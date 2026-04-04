@@ -3,20 +3,27 @@ import { client } from '../lib/honoClient';
 
 export const Route = createFileRoute('/')({
   loader: async () => {
-    const res = await client.kifus.$get();
-    if (!res.ok) throw new Error('Failed to fetch kifus');
-    return await res.json();
+    try {
+      const res = await client.kifus.$get();
+      if (!res.ok) return { kifus: [], error: `サーバーエラー (${res.status})` };
+      return { kifus: await res.json(), error: null };
+    } catch {
+      return { kifus: [], error: 'サーバーに接続できません' };
+    }
   },
   component: KifuListPage,
 });
 
 function KifuListPage() {
-  const kifus = Route.useLoaderData();
+  const { kifus, error } = Route.useLoaderData();
 
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">棋譜一覧</h2>
-      {kifus.length === 0 ? (
+      {error && (
+        <div className="alert alert-warning mb-4">{error}</div>
+      )}
+      {kifus.length === 0 && !error ? (
         <p className="text-base-content/60">
           棋譜がまだありません。
           <Link to="/kifus/new" className="link link-primary">

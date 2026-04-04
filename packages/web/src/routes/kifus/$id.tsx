@@ -52,31 +52,50 @@ function KifuDetailPage() {
                 <thead>
                   <tr>
                     <th>手数</th>
+                    <th>指し手</th>
+                    <th>順位</th>
+                    <th>候補手</th>
                     <th>評価値</th>
-                    <th>最善手</th>
+                    <th>深さ</th>
                     <th>読み筋</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {kifu.analyses.map((a) => (
-                    <tr key={a.id}>
-                      <td>{a.moveNumber}</td>
-                      <td
-                        className={
-                          a.score > 0
-                            ? 'text-success'
-                            : a.score < 0
-                              ? 'text-error'
-                              : ''
-                        }
-                      >
-                        {a.score > 0 ? '+' : ''}
-                        {a.score}
-                      </td>
-                      <td>{a.bestMove}</td>
-                      <td className="font-mono text-xs">{a.pv}</td>
-                    </tr>
-                  ))}
+                  {kifu.analyses.flatMap((a) =>
+                    a.candidates.map((c, i) => (
+                      <tr key={`${a.id}-${c.rank}`}>
+                        {i === 0 && (
+                          <>
+                            <td rowSpan={a.candidates.length}>
+                              {a.moveNumber}
+                            </td>
+                            <td rowSpan={a.candidates.length}>
+                              {a.movePlayed ?? '-'}
+                            </td>
+                          </>
+                        )}
+                        <td>{c.rank}</td>
+                        <td>{c.move}</td>
+                        <td
+                          className={
+                            c.scoreValue > 0
+                              ? 'text-success'
+                              : c.scoreValue < 0
+                                ? 'text-error'
+                                : ''
+                          }
+                        >
+                          {c.scoreType === 'mate'
+                            ? `#${c.scoreValue}`
+                            : `${c.scoreValue > 0 ? '+' : ''}${c.scoreValue}`}
+                        </td>
+                        <td>{c.depth}</td>
+                        <td className="font-mono text-xs">
+                          {c.pv?.join(' ')}
+                        </td>
+                      </tr>
+                    )),
+                  )}
                 </tbody>
               </table>
             </div>

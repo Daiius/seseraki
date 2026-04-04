@@ -1,6 +1,7 @@
 import {
   bigint,
   int,
+  json,
   mysqlTable,
   serial,
   text,
@@ -17,26 +18,49 @@ export const kifus = mysqlTable('kifus', {
   updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
 });
 
-export const analyses = mysqlTable('analyses', {
+// 1手ごとの解析結果
+export const moveAnalyses = mysqlTable('move_analyses', {
   id: serial().primaryKey(),
   kifuId: bigint({ mode: 'number', unsigned: true })
     .notNull()
     .references(() => kifus.id, { onDelete: 'cascade' }),
   moveNumber: int().notNull(),
-  score: int().notNull(),
-  bestMove: varchar({ length: 255 }).notNull(),
-  pv: text(),
+  movePlayed: varchar({ length: 255 }),
   createdAt: timestamp().notNull().defaultNow(),
 });
 
-export const relations = defineRelations({ kifus, analyses }, (r) => ({
-  kifus: {
-    analyses: r.many.analyses(),
-  },
-  analyses: {
-    kifu: r.one.kifus({
-      from: r.analyses.kifuId,
-      to: r.kifus.id,
-    }),
-  },
-}));
+// MultiPV の各候補手
+export const candidateMoves = mysqlTable('candidate_moves', {
+  id: serial().primaryKey(),
+  moveAnalysisId: bigint({ mode: 'number', unsigned: true })
+    .notNull()
+    .references(() => moveAnalyses.id, { onDelete: 'cascade' }),
+  rank: int().notNull(),
+  move: varchar({ length: 255 }).notNull(),
+  scoreType: varchar({ length: 16 }).notNull(), // "cp" | "mate"
+  scoreValue: int().notNull(),
+  pv: json().$type<string[]>(),
+  depth: int().notNull(),
+});
+
+export const relations = defineRelations(
+  { kifus, moveAnalyses, candidateMoves },
+  (r) => ({
+    kifus: {
+      moveAnalyses: r.many.moveAnalyses(),
+    },
+    moveAnalyses: {
+      kifu: r.one.kifus({
+        from: r.moveAnalyses.kifuId,
+        to: r.kifus.id,
+      }),
+      candidateMoves: r.many.candidateMoves(),
+    },
+    candidateMoves: {
+      moveAnalysis: r.one.moveAnalyses({
+        from: r.candidateMoves.moveAnalysisId,
+        to: r.moveAnalyses.id,
+      }),
+    },
+  }),
+);

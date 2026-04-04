@@ -1,4 +1,5 @@
 import {
+  bigint,
   int,
   mysqlTable,
   serial,
@@ -18,7 +19,7 @@ export const kifus = mysqlTable('kifus', {
 
 export const analyses = mysqlTable('analyses', {
   id: serial().primaryKey(),
-  kifuId: int()
+  kifuId: bigint({ mode: 'number', unsigned: true })
     .notNull()
     .references(() => kifus.id, { onDelete: 'cascade' }),
   moveNumber: int().notNull(),

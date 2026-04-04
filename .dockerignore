@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+**/node_modules
+
+# Build outputs
+dist
+**/dist
+
+# Environment files
+.env
+.env.*
+!.env.database
+
+# Logs
+*.log
+
+# IDE / OS
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Docker
+compose.yml
+Dockerfile*
+
+# Engine binaries (built separately)
+engines/

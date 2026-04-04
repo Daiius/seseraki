@@ -2,9 +2,11 @@
   "name": "shogi",
   "private": true,
   "scripts": {
+    "dev": "docker compose watch",
     "dev:web": "pnpm --filter web dev",
     "dev:server": "pnpm --filter server dev",
     "dev:worker": "pnpm --filter worker dev",
+    "down": "docker compose down",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck"
   },

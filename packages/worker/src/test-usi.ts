@@ -2,27 +2,31 @@
  * USI プロトコル通信テスト
  *
  * 使い方:
- *   # Docker イメージのビルド（初回のみ）
- *   docker build -t yaneuraou-material ./engines
+ *   # A) バイナリ直接実行
+ *   docker build --build-arg TARGET_CPU=OTHER --output type=local,dest=./engines/out ./engines
+ *   ENGINE_PATH=../../engines/out/yaneuraou pnpm --filter worker test:usi
  *
- *   # テスト実行
- *   pnpm --filter worker test:usi
+ *   # B) Docker 経由（旧方式、DOCKER_IMAGE が必要）
+ *   DOCKER_IMAGE=yaneuraou-material pnpm --filter worker test:usi
  */
 import { UsiEngine } from "./usi/engine.js";
 
-const DOCKER_IMAGE = process.env.DOCKER_IMAGE ?? "yaneuraou-material";
+function createEngine(): UsiEngine {
+  const enginePath = process.env.ENGINE_PATH;
+  if (enginePath) {
+    console.log(`Using local binary: ${enginePath}\n`);
+    return new UsiEngine(enginePath);
+  }
+
+  const image = process.env.DOCKER_IMAGE ?? "yaneuraou-material";
+  console.log(`Using Docker image: ${image}\n`);
+  return new UsiEngine("docker", ["run", "-i", "--rm", image]);
+}
 
 async function main() {
   console.log("=== USI Protocol Communication Test ===\n");
-  console.log(`Using Docker image: ${DOCKER_IMAGE}\n`);
 
-  // docker run -i --rm で USI エンジンを起動
-  const engine = new UsiEngine("docker", [
-    "run",
-    "-i",
-    "--rm",
-    DOCKER_IMAGE,
-  ]);
+  const engine = createEngine();
 
   // 1. USI ハンドシェイク
   console.log("--- Step 1: USI handshake ---");

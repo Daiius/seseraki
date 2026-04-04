@@ -41,12 +41,15 @@ services:
       - .env.database
     environment:
       TZ: "Asia/Tokyo"
+      API_KEY: "dev-api-key"
     command: pnpm --filter server dev
     depends_on:
       db-prep:
         condition: service_completed_successfully
     expose:
       - "4000"
+    ports:
+      - "4000:4000"
     develop:
       watch:
         - action: sync

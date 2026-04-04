@@ -8,15 +8,21 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@tanstack/react-router": "^1",
     "hono": "^4",
     "react": "^19",
     "react-dom": "^19"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tanstack/router-plugin": "^1",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
+    "daisyui": "^5",
     "server": "workspace:*",
+    "tailwindcss": "^4",
     "vite": "^8"
   }
 }

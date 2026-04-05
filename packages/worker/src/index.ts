@@ -20,6 +20,9 @@ async function main() {
   await engine.start();
 
   engine.setOption("Threads", String(config.engineThreads));
+  if (config.engineEvalDir) {
+    engine.setOption("EvalDir", config.engineEvalDir);
+  }
   await engine.ready();
 
   let running = true;

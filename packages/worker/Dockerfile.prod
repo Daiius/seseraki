@@ -1,0 +1,33 @@
+FROM debian:bookworm-slim AS engine-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential clang lld git ca-certificates p7zip-full wget \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG EDITION=YANEURAOU_ENGINE_NNUE
+ARG TARGET_CPU=AVX2
+
+RUN git clone --depth 1 https://github.com/yaneurao/YaneuraOu.git /yaneuraou
+WORKDIR /yaneuraou/source
+RUN make clean YANEURAOU_EDITION=${EDITION} && \
+    make -j$(nproc) tournament COMPILER=clang++ YANEURAOU_EDITION=${EDITION} TARGET_CPU=${TARGET_CPU}
+
+# 水匠5 評価関数ファイル
+RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suisho5.7z -O /tmp/suisho5.7z && \
+    7z x /tmp/suisho5.7z -o/eval && \
+    rm /tmp/suisho5.7z
+
+FROM node:22-slim
+WORKDIR /workspace
+RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/server/package.json ./packages/server/
+COPY packages/web/package.json ./packages/web/
+COPY packages/worker/package.json ./packages/worker/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+COPY tsconfig.json ./
+COPY packages/server/ ./packages/server/
+COPY packages/worker/ ./packages/worker/
+COPY --from=engine-builder /yaneuraou/source/YaneuraOu-by-gcc /usr/local/bin/yaneuraou
+COPY --from=engine-builder /eval /usr/local/share/yaneuraou/eval

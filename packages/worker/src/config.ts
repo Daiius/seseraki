@@ -25,6 +25,7 @@ export function loadConfig() {
     enginePath,
     engineThreads: Number(optionalEnv("ENGINE_THREADS", "1")),
     engineDepth: Number(optionalEnv("ENGINE_DEPTH", "10")),
+    engineEvalDir: process.env.ENGINE_EVAL_DIR,
     serverUrl: optionalEnv("SERVER_URL", "http://localhost:4000"),
     pollIntervalMs: Number(optionalEnv("POLL_INTERVAL_MS", "10000")),
     useMock: optionalEnv("USE_MOCK", "true") === "true",

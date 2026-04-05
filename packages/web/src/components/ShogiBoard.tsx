@@ -8,6 +8,7 @@ import {
   type PieceKind,
 } from '../lib/board';
 import { turnSymbol, formatScore } from '../lib/usi';
+import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
@@ -173,6 +174,13 @@ export function ShogiBoard({ analyses }: Props) {
           {moveIndex} / {totalMoves}
         </span>
       </div>
+
+      {/* 評価値グラフ */}
+      <EvalGraph
+        analyses={sortedAnalyses}
+        currentMove={moveIndex}
+        onClickMove={setMoveIndex}
+      />
 
       <div className="flex gap-6 flex-wrap">
         {/* 盤面 */}

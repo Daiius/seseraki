@@ -24,7 +24,7 @@ services:
     env_file:
       - .env.database
     command: >
-      sh -c "pnpm drizzle-kit push
+      sh -c "pnpm drizzle-kit push --force
       --dialect mysql --schema=./src/db/schema.ts
       --host=$$DB_HOST --user=$$MYSQL_USER
       --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE

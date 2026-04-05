@@ -23,6 +23,15 @@ async function main() {
   if (config.engineEvalDir) {
     engine.setOption("EvalDir", config.engineEvalDir);
   }
+  if (config.engineBookDir) {
+    engine.setOption("BookDir", config.engineBookDir);
+    engine.setOption("IgnoreBookPly", "true");
+    engine.setOption("FlippedBook", "true");
+    engine.setOption("BookOnTheFly", "true");
+    engine.setOption("BookMoves", "999");
+    engine.setOption("BookEvalDiff", "0");
+    engine.setOption("BookDepthLimit", "0");
+  }
   await engine.ready();
 
   let running = true;

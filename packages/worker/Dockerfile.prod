@@ -17,6 +17,12 @@ RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suis
     7z x /tmp/suisho5.7z -o/eval && \
     rm /tmp/suisho5.7z
 
+# ペタブック定跡ファイル
+RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/new_petabook233/new_petabook233.7z -O /tmp/petabook.7z && \
+    mkdir -p /book && \
+    7z x /tmp/petabook.7z -o/book && \
+    rm /tmp/petabook.7z
+
 FROM node:22-slim
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
@@ -31,3 +37,4 @@ COPY packages/server/ ./packages/server/
 COPY packages/worker/ ./packages/worker/
 COPY --from=engine-builder /yaneuraou/source/YaneuraOu-by-gcc /usr/local/bin/yaneuraou
 COPY --from=engine-builder /eval /usr/local/share/yaneuraou/eval
+COPY --from=engine-builder /book /usr/local/share/yaneuraou/book

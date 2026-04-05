@@ -65,13 +65,17 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
  * @param kifText - KIF 形式の棋譜テキスト
  * @param options.depth - 解析深さ (default: 10)
  * @param options.multiPv - 候補手数 (default: 3)
+ * @param options.byoyomi - 秒読み(ms)。設定時は depth より優先
  */
 export async function analyzeKifu(
   engine: UsiEngine,
   kifText: string,
-  options: { depth?: number; multiPv?: number } = {},
+  options: { depth?: number; multiPv?: number; byoyomi?: number } = {},
 ): Promise<KifuAnalysisResult> {
-  const { depth = 10, multiPv = 3 } = options;
+  const { depth = 10, multiPv = 3, byoyomi } = options;
+  const goCommand = byoyomi
+    ? `go btime 0 wtime 0 byoyomi ${byoyomi}`
+    : `go depth ${depth}`;
 
   const parsed = parseKif(kifText);
   if (parsed.errors.length > 0) {
@@ -93,7 +97,7 @@ export async function analyzeKifu(
         : `position startpos moves ${movesPlayed.join(" ")}`;
 
     const t0 = Date.now();
-    const result = await engine.analyze(position, `go depth ${depth}`);
+    const result = await engine.analyze(position, goCommand);
     const elapsed = Date.now() - t0;
     const candidates = extractMultiPvResults(result.infoLines);
     const isBook = candidates.length > 0 && candidates[0].depth === 0;

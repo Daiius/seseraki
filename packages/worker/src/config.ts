@@ -25,6 +25,7 @@ export function loadConfig() {
     enginePath,
     engineThreads: Number(optionalEnv("ENGINE_THREADS", "1")),
     engineDepth: Number(optionalEnv("ENGINE_DEPTH", "10")),
+    engineByoyomi: process.env.ENGINE_BYOYOMI ? Number(process.env.ENGINE_BYOYOMI) : undefined,
     engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
     engineHash: Number(optionalEnv("ENGINE_HASH", "128")),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,

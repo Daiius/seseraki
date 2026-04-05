@@ -97,6 +97,7 @@ async function main() {
           const result = await analyzeKifu(engine, kifu.kifText, {
             depth: config.engineDepth,
             multiPv: config.engineMultiPv,
+            byoyomi: config.engineByoyomi,
           });
           await client.submitAnalysis(kifu.id, result);
           console.log(

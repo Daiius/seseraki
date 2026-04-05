@@ -118,7 +118,7 @@ Worker POST body:
 
 | パス | 画面 | 内容 |
 |------|------|------|
-| `/` | 棋譜一覧 | テーブル表示。サーバー未接続時は警告を表示 |
+| `/` | 棋譜一覧 | テーブル表示。解析済み/未バッジ表示。サーバー未接続時は警告を表示 |
 | `/kifus/new` | 棋譜登録 | タイトル + KIF テキスト貼り付けフォーム |
 | `/kifus/$id` | 棋譜詳細 | 将棋盤 + 評価値 + 解析結果 |
 
@@ -127,7 +127,7 @@ Worker POST body:
 - **将棋盤**: 9x9 テキスト盤面。先手=黒字、後手=赤字+180度反転。スライダーで局面移動
 - **持ち駒表示**: 先手・後手それぞれ
 - **局面評価値**: 先手視点のスコア + 形勢判断ラベル（互角/有利/優勢/勝勢/詰み）
-- **最善手比較**: 実際の手と最善手が異なる場合、候補手と読み筋を表示
+- **候補手一覧**: 各候補に読み筋・探索深さ・実手マーク・最善手との差異を表示
 - **日本語表記**: USI→駒名付き日本語変換（▲７六歩(77)）。盤面追跡で駒名を解決
 - **評価値グラフ**: SVG 直書きの折れ線グラフ。先手有利=上、後手有利=下。スライダーと連動、クリックで局面移動
 - **KIF テキスト**: 折りたたみ表示
@@ -144,22 +144,26 @@ Vite dev server が `/api` プレフィックスを除去しつつ server にプ
 | EDITION | MATERIAL（駒得、開発環境の低スペックに合わせた軽量版） | NNUE |
 | 評価関数 | なし | 水匠5 (nn.bin, ~60MB) |
 | 定跡 | なし | ペタブック (new_petabook233) |
-| TARGET_CPU | OTHER | AVX2 |
+| TARGET_CPU | OTHER | OTHER（本番デスクトップも同様） |
 
-### 本番エンジンオプション
+### エンジンオプション
 
-| オプション | 値 | 説明 |
-|-----------|-----|------|
-| EvalDir | /usr/local/share/yaneuraou/eval | 水匠5 評価関数 |
-| BookDir | /usr/local/share/yaneuraou/book | ペタブック定跡 |
-| IgnoreBookPly | true | 定跡の手数制限を無視 |
-| FlippedBook | true | 180度回転局面も定跡としてヒット |
-| BookOnTheFly | true | 定跡を逐次読み（メモリ節約） |
-| BookMoves | 999 | 定跡採用の手数制限なし |
-| BookEvalDiff | 0 | 最善手のみ採用 |
-| BookDepthLimit | 0 | 末端の指し手も採用 |
-| Threads | 環境変数 ENGINE_THREADS | |
-| USI_Hash | [未実装] 環境変数で設定予定 | |
+| オプション | 環境変数 | デフォルト | 説明 |
+|-----------|---------|-----------|------|
+| Threads | ENGINE_THREADS | 1 | |
+| USI_Hash | ENGINE_HASH | 128 (MB) | 本番では 2048-4096 推奨 |
+| MultiPV | ENGINE_MULTIPV | 3 | 候補手数 |
+| — | ENGINE_DEPTH | 10 | 探索深さ |
+| — | ENGINE_BYOYOMI | 未設定 | 秒読み(ms)。設定時は depth より優先。エンジンが局面の複雑さに応じて深さを自動調整 |
+| EvalDir | ENGINE_EVAL_DIR | — | 本番: /usr/local/share/yaneuraou/eval |
+| BookDir | ENGINE_BOOK_DIR | — | 本番: /usr/local/share/yaneuraou/book |
+| BookFile | — | user_book1.db | BookDir 設定時に自動設定 |
+| IgnoreBookPly | — | true | 定跡の手数制限を無視 |
+| FlippedBook | — | true | 180度回転局面も定跡としてヒット |
+| BookOnTheFly | — | true | 定跡を逐次読み（メモリ節約） |
+| BookMoves | — | 999 | 定跡採用の手数制限なし |
+| BookEvalDiff | — | 0 | 最善手のみ採用 |
+| BookDepthLimit | — | 0 | 末端の指し手も採用 |
 
 ### 解析フロー
 
@@ -205,7 +209,7 @@ KifuAnalysisResult = {
 | db-prep | - | drizzle-kit push + sample.kif シード |
 | server | 4000 | tsx watch, API_KEY=dev-api-key |
 | web | 5173 | Vite dev server, API_URL=http://server:4000 |
-| worker | - | tsx watch, Material エンジン（開発用） |
+| worker | - | tsx watch, Material エンジン（開発用）, cpus: 1 |
 
 ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 
@@ -244,6 +248,3 @@ KifuAnalysisResult = {
 - 特定局面だけ depth を変えて再解析する機能
 - Web UI から「この局面を深く解析」ボタン → worker に解析リクエスト
 
-### USI_Hash 設定 (優先度: 低)
-- 環境変数 `ENGINE_HASH` でハッシュテーブルサイズを設定
-- デスクトップ PC (32GB) では 2048-4096MB を想定

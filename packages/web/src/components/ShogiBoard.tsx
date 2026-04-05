@@ -119,15 +119,20 @@ export function ShogiBoard({ analyses }: Props) {
   const [moveIndex, setMoveIndex] = useState(0);
 
   const currentState = positions[moveIndex];
-  const currentAnalysis = sortedAnalyses.find(
-    (a) => a.moveNumber === moveIndex,
+
+  // moveIndex N の盤面 = N 手指した後の局面
+  // この局面に至った手の解析 = moveNumber N-1 の解析結果
+  // moveIndex 0 の場合は moveNumber 0（初期局面からの候補手）
+  const prevAnalysis = sortedAnalyses.find(
+    (a) => a.moveNumber === (moveIndex > 0 ? moveIndex - 1 : 0),
   );
 
-  const best = currentAnalysis?.candidates.find((c) => c.rank === 1);
+  const best = prevAnalysis?.candidates.find((c) => c.rank === 1);
   const isBestMove =
-    best && currentAnalysis?.movePlayed && best.move === currentAnalysis.movePlayed;
+    best && prevAnalysis?.movePlayed && best.move === prevAnalysis.movePlayed;
+  const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
   const posEval = best
-    ? formatScore(best.scoreType, best.scoreValue, moveIndex)
+    ? formatScore(best.scoreType, best.scoreValue, evalMoveNumber)
     : null;
 
   return (
@@ -185,19 +190,25 @@ export function ShogiBoard({ analyses }: Props) {
 
         {/* 評価値・候補手情報 */}
         <div className="flex flex-col gap-3 min-w-64">
-          {/* 直前の指し手 */}
-          {currentAnalysis?.movePlayed && moveIndex > 0 && (
-            <div>
-              <div className="text-sm text-base-content/60">指し手</div>
-              <div className="text-lg font-bold">
-                {turnSymbol(moveIndex - 1)}
-                {usiToJapaneseWithPiece(
-                  positions[moveIndex - 1],
-                  currentAnalysis.movePlayed,
-                )}
+          {/* 直前の指し手（1つ前の局面の movePlayed がこの局面への手） */}
+          {moveIndex > 0 && (() => {
+            const prevAnalysis = sortedAnalyses.find(
+              (a) => a.moveNumber === moveIndex - 1,
+            );
+            if (!prevAnalysis?.movePlayed) return null;
+            return (
+              <div>
+                <div className="text-sm text-base-content/60">指し手</div>
+                <div className="text-lg font-bold">
+                  {turnSymbol(moveIndex - 1)}
+                  {usiToJapaneseWithPiece(
+                    positions[moveIndex - 1],
+                    prevAnalysis.movePlayed,
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* 局面評価値 */}
           {posEval && (
@@ -210,13 +221,14 @@ export function ShogiBoard({ analyses }: Props) {
           )}
 
           {/* 候補手一覧（読み筋付き） */}
-          {currentAnalysis && currentAnalysis.candidates.length > 0 && (
+          {prevAnalysis && prevAnalysis.candidates.length > 0 && (
             <div>
               <div className="mb-1 text-sm text-base-content/60">候補手</div>
               <div className="flex flex-col gap-2">
-                {currentAnalysis.candidates.map((c) => {
-                  const isPlayed = c.move === currentAnalysis.movePlayed;
-                  const isNotBest = c.rank === 1 && currentAnalysis.movePlayed && !isPlayed;
+                {prevAnalysis.candidates.map((c) => {
+                  const isPlayed = c.move === prevAnalysis.movePlayed;
+                  const isNotBest = c.rank === 1 && prevAnalysis.movePlayed && !isPlayed;
+                  const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
                   return (
                     <div
                       key={c.rank}
@@ -231,11 +243,11 @@ export function ShogiBoard({ analyses }: Props) {
                           {c.rank}
                         </span>
                         <span className="font-bold">
-                          {turnSymbol(moveIndex)}
-                          {usiToJapaneseWithPiece(currentState, c.move)}
+                          {turnSymbol(evalMoveNumber)}
+                          {usiToJapaneseWithPiece(prevState, c.move)}
                         </span>
                         <span className="text-base-content/70">
-                          {formatScore(c.scoreType, c.scoreValue, moveIndex)}
+                          {formatScore(c.scoreType, c.scoreValue, evalMoveNumber)}
                         </span>
                         <span className="text-xs text-base-content/40">
                           d{c.depth}
@@ -250,10 +262,10 @@ export function ShogiBoard({ analyses }: Props) {
                       {c.pv && c.pv.length > 0 && (
                         <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
                           {(() => {
-                            let st = applyMove(currentState, c.move);
+                            let st = applyMove(prevState, c.move);
                             return c.pv!
                               .map((m: string, j: number) => {
-                                const turn = turnSymbol(moveIndex + j);
+                                const turn = turnSymbol(evalMoveNumber + j);
                                 const text = usiToJapaneseWithPiece(st, m);
                                 st = applyMove(st, m);
                                 return `${turn}${text}`;

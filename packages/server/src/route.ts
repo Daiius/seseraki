@@ -5,6 +5,8 @@ import { eq } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
+import { swarsToKif, formatTitle } from './swars/csa-to-kif.js';
+import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 
 export const app = new Hono();
 
@@ -132,6 +134,67 @@ const route = app
         }
       }
       return c.json({ ok: true }, 201);
+    },
+  )
+  // --- 将棋ウォーズ棋譜取得 ---
+  .post(
+    '/swars/import',
+    apiKeyRequired,
+    zv(
+      'json',
+      z.object({
+        userId: z.string(),
+        gtype: z.enum(['', 'sb', 's1']).default(''),
+        pages: z.number().min(1).max(10).default(1),
+      }),
+    ),
+    async (c) => {
+      const { userId, gtype, pages } = c.req.valid('json');
+      const cookie = process.env.SWARS_SESSION_COOKIE;
+      if (!cookie) {
+        return c.json({ error: 'SWARS_SESSION_COOKIE not configured' }, 500);
+      }
+
+      const imported: { id: number; gameKey: string }[] = [];
+      const skipped: string[] = [];
+      const errors: { gameKey: string; error: string }[] = [];
+
+      // 履歴ページから対局キーを収集
+      const allKeys: string[] = [];
+      for (let page = 1; page <= pages; page++) {
+        const keys = await fetchHistoryKeys(userId, gtype, page, cookie);
+        allKeys.push(...keys);
+        if (keys.length === 0) break;
+      }
+
+      // 各対局を取得・変換・保存
+      for (const gameKey of allKeys) {
+        // 重複チェック
+        const [existing] = await db
+          .select({ id: kifus.id })
+          .from(kifus)
+          .where(eq(kifus.swarsGameKey, gameKey))
+          .limit(1);
+        if (existing) {
+          skipped.push(gameKey);
+          continue;
+        }
+
+        try {
+          const gameData = await fetchGameData(gameKey);
+          const kifText = swarsToKif(gameData);
+          const title = formatTitle(gameData);
+          const [result] = await db
+            .insert(kifus)
+            .values({ title, kifText, swarsGameKey: gameKey })
+            .$returningId();
+          imported.push({ id: result.id, gameKey });
+        } catch (e) {
+          errors.push({ gameKey, error: String(e) });
+        }
+      }
+
+      return c.json({ imported, skipped, errors });
     },
   );
 

@@ -14,6 +14,7 @@ export const kifus = mysqlTable('kifus', {
   id: serial().primaryKey(),
   title: varchar({ length: 255 }).notNull(),
   kifText: text().notNull(),
+  swarsGameKey: varchar({ length: 255 }).unique(),
   createdAt: timestamp().notNull().defaultNow(),
   updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
 });

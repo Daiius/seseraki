@@ -54,6 +54,7 @@ kifus
 ├── id: serial PK
 ├── title: varchar(255)
 ├── kifText: text              -- KIF 形式の棋譜テキスト
+├── swarsGameKey: varchar(255) UNIQUE -- 将棋ウォーズ対局キー（重複検知用、nullable）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 
@@ -92,6 +93,7 @@ candidateMoves                 -- MultiPV の候補手
 |--------|------|------|
 | GET | `/worker/kifus` | 未解析の棋譜を取得 |
 | POST | `/worker/analyses` | 解析結果を一括登録 |
+| POST | `/swars/import` | 将棋ウォーズ棋譜取得。body: `{ userId, gtype?, pages? }` |
 
 Worker POST body:
 ```
@@ -127,6 +129,7 @@ Worker POST body:
 - **局面評価値**: 先手視点のスコア + 形勢判断ラベル（互角/有利/優勢/勝勢/詰み）
 - **最善手比較**: 実際の手と最善手が異なる場合、候補手と読み筋を表示
 - **日本語表記**: USI→駒名付き日本語変換（▲７六歩(77)）。盤面追跡で駒名を解決
+- **評価値グラフ**: SVG 直書きの折れ線グラフ。先手有利=上、後手有利=下。スライダーと連動、クリックで局面移動
 - **KIF テキスト**: 折りたたみ表示
 - **候補手詳細**: 折りたたみ表示
 
@@ -213,35 +216,29 @@ KifuAnalysisResult = {
 - 候補: 本番 nginx の Basic 認証が最有力（個人用のため）、Hono 側での実装、Cloudflare Access 等
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
-### 将棋ウォーズ棋譜自動取得 (優先度: 中)
+### 将棋ウォーズ棋譜取得 (実装済み・ポーリング未実装)
 
-調査完了、実装待ち。詳細は `docs/swars-cookie-test.md` を参照。
+`POST /swars/import` で手動トリガー。詳細は `docs/swars-cookie-test.md` を参照。
 
-**取得フロー:**
-1. 履歴一覧取得（Cookie 必須）: `GET /games/history?user_id=Daiius&page={n}` → HTML から対局キーを抽出
-2. 個別棋譜取得（認証不要）: `GET /games/{対局キー}` → `data-react-props` 内の JSON を取得
-3. JSON 内の CSA 形式の手列 + SFEN 初期局面から KIF に変換して DB 登録
+**実装済み:**
+- 履歴ページから対局キー抽出 → 個別棋譜取得 → CSA→KIF 変換 → DB 保存
+- `swarsGameKey` カラムによる重複検知
+- 3 秒間隔のレート制限付きフェッチャー
+- `apiKeyRequired` で保護
 
-**棋譜データ形式:**
-- CSA 風の独自形式（`+7776FU,L600`）+ 残り時間付き
-- SFEN 初期局面つきで USI 互換
-- メタデータ: 先手/後手名、段級位、結果、ルール（10分/3分/10秒）、手合い
+**未実装:**
+- 定期ポーリング（1 時間に 1 回の自動取得）
+- Cookie 失効時の通知・再取得フロー
 
 **認証:**
-- `_web_session` Cookie（Rails CookieStore、有効期限約20年）
+- `_web_session` Cookie（Rails CookieStore、有効期限約 20 年）
 - 手動ブラウザログインで取得（Cloudflare Turnstile のため自動ログイン不可）
 - 環境変数 `SWARS_SESSION_COOKIE` で管理
-- Cookie 有効期間は別セッションでテスト中
 
 **アクセス制御方針:**
-- リクエスト間隔: 3秒以上
-- ポーリング頻度: 1時間に1回（新規対局の差分のみ）
+- リクエスト間隔: 3 秒以上
 - User-Agent: ブラウザ同等の値を設定
 - 非公式アクセスのためアカウント BAN リスクあり（控えめに運用）
-
-### 評価値グラフ (優先度: 中)
-- 棋譜詳細画面に評価値の推移グラフを表示
-- 先手視点で +/- のグラフ。悪手の箇所が一目でわかるように
 
 ### 局面単位の再解析 (優先度: 低)
 - 特定局面だけ depth を変えて再解析する機能

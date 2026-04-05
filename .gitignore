@@ -5,6 +5,3 @@ dist/
 .env.*
 !.env.example
 
-# Engine binaries (Dockerfile is tracked)
-engines/*
-!engines/Dockerfile

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { eq, count } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
@@ -27,10 +27,15 @@ const route = app
         id: kifus.id,
         title: kifus.title,
         createdAt: kifus.createdAt,
+        analysisCount: count(moveAnalyses.id),
       })
       .from(kifus)
+      .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
+      .groupBy(kifus.id)
       .orderBy(kifus.createdAt);
-    return c.json(rows);
+    return c.json(
+      rows.map((r) => ({ ...r, analyzed: r.analysisCount > 0 })),
+    );
   })
   .get(
     '/kifus/:id',

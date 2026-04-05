@@ -175,13 +175,6 @@ export function ShogiBoard({ analyses }: Props) {
         </span>
       </div>
 
-      {/* 評価値グラフ */}
-      <EvalGraph
-        analyses={sortedAnalyses}
-        currentMove={moveIndex}
-        onClickMove={setMoveIndex}
-      />
-
       <div className="flex gap-6 flex-wrap">
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
@@ -190,7 +183,7 @@ export function ShogiBoard({ analyses }: Props) {
           <HandDisplay hand={currentState.hand.sente} side="sente" />
         </div>
 
-        {/* 評価値・最善手情報 */}
+        {/* 評価値・候補手情報 */}
         <div className="flex flex-col gap-3 min-w-64">
           {/* 直前の指し手 */}
           {currentAnalysis?.movePlayed && moveIndex > 0 && (
@@ -216,75 +209,74 @@ export function ShogiBoard({ analyses }: Props) {
             </div>
           )}
 
-          {/* 最善手との比較 */}
-          {best && !isBestMove && currentAnalysis?.movePlayed && (
-            <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">
-              <div className="mb-1 text-sm font-semibold text-warning">
-                最善手と異なります
-              </div>
-              <div>
-                <span className="text-sm text-base-content/60">最善手: </span>
-                <span className="font-bold">
-                  {turnSymbol(moveIndex)}
-                  {usiToJapaneseWithPiece(currentState, best.move)}
-                </span>
-              </div>
-              <div>
-                <span className="text-sm text-base-content/60">評価値: </span>
-                {formatScore(best.scoreType, best.scoreValue, moveIndex)}
-              </div>
-              {best.pv && best.pv.length > 0 && (
-                <div className="mt-1">
-                  <span className="text-sm text-base-content/60">
-                    読み筋:{' '}
-                  </span>
-                  <span className="font-mono text-xs">
-                    {(() => {
-                      let st = applyMove(currentState, best.move);
-                      return best.pv
-                        .map((m: string, j: number) => {
-                          const turn = turnSymbol(moveIndex + j);
-                          const text = usiToJapaneseWithPiece(st, m);
-                          st = applyMove(st, m);
-                          return `${turn}${text}`;
-                        })
-                        .join(' ');
-                    })()}
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 候補手一覧 */}
+          {/* 候補手一覧（読み筋付き） */}
           {currentAnalysis && currentAnalysis.candidates.length > 0 && (
             <div>
               <div className="mb-1 text-sm text-base-content/60">候補手</div>
-              <table className="table table-xs">
-                <tbody>
-                  {currentAnalysis.candidates.map((c) => (
-                    <tr
+              <div className="flex flex-col gap-2">
+                {currentAnalysis.candidates.map((c) => {
+                  const isPlayed = c.move === currentAnalysis.movePlayed;
+                  const isNotBest = c.rank === 1 && currentAnalysis.movePlayed && !isPlayed;
+                  return (
+                    <div
                       key={c.rank}
                       className={clsx(
-                        c.move === currentAnalysis.movePlayed && 'bg-base-200',
+                        'rounded-lg p-2 text-sm',
+                        isPlayed && 'bg-base-200',
+                        isNotBest && 'border border-warning/30',
                       )}
                     >
-                      <td className="font-mono">{c.rank}</td>
-                      <td className="font-bold">
-                        {turnSymbol(moveIndex)}
-                        {usiToJapaneseWithPiece(currentState, c.move)}
-                      </td>
-                      <td>
-                        {formatScore(c.scoreType, c.scoreValue, moveIndex)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-base-content/50">
+                          {c.rank}
+                        </span>
+                        <span className="font-bold">
+                          {turnSymbol(moveIndex)}
+                          {usiToJapaneseWithPiece(currentState, c.move)}
+                        </span>
+                        <span className="text-base-content/70">
+                          {formatScore(c.scoreType, c.scoreValue, moveIndex)}
+                        </span>
+                        <span className="text-xs text-base-content/40">
+                          d{c.depth}
+                        </span>
+                        {isPlayed && (
+                          <span className="text-xs text-success">実手</span>
+                        )}
+                        {isNotBest && (
+                          <span className="text-xs text-warning">※</span>
+                        )}
+                      </div>
+                      {c.pv && c.pv.length > 0 && (
+                        <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
+                          {(() => {
+                            let st = applyMove(currentState, c.move);
+                            return c.pv!
+                              .map((m: string, j: number) => {
+                                const turn = turnSymbol(moveIndex + j);
+                                const text = usiToJapaneseWithPiece(st, m);
+                                st = applyMove(st, m);
+                                return `${turn}${text}`;
+                              })
+                              .join(' ');
+                          })()}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* 評価値グラフ */}
+      <EvalGraph
+        analyses={sortedAnalyses}
+        currentMove={moveIndex}
+        onClickMove={setMoveIndex}
+      />
     </div>
   );
 }

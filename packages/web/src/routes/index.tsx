@@ -37,6 +37,7 @@ function KifuListPage() {
               <tr>
                 <th>ID</th>
                 <th>タイトル</th>
+                <th>解析</th>
                 <th>登録日時</th>
               </tr>
             </thead>
@@ -52,6 +53,19 @@ function KifuListPage() {
                     >
                       {kifu.title}
                     </Link>
+                  </td>
+                  <td>
+                    {'analyzed' in kifu && (
+                      <span
+                        className={
+                          kifu.analyzed
+                            ? 'badge badge-success badge-sm'
+                            : 'badge badge-ghost badge-sm'
+                        }
+                      >
+                        {kifu.analyzed ? '済' : '未'}
+                      </span>
+                    )}
                   </td>
                   <td>{new Date(kifu.createdAt).toLocaleString('ja-JP')}</td>
                 </tr>

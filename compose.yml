@@ -40,9 +40,9 @@ services:
     working_dir: /workspace
     env_file:
       - .env.database
+      - .env.server
     environment:
       TZ: "Asia/Tokyo"
-      API_KEY: "dev-api-key"
     command: pnpm --filter server dev
     depends_on:
       db-prep:

@@ -31,6 +31,8 @@ TypeScript フルスタック、pnpm monorepo 構成。
 | VPS (1GB) | web + server + db | グローバルにアクセス可能 |
 | デスクトップ PC (32GB) | worker | API_KEY で server に接続。CPU 解析 |
 
+VPS は web アクセス用、デスクトップ PC は解析用に分離。VPS での worker 動作も検討したが、メモリ消費量的に厳しく デスクトップ一択。
+
 ### パッケージ
 
 | パッケージ | 役割 | 主要技術 |
@@ -39,7 +41,11 @@ TypeScript フルスタック、pnpm monorepo 構成。
 | server | API + DB | Hono, Drizzle ORM (beta.20), MySQL, zod |
 | worker | 棋譜解析 | USI プロトコル, やねうら王 |
 
+- MySQL: 開発経験が多いため選択
+- Drizzle ORM beta.20: 1.0 正式リリースが近く、早めにキャッチアップする目的
+
 Hono RPC (`AppType` export + `hc<AppType>`) で server → web/worker 間の型を共有。shared パッケージは持たない。
+Drizzle ORM の型情報を Hono RPC 経由でフロントエンドまで伝えられるのが利点。
 
 ## DB スキーマ
 
@@ -132,7 +138,7 @@ Vite dev server が `/api` プレフィックスを除去しつつ server にプ
 
 | | 開発用 (Dockerfile) | 本番用 (Dockerfile.prod) |
 |---|---|---|
-| EDITION | MATERIAL（駒得） | NNUE |
+| EDITION | MATERIAL（駒得、開発環境の低スペックに合わせた軽量版） | NNUE |
 | 評価関数 | なし | 水匠5 (nn.bin, ~60MB) |
 | 定跡 | なし | ペタブック (new_petabook233) |
 | TARGET_CPU | OTHER | AVX2 |
@@ -192,7 +198,7 @@ KifuAnalysisResult = {
 
 | サービス | ポート | 備考 |
 |---------|--------|------|
-| db | - | MySQL 8.4, tmpfs（データ揮発） |
+| db | - | MySQL 8.4, tmpfs（データ揮発、高速化 + テストデータが小規模のため） |
 | db-prep | - | drizzle-kit push + sample.kif シード |
 | server | 4000 | tsx watch, API_KEY=dev-api-key |
 | web | 5173 | Vite dev server, API_URL=http://server:4000 |
@@ -204,7 +210,7 @@ KifuAnalysisResult = {
 
 ### 認証 (優先度: 高)
 - Web 向けルートに認証が必要（グローバル公開のため）
-- 候補: Hono で静的ファイル配信 + Basic 認証、nginx Basic 認証、Cloudflare Access 等
+- 候補: 本番 nginx の Basic 認証が最有力（個人用のため）、Hono 側での実装、Cloudflare Access 等
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
 ### 将棋ウォーズ棋譜自動取得 (優先度: 中)

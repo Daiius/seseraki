@@ -6,7 +6,12 @@ TypeScript フルスタック、pnpm monorepo 構成。
 ## システム構成
 
 ```
-┌─────────┐     ┌─────────┐     ┌─────────┐
+                    ┌─────────┐
+                    │ 将棋    │
+                    │ ウォーズ │
+                    └────┬────┘
+                         │ [未実装] 棋譜自動取得
+┌─────────┐     ┌───────▼─┐     ┌─────────┐
 │   web   │────▶│ server  │◀────│ worker  │
 │ React   │proxy│ Hono    │API  │ Node.js │
 │ Vite    │/api │ Drizzle │KEY  │ USI     │
@@ -14,12 +19,23 @@ TypeScript フルスタック、pnpm monorepo 構成。
                      │               │
                 ┌────▼────┐     ┌────▼────┐
                 │  MySQL  │     │yaneuraou│
-                └─────────┘     └─────────┘
+                └─────────┘     │+水匠5  │
+                                │+ペタブック│
+                                └─────────┘
 ```
+
+### デプロイ構成
+
+| 環境 | サービス | 備考 |
+|------|---------|------|
+| VPS (1GB) | web + server + db | グローバルにアクセス可能 |
+| デスクトップ PC (32GB) | worker | API_KEY で server に接続。CPU 解析 |
+
+### パッケージ
 
 | パッケージ | 役割 | 主要技術 |
 |-----------|------|---------|
-| web | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI |
+| web | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
 | server | API + DB | Hono, Drizzle ORM (beta.20), MySQL, zod |
 | worker | 棋譜解析 | USI プロトコル, やねうら王 |
 
@@ -38,7 +54,7 @@ kifus
 moveAnalyses                   -- 1手ごとの解析レコード
 ├── id: serial PK
 ├── kifuId: FK → kifus.id (CASCADE)
-├── moveNumber: int            -- 局面番号（1 = 初期局面）
+├── moveNumber: int            -- 局面番号（0 = 初期局面）
 ├── movePlayed: varchar(255)?  -- 実際に指された手（USI 表記）
 └── createdAt: timestamp
 
@@ -55,7 +71,7 @@ candidateMoves                 -- MultiPV の候補手
 
 ## API
 
-### Web 向け（認証なし）
+### Web 向け（[未実装] 認証方式検討中）
 
 | Method | Path | 説明 |
 |--------|------|------|
@@ -96,18 +112,61 @@ Worker POST body:
 |------|------|------|
 | `/` | 棋譜一覧 | テーブル表示。サーバー未接続時は警告を表示 |
 | `/kifus/new` | 棋譜登録 | タイトル + KIF テキスト貼り付けフォーム |
-| `/kifus/$id` | 棋譜詳細 | KIF テキスト表示 + 解析結果テーブル（MultiPV 対応） |
+| `/kifus/$id` | 棋譜詳細 | 将棋盤 + 評価値 + 解析結果 |
+
+### 棋譜詳細画面の機能
+
+- **将棋盤**: 9x9 テキスト盤面。先手=黒字、後手=赤字+180度反転。スライダーで局面移動
+- **持ち駒表示**: 先手・後手それぞれ
+- **局面評価値**: 先手視点のスコア + 形勢判断ラベル（互角/有利/優勢/勝勢/詰み）
+- **最善手比較**: 実際の手と最善手が異なる場合、候補手と読み筋を表示
+- **日本語表記**: USI→駒名付き日本語変換（▲７六歩(77)）。盤面追跡で駒名を解決
+- **KIF テキスト**: 折りたたみ表示
+- **候補手詳細**: 折りたたみ表示
 
 Vite dev server が `/api` プレフィックスを除去しつつ server にプロキシ。
 
 ## Worker
 
-- `packages/worker/Dockerfile.engine` でやねうら王をソースビルド（マルチステージ）
-- 本番 Docker イメージにはやねうら王バイナリ + Node.js worker プロセスが同居
-- KIF テキストをパースし、各局面を USI プロトコルでやねうら王に送信
-- MultiPV（デフォルト 3）で候補手を取得
-- 解析結果を `POST /worker/analyses` でサーバーに送信
-- ポーリング間隔: 設定可能（デフォルト 10秒）
+### エンジン構成
+
+| | 開発用 (Dockerfile) | 本番用 (Dockerfile.prod) |
+|---|---|---|
+| EDITION | MATERIAL（駒得） | NNUE |
+| 評価関数 | なし | 水匠5 (nn.bin, ~60MB) |
+| 定跡 | なし | ペタブック (new_petabook233) |
+| TARGET_CPU | OTHER | AVX2 |
+
+### 本番エンジンオプション
+
+| オプション | 値 | 説明 |
+|-----------|-----|------|
+| EvalDir | /usr/local/share/yaneuraou/eval | 水匠5 評価関数 |
+| BookDir | /usr/local/share/yaneuraou/book | ペタブック定跡 |
+| IgnoreBookPly | true | 定跡の手数制限を無視 |
+| FlippedBook | true | 180度回転局面も定跡としてヒット |
+| BookOnTheFly | true | 定跡を逐次読み（メモリ節約） |
+| BookMoves | 999 | 定跡採用の手数制限なし |
+| BookEvalDiff | 0 | 最善手のみ採用 |
+| BookDepthLimit | 0 | 末端の指し手も採用 |
+| Threads | 環境変数 ENGINE_THREADS | |
+| USI_Hash | [未実装] 環境変数で設定予定 | |
+
+### 解析フロー
+
+1. サーバーから未解析の棋譜を取得（`GET /worker/kifus`）
+2. KIF テキストをパース → USI 形式の手列に変換
+3. 各局面を MultiPV（デフォルト 3）で解析。定跡ヒット時はスキップ
+4. 解析結果をサーバーに送信（`POST /worker/analyses`）
+5. ポーリング間隔（デフォルト 10秒）で繰り返し
+
+### 解析 depth 目安
+
+| depth | 用途 | 時間/局面(1CPU) |
+|-------|------|---------------|
+| 10-12 | 簡易解析 | 数秒 |
+| 15-18 | 標準解析 | 数十秒 |
+| 20+ | 詳細解析 | 数分 |
 
 ### USI データ型
 
@@ -134,14 +193,34 @@ KifuAnalysisResult = {
 | サービス | ポート | 備考 |
 |---------|--------|------|
 | db | - | MySQL 8.4, tmpfs（データ揮発） |
-| db-prep | - | drizzle-kit push でスキーマ反映後に終了 |
+| db-prep | - | drizzle-kit push + sample.kif シード |
 | server | 4000 | tsx watch, API_KEY=dev-api-key |
 | web | 5173 | Vite dev server, API_URL=http://server:4000 |
+| worker | - | tsx watch, Material エンジン（開発用） |
 
 ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 
-## 未実装
+## 未実装・計画中
 
-- 将棋盤 UI（盤面描画、指し手の可視化）
-- Worker の本番デプロイ構成
-- 評価値グラフ表示
+### 認証 (優先度: 高)
+- Web 向けルートに認証が必要（グローバル公開のため）
+- 候補: Hono で静的ファイル配信 + Basic 認証、nginx Basic 認証、Cloudflare Access 等
+- ユーザーは自分一人なのでマルチユーザー対応は不要
+
+### 将棋ウォーズ棋譜自動取得 (優先度: 中)
+- 公式 API なし。スクレイピング or 非公式 API で自分の対局履歴を取得
+- 将棋ウォーズの棋譜は CSA 風の独自形式 → KIF に変換して DB に登録
+- 定期ポーリング（1時間に1回程度）で新規対局のみ取得
+- メタデータ（対局日時、レーティング、先手後手、ルール等）の取得範囲は要調査
+
+### 評価値グラフ (優先度: 中)
+- 棋譜詳細画面に評価値の推移グラフを表示
+- 先手視点で +/- のグラフ。悪手の箇所が一目でわかるように
+
+### 局面単位の再解析 (優先度: 低)
+- 特定局面だけ depth を変えて再解析する機能
+- Web UI から「この局面を深く解析」ボタン → worker に解析リクエスト
+
+### USI_Hash 設定 (優先度: 低)
+- 環境変数 `ENGINE_HASH` でハッシュテーブルサイズを設定
+- デスクトップ PC (32GB) では 2048-4096MB を想定

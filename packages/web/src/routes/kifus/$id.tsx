@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { useMemo } from 'react';
+import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { turnSymbol, formatScore } from '../../lib/usi';
 import {
@@ -8,6 +9,7 @@ import {
   applyMove,
   type BoardState,
 } from '../../lib/board';
+import { ShogiBoard } from '../../components/ShogiBoard';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -103,6 +105,8 @@ function KifuDetailPage() {
 
         {kifu.analyses.length > 0 && (
           <>
+            <ShogiBoard analyses={kifu.analyses} />
+
             <div>
               <h3 className="text-lg font-semibold mb-2">局面評価値</h3>
               <div className="overflow-x-auto">
@@ -143,7 +147,7 @@ function KifuDetailPage() {
                           <td>
                             {best ? (
                               <span
-                                className={isBestMove ? '' : 'text-warning'}
+                                className={clsx(!isBestMove && 'text-warning')}
                               >
                                 {turn}
                                 {toJapanese(best.move, state)}

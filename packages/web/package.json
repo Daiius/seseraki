@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@tanstack/react-router": "^1",
+    "clsx": "^2",
     "hono": "^4",
     "react": "^19",
     "react-dom": "^19"

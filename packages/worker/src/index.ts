@@ -20,6 +20,7 @@ async function main() {
   await engine.start();
 
   engine.setOption("Threads", String(config.engineThreads));
+  engine.setOption("USI_Hash", String(config.engineHash));
   if (config.engineEvalDir) {
     engine.setOption("EvalDir", config.engineEvalDir);
   }

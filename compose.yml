@@ -69,10 +69,15 @@ services:
     environment:
       TZ: "Asia/Tokyo"
       ENGINE_PATH: /usr/local/bin/yaneuraou
+      # ENGINE_EVAL_DIR: /usr/local/share/yaneuraou/eval
+      # ENGINE_BOOK_DIR: /usr/local/share/yaneuraou/book
+      # ENGINE_DEPTH: "20"
+      # ENGINE_MULTIPV: "5"
       SERVER_URL: "http://server:4000"
       API_KEY: "dev-api-key"
       USE_MOCK: "false"
       POLL_INTERVAL_MS: "10000"
+    cpus: 1
     command: pnpm --filter worker dev
     depends_on:
       server:

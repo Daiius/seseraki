@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG EDITION=YANEURAOU_ENGINE_NNUE
-ARG TARGET_CPU=AVX2
+ARG TARGET_CPU=OTHER
 
 RUN git clone --depth 1 https://github.com/yaneurao/YaneuraOu.git /yaneuraou
 WORKDIR /yaneuraou/source
@@ -18,7 +18,7 @@ RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suis
     rm /tmp/suisho5.7z
 
 # ペタブック定跡ファイル
-RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/new_petabook233/new_petabook233.7z -O /tmp/petabook.7z && \
+RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/new_petabook233/new_petabook_20250505c.7z -O /tmp/petabook.7z && \
     mkdir -p /book && \
     7z x /tmp/petabook.7z -o/book && \
     rm /tmp/petabook.7z

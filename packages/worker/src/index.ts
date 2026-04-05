@@ -25,6 +25,7 @@ async function main() {
   }
   if (config.engineBookDir) {
     engine.setOption("BookDir", config.engineBookDir);
+    engine.setOption("BookFile", "user_book1.db");
     engine.setOption("IgnoreBookPly", "true");
     engine.setOption("FlippedBook", "true");
     engine.setOption("BookOnTheFly", "true");
@@ -94,6 +95,7 @@ async function main() {
           );
           const result = await analyzeKifu(engine, kifu.kifText, {
             depth: config.engineDepth,
+            multiPv: config.engineMultiPv,
           });
           await client.submitAnalysis(kifu.id, result);
           console.log(

@@ -92,12 +92,15 @@ export async function analyzeKifu(
         ? "position startpos"
         : `position startpos moves ${movesPlayed.join(" ")}`;
 
-    console.log(
-      `[Analysis] Analyzing position ${i}/${usiMoves.length}...`,
-    );
-
+    const t0 = Date.now();
     const result = await engine.analyze(position, `go depth ${depth}`);
+    const elapsed = Date.now() - t0;
     const candidates = extractMultiPvResults(result.infoLines);
+    const isBook = candidates.length > 0 && candidates[0].depth === 0;
+
+    console.log(
+      `[Analysis] ${i}/${usiMoves.length} ${elapsed}ms ${isBook ? "BOOK" : `d${candidates[0]?.depth ?? 0}`} ${candidates.length}candidates`,
+    );
 
     analyses.push({
       moveNumber: i,

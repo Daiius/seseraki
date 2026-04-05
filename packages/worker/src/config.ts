@@ -25,6 +25,7 @@ export function loadConfig() {
     enginePath,
     engineThreads: Number(optionalEnv("ENGINE_THREADS", "1")),
     engineDepth: Number(optionalEnv("ENGINE_DEPTH", "10")),
+    engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,
     engineBookDir: process.env.ENGINE_BOOK_DIR,
     serverUrl: optionalEnv("SERVER_URL", "http://localhost:4000"),

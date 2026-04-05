@@ -3,6 +3,8 @@ import { UsiEngine } from "./usi/engine.js";
 import { MockTaskSource } from "./polling/mock.js";
 import type { TaskSource } from "./polling/types.js";
 import { analyzeTask } from "./analysis.js";
+import { createClient } from "./polling/client.js";
+import { analyzeKifu } from "./kifu-analysis.js";
 
 async function main() {
   const config = loadConfig();
@@ -20,51 +22,93 @@ async function main() {
   engine.setOption("Threads", String(config.engineThreads));
   await engine.ready();
 
-  // Initialize task source
-  const taskSource: TaskSource = config.useMock
-    ? new MockTaskSource()
-    : (() => {
-        throw new Error("Real task source not implemented yet");
-      })();
-
-  // Polling loop
   let running = true;
   let analyzing = false;
 
-  const poll = async () => {
-    if (!running || analyzing) return;
+  if (config.useMock) {
+    // Mock mode: use TaskSource interface for simple position analysis
+    const taskSource: TaskSource = new MockTaskSource();
 
-    try {
-      analyzing = true;
-      const task = await taskSource.fetchPending();
-      if (task) {
-        console.log(`[Worker] Analyzing task: ${task.id}`);
-        const result = await analyzeTask(engine, task);
-        await taskSource.submitResult(result);
+    const poll = async () => {
+      if (!running || analyzing) return;
+      try {
+        analyzing = true;
+        const task = await taskSource.fetchPending();
+        if (task) {
+          console.log(`[Worker] Analyzing task: ${task.id}`);
+          const result = await analyzeTask(engine, task);
+          await taskSource.submitResult(result);
+        }
+      } catch (err) {
+        console.error("[Worker] Error during analysis:", err);
+      } finally {
+        analyzing = false;
       }
-    } catch (err) {
-      console.error("[Worker] Error during analysis:", err);
-    } finally {
-      analyzing = false;
-    }
-  };
+    };
 
-  const intervalId = setInterval(poll, config.pollIntervalMs);
-  // Run first poll immediately
-  await poll();
+    const intervalId = setInterval(poll, config.pollIntervalMs);
+    await poll();
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    console.log("\n[Worker] Shutting down...");
-    running = false;
-    clearInterval(intervalId);
-    await engine.quit();
-    console.log("[Worker] Shutdown complete");
-    process.exit(0);
-  };
+    const shutdown = async () => {
+      console.log("\n[Worker] Shutting down...");
+      running = false;
+      clearInterval(intervalId);
+      await engine.quit();
+      console.log("[Worker] Shutdown complete");
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  } else {
+    // Real mode: fetch unanalyzed kifus from server, analyze full kifu
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error("API_KEY is required when USE_MOCK=false");
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+    const client = createClient(config.serverUrl, apiKey);
+
+    const poll = async () => {
+      if (!running || analyzing) return;
+      try {
+        analyzing = true;
+        const kifus = await client.fetchUnanalyzedKifus();
+        if (kifus.length === 0) {
+          console.log("[Worker] No unanalyzed kifus");
+          return;
+        }
+        for (const kifu of kifus) {
+          if (!running) break;
+          console.log(
+            `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
+          );
+          const result = await analyzeKifu(engine, kifu.kifText, {
+            depth: config.engineDepth,
+          });
+          await client.submitAnalysis(kifu.id, result);
+          console.log(
+            `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
+          );
+        }
+      } catch (err) {
+        console.error("[Worker] Error during analysis:", err);
+      } finally {
+        analyzing = false;
+      }
+    };
+
+    const intervalId = setInterval(poll, config.pollIntervalMs);
+    await poll();
+
+    const shutdown = async () => {
+      console.log("\n[Worker] Shutting down...");
+      running = false;
+      clearInterval(intervalId);
+      await engine.quit();
+      console.log("[Worker] Shutdown complete");
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  }
 
   console.log(
     `[Worker] Polling every ${config.pollIntervalMs}ms. Press Ctrl+C to stop.`,

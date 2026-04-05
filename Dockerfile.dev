@@ -11,3 +11,4 @@ COPY tsconfig.json ./
 COPY packages/server/ ./packages/server/
 COPY packages/web/ ./packages/web/
 COPY packages/worker/ ./packages/worker/
+COPY sample.kif ./sample.kif

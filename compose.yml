@@ -27,7 +27,8 @@ services:
       sh -c "pnpm drizzle-kit push
       --dialect mysql --schema=./src/db/schema.ts
       --host=$$DB_HOST --user=$$MYSQL_USER
-      --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE"
+      --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE
+      && pnpm tsx src/db/seed.ts /workspace/sample.kif"
     depends_on:
       db:
         condition: service_healthy
@@ -57,6 +58,34 @@ services:
           target: /workspace/packages/server
           ignore:
             - node_modules/
+        - action: rebuild
+          path: pnpm-lock.yaml
+
+  worker:
+    build:
+      context: .
+      dockerfile: packages/worker/Dockerfile
+    working_dir: /workspace
+    environment:
+      TZ: "Asia/Tokyo"
+      ENGINE_PATH: /usr/local/bin/yaneuraou
+      SERVER_URL: "http://server:4000"
+      API_KEY: "dev-api-key"
+      USE_MOCK: "false"
+      POLL_INTERVAL_MS: "10000"
+    command: pnpm --filter worker dev
+    depends_on:
+      server:
+        condition: service_started
+    develop:
+      watch:
+        - action: sync
+          path: ./packages/worker
+          target: /workspace/packages/worker
+          ignore:
+            - node_modules/
+            - Dockerfile
+            - Dockerfile.engine
         - action: rebuild
           path: pnpm-lock.yaml
 

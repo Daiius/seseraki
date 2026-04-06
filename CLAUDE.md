@@ -13,7 +13,8 @@ pnpm dev          # docker compose watch で全サービス起動（db, server, 
 - DB: MySQL 8.4（tmpfs、データ揮発）
 - ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド
 
-DB 接続情報は `.env.database`（gitignore 対象外、開発用固定値）。
+DB 接続情報は `.env.database`、server の秘密情報（API_KEY, SWARS_SESSION_COOKIE, SWARS_BASE_URL）は `.env.server` で管理。
+いずれも `.env.*` パターンで gitignore 対象。
 
 ## 型チェック・ビルド
 

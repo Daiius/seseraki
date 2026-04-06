@@ -4,4 +4,7 @@ dist/
 .env
 .env.*
 !.env.example
+docs/
+.claude/
+.playwright-mcp/
 

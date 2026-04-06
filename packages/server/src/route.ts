@@ -141,7 +141,7 @@ const route = app
       return c.json({ ok: true }, 201);
     },
   )
-  // --- 将棋ウォーズ棋譜取得 ---
+  // --- swars 棋譜取得 ---
   .post(
     '/swars/import',
     apiKeyRequired,

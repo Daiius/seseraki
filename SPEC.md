@@ -1,4 +1,4 @@
-# Seseragi（細流棋）棋譜解析システム仕様書
+# Seseraki（細流棋）棋譜解析システム仕様書
 
 スペックの余っているデスクトップ PC で棋譜解析を行う個人開発システム。
 TypeScript フルスタック、pnpm monorepo 構成。
@@ -7,8 +7,8 @@ TypeScript フルスタック、pnpm monorepo 構成。
 
 ```
                     ┌─────────┐
-                    │ 将棋    │
-                    │ ウォーズ │
+                    │  swars  │
+                    │         │
                     └────┬────┘
                          │ [未実装] 棋譜自動取得
 ┌─────────┐     ┌───────▼─┐     ┌─────────┐
@@ -54,7 +54,7 @@ kifus
 ├── id: serial PK
 ├── title: varchar(255)
 ├── kifText: text              -- KIF 形式の棋譜テキスト
-├── swarsGameKey: varchar(255) UNIQUE -- 将棋ウォーズ対局キー（重複検知用、nullable）
+├── swarsGameKey: varchar(255) UNIQUE -- swars対局キー（重複検知用、nullable）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 
@@ -93,7 +93,7 @@ candidateMoves                 -- MultiPV の候補手
 |--------|------|------|
 | GET | `/worker/kifus` | 未解析の棋譜を取得 |
 | POST | `/worker/analyses` | 解析結果を一括登録 |
-| POST | `/swars/import` | 将棋ウォーズ棋譜取得。body: `{ userId, gtype?, pages? }` |
+| POST | `/swars/import` | swars棋譜取得。body: `{ userId, gtype?, pages? }` |
 
 Worker POST body:
 ```
@@ -220,9 +220,9 @@ KifuAnalysisResult = {
 - 候補: 本番 nginx の Basic 認証が最有力（個人用のため）、Hono 側での実装、Cloudflare Access 等
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
-### 将棋ウォーズ棋譜取得 (実装済み・ポーリング未実装)
+### swars棋譜取得 (実装済み・ポーリング未実装)
 
-`POST /swars/import` で手動トリガー。詳細は `docs/swars-cookie-test.md` を参照。
+`POST /swars/import` で手動トリガー。
 
 **実装済み:**
 - 履歴ページから対局キー抽出 → 個別棋譜取得 → CSA→KIF 変換 → DB 保存

@@ -10,7 +10,7 @@ TypeScript フルスタック、pnpm monorepo 構成。
                     │  swars  │
                     │         │
                     └────┬────┘
-                         │ [未実装] 棋譜自動取得
+                         │ 棋譜取得（手動トリガー）
 ┌─────────┐     ┌───────▼─┐     ┌─────────┐
 │   web   │────▶│ server  │◀────│ worker  │
 │ React   │proxy│ Hono    │API  │ Node.js │
@@ -82,7 +82,7 @@ candidateMoves                 -- MultiPV の候補手
 
 | Method | Path | 説明 |
 |--------|------|------|
-| GET | `/kifus` | 棋譜一覧（id, title, createdAt） |
+| GET | `/kifus` | 棋譜一覧（id, title, createdAt, analyzed） |
 | GET | `/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
 | POST | `/kifus` | 棋譜登録。body: `{ title, kifText }` → `{ id }` |
 | DELETE | `/kifus/:id` | 棋譜削除（解析結果も CASCADE 削除） |
@@ -129,9 +129,8 @@ Worker POST body:
 - **局面評価値**: 先手視点のスコア + 形勢判断ラベル（互角/有利/優勢/勝勢/詰み）
 - **候補手一覧**: 各候補に読み筋・探索深さ・実手マーク・最善手との差異を表示
 - **日本語表記**: USI→駒名付き日本語変換（▲７六歩(77)）。盤面追跡で駒名を解決
-- **評価値グラフ**: SVG 直書きの折れ線グラフ。先手有利=上、後手有利=下。スライダーと連動、クリックで局面移動
 - **KIF テキスト**: 折りたたみ表示
-- **候補手詳細**: 折りたたみ表示
+- **評価値グラフ**: SVG 直書きの折れ線グラフ。先手有利=上、後手有利=下。スライダーと連動、クリックで局面移動
 
 Vite dev server が `/api` プレフィックスを除去しつつ server にプロキシ。
 
@@ -169,7 +168,7 @@ Vite dev server が `/api` プレフィックスを除去しつつ server にプ
 
 1. サーバーから未解析の棋譜を取得（`GET /worker/kifus`）
 2. KIF テキストをパース → USI 形式の手列に変換
-3. 各局面を MultiPV（デフォルト 3）で解析。定跡ヒット時はスキップ
+3. 各局面を MultiPV（デフォルト 3）で解析。定跡ヒット時はエンジンが即座に候補手を返す
 4. 解析結果をサーバーに送信（`POST /worker/analyses`）
 5. ポーリング間隔（デフォルト 10秒）で繰り返し
 
@@ -207,11 +206,12 @@ KifuAnalysisResult = {
 |---------|--------|------|
 | db | - | MySQL 8.4, tmpfs（データ揮発、高速化 + テストデータが小規模のため） |
 | db-prep | - | drizzle-kit push + sample.kif シード |
-| server | 4000 | tsx watch, API_KEY=dev-api-key |
+| server | 4000 | tsx watch, `.env.server` で API_KEY / SWARS_SESSION_COOKIE / SWARS_BASE_URL を管理 |
 | web | 5173 | Vite dev server, API_URL=http://server:4000 |
 | worker | - | tsx watch, Material エンジン（開発用）, cpus: 1 |
 
 ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
+db-prep は `drizzle-kit push --force` で非対話実行。
 
 ## 未実装・計画中
 

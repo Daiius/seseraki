@@ -6,7 +6,7 @@ export const Route = createRootRoute({
       <nav className="navbar bg-base-200">
         <div className="flex-1">
           <Link to="/" className="btn btn-ghost text-xl">
-            Shogi
+            Seseragi
           </Link>
         </div>
         <div className="flex-none">

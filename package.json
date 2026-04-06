@@ -1,5 +1,5 @@
 {
-  "name": "shogi",
+  "name": "seseragi",
   "private": true,
   "scripts": {
     "dev": "docker compose watch",

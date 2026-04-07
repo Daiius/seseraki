@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsx esbuild.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "exports": {
@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^22",
     "drizzle-kit": "1.0.0-beta.20",
+    "esbuild": "^0.25",
     "tsx": "^4"
   }
 }

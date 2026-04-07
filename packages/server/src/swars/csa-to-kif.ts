@@ -102,6 +102,13 @@ function formatResult(result: string): string | null {
   return '投了';
 }
 
+/** swarsGameKey (e.g. "user1-user2-20260401_123456") から対局日時を抽出 */
+export function parsePlayedAt(gameKey: string): Date | null {
+  const m = gameKey.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return null;
+  return new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}+09:00`);
+}
+
 export function formatTitle(game: SwarsGameData): string {
   const gtypeLabel =
     { '': '10分', sb: '3分', s1: '10秒' }[game.gtype] ?? game.gtype;

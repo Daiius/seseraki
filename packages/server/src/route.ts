@@ -1,11 +1,11 @@
 import { Hono } from 'hono';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq, count } from 'drizzle-orm';
+import { eq, count, desc, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
-import { swarsToKif, formatTitle } from './swars/csa-to-kif.js';
+import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 
 export const app = new Hono();
@@ -21,22 +21,43 @@ const candidateMoveSchema = z.object({
 
 const route = app
   // --- Web 向け（認証なし） ---
-  .get('/kifus', async (c) => {
-    const rows = await db
-      .select({
-        id: kifus.id,
-        title: kifus.title,
-        createdAt: kifus.createdAt,
-        analysisCount: count(moveAnalyses.id),
-      })
-      .from(kifus)
-      .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
-      .groupBy(kifus.id)
-      .orderBy(kifus.createdAt);
-    return c.json(
-      rows.map((r) => ({ ...r, analyzed: r.analysisCount > 0 })),
-    );
-  })
+  .get(
+    '/kifus',
+    zv('query', z.object({ page: z.coerce.number().min(1).default(1) })),
+    async (c) => {
+      const { page } = c.req.valid('query');
+      const limit = 50;
+      const offset = (page - 1) * limit;
+
+      const [{ total }] = await db
+        .select({ total: count() })
+        .from(kifus);
+
+      const rows = await db
+        .select({
+          id: kifus.id,
+          title: kifus.title,
+          playedAt: kifus.playedAt,
+          createdAt: kifus.createdAt,
+          analysisCount: count(moveAnalyses.id),
+        })
+        .from(kifus)
+        .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
+        .groupBy(kifus.id)
+        .orderBy(desc(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`))
+        .limit(limit)
+        .offset(offset);
+
+      return c.json({
+        kifus: rows.map((r) => ({ ...r, analyzed: r.analysisCount > 0 })),
+        pagination: {
+          page,
+          totalPages: Math.ceil(total / limit),
+          total,
+        },
+      });
+    },
+  )
   .get(
     '/kifus/:id',
     zv('param', z.object({ id: z.coerce.number() })),
@@ -189,9 +210,10 @@ const route = app
           const gameData = await fetchGameData(gameKey);
           const kifText = swarsToKif(gameData);
           const title = formatTitle(gameData);
+          const playedAt = parsePlayedAt(gameKey);
           const [result] = await db
             .insert(kifus)
-            .values({ title, kifText, swarsGameKey: gameKey })
+            .values({ title, kifText, swarsGameKey: gameKey, playedAt })
             .$returningId();
           imported.push({ id: result.id, gameKey });
         } catch (e) {

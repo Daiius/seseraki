@@ -1,21 +1,30 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 
 export const Route = createFileRoute('/')({
-  loader: async () => {
+  validateSearch: (search: Record<string, unknown>): { page?: number } => ({
+    page: Number(search.page) || undefined,
+  }),
+  loaderDeps: ({ search }) => ({ page: search.page ?? 1 }),
+  loader: async ({ deps: { page } }) => {
     try {
-      const res = await client.kifus.$get();
-      if (!res.ok) return { kifus: [], error: `サーバーエラー (${res.status})` };
-      return { kifus: await res.json(), error: null };
+      const res = await client.kifus.$get({ query: { page } });
+      if (!res.ok) return { kifus: [], pagination: null, error: `サーバーエラー (${res.status})` };
+      const data = await res.json();
+      return { kifus: data.kifus, pagination: data.pagination, error: null };
     } catch {
-      return { kifus: [], error: 'サーバーに接続できません' };
+      return { kifus: [], pagination: null, error: 'サーバーに接続できません' };
     }
   },
   component: KifuListPage,
 });
 
 function KifuListPage() {
-  const { kifus, error } = Route.useLoaderData();
+  const { kifus, pagination, error } = Route.useLoaderData();
+  const { page = 1 } = Route.useSearch();
+  const navigate = useNavigate();
+
+  const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
   return (
     <div>
@@ -31,48 +40,75 @@ function KifuListPage() {
           </Link>
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>タイトル</th>
-                <th>解析</th>
-                <th>登録日時</th>
-              </tr>
-            </thead>
-            <tbody>
-              {kifus.map((kifu) => (
-                <tr key={kifu.id} className="hover">
-                  <td>{kifu.id}</td>
-                  <td>
-                    <Link
-                      to="/kifus/$id"
-                      params={{ id: String(kifu.id) }}
-                      className="link"
-                    >
-                      {kifu.title}
-                    </Link>
-                  </td>
-                  <td>
-                    {'analyzed' in kifu && (
-                      <span
-                        className={
-                          kifu.analyzed
-                            ? 'badge badge-success badge-sm'
-                            : 'badge badge-ghost badge-sm'
-                        }
-                      >
-                        {kifu.analyzed ? '済' : '未'}
-                      </span>
-                    )}
-                  </td>
-                  <td>{new Date(kifu.createdAt).toLocaleString('ja-JP')}</td>
+        <>
+          <div className="overflow-x-auto">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>タイトル</th>
+                  <th>解析</th>
+                  <th>対局日時</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {kifus.map((kifu) => (
+                  <tr key={kifu.id} className="hover">
+                    <td>{kifu.id}</td>
+                    <td>
+                      <Link
+                        to="/kifus/$id"
+                        params={{ id: String(kifu.id) }}
+                        className="link"
+                      >
+                        {kifu.title}
+                      </Link>
+                    </td>
+                    <td>
+                      {'analyzed' in kifu && (
+                        <span
+                          className={
+                            kifu.analyzed
+                              ? 'badge badge-success badge-sm'
+                              : 'badge badge-ghost badge-sm'
+                          }
+                        >
+                          {kifu.analyzed ? '済' : '未'}
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      {kifu.playedAt
+                        ? new Date(kifu.playedAt).toLocaleString('ja-JP')
+                        : new Date(kifu.createdAt).toLocaleString('ja-JP')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {pagination && pagination.totalPages > 1 && (
+            <div className="join mt-4 flex justify-center">
+              <button
+                className="join-item btn"
+                disabled={page <= 1}
+                onClick={() => goToPage(page - 1)}
+              >
+                «
+              </button>
+              <button className="join-item btn">
+                {page} / {pagination.totalPages}
+              </button>
+              <button
+                className="join-item btn"
+                disabled={page >= pagination.totalPages}
+                onClick={() => goToPage(page + 1)}
+              >
+                »
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

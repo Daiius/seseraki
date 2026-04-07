@@ -37,6 +37,11 @@ const route = app
         .select({
           id: kifus.id,
           title: kifus.title,
+          sente: kifus.sente,
+          gote: kifus.gote,
+          senteDan: kifus.senteDan,
+          goteDan: kifus.goteDan,
+          result: kifus.result,
           playedAt: kifus.playedAt,
           createdAt: kifus.createdAt,
           analysisCount: count(moveAnalyses.id),
@@ -213,7 +218,17 @@ const route = app
           const playedAt = parsePlayedAt(gameKey);
           const [result] = await db
             .insert(kifus)
-            .values({ title, kifText, swarsGameKey: gameKey, playedAt })
+            .values({
+              title,
+              kifText,
+              sente: gameData.sente,
+              gote: gameData.gote,
+              senteDan: gameData.sente_dan,
+              goteDan: gameData.gote_dan,
+              result: gameData.result,
+              swarsGameKey: gameKey,
+              playedAt,
+            })
             .$returningId();
           imported.push({ id: result.id, gameKey });
         } catch (e) {

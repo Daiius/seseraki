@@ -10,8 +10,18 @@ pnpm dev          # docker compose watch で全サービス起動（db, server, 
 
 - web: http://localhost:5173
 - server: http://localhost:4000
-- DB: MySQL 8.4（tmpfs、データ揮発）
+- DB: MySQL 8.4（named volume で永続。`docker compose down -v` で初期化）
 - ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド
+
+## DB 操作
+
+```bash
+pnpm db:migrate   # スキーマ変更を DB に反映（drizzle-kit push --force）
+pnpm db:seed      # サンプルデータ投入（初回のみ必要、既存データがあればスキップ）
+```
+
+初回セットアップ: `pnpm dev` で起動後、`pnpm db:migrate && pnpm db:seed` を実行。
+スキーマ変更時: `pnpm db:migrate` を実行。
 
 DB 接続情報は `.env.database`、server の秘密情報（API_KEY, SWARS_SESSION_COOKIE, SWARS_BASE_URL）は `.env.server` で管理。
 いずれも `.env.*` パターンで gitignore 対象。

@@ -6,6 +6,8 @@
     "dev:web": "pnpm --filter web dev",
     "dev:server": "pnpm --filter server dev",
     "dev:worker": "pnpm --filter worker dev",
+    "db:migrate": "pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost drizzle-kit push --force'",
+    "db:seed": "pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost tsx src/db/seed.ts ../../sample.kif'",
     "down": "docker compose down",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck"

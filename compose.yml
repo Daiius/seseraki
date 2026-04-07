@@ -5,8 +5,10 @@ services:
       TZ: "Asia/Tokyo"
     env_file:
       - .env.database
-    tmpfs:
-      - /var/lib/mysql
+    volumes:
+      - db-data:/var/lib/mysql
+    ports:
+      - "3306:3306"
     cap_add:
       - SYS_NICE
     healthcheck:
@@ -16,22 +18,23 @@ services:
       retries: 3
       start_period: 5s
 
-  db-prep:
-    build:
-      context: .
-      dockerfile: Dockerfile.dev
-    working_dir: /workspace/packages/server
-    env_file:
-      - .env.database
-    command: >
-      sh -c "pnpm drizzle-kit push --force
-      --dialect mysql --schema=./src/db/schema.ts
-      --host=$$DB_HOST --user=$$MYSQL_USER
-      --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE
-      && pnpm tsx src/db/seed.ts /workspace/sample.kif"
-    depends_on:
-      db:
-        condition: service_healthy
+  # db-prep: one-shot マイグレーション＋シード（廃止 → pnpm db:migrate / db:seed に移行）
+  # db-prep:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.dev
+  #   working_dir: /workspace/packages/server
+  #   env_file:
+  #     - .env.database
+  #   command: >
+  #     sh -c "pnpm drizzle-kit push --force
+  #     --dialect mysql --schema=./src/db/schema.ts
+  #     --host=$$DB_HOST --user=$$MYSQL_USER
+  #     --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE
+  #     && pnpm tsx src/db/seed.ts /workspace/sample.kif"
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
 
   server:
     build:
@@ -45,8 +48,8 @@ services:
       TZ: "Asia/Tokyo"
     command: pnpm --filter server dev
     depends_on:
-      db-prep:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     expose:
       - "4000"
     ports:
@@ -119,3 +122,6 @@ services:
             - node_modules/
         - action: rebuild
           path: pnpm-lock.yaml
+
+volumes:
+  db-data:

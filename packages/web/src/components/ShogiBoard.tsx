@@ -36,25 +36,30 @@ interface Analysis {
 
 interface Props {
   analyses: Analysis[];
+  sente?: string | null;
+  gote?: string | null;
 }
 
 function HandDisplay({
   hand,
   side,
+  name,
 }: {
   hand: Partial<Record<PieceKind, number>>;
   side: 'sente' | 'gote';
+  name?: string | null;
 }) {
   const pieces = HAND_ORDER.flatMap((kind) => {
     const count = hand[kind];
     if (!count) return [];
     return [`${PIECE_DISPLAY[kind]}${count > 1 ? count : ''}`];
   });
-  const label = side === 'sente' ? '☗先手' : '☖後手';
+  const symbol = side === 'sente' ? '☗' : '☖';
+  const label = name ?? (side === 'sente' ? '先手' : '後手');
   return (
-    <div className="text-sm">
-      <span className="font-semibold">{label}: </span>
-      {pieces.length > 0 ? pieces.join(' ') : 'なし'}
+    <div className="text-sm flex items-center">
+      <span className="font-semibold">{symbol}{label}</span>
+      <span className="ml-auto">{pieces.length > 0 ? pieces.join(' ') : 'なし'}</span>
     </div>
   );
 }
@@ -102,7 +107,7 @@ function BoardGrid({ state }: { state: BoardState }) {
   );
 }
 
-export function ShogiBoard({ analyses }: Props) {
+export function ShogiBoard({ analyses, sente, gote }: Props) {
   const sortedAnalyses = useMemo(
     () => [...analyses].sort((a, b) => a.moveNumber - b.moveNumber),
     [analyses],
@@ -183,9 +188,9 @@ export function ShogiBoard({ analyses }: Props) {
       <div className="flex gap-6 flex-wrap">
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
-          <HandDisplay hand={currentState.hand.gote} side="gote" />
+          <HandDisplay hand={currentState.hand.gote} side="gote" name={gote} />
           <BoardGrid state={currentState} />
-          <HandDisplay hand={currentState.hand.sente} side="sente" />
+          <HandDisplay hand={currentState.hand.sente} side="sente" name={sente} />
         </div>
 
         {/* 評価値・候補手情報 */}

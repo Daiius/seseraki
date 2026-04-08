@@ -105,7 +105,7 @@ function KifuDetailPage() {
 
         {kifu.analyses.length > 0 && (
           <>
-            <ShogiBoard analyses={kifu.analyses} />
+            <ShogiBoard analyses={kifu.analyses} sente={kifu.sente} gote={kifu.gote} />
 
             <div>
               <h3 className="text-lg font-semibold mb-2">局面評価値</h3>

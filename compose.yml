@@ -69,20 +69,10 @@ services:
       context: .
       dockerfile: packages/worker/Dockerfile
     working_dir: /workspace
+    env_file:
+      - .env.worker
     environment:
       TZ: "Asia/Tokyo"
-      ENGINE_PATH: /usr/local/bin/yaneuraou
-      # ENGINE_EVAL_DIR: /usr/local/share/yaneuraou/eval
-      # ENGINE_BOOK_DIR: /usr/local/share/yaneuraou/book
-      # ENGINE_DEPTH: "20"
-      # ENGINE_MULTIPV: "5"
-      # ENGINE_HASH: "128"
-      ENGINE_DEPTH: "10"
-      # ENGINE_BYOYOMI: "5000"
-      SERVER_URL: "http://server:4000"
-      API_KEY: "dev-api-key"
-      USE_MOCK: "false"
-      POLL_INTERVAL_MS: "10000"
     cpus: 1
     command: pnpm --filter worker start
     depends_on:

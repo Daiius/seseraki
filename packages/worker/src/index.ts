@@ -80,15 +80,14 @@ async function main() {
 
     const client = createClient(config.serverUrl, apiKey);
 
+    console.log("[Worker] Ready, waiting for jobs...");
+
     const poll = async () => {
       if (!running || analyzing) return;
       try {
         analyzing = true;
         const kifu = await client.fetchNextKifu();
-        if (!kifu) {
-          console.log("[Worker] No unanalyzed kifus");
-          return;
-        }
+        if (!kifu) return;
         console.log(
           `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
         );
@@ -102,7 +101,7 @@ async function main() {
           `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
         );
       } catch (err) {
-        console.error("[Worker] Error during analysis:", err);
+        console.error("[Worker] Error:", err);
       } finally {
         analyzing = false;
       }
@@ -112,7 +111,7 @@ async function main() {
     await poll();
 
     const shutdown = async () => {
-      console.log("\n[Worker] Shutting down...");
+      console.log("[Worker] Shutting down...");
       running = false;
       clearInterval(intervalId);
       await engine.quit();
@@ -122,10 +121,6 @@ async function main() {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   }
-
-  console.log(
-    `[Worker] Polling every ${config.pollIntervalMs}ms. Press Ctrl+C to stop.`,
-  );
 }
 
 main().catch((err) => {

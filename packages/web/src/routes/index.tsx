@@ -1,4 +1,5 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { useState } from 'react';
+import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 
 export const Route = createFileRoute('/')({
@@ -23,12 +24,58 @@ function KifuListPage() {
   const { kifus, pagination, error } = Route.useLoaderData();
   const { page = 1 } = Route.useSearch();
   const navigate = useNavigate();
+  const router = useRouter();
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
 
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
+  const handleImport = async () => {
+    const userId = import.meta.env.VITE_SWARS_USER_ID;
+    const apiKey = import.meta.env.VITE_CLIENT_API_KEY;
+    if (!userId || !apiKey) return;
+
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const res = await client.swars.import.$post(
+        { json: { userId, pages: 1 } },
+        { headers: { Authorization: `Bearer ${apiKey}` } },
+      );
+      if (!res.ok) {
+        setImportResult(`取得失敗 (${res.status})`);
+        return;
+      }
+      const data = await res.json();
+      const count = data.imported.length;
+      setImportResult(
+        count > 0 ? `${count}件の棋譜を取得しました` : '新しい棋譜はありません',
+      );
+      if (count > 0) router.invalidate();
+    } catch {
+      setImportResult('サーバーに接続できません');
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-4">棋譜一覧</h2>
+      <div className="flex items-center gap-4 mb-4">
+        <h2 className="text-2xl font-bold">棋譜一覧</h2>
+        {import.meta.env.VITE_SWARS_USER_ID && (
+          <button
+            className="btn btn-sm btn-outline"
+            disabled={importing}
+            onClick={handleImport}
+          >
+            {importing ? <span className="loading loading-spinner loading-xs" /> : '更新'}
+          </button>
+        )}
+      </div>
+      {importResult && (
+        <div className="alert alert-info mb-4">{importResult}</div>
+      )}
       {error && (
         <div className="alert alert-warning mb-4">{error}</div>
       )}

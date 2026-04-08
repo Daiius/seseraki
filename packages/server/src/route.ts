@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { eq, count, desc, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
-import { apiKeyRequired } from './middlewares.js';
+import { apiKeyRequired, clientApiKeyRequired } from './middlewares.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 
@@ -170,7 +170,7 @@ const route = app
   // --- swars 棋譜取得 ---
   .post(
     '/swars/import',
-    apiKeyRequired,
+    clientApiKeyRequired,
     zv(
       'json',
       z.object({

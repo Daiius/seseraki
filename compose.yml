@@ -105,9 +105,10 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     working_dir: /workspace
+    env_file:
+      - .env.web
     environment:
       TZ: "Asia/Tokyo"
-      API_URL: "http://server:4000"
     command: pnpm --filter web dev -- --host
     ports:
       - "5173:5173"

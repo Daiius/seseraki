@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq, count, desc, sql } from 'drizzle-orm';
+import { count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired, clientApiKeyRequired } from './middlewares.js';
@@ -44,17 +44,15 @@ const route = app
           result: kifus.result,
           playedAt: kifus.playedAt,
           createdAt: kifus.createdAt,
-          analysisCount: count(moveAnalyses.id),
+          analyzedAt: kifus.analysisCompletedAt,
         })
         .from(kifus)
-        .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
-        .groupBy(kifus.id)
         .orderBy(desc(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`))
         .limit(limit)
         .offset(offset);
 
       return c.json({
-        kifus: rows.map((r) => ({ ...r, analyzed: r.analysisCount > 0 })),
+        kifus: rows.map(({ analyzedAt, ...r }) => ({ ...r, analyzed: analyzedAt !== null })),
         pagination: {
           page,
           totalPages: Math.ceil(total / limit),
@@ -77,16 +75,33 @@ const route = app
         .where(eq(moveAnalyses.kifuId, id))
         .orderBy(moveAnalyses.moveNumber);
 
-      const analysesWithCandidates = await Promise.all(
-        moves.map(async (move) => {
-          const candidates = await db
+      const candidates = moves.length
+        ? await db
             .select()
             .from(candidateMoves)
-            .where(eq(candidateMoves.moveAnalysisId, move.id))
-            .orderBy(candidateMoves.rank);
-          return { ...move, candidates };
-        }),
-      );
+            .where(
+              inArray(
+                candidateMoves.moveAnalysisId,
+                moves.map((move) => move.id),
+              ),
+            )
+            .orderBy(candidateMoves.moveAnalysisId, candidateMoves.rank)
+        : [];
+
+      const candidatesByMoveAnalysisId = new Map<number, typeof candidates>();
+      for (const candidate of candidates) {
+        const existing = candidatesByMoveAnalysisId.get(candidate.moveAnalysisId);
+        if (existing) {
+          existing.push(candidate);
+        } else {
+          candidatesByMoveAnalysisId.set(candidate.moveAnalysisId, [candidate]);
+        }
+      }
+
+      const analysesWithCandidates = moves.map((move) => ({
+        ...move,
+        candidates: candidatesByMoveAnalysisId.get(move.id) ?? [],
+      }));
 
       return c.json({ ...kifu, analyses: analysesWithCandidates });
     },
@@ -114,8 +129,7 @@ const route = app
     const [kifu] = await db
       .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText })
       .from(kifus)
-      .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
-      .where(sql`${moveAnalyses.id} is null`)
+      .where(isNull(kifus.analysisCompletedAt))
       .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
       .limit(1);
     return c.json(kifu ?? null);
@@ -138,29 +152,37 @@ const route = app
     ),
     async (c) => {
       const { kifuId, analyses } = c.req.valid('json');
-      for (const analysis of analyses) {
-        const [inserted] = await db
-          .insert(moveAnalyses)
-          .values({
-            kifuId,
-            moveNumber: analysis.moveNumber,
-            movePlayed: analysis.movePlayed ?? null,
-          })
-          .$returningId();
-        if (analysis.candidates.length > 0) {
-          await db.insert(candidateMoves).values(
-            analysis.candidates.map((c) => ({
-              moveAnalysisId: inserted.id,
-              rank: c.rank,
-              move: c.move,
-              scoreType: c.scoreType,
-              scoreValue: c.scoreValue,
-              pv: c.pv ?? null,
-              depth: c.depth,
-            })),
-          );
+      await db.transaction(async (tx) => {
+        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, kifuId));
+
+        for (const analysis of analyses) {
+          const [inserted] = await tx
+            .insert(moveAnalyses)
+            .values({
+              kifuId,
+              moveNumber: analysis.moveNumber,
+              movePlayed: analysis.movePlayed ?? null,
+            })
+            .$returningId();
+          if (analysis.candidates.length > 0) {
+            await tx.insert(candidateMoves).values(
+              analysis.candidates.map((candidate) => ({
+                moveAnalysisId: inserted.id,
+                rank: candidate.rank,
+                move: candidate.move,
+                scoreType: candidate.scoreType,
+                scoreValue: candidate.scoreValue,
+                pv: candidate.pv ?? null,
+                depth: candidate.depth,
+              })),
+            );
+          }
         }
-      }
+        await tx
+          .update(kifus)
+          .set({ analysisCompletedAt: new Date() })
+          .where(eq(kifus.id, kifuId));
+      });
       return c.json({ ok: true }, 201);
     },
   )

@@ -54,7 +54,14 @@ kifus
 ├── id: serial PK
 ├── title: varchar(255)
 ├── kifText: text              -- KIF 形式の棋譜テキスト
+├── sente: varchar(100)?       -- 先手プレイヤー名
+├── gote: varchar(100)?        -- 後手プレイヤー名
+├── senteDan: smallint?        -- 先手段位
+├── goteDan: smallint?         -- 後手段位
+├── result: varchar(50)?       -- 対局結果
 ├── swarsGameKey: varchar(255) UNIQUE -- swars対局キー（重複検知用、nullable）
+├── playedAt: timestamp?       -- 対局日時
+├── analysisCompletedAt: timestamp? -- 解析完了日時（INDEX）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 
@@ -63,7 +70,8 @@ moveAnalyses                   -- 1手ごとの解析レコード
 ├── kifuId: FK → kifus.id (CASCADE)
 ├── moveNumber: int            -- 局面番号（0 = 初期局面）
 ├── movePlayed: varchar(255)?  -- 実際に指された手（USI 表記）
-└── createdAt: timestamp
+├── createdAt: timestamp
+└── UNIQUE(kifuId, moveNumber)
 
 candidateMoves                 -- MultiPV の候補手
 ├── id: serial PK
@@ -73,7 +81,8 @@ candidateMoves                 -- MultiPV の候補手
 ├── scoreType: varchar(16)     -- "cp"（centipawn）| "mate"
 ├── scoreValue: int
 ├── pv: json (string[])        -- 読み筋
-└── depth: int                 -- 探索深さ
+├── depth: int                 -- 探索深さ
+└── UNIQUE(moveAnalysisId, rank)
 ```
 
 ## API
@@ -82,7 +91,7 @@ candidateMoves                 -- MultiPV の候補手
 
 | Method | Path | 説明 |
 |--------|------|------|
-| GET | `/kifus` | 棋譜一覧（id, title, createdAt, analyzed） |
+| GET | `/kifus` | 棋譜一覧（ページネーション付き、対局日時新しい順） |
 | GET | `/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
 | POST | `/kifus` | 棋譜登録。body: `{ title, kifText }` → `{ id }` |
 | DELETE | `/kifus/:id` | 棋譜削除（解析結果も CASCADE 削除） |
@@ -91,8 +100,13 @@ candidateMoves                 -- MultiPV の候補手
 
 | Method | Path | 説明 |
 |--------|------|------|
-| GET | `/worker/kifus` | 未解析の棋譜を取得 |
-| POST | `/worker/analyses` | 解析結果を一括登録 |
+| GET | `/worker/kifus` | 未解析の最古の棋譜を1件取得（なければ null） |
+| POST | `/worker/analyses` | 解析結果をトランザクションで登録（既存データは DELETE → 再投入） |
+
+### swars 棋譜取得（`Authorization: Bearer <CLIENT_API_KEY>` 必須）
+
+| Method | Path | 説明 |
+|--------|------|------|
 | POST | `/swars/import` | swars棋譜取得。body: `{ userId, gtype?, pages? }` |
 
 Worker POST body:
@@ -118,14 +132,14 @@ Worker POST body:
 
 | パス | 画面 | 内容 |
 |------|------|------|
-| `/` | 棋譜一覧 | テーブル表示。解析済み/未バッジ表示。サーバー未接続時は警告を表示 |
+| `/` | 棋譜一覧 | テーブル表示。解析済み/未バッジ表示。swars 棋譜取得「更新」ボタン。サーバー未接続時は警告を表示 |
 | `/kifus/new` | 棋譜登録 | タイトル + KIF テキスト貼り付けフォーム |
 | `/kifus/$id` | 棋譜詳細 | 将棋盤 + 評価値 + 解析結果 |
 
 ### 棋譜詳細画面の機能
 
 - **将棋盤**: 9x9 テキスト盤面。先手=黒字、後手=赤字+180度反転。スライダーで局面移動
-- **持ち駒表示**: 先手・後手それぞれ
+- **持ち駒表示**: 先手・後手それぞれ。プレイヤー名を左、持ち駒を右に配置
 - **局面評価値**: 先手視点のスコア + 形勢判断ラベル（互角/有利/優勢/勝勢/詰み）
 - **候補手一覧**: 各候補に読み筋・探索深さ・実手マーク・最善手との差異を表示
 - **日本語表記**: USI→駒名付き日本語変換（▲７六歩(77)）。盤面追跡で駒名を解決
@@ -166,11 +180,11 @@ Vite dev server が `/api` プレフィックスを除去しつつ server にプ
 
 ### 解析フロー
 
-1. サーバーから未解析の棋譜を取得（`GET /worker/kifus`）
+1. サーバーから未解析の最古の棋譜を1件取得（`GET /worker/kifus`）
 2. KIF テキストをパース → USI 形式の手列に変換
 3. 各局面を MultiPV（デフォルト 3）で解析。定跡ヒット時はエンジンが即座に候補手を返す
-4. 解析結果をサーバーに送信（`POST /worker/analyses`）
-5. ポーリング間隔（デフォルト 10秒）で繰り返し
+4. 解析結果をサーバーにトランザクションで送信（`POST /worker/analyses`）
+5. ポーリング間隔（デフォルト 10秒）で繰り返し。idle 時はログ出力なし
 
 ### 解析 depth 目安
 
@@ -204,20 +218,20 @@ KifuAnalysisResult = {
 
 | サービス | ポート | 備考 |
 |---------|--------|------|
-| db | - | MySQL 8.4, tmpfs（データ揮発、高速化 + テストデータが小規模のため） |
-| db-prep | - | drizzle-kit push + sample.kif シード |
-| server | 4000 | tsx watch, `.env.server` で API_KEY / SWARS_SESSION_COOKIE / SWARS_BASE_URL を管理 |
-| web | 5173 | Vite dev server, API_URL=http://server:4000 |
-| worker | - | tsx watch, Material エンジン（開発用）, cpus: 1 |
+| db | 3306 | MySQL 8.4, named volume で永続 |
+| server | 4000 | `.env.database` + `.env.server` |
+| web | 5173 | Vite dev server, `.env.web` |
+| worker | - | Material エンジン（開発用）, cpus: 1, `.env.worker` |
 
-ファイル変更は docker watch で自動同期。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
-db-prep は `drizzle-kit push --force` で非対話実行。
+ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
+スキーマ変更時は `pnpm db:migrate`、初回データ投入は `pnpm db:seed` を手動実行。
 
 ## 未実装・計画中
 
 ### 認証 (優先度: 高)
 - Web 向けルートに認証が必要（グローバル公開のため）
-- 候補: 本番 nginx の Basic 認証が最有力（個人用のため）、Hono 側での実装、Cloudflare Access 等
+- 候補: 本番 nginx の Basic 認証が最有力（個人用のため）
+- API_KEY（worker 用）と CLIENT_API_KEY（Web フロントエンド用）の二種類を運用中
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
 ### swars棋譜取得 (実装済み・ポーリング未実装)
@@ -228,7 +242,8 @@ db-prep は `drizzle-kit push --force` で非対話実行。
 - 履歴ページから対局キー抽出 → 個別棋譜取得 → CSA→KIF 変換 → DB 保存
 - `swarsGameKey` カラムによる重複検知
 - 3 秒間隔のレート制限付きフェッチャー
-- `apiKeyRequired` で保護
+- `clientApiKeyRequired` で保護（CLIENT_API_KEY）
+- Web UI の「更新」ボタンからもトリガー可能
 
 **未実装:**
 - 定期ポーリング（1 時間に 1 回の自動取得）

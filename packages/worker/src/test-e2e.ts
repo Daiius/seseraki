@@ -35,14 +35,14 @@ async function main() {
   const client = createClient(SERVER_URL, API_KEY);
 
   // 1. 未解析の棋譜を取得
-  console.log("\n--- Step 1: Fetch unanalyzed kifus ---");
-  const kifus = await client.fetchUnanalyzedKifus();
-  console.log(`Found ${kifus.length} unanalyzed kifu(s)`);
+  console.log("\n--- Step 1: Fetch next unanalyzed kifu ---");
+  const kifu = await client.fetchNextKifu();
 
-  if (kifus.length === 0) {
+  if (!kifu) {
     console.log("No kifus to analyze. Register a kifu first.");
     return;
   }
+  console.log(`Found kifu #${kifu.id}: "${kifu.title}"`);
 
   // 2. エンジン起動
   console.log("\n--- Step 2: Start engine ---");
@@ -51,8 +51,7 @@ async function main() {
   engine.setOption("Threads", "1");
   await engine.ready();
 
-  // 3. 最初の棋譜を解析
-  const kifu = kifus[0];
+  // 3. 棋譜を解析
   console.log(`\n--- Step 3: Analyze kifu #${kifu.id}: "${kifu.title}" ---`);
   console.log(`KIF text (first 200 chars): ${kifu.kifText.slice(0, 200)}...`);
 

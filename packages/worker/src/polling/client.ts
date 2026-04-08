@@ -7,8 +7,8 @@ export function createClient(baseUrl: string, apiKey: string) {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   return {
-    /** 未解析の棋譜を取得 */
-    async fetchUnanalyzedKifus() {
+    /** 未解析の最古の棋譜を1件取得（なければ null） */
+    async fetchNextKifu() {
       const res = await client.worker.kifus.$get();
       if (!res.ok) throw new Error(`Failed to fetch kifus: ${res.status}`);
       return await res.json();

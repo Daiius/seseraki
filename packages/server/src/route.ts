@@ -111,17 +111,14 @@ const route = app
   )
   // --- Worker 向け（API_KEY 必須） ---
   .get('/worker/kifus', apiKeyRequired, async (c) => {
-    const allKifus = await db.select().from(kifus);
-    const unanalyzed = [];
-    for (const kifu of allKifus) {
-      const [row] = await db
-        .select({ id: moveAnalyses.id })
-        .from(moveAnalyses)
-        .where(eq(moveAnalyses.kifuId, kifu.id))
-        .limit(1);
-      if (!row) unanalyzed.push(kifu);
-    }
-    return c.json(unanalyzed);
+    const [kifu] = await db
+      .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText })
+      .from(kifus)
+      .leftJoin(moveAnalyses, eq(kifus.id, moveAnalyses.kifuId))
+      .where(sql`${moveAnalyses.id} is null`)
+      .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
+      .limit(1);
+    return c.json(kifu ?? null);
   })
   .post(
     '/worker/analyses',

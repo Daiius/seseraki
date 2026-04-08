@@ -84,26 +84,23 @@ async function main() {
       if (!running || analyzing) return;
       try {
         analyzing = true;
-        const kifus = await client.fetchUnanalyzedKifus();
-        if (kifus.length === 0) {
+        const kifu = await client.fetchNextKifu();
+        if (!kifu) {
           console.log("[Worker] No unanalyzed kifus");
           return;
         }
-        for (const kifu of kifus) {
-          if (!running) break;
-          console.log(
-            `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
-          );
-          const result = await analyzeKifu(engine, kifu.kifText, {
-            depth: config.engineDepth,
-            multiPv: config.engineMultiPv,
-            byoyomi: config.engineByoyomi,
-          });
-          await client.submitAnalysis(kifu.id, result);
-          console.log(
-            `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
-          );
-        }
+        console.log(
+          `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
+        );
+        const result = await analyzeKifu(engine, kifu.kifText, {
+          depth: config.engineDepth,
+          multiPv: config.engineMultiPv,
+          byoyomi: config.engineByoyomi,
+        });
+        await client.submitAnalysis(kifu.id, result);
+        console.log(
+          `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
+        );
       } catch (err) {
         console.error("[Worker] Error during analysis:", err);
       } finally {

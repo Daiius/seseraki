@@ -70,6 +70,31 @@ pnpm dev    # docker compose watch で全サービス起動
 - web: http://localhost:5173
 - server: http://localhost:4000
 
+## 本番ビルド
+
+### web (静的ファイルを nginx 等に配置)
+
+```bash
+BASE_PATH=/<deploy-path>/ \
+VITE_CLIENT_API_KEY=<client-api-key> \
+VITE_SWARS_USER_ID=<swars-user-id> \
+pnpm --filter web build
+```
+
+成果物は `packages/web/dist/` に出力される。
+
+- `BASE_PATH`: 配信パス（ルート配信なら省略可）。末尾スラッシュ必須
+- `VITE_CLIENT_API_KEY`: フロントエンドが API 呼び出し時に使う鍵
+- `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID
+
+### server (Docker イメージ)
+
+```bash
+docker buildx build --platform=linux/amd64 --push \
+  -t ghcr.io/<owner>/seseraki-server:latest \
+  -f packages/server/Dockerfile.prod .
+```
+
 ## そもそも
 
 解析エンジンを載せるサーバーはある程度のスペックが必要です。

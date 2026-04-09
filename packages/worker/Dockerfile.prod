@@ -1,3 +1,6 @@
+# ========================================
+# Stage 1: やねうら王エンジン + 評価関数 + 定跡
+# ========================================
 FROM debian:bookworm-slim AS engine-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,18 +26,37 @@ RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/new_petabook
     7z x /tmp/petabook.7z -o/book && \
     rm /tmp/petabook.7z
 
-FROM node:22-slim
+# ========================================
+# Stage 2: TypeScript ビルド
+# ========================================
+FROM node:22-slim AS node-builder
+
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 COPY packages/server/package.json ./packages/server/
 COPY packages/web/package.json ./packages/web/
 COPY packages/worker/package.json ./packages/worker/
+
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
-COPY tsconfig.json ./
+
 COPY packages/server/ ./packages/server/
 COPY packages/worker/ ./packages/worker/
+
+RUN pnpm --filter worker build
+
+# ========================================
+# Stage 3: 本番イメージ
+# ========================================
+FROM node:22-slim
+
+WORKDIR /app
+
 COPY --from=engine-builder /yaneuraou/source/YaneuraOu-by-gcc /usr/local/bin/yaneuraou
 COPY --from=engine-builder /eval /usr/local/share/yaneuraou/eval
 COPY --from=engine-builder /book /usr/local/share/yaneuraou/book
+COPY --from=node-builder /workspace/packages/worker/dist/worker.js ./worker.js
+
+CMD ["node", "worker.js"]

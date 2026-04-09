@@ -107,6 +107,9 @@ importers:
       '@types/node':
         specifier: ^22
         version: 22.19.17
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
       server:
         specifier: workspace:*
         version: link:../server

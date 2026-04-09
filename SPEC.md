@@ -28,10 +28,14 @@ TypeScript フルスタック、pnpm monorepo 構成。
 
 | 環境 | サービス | 備考 |
 |------|---------|------|
-| VPS (1GB) | web + server + db | グローバルにアクセス可能 |
+| VPS (1GB) | web + server + db | nginx の Basic 認証下で公開 |
 | デスクトップ PC (32GB) | worker | API_KEY で server に接続。CPU 解析 |
 
 VPS は web アクセス用、デスクトップ PC は解析用に分離。VPS での worker 動作も検討したが、メモリ消費量的に厳しく デスクトップ一択。
+
+本番イメージ:
+- `ghcr.io/daiius/seseraki-server`: server を esbuild バンドル → distroless で実行
+- worker: `packages/worker/Dockerfile.prod` で本番デスクトップ上でビルド。やねうら王 NNUE + 水匠5 + ペタブック定跡を同梱、esbuild バンドルで実行
 
 ### パッケージ
 
@@ -95,6 +99,8 @@ candidateMoves                 -- MultiPV の候補手
 | GET | `/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
 | POST | `/kifus` | 棋譜登録。body: `{ title, kifText }` → `{ id }` |
 | DELETE | `/kifus/:id` | 棋譜削除（解析結果も CASCADE 削除） |
+
+全リクエストに `hono/logger` でアクセスログを出力。`CORS_ORIGINS` 環境変数（カンマ区切り）で CORS 許可オリジンを設定可能。
 
 ### Worker 向け（`Authorization: Bearer <API_KEY>` 必須）
 
@@ -228,10 +234,11 @@ KifuAnalysisResult = {
 
 ## 未実装・計画中
 
-### 認証 (優先度: 高)
-- Web 向けルートに認証が必要（グローバル公開のため）
-- 候補: 本番 nginx の Basic 認証が最有力（個人用のため）
+### 認証
+
+- 本番 nginx で Basic 認証を設定（個人用のため）
 - API_KEY（worker 用）と CLIENT_API_KEY（Web フロントエンド用）の二種類を運用中
+- CLIENT_API_KEY は Basic 認証の裏にあるので機密性は低い扱い、漏洩時は差し替え
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
 ### swars棋譜取得 (実装済み・ポーリング未実装)

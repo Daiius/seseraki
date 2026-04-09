@@ -23,14 +23,17 @@ pnpm db:seed      # サンプルデータ投入（初回のみ必要、既存デ
 初回セットアップ: `pnpm dev` で起動後、`pnpm db:migrate && pnpm db:seed` を実行。
 スキーマ変更時: `pnpm db:migrate` を実行。
 
-環境変数は `.env.*` ファイルで管理（gitignore 対象）:
+環境変数は `.env.*` ファイルで管理（gitignore 対象）。雛形は `.env.*.example` を参照:
 
 | ファイル | 内容 |
 |---------|------|
 | `.env.database` | MySQL 接続情報 |
-| `.env.server` | API_KEY, CLIENT_API_KEY, SWARS_SESSION_COOKIE, SWARS_BASE_URL |
+| `.env.server` | API_KEY, CLIENT_API_KEY, CORS_ORIGINS, SWARS_SESSION_COOKIE, SWARS_BASE_URL |
 | `.env.worker` | ENGINE_*, SERVER_URL, API_KEY, USE_MOCK, POLL_INTERVAL_MS |
-| `.env.web` | API_URL, VITE_CLIENT_API_KEY, VITE_SWARS_USER_ID |
+| `.env.web` | API_URL, VITE_API_URL, VITE_CLIENT_API_KEY, VITE_SWARS_USER_ID |
+
+注意: Docker の `--env-file` はインラインコメントに対応していない（行頭の `#` のみ）。
+値の後ろに `# コメント` を書くと値の一部として扱われるので避けること。
 
 ## 型チェック・ビルド
 

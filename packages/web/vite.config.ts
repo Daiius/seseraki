@@ -5,7 +5,8 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 
 const apiTarget = process.env.API_URL ?? 'http://localhost:4000';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? (process.env.BASE_PATH ?? '/') : '/',
   plugins: [TanStackRouterVite(), react(), tailwindcss()],
   server: {
     host: !!process.env.API_URL,
@@ -17,4 +18,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

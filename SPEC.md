@@ -266,6 +266,12 @@ KifuAnalysisResult = {
 - User-Agent: ブラウザ同等の値を設定
 - 非公式アクセスのためアカウント BAN リスクあり（控えめに運用）
 
+### 未解析の棋譜でも将棋盤を表示
+- 現状: 解析データ（`moveAnalyses`）の `movePlayed` から手列を構築しているため、未解析だと初期局面しか表示されない
+- 対応案: KIF テキストから USI 手列を生成する処理を web/server で共有
+  - worker のパーサー (`packages/worker/src/kif/parser.ts`) を共有可能な場所に移すか、server 側で同様の処理を提供
+  - または server に「kifText から手列を返す」エンドポイントを追加
+
 ### 局面単位の再解析 (優先度: 低)
 - 特定局面だけ depth を変えて再解析する機能
 - Web UI から「この局面を深く解析」ボタン → worker に解析リクエスト

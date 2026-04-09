@@ -63,7 +63,7 @@ function KifuListPage() {
     <div>
       <div className="flex items-center gap-4 mb-4">
         <h2 className="text-2xl font-bold">棋譜一覧</h2>
-        {import.meta.env.VITE_SWARS_USER_ID && (
+        {import.meta.env.VITE_SWARS_USER_ID ? (
           <button
             className="btn btn-sm btn-outline"
             disabled={importing}
@@ -71,6 +71,10 @@ function KifuListPage() {
           >
             {importing ? <span className="loading loading-spinner loading-xs" /> : '更新'}
           </button>
+        ) : (
+          <span className="text-xs text-base-content/50">
+            VITE_SWARS_USER_ID が未設定のため更新ボタンを表示できません
+          </span>
         )}
       </div>
       {importResult && (

@@ -75,7 +75,7 @@ pnpm dev    # docker compose watch で全サービス起動
 ### web (静的ファイルを nginx 等に配置)
 
 ```bash
-BASE_PATH=/<deploy-path>/ \
+VITE_API_URL=<api-url> \
 VITE_CLIENT_API_KEY=<client-api-key> \
 VITE_SWARS_USER_ID=<swars-user-id> \
 pnpm --filter web build
@@ -83,7 +83,7 @@ pnpm --filter web build
 
 成果物は `packages/web/dist/` に出力される。
 
-- `BASE_PATH`: 配信パス（ルート配信なら省略可）。末尾スラッシュ必須
+- `VITE_API_URL`: server の URL（省略時は `/api`、同一オリジンで proxy 配信する場合）
 - `VITE_CLIENT_API_KEY`: フロントエンドが API 呼び出し時に使う鍵
 - `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID
 

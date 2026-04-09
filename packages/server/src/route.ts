@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
 import { count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -9,6 +11,16 @@ import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 
 export const app = new Hono();
+
+const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+app.use('*', logger());
+if (corsOrigins.length > 0) {
+  app.use('*', cors({ origin: corsOrigins, credentials: true }));
+}
 
 const candidateMoveSchema = z.object({
   rank: z.number(),

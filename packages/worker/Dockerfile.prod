@@ -59,4 +59,8 @@ COPY --from=engine-builder /eval /usr/local/share/yaneuraou/eval
 COPY --from=engine-builder /book /usr/local/share/yaneuraou/book
 COPY --from=node-builder /workspace/packages/worker/dist/worker.js ./worker.js
 
+ENV ENGINE_PATH=/usr/local/bin/yaneuraou \
+    ENGINE_EVAL_DIR=/usr/local/share/yaneuraou/eval \
+    ENGINE_BOOK_DIR=/usr/local/share/yaneuraou/book
+
 CMD ["node", "worker.js"]

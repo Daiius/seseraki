@@ -45,7 +45,6 @@ export const moveAnalyses = mysqlTable(
       .notNull()
       .references(() => kifus.id, { onDelete: 'cascade' }),
     moveNumber: int().notNull(),
-    movePlayed: varchar({ length: 255 }),
     createdAt: timestamp().notNull().defaultNow(),
   },
   (table) => [

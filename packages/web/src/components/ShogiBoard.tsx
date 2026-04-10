@@ -22,7 +22,6 @@ const ROW_LABELS = ['一', '二', '三', '四', '五', '六', '七', '八', '九
 interface Analysis {
   id: number;
   moveNumber: number;
-  movePlayed: string | null;
   candidates: {
     id: number;
     rank: number;
@@ -156,8 +155,8 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   );
 
   const best = prevAnalysis?.candidates.find((c) => c.rank === 1);
-  const isBestMove =
-    best && prevAnalysis?.movePlayed && best.move === prevAnalysis.movePlayed;
+  const played = moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined;
+  const isBestMove = best && played && best.move === played;
   const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
   const posEval = best
     ? formatScore(best.scoreType, best.scoreValue, evalMoveNumber)
@@ -225,25 +224,19 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
 
         {/* 評価値・候補手情報 */}
         <div className="flex flex-col gap-3 min-w-64">
-          {/* 直前の指し手（1つ前の局面の movePlayed がこの局面への手） */}
-          {moveIndex > 0 && (() => {
-            const prevAnalysis = sortedAnalyses.find(
-              (a) => a.moveNumber === moveIndex - 1,
-            );
-            if (!prevAnalysis?.movePlayed) return null;
-            return (
-              <div>
-                <div className="text-sm text-base-content/60">指し手</div>
-                <div className="text-lg font-bold">
-                  {turnSymbol(moveIndex - 1)}
-                  {usiToJapaneseWithPiece(
-                    positions[moveIndex - 1],
-                    prevAnalysis.movePlayed,
-                  )}
-                </div>
+          {/* 直前の指し手 */}
+          {played && (
+            <div>
+              <div className="text-sm text-base-content/60">指し手</div>
+              <div className="text-lg font-bold">
+                {turnSymbol(moveIndex - 1)}
+                {usiToJapaneseWithPiece(
+                  positions[moveIndex - 1],
+                  played,
+                )}
               </div>
-            );
-          })()}
+            </div>
+          )}
 
           {/* 局面評価値 */}
           {posEval && (
@@ -261,8 +254,8 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
               <div className="mb-1 text-sm text-base-content/60">候補手</div>
               <div className="flex flex-col gap-2">
                 {prevAnalysis.candidates.map((c) => {
-                  const isPlayed = c.move === prevAnalysis.movePlayed;
-                  const isNotBest = c.rank === 1 && prevAnalysis.movePlayed && !isPlayed;
+                  const isPlayed = played && c.move === played;
+                  const isNotBest = c.rank === 1 && played && !isPlayed;
                   const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
                   return (
                     <div

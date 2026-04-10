@@ -168,7 +168,6 @@ const route = app
         analyses: z.array(
           z.object({
             moveNumber: z.number(),
-            movePlayed: z.string().optional(),
             candidates: z.array(candidateMoveSchema),
           }),
         ),
@@ -185,7 +184,6 @@ const route = app
             .values({
               kifuId,
               moveNumber: analysis.moveNumber,
-              movePlayed: analysis.movePlayed ?? null,
             })
             .$returningId();
           if (analysis.candidates.length > 0) {

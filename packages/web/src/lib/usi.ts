@@ -77,7 +77,7 @@ export function usiToJapanese(usi: string): string {
 /**
  * 手番記号を返す
  * moveNumber 0 = 初期局面（先手番）、1 = 先手が指した後（後手番）...
- * movePlayed は「この局面で指す手」なので moveNumber の手番側の記号を返す
+ * moveNumber が偶数なら先手（▲）、奇数なら後手（△）
  */
 export function turnSymbol(moveNumber: number): string {
   return moveNumber % 2 === 0 ? '▲' : '△';

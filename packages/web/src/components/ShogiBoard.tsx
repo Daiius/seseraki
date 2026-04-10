@@ -64,7 +64,26 @@ function HandDisplay({
   );
 }
 
-function BoardGrid({ state }: { state: BoardState }) {
+/** USI の手から移動先の [row, col] を取得 */
+function lastMoveDestination(usiMove: string): [number, number] | null {
+  // 駒打ち: "B*5c" → "5c"
+  const dropMatch = usiMove.match(/^[PLNSGBR]\*(\d[a-i])$/);
+  if (dropMatch) {
+    const col = 9 - Number(dropMatch[1][0]);
+    const row = dropMatch[1].charCodeAt(1) - 97;
+    return [row, col];
+  }
+  // 通常の移動: "7g7f" or "7g7f+" → "7f"
+  const moveMatch = usiMove.match(/^\d[a-i](\d[a-i])\+?$/);
+  if (moveMatch) {
+    const col = 9 - Number(moveMatch[1][0]);
+    const row = moveMatch[1].charCodeAt(1) - 97;
+    return [row, col];
+  }
+  return null;
+}
+
+function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [number, number] | null }) {
   return (
     <div className="inline-grid grid-cols-[repeat(9,2rem)_1.5rem] grid-rows-[1.25rem_repeat(9,2rem)]">
       {/* 筋番号（1行目） */}
@@ -79,23 +98,29 @@ function BoardGrid({ state }: { state: BoardState }) {
       <div />
       {/* 盤面 9x9 + 段番号 */}
       {state.board.flatMap((row, rowIdx) => [
-        ...row.map((sq, colIdx) => (
-          <div
-            key={`${rowIdx}-${colIdx}`}
-            className="size-8 border border-base-300 flex items-center justify-center text-sm font-bold"
-          >
-            {sq && (
-              <span
-                className={clsx(
-                  'inline-block',
-                  sq.side === 'gote' && 'rotate-180 text-error',
-                )}
-              >
-                {PIECE_DISPLAY[sq.kind]}
-              </span>
-            )}
-          </div>
-        )),
+        ...row.map((sq, colIdx) => {
+          const isLastMove = lastMoveTo !== null && lastMoveTo[0] === rowIdx && lastMoveTo[1] === colIdx;
+          return (
+            <div
+              key={`${rowIdx}-${colIdx}`}
+              className={clsx(
+                'size-8 border border-base-300 flex items-center justify-center text-sm font-bold',
+                isLastMove && 'bg-primary/15',
+              )}
+            >
+              {sq && (
+                <span
+                  className={clsx(
+                    'inline-block',
+                    sq.side === 'gote' && 'rotate-180 text-error',
+                  )}
+                >
+                  {PIECE_DISPLAY[sq.kind]}
+                </span>
+              )}
+            </div>
+          );
+        }),
         <div
           key={`row-${rowIdx}`}
           className="flex items-center justify-center text-xs text-base-content/50"
@@ -139,6 +164,13 @@ export function ShogiBoard({ analyses, sente, gote }: Props) {
   const posEval = best
     ? formatScore(best.scoreType, best.scoreValue, evalMoveNumber)
     : null;
+
+  // 直前の指し手の移動先をハイライト用に算出
+  const lastMoveTo = useMemo(() => {
+    if (moveIndex === 0) return null;
+    const prev = sortedAnalyses.find((a) => a.moveNumber === moveIndex - 1);
+    return prev?.movePlayed ? lastMoveDestination(prev.movePlayed) : null;
+  }, [sortedAnalyses, moveIndex]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -189,7 +221,7 @@ export function ShogiBoard({ analyses, sente, gote }: Props) {
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
           <HandDisplay hand={currentState.hand.gote} side="gote" name={gote} />
-          <BoardGrid state={currentState} />
+          <BoardGrid state={currentState} lastMoveTo={lastMoveTo} />
           <HandDisplay hand={currentState.hand.sente} side="sente" name={sente} />
         </div>
 

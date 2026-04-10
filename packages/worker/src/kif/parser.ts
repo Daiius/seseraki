@@ -30,6 +30,13 @@ const PIECE_USI: Record<string, string> = {
   "金": "G", "角": "B", "飛": "R",
 };
 
+// 成駒名 → 成り前の駒名（駒名が成り後になっている場合の成り検出用）
+// KIF では「４八馬(37)」のように移動先の駒名が成り後の名前になる表記がある
+const PROMOTED_TO_BASE: Record<string, string> = {
+  "と": "歩", "成香": "香", "成桂": "桂", "成銀": "銀",
+  "馬": "角", "龍": "飛", "竜": "飛",
+};
+
 // KIF 指し手行の正規表現
 // グループ: (手数)(全角列?)(漢数字段?)(同?)(駒名)(成|不成)?(打)?(移動元)?
 // ※ 漢数字は Unicode 上で連続しないため列挙する
@@ -57,6 +64,11 @@ export function parseKif(kifText: string): ParsedKif {
   let prevCol = 0;
   let prevRow = 0;
 
+  // 各マスの成り状態を追跡（"col,row" → boolean）
+  // KIF は駒名が成り後の名前になる表記を使うため、
+  // USI の "+" を付けるべきかどうかの判定に必要
+  const promoted = new Set<string>();
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
@@ -76,7 +88,7 @@ export function parseKif(kifText: string): ParsedKif {
     const isSame = line.includes("同"); // 同X
     const colStr = m[3]; // 全角数字 (列)
     const rowStr = m[4]; // 漢数字 (段)
-    const promote = m[6] === "成";
+    const explicitPromote = m[6] === "成";
     const isDrop = !!m[7]; // 打
     const fromStr = m[8]; // 移動元 e.g. "77"
     const pieceName = m[5];
@@ -110,13 +122,32 @@ export function parseKif(kifText: string): ParsedKif {
         continue;
       }
       usi = `${pieceUsi}*${destCol}${rowToUsi(destRow)}`;
+      // 打った駒は不成
     } else if (fromStr) {
-      // 通常の移動: "7g7f" or "8h2b+"
       const fromCol = Number(fromStr[0]);
       const fromRow = Number(fromStr[1]);
+      const fromKey = `${fromCol},${fromRow}`;
+
+      // 成り判定:
+      // 1. 明示的な「成」サフィックス
+      // 2. 駒名が成駒名（馬, 龍 等）かつ移動元が不成 → この手で成った
+      const isPromotedPieceName = pieceName in PROMOTED_TO_BASE;
+      const wasPromoted = promoted.has(fromKey);
+      const promote =
+        explicitPromote || (isPromotedPieceName && !wasPromoted);
+
       usi =
         `${fromCol}${rowToUsi(fromRow)}${destCol}${rowToUsi(destRow)}` +
         (promote ? "+" : "");
+
+      // 成り状態を更新: 移動元をクリア、移動先を設定
+      promoted.delete(fromKey);
+      const destKey = `${destCol},${destRow}`;
+      if (promote || wasPromoted) {
+        promoted.add(destKey);
+      } else {
+        promoted.delete(destKey);
+      }
     } else {
       errors.push({
         line: i + 1,

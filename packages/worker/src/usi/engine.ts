@@ -74,6 +74,12 @@ export class UsiEngine {
       }, DEFAULT_TIMEOUT_MS);
 
       const listener = (line: string) => {
+        if (line.startsWith("info string Error!")) {
+          console.error("[USI] Engine error:", line);
+          cleanup();
+          reject(new Error(line));
+          return;
+        }
         if (line.startsWith("info ")) {
           infoLines.push(parseInfoLine(line));
         } else if (line.startsWith("bestmove ")) {

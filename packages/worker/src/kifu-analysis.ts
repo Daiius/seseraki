@@ -97,7 +97,15 @@ export async function analyzeKifu(
         : `position startpos moves ${movesPlayed.join(" ")}`;
 
     const t0 = Date.now();
-    const result = await engine.analyze(position, goCommand);
+    let result;
+    try {
+      result = await engine.analyze(position, goCommand);
+    } catch (err) {
+      console.error(
+        `[Analysis] ${i}/${usiMoves.length} Engine error at position: ${position}`,
+      );
+      throw err;
+    }
     const elapsed = Date.now() - t0;
     const candidates = extractMultiPvResults(result.infoLines);
     const isBook = candidates.length > 0 && candidates[0].depth === 0;

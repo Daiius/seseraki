@@ -44,6 +44,11 @@ async function main() {
   }
   console.log(`Found kifu #${kifu.id}: "${kifu.title}"`);
 
+  if (!kifu.usiMoves) {
+    console.log("Kifu has no usiMoves, skipping.");
+    return;
+  }
+
   // 2. エンジン起動
   console.log("\n--- Step 2: Start engine ---");
   const engine = createEngine();
@@ -53,17 +58,14 @@ async function main() {
 
   // 3. 棋譜を解析
   console.log(`\n--- Step 3: Analyze kifu #${kifu.id}: "${kifu.title}" ---`);
-  console.log(`KIF text (first 200 chars): ${kifu.kifText.slice(0, 200)}...`);
+  console.log(`Moves: ${kifu.usiMoves.length}`);
 
-  const result = await analyzeKifu(engine, kifu.kifText, {
+  const result = await analyzeKifu(engine, kifu.usiMoves, {
     depth: 5,
     multiPv: 3,
   });
 
   console.log(`\nAnalysis complete: ${result.totalMoves} moves`);
-  if (result.parseErrors.length > 0) {
-    console.warn("Parse errors:", result.parseErrors);
-  }
 
   // 結果サマリー
   for (const a of result.analyses.slice(0, 3)) {
@@ -73,8 +75,9 @@ async function main() {
         top.score.type === "mate"
           ? `mate ${top.score.value}`
           : `${top.score.value}cp`;
+      const played = kifu.usiMoves[a.moveNumber];
       console.log(
-        `  [${a.moveNumber}] played=${a.movePlayed ?? "(end)"} best=${top.move} (${scoreStr})`,
+        `  [${a.moveNumber}] played=${played ?? "(end)"} best=${top.move} (${scoreStr})`,
       );
     }
   }

@@ -1,7 +1,7 @@
 /**
  * 棋譜解析テスト
  *
- * サンプル KIF を解析して結果を表示する
+ * サンプル USI 指し手列を解析して結果を表示する
  *
  * 使い方:
  *   DOCKER_IMAGE=yaneuraou-material pnpm --filter worker test:analysis
@@ -11,26 +11,11 @@
 import { UsiEngine } from "./usi/engine.js";
 import { analyzeKifu, type MoveAnalysis } from "./kifu-analysis.js";
 
-// サンプル棋譜（相掛かり序盤）
-const SAMPLE_KIF = `
-手合割：平手
-先手：先手
-後手：後手
-手数----指手---------消費時間--
-   1 ７六歩(77)   ( 0:00/00:00:00)
-   2 ３四歩(33)   ( 0:00/00:00:00)
-   3 ２六歩(27)   ( 0:00/00:00:00)
-   4 ８四歩(83)   ( 0:00/00:00:00)
-   5 ２五歩(26)   ( 0:00/00:00:00)
-   6 ８五歩(84)   ( 0:00/00:00:00)
-   7 ７八金(69)   ( 0:00/00:00:00)
-   8 ３二金(41)   ( 0:00/00:00:00)
-   9 ２四歩(25)   ( 0:00/00:00:00)
-  10 同　歩(23)   ( 0:00/00:00:00)
-  11 同　飛(28)   ( 0:00/00:00:00)
-  12 ２三歩打     ( 0:00/00:00:00)
-  13 ２六飛(24)   ( 0:00/00:00:00)
-`;
+// サンプル指し手列（相掛かり序盤）
+const SAMPLE_USI_MOVES = [
+  "7g7f", "3c3d", "2g2f", "8c8d", "2f2e", "8d8e",
+  "6i7h", "4a3b", "2e2d", "2c2d", "2h2d", "P*2c", "2d2f",
+];
 
 function createEngine(): UsiEngine {
   const enginePath = process.env.ENGINE_PATH;
@@ -44,10 +29,11 @@ function createEngine(): UsiEngine {
   return new UsiEngine("docker", ["run", "-i", "--rm", image]);
 }
 
-function formatAnalysis(a: MoveAnalysis): string {
+function formatAnalysis(a: MoveAnalysis, usiMoves: string[]): string {
   const lines: string[] = [];
-  const header = a.movePlayed
-    ? `[${a.moveNumber}] 指し手: ${a.movePlayed}`
+  const played = usiMoves[a.moveNumber];
+  const header = played
+    ? `[${a.moveNumber}] 指し手: ${played}`
     : `[${a.moveNumber}] (最終局面)`;
   lines.push(header);
 
@@ -73,17 +59,16 @@ async function main() {
   await engine.ready();
 
   // depth 5, MultiPV 3 で解析（MATERIAL版なのでスコアは簡易的）
-  const result = await analyzeKifu(engine, SAMPLE_KIF, {
+  const result = await analyzeKifu(engine, SAMPLE_USI_MOVES, {
     depth: 5,
     multiPv: 3,
   });
 
   console.log("\n=== Analysis Results ===\n");
-  console.log(`Total moves: ${result.totalMoves}`);
-  console.log(`Parse errors: ${result.parseErrors.length}\n`);
+  console.log(`Total moves: ${result.totalMoves}\n`);
 
   for (const a of result.analyses) {
-    console.log(formatAnalysis(a));
+    console.log(formatAnalysis(a, SAMPLE_USI_MOVES));
     console.log();
   }
 

@@ -35,6 +35,7 @@ interface Analysis {
 }
 
 interface Props {
+  usiMoves: string[];
   analyses: Analysis[];
   sente?: string | null;
   gote?: string | null;
@@ -132,18 +133,15 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
   );
 }
 
-export function ShogiBoard({ analyses, sente, gote }: Props) {
+export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const sortedAnalyses = useMemo(
     () => [...analyses].sort((a, b) => a.moveNumber - b.moveNumber),
     [analyses],
   );
 
   const positions = useMemo(() => {
-    const moves = sortedAnalyses
-      .filter((a) => a.movePlayed)
-      .map((a) => a.movePlayed!);
-    return buildPositions(moves);
-  }, [sortedAnalyses]);
+    return buildPositions(usiMoves);
+  }, [usiMoves]);
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -168,9 +166,9 @@ export function ShogiBoard({ analyses, sente, gote }: Props) {
   // 直前の指し手の移動先をハイライト用に算出
   const lastMoveTo = useMemo(() => {
     if (moveIndex === 0) return null;
-    const prev = sortedAnalyses.find((a) => a.moveNumber === moveIndex - 1);
-    return prev?.movePlayed ? lastMoveDestination(prev.movePlayed) : null;
-  }, [sortedAnalyses, moveIndex]);
+    const move = usiMoves[moveIndex - 1];
+    return move ? lastMoveDestination(move) : null;
+  }, [usiMoves, moveIndex]);
 
   return (
     <div className="flex flex-col gap-4">

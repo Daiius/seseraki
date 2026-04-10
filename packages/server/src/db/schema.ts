@@ -19,6 +19,7 @@ export const kifus = mysqlTable(
     id: serial().primaryKey(),
     title: varchar({ length: 255 }).notNull(),
     kifText: text().notNull(),
+    usiMoves: json().$type<string[]>(),
     sente: varchar({ length: 100 }),
     gote: varchar({ length: 100 }),
     senteDan: smallint(),

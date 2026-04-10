@@ -88,10 +88,14 @@ async function main() {
         analyzing = true;
         const kifu = await client.fetchNextKifu();
         if (!kifu) return;
+        if (!kifu.usiMoves) {
+          console.warn(`[Worker] Skipping kifu ${kifu.id}: no usiMoves`);
+          return;
+        }
         console.log(
           `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
         );
-        const result = await analyzeKifu(engine, kifu.kifText, {
+        const result = await analyzeKifu(engine, kifu.usiMoves, {
           depth: config.engineDepth,
           multiPv: config.engineMultiPv,
           byoyomi: config.engineByoyomi,

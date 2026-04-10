@@ -1,12 +1,11 @@
 /**
  * 棋譜解析オーケストレーション
  *
- * KIF テキストをパースし、一手ごとに MultiPV で解析して
+ * USI 指し手列を受け取り、一手ごとに MultiPV で解析して
  * 各局面の候補手・評価値・読み筋を記録する
  */
 import type { UsiEngine } from "./usi/engine.js";
 import type { UsiInfo, UsiScore } from "./usi/types.js";
-import { parseKif } from "./kif/parser.js";
 
 /** 一局面での候補手 */
 export interface CandidateMove {
@@ -21,8 +20,6 @@ export interface CandidateMove {
 export interface MoveAnalysis {
   /** 手数 (1 = 初手の前の局面を解析) */
   moveNumber: number;
-  /** 実際に指された手 (USI) — 最終局面では undefined */
-  movePlayed?: string;
   /** エンジンの候補手リスト (MultiPV) */
   candidates: CandidateMove[];
 }
@@ -31,7 +28,6 @@ export interface MoveAnalysis {
 export interface KifuAnalysisResult {
   totalMoves: number;
   analyses: MoveAnalysis[];
-  parseErrors: { line: number; text: string; reason: string }[];
 }
 
 /**
@@ -62,14 +58,14 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
  * 棋譜を一手ずつ解析する
  *
  * @param engine - 起動済みの USI エンジン
- * @param kifText - KIF 形式の棋譜テキスト
+ * @param usiMoves - USI 形式の指し手列
  * @param options.depth - 解析深さ (default: 10)
  * @param options.multiPv - 候補手数 (default: 3)
  * @param options.byoyomi - 秒読み(ms)。設定時は depth より優先
  */
 export async function analyzeKifu(
   engine: UsiEngine,
-  kifText: string,
+  usiMoves: string[],
   options: { depth?: number; multiPv?: number; byoyomi?: number } = {},
 ): Promise<KifuAnalysisResult> {
   const { depth = 10, multiPv = 3, byoyomi } = options;
@@ -77,12 +73,6 @@ export async function analyzeKifu(
     ? `go btime 0 wtime 0 byoyomi ${byoyomi}`
     : `go depth ${depth}`;
 
-  const parsed = parseKif(kifText);
-  if (parsed.errors.length > 0) {
-    console.warn("[Analysis] KIF parse errors:", parsed.errors);
-  }
-
-  const usiMoves = parsed.moves.map((m) => m.usi);
   const analyses: MoveAnalysis[] = [];
 
   // MultiPV 設定
@@ -116,7 +106,6 @@ export async function analyzeKifu(
 
     analyses.push({
       moveNumber: i,
-      movePlayed: usiMoves[i], // undefined for last position
       candidates,
     });
   }
@@ -127,6 +116,5 @@ export async function analyzeKifu(
   return {
     totalMoves: usiMoves.length,
     analyses,
-    parseErrors: parsed.errors,
   };
 }

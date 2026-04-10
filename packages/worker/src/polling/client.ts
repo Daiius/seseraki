@@ -21,7 +21,6 @@ export function createClient(baseUrl: string, apiKey: string) {
           kifuId,
           analyses: result.analyses.map((a) => ({
             moveNumber: a.moveNumber,
-            movePlayed: a.movePlayed,
             candidates: a.candidates.map((c) => ({
               rank: c.rank,
               move: c.move,

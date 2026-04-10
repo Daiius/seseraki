@@ -26,14 +26,12 @@ function KifuDetailPage() {
   const kifu = Route.useLoaderData();
   const navigate = useNavigate();
 
-  // 実際に指された手の USI 列を解析結果から抽出し、盤面を構築
+  const usiMoves: string[] = kifu.usiMoves ?? [];
+
+  // USI 指し手列から盤面を構築
   const positions = useMemo(() => {
-    const moves = kifu.analyses
-      .filter((a) => a.movePlayed)
-      .sort((a, b) => a.moveNumber - b.moveNumber)
-      .map((a) => a.movePlayed!);
-    return buildPositions(moves);
-  }, [kifu.analyses]);
+    return buildPositions(usiMoves);
+  }, [usiMoves]);
 
   // moveNumber → その局面の BoardState
   const getState = (moveNumber: number): BoardState | undefined =>
@@ -103,9 +101,12 @@ function KifuDetailPage() {
           </div>
         </details>
 
+        {usiMoves.length > 0 && (
+          <ShogiBoard usiMoves={usiMoves} analyses={kifu.analyses} sente={kifu.sente} gote={kifu.gote} />
+        )}
+
         {kifu.analyses.length > 0 && (
           <>
-            <ShogiBoard analyses={kifu.analyses} sente={kifu.sente} gote={kifu.gote} />
 
             <div>
               <h3 className="text-lg font-semibold mb-2">局面評価値</h3>
@@ -125,14 +126,15 @@ function KifuDetailPage() {
                       const best = a.candidates.find((c) => c.rank === 1);
                       const turn = turnSymbol(a.moveNumber);
                       const state = getState(a.moveNumber);
+                      const played = usiMoves[a.moveNumber];
                       const isBestMove =
-                        best && a.movePlayed && best.move === a.movePlayed;
+                        best && played && best.move === played;
                       return (
                         <tr key={a.id}>
                           <td>{a.moveNumber}</td>
                           <td>
-                            {a.movePlayed
-                              ? `${turn}${toJapanese(a.movePlayed, state)}`
+                            {played
+                              ? `${turn}${toJapanese(played, state)}`
                               : '-'}
                           </td>
                           <td>
@@ -187,6 +189,7 @@ function KifuDetailPage() {
                       {kifu.analyses.flatMap((a) => {
                         const turn = turnSymbol(a.moveNumber);
                         const state = getState(a.moveNumber);
+                        const played = usiMoves[a.moveNumber];
                         return a.candidates.map((c, i) => (
                           <tr key={`${a.id}-${c.rank}`}>
                             {i === 0 && (
@@ -195,8 +198,8 @@ function KifuDetailPage() {
                                   {a.moveNumber}
                                 </td>
                                 <td rowSpan={a.candidates.length}>
-                                  {a.movePlayed
-                                    ? `${turn}${toJapanese(a.movePlayed, state)}`
+                                  {played
+                                    ? `${turn}${toJapanese(played, state)}`
                                     : '-'}
                                 </td>
                               </>

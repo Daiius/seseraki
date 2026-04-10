@@ -9,6 +9,7 @@ import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired, clientApiKeyRequired } from './middlewares.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
+import { parseKif } from './kif/parser.js';
 
 export const app = new Hono();
 
@@ -20,6 +21,13 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? '')
 app.use('*', logger());
 if (corsOrigins.length > 0) {
   app.use('*', cors({ origin: corsOrigins, credentials: true }));
+}
+
+/** KIF テキストから USI 指し手列を抽出。パースエラー時は null */
+function kifToUsiMoves(kifText: string): string[] | null {
+  const parsed = parseKif(kifText);
+  if (parsed.moves.length === 0) return null;
+  return parsed.moves.map((m) => m.usi);
 }
 
 const candidateMoveSchema = z.object({
@@ -122,8 +130,12 @@ const route = app
     '/kifus',
     zv('json', z.object({ title: z.string(), kifText: z.string() })),
     async (c) => {
-      const data = c.req.valid('json');
-      const [result] = await db.insert(kifus).values(data).$returningId();
+      const { title, kifText } = c.req.valid('json');
+      const usiMoves = kifToUsiMoves(kifText);
+      const [result] = await db
+        .insert(kifus)
+        .values({ title, kifText, usiMoves })
+        .$returningId();
       return c.json({ id: result.id }, 201);
     },
   )
@@ -139,7 +151,7 @@ const route = app
   // --- Worker 向け（API_KEY 必須） ---
   .get('/worker/kifus', apiKeyRequired, async (c) => {
     const [kifu] = await db
-      .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText })
+      .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText, usiMoves: kifus.usiMoves })
       .from(kifus)
       .where(isNull(kifus.analysisCompletedAt))
       .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
@@ -245,6 +257,7 @@ const route = app
         try {
           const gameData = await fetchGameData(gameKey);
           const kifText = swarsToKif(gameData);
+          const usiMoves = kifToUsiMoves(kifText);
           const title = formatTitle(gameData);
           const playedAt = parsePlayedAt(gameKey);
           const [result] = await db
@@ -252,6 +265,7 @@ const route = app
             .values({
               title,
               kifText,
+              usiMoves,
               sente: gameData.sente,
               gote: gameData.gote,
               senteDan: gameData.sente_dan,

@@ -149,13 +149,17 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
     (a) => a.moveNumber === (moveIndex > 0 ? moveIndex - 1 : 0),
   );
 
-  const best = prevAnalysis?.candidates.find((c) => c.rank === 1);
-  const played = moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined;
-  const isBestMove = best && played && best.move === played;
-  const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
-  const posEval = best
-    ? formatScore(best.scoreType, best.scoreValue, evalMoveNumber)
+  // 現在の局面（moveIndex）の解析 → 実手後の局面評価値
+  const currentAnalysis = sortedAnalyses.find(
+    (a) => a.moveNumber === moveIndex,
+  );
+  const currentBest = currentAnalysis?.candidates.find((c) => c.rank === 1);
+  const posEval = currentBest
+    ? formatScore(currentBest.scoreType, currentBest.scoreValue, moveIndex)
     : null;
+
+  const played = moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined;
+  const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
 
   // 直前の指し手の移動先をハイライト用に算出
   const lastMoveTo = moveIndex === 0

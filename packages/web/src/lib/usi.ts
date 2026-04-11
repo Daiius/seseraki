@@ -1,3 +1,60 @@
+const BLUNDER_THRESHOLD = 300;
+
+/**
+ * 悪手の手番セットを算出する。
+ * 悪手条件: 手番側にとって評価値が BLUNDER_THRESHOLD 以上悪化し、かつ実手が候補手リストに含まれていない。
+ */
+export function detectBlunders(
+  analyses: {
+    moveNumber: number;
+    candidates: { rank: number; move: string; scoreType: string; scoreValue: number }[];
+  }[],
+  usiMoves: string[],
+): Set<number> {
+  const blunders = new Set<number>();
+  const sorted = [...analyses]
+    .filter((a) => a.candidates.length > 0)
+    .sort((a, b) => a.moveNumber - b.moveNumber);
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const curr = sorted[i];
+    const next = sorted[i + 1];
+    // curr.moveNumber の局面で指された手が悪手かを判定
+    // next.moveNumber が curr.moveNumber + 1 でなければスキップ
+    if (next.moveNumber !== curr.moveNumber + 1) continue;
+
+    const currBest = curr.candidates.find((c) => c.rank === 1);
+    const nextBest = next.candidates.find((c) => c.rank === 1);
+    if (!currBest || !nextBest) continue;
+
+    // 先手視点の評価値
+    const currVal = toSenteEval(currBest.scoreType, currBest.scoreValue, curr.moveNumber);
+    const nextVal = toSenteEval(nextBest.scoreType, nextBest.scoreValue, next.moveNumber);
+
+    // 手番側にとっての変化量（先手番=偶数: 下がったら悪い、後手番=奇数: 上がったら悪い）
+    const isSenteTurn = curr.moveNumber % 2 === 0;
+    const drop = isSenteTurn ? currVal - nextVal : nextVal - currVal;
+
+    if (drop < BLUNDER_THRESHOLD) continue;
+
+    // 実手が候補手リストに含まれている場合は悪手としない
+    const played = usiMoves[curr.moveNumber];
+    if (!played) continue;
+    const playedInCandidates = curr.candidates.some((c) => c.move === played);
+    if (playedInCandidates) continue;
+
+    blunders.add(curr.moveNumber);
+  }
+
+  return blunders;
+}
+
+function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
+  const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
+  if (scoreType === 'mate') return v > 0 ? 3000 : -3000;
+  return Math.max(-3000, Math.min(3000, v));
+}
+
 const COL_MAP: Record<string, string> = {
   '1': '１',
   '2': '２',

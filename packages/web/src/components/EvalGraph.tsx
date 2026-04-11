@@ -12,6 +12,8 @@ interface EvalGraphProps {
   /** 現在のスライダー位置（ハイライト用） */
   currentMove?: number;
   onClickMove?: (moveNumber: number) => void;
+  /** 悪手と判定された手番のセット */
+  blunders?: Set<number>;
 }
 
 const CLAMP = 3000;
@@ -33,6 +35,7 @@ export function EvalGraph({
   analyses,
   currentMove,
   onClickMove,
+  blunders,
 }: EvalGraphProps) {
   const points: EvalPoint[] = analyses
     .filter((a) => a.candidates.length > 0)
@@ -135,6 +138,24 @@ export function EvalGraph({
               strokeWidth={2}
             />
           )}
+
+        {/* 悪手マーカー（下向き三角） */}
+        {blunders &&
+          points
+            .filter((p) => blunders.has(p.moveNumber))
+            .map((p) => {
+              const cx = toX(p.moveNumber);
+              const cy = toY(p.value);
+              const size = 5;
+              return (
+                <polygon
+                  key={`blunder-${p.moveNumber}`}
+                  points={`${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`}
+                  className="fill-error stroke-base-100"
+                  strokeWidth={1}
+                />
+              );
+            })}
 
         {/* クリック領域 */}
         {onClickMove &&

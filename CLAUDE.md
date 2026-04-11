@@ -35,11 +35,13 @@ pnpm db:seed      # サンプルデータ投入（初回のみ必要、既存デ
 注意: Docker の `--env-file` はインラインコメントに対応していない（行頭の `#` のみ）。
 値の後ろに `# コメント` を書くと値の一部として扱われるので避けること。
 
-## 型チェック・ビルド
+## 型チェック・テスト・ビルド
 
 ```bash
 pnpm typecheck    # 全パッケージの tsc --noEmit
 pnpm build        # 全パッケージのビルド
+pnpm --filter server test   # server のユニットテスト（vitest）
+pnpm --filter worker test   # worker のユニットテスト（vitest）
 ```
 
 ## パッケージ間の型共有

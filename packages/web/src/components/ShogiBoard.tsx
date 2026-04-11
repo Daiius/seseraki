@@ -211,7 +211,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         </span>
       </div>
 
-      <div className="flex gap-6 flex-wrap">
+      <div className="flex flex-col md:flex-row gap-6">
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
           <HandDisplay hand={currentState.hand.gote} side="gote" name={gote} />

@@ -142,7 +142,7 @@ export function EvalGraph({
         {/* 悪手マーカー（下向き三角） */}
         {blunders &&
           points
-            .filter((p) => blunders.has(p.moveNumber))
+            .filter((p) => blunders.has(p.moveNumber - 1))
             .map((p) => {
               const cx = toX(p.moveNumber);
               const cy = toY(p.value);

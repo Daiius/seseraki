@@ -136,6 +136,12 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const blunders = detectBlunders(sortedAnalyses, usiMoves);
   const positions = buildPositions(usiMoves);
+  const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
+  const userSide = swarsUserId
+    ? swarsUserId === sente ? 'sente' as const
+    : swarsUserId === gote ? 'gote' as const
+    : null
+    : null;
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -265,6 +271,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         currentMove={moveIndex}
         onClickMove={setMoveIndex}
         blunders={blunders}
+        userSide={userSide}
       />
     </div>
   );

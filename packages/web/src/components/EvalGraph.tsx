@@ -14,6 +14,8 @@ interface EvalGraphProps {
   onClickMove?: (moveNumber: number) => void;
   /** 悪手と判定された手番のセット */
   blunders?: Set<number>;
+  /** ユーザーの手番（'sente' | 'gote'）。相手の悪手は透明度を下げる */
+  userSide?: 'sente' | 'gote' | null;
 }
 
 const CLAMP = 3000;
@@ -36,6 +38,7 @@ export function EvalGraph({
   currentMove,
   onClickMove,
   blunders,
+  userSide,
 }: EvalGraphProps) {
   const points: EvalPoint[] = analyses
     .filter((a) => a.candidates.length > 0)
@@ -139,7 +142,7 @@ export function EvalGraph({
             />
           )}
 
-        {/* 悪手マーカー（下向き三角） */}
+        {/* 悪手マーカー（先手▲/後手▽、相手の悪手は透明度を下げる） */}
         {blunders &&
           points
             .filter((p) => blunders.has(p.moveNumber - 1))
@@ -147,12 +150,21 @@ export function EvalGraph({
               const cx = toX(p.moveNumber);
               const cy = toY(p.value);
               const size = 5;
+              // blunder の moveNumber は p.moveNumber - 1（指した局面）
+              const blunderMoveNumber = p.moveNumber - 1;
+              const isSenteMove = blunderMoveNumber % 2 === 0;
+              const isUserBlunder = !userSide || (userSide === 'sente' ? isSenteMove : !isSenteMove);
+              // 先手=上向き三角(▲)、後手=下向き三角(▽)
+              const pts = isSenteMove
+                ? `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`
+                : `${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`;
               return (
                 <polygon
                   key={`blunder-${p.moveNumber}`}
-                  points={`${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`}
+                  points={pts}
                   className="fill-error stroke-base-100"
                   strokeWidth={1}
+                  opacity={isUserBlunder ? 1 : 0.35}
                 />
               );
             })}

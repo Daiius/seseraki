@@ -1,2 +1,6 @@
 @import 'tailwindcss';
 @plugin 'daisyui';
+
+@theme {
+  --font-logo: 'WDXL Lubrifont JP N', sans-serif;
+}

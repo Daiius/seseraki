@@ -5,7 +5,7 @@ export const Route = createRootRoute({
     <div className="min-h-screen">
       <nav className="navbar bg-base-200">
         <div className="flex-1">
-          <Link to="/" className="btn btn-ghost text-xl">
+          <Link to="/" className="btn btn-ghost text-2xl font-logo">
             細流棋
           </Link>
         </div>

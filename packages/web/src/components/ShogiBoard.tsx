@@ -83,11 +83,16 @@ function lastMoveDestination(usiMove: string): [number, number] | null {
   return null;
 }
 
-function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [number, number] | null }) {
+function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
+  const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
+  const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
+  const rowOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
+  const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
   return (
     <div className="inline-grid grid-cols-[repeat(9,2.5rem)_1.5rem] grid-rows-[1.25rem_repeat(9,2.5rem)]">
       {/* 筋番号（1行目） */}
-      {COL_LABELS.map((col) => (
+      {colLabels.map((col) => (
         <div
           key={`col-${col}`}
           className="flex items-end justify-center text-xs text-base-content/50"
@@ -97,8 +102,9 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
       ))}
       <div />
       {/* 盤面 9x9 + 段番号 */}
-      {state.board.flatMap((row, rowIdx) => [
-        ...row.map((sq, colIdx) => {
+      {rowOrder.flatMap((rowIdx, ri) => [
+        ...colOrder.map((colIdx) => {
+          const sq = state.board[rowIdx][colIdx];
           const isLastMove = lastMoveTo !== null && lastMoveTo[0] === rowIdx && lastMoveTo[1] === colIdx;
           return (
             <div
@@ -112,7 +118,7 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
                 <span
                   className={clsx(
                     'inline-block',
-                    sq.side === 'gote' && 'rotate-180 text-error',
+                    (flipped ? sq.side === 'sente' : sq.side === 'gote') && 'rotate-180 text-error',
                   )}
                 >
                   {PIECE_DISPLAY[sq.kind]}
@@ -122,10 +128,10 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
           );
         }),
         <div
-          key={`row-${rowIdx}`}
+          key={`row-${ri}`}
           className="flex items-center justify-center text-xs text-base-content/50"
         >
-          {ROW_LABELS[rowIdx]}
+          {rowLabels[ri]}
         </div>,
       ])}
     </div>
@@ -145,6 +151,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
+  const [flipped, setFlipped] = useState(userSide === 'gote');
 
   const currentState = positions[moveIndex];
 
@@ -220,9 +227,24 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
       <div className="flex flex-col md:flex-row gap-6">
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
-          <HandDisplay hand={currentState.hand.gote} side="gote" name={gote} />
-          <BoardGrid state={currentState} lastMoveTo={lastMoveTo} />
-          <HandDisplay hand={currentState.hand.sente} side="sente" name={sente} />
+          <HandDisplay
+            hand={flipped ? currentState.hand.sente : currentState.hand.gote}
+            side={flipped ? 'sente' : 'gote'}
+            name={flipped ? sente : gote}
+          />
+          <BoardGrid state={currentState} lastMoveTo={lastMoveTo} flipped={flipped} />
+          <HandDisplay
+            hand={flipped ? currentState.hand.gote : currentState.hand.sente}
+            side={flipped ? 'gote' : 'sente'}
+            name={flipped ? gote : sente}
+          />
+          <button
+            className="btn btn-ghost btn-xs self-end"
+            onClick={() => setFlipped(!flipped)}
+            title="盤面反転"
+          >
+            🔄
+          </button>
         </div>
 
         {/* 評価値・候補手情報 */}

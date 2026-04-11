@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import clsx from 'clsx';
 import {
   buildPositions,
@@ -7,7 +7,7 @@ import {
   type BoardState,
   type PieceKind,
 } from '../lib/board';
-import { turnSymbol, formatScore } from '../lib/usi';
+import { turnSymbol, formatScore, detectBlunders } from '../lib/usi';
 import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
@@ -133,14 +133,9 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
 }
 
 export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
-  const sortedAnalyses = useMemo(
-    () => [...analyses].sort((a, b) => a.moveNumber - b.moveNumber),
-    [analyses],
-  );
-
-  const positions = useMemo(() => {
-    return buildPositions(usiMoves);
-  }, [usiMoves]);
+  const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
+  const blunders = detectBlunders(sortedAnalyses, usiMoves);
+  const positions = buildPositions(usiMoves);
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -163,11 +158,9 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
     : null;
 
   // 直前の指し手の移動先をハイライト用に算出
-  const lastMoveTo = useMemo(() => {
-    if (moveIndex === 0) return null;
-    const move = usiMoves[moveIndex - 1];
-    return move ? lastMoveDestination(move) : null;
-  }, [usiMoves, moveIndex]);
+  const lastMoveTo = moveIndex === 0
+    ? null
+    : (usiMoves[moveIndex - 1] ? lastMoveDestination(usiMoves[moveIndex - 1]) : null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -250,10 +243,54 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
 
           {/* 候補手一覧（読み筋付き） */}
           {prevAnalysis && prevAnalysis.candidates.length > 0 && (
-            <div>
-              <div className="mb-1 text-sm text-base-content/60">候補手</div>
-              <div className="flex flex-col gap-2">
-                {prevAnalysis.candidates.map((c) => {
+            <CandidateList
+              candidates={prevAnalysis.candidates}
+              played={played}
+              evalMoveNumber={evalMoveNumber}
+              positions={positions}
+              moveIndex={moveIndex}
+              isBlunder={blunders.has(evalMoveNumber)}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* 評価値グラフ */}
+      <EvalGraph
+        analyses={sortedAnalyses}
+        currentMove={moveIndex}
+        onClickMove={setMoveIndex}
+        blunders={blunders}
+      />
+    </div>
+  );
+}
+
+function CandidateList({
+  candidates,
+  played,
+  evalMoveNumber,
+  positions,
+  moveIndex,
+  isBlunder,
+}: {
+  candidates: Analysis['candidates'];
+  played: string | undefined;
+  evalMoveNumber: number;
+  positions: BoardState[];
+  moveIndex: number;
+  isBlunder: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const INITIAL_COUNT = 3;
+  const hasMore = candidates.length > INITIAL_COUNT;
+  const visible = expanded ? candidates : candidates.slice(0, INITIAL_COUNT);
+
+  return (
+    <div>
+      <div className="mb-1 text-sm text-base-content/60">候補手</div>
+      <div className="flex flex-col gap-2">
+        {visible.map((c) => {
                   const isPlayed = played && c.move === played;
                   const isNotBest = c.rank === 1 && played && !isPlayed;
                   const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
@@ -263,7 +300,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
                       className={clsx(
                         'rounded-lg p-2 text-sm',
                         isPlayed && 'bg-base-200',
-                        isNotBest && 'border border-warning/30',
+                        isNotBest && (isBlunder ? 'border border-error/30' : 'border border-warning/30'),
                       )}
                     >
                       <div className="flex items-center gap-2">
@@ -284,7 +321,9 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
                           <span className="text-xs text-success">実手</span>
                         )}
                         {isNotBest && (
-                          <span className="text-xs text-warning">※</span>
+                          isBlunder
+                            ? <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
+                            : <span className="text-xs text-warning">※</span>
                         )}
                       </div>
                       {c.pv && c.pv.length > 0 && (
@@ -304,19 +343,18 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
                       )}
                     </div>
                   );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
+        })}
       </div>
-
-      {/* 評価値グラフ */}
-      <EvalGraph
-        analyses={sortedAnalyses}
-        currentMove={moveIndex}
-        onClickMove={setMoveIndex}
-      />
+      {hasMore && (
+        <button
+          className="btn btn-ghost btn-xs w-full mt-1"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className={clsx('transition-transform', expanded && 'rotate-180')}>
+            ▼
+          </span>
+        </button>
+      )}
     </div>
   );
 }

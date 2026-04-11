@@ -28,6 +28,7 @@ function KifuListPage() {
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
 
+  const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
   const handleImport = async () => {
@@ -98,6 +99,7 @@ function KifuListPage() {
                 <tr>
                   <th>ID</th>
                   <th>タイトル</th>
+                  {swarsUserId && <th>結果</th>}
                   <th>解析</th>
                   <th>対局日時</th>
                 </tr>
@@ -115,6 +117,22 @@ function KifuListPage() {
                         {kifu.title}
                       </Link>
                     </td>
+                    {swarsUserId && (
+                      <td>
+                        {(() => {
+                          const r = kifu.result;
+                          if (!r) return <span className="badge badge-ghost badge-sm">−</span>;
+                          const isSente = kifu.sente === swarsUserId;
+                          const isGote = kifu.gote === swarsUserId;
+                          if (!isSente && !isGote) return <span className="badge badge-ghost badge-sm">−</span>;
+                          const won = (isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN'));
+                          const lost = (isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN'));
+                          if (won) return <span className="badge badge-soft badge-success badge-sm">勝</span>;
+                          if (lost) return <span className="badge badge-soft badge-error badge-sm">負</span>;
+                          return <span className="badge badge-ghost badge-sm">−</span>;
+                        })()}
+                      </td>
+                    )}
                     <td>
                       {'analyzed' in kifu && (
                         <span

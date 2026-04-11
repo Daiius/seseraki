@@ -85,7 +85,7 @@ function lastMoveDestination(usiMove: string): [number, number] | null {
 
 function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [number, number] | null }) {
   return (
-    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.5rem] grid-rows-[1.25rem_repeat(9,2rem)]">
+    <div className="inline-grid grid-cols-[repeat(9,2.5rem)_1.5rem] grid-rows-[1.25rem_repeat(9,2.5rem)]">
       {/* 筋番号（1行目） */}
       {COL_LABELS.map((col) => (
         <div
@@ -104,7 +104,7 @@ function BoardGrid({ state, lastMoveTo }: { state: BoardState; lastMoveTo: [numb
             <div
               key={`${rowIdx}-${colIdx}`}
               className={clsx(
-                'size-8 border border-base-300 flex items-center justify-center text-sm font-bold',
+                'size-10 border border-base-300 flex items-center justify-center text-base font-bold',
                 isLastMove && 'bg-primary/15',
               )}
             >

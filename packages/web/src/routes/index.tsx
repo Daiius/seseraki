@@ -33,16 +33,12 @@ function KifuListPage() {
 
   const handleImport = async () => {
     const userId = import.meta.env.VITE_SWARS_USER_ID;
-    const apiKey = import.meta.env.VITE_CLIENT_API_KEY;
-    if (!userId || !apiKey) return;
+    if (!userId) return;
 
     setImporting(true);
     setImportResult(null);
     try {
-      const res = await client.swars.import.$post(
-        { json: { userId, pages: 1 } },
-        { headers: { Authorization: `Bearer ${apiKey}` } },
-      );
+      const res = await client.swars.import.$post({ json: { userId, pages: 1 } });
       if (!res.ok) {
         setImportResult(`取得失敗 (${res.status})`);
         return;

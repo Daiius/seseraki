@@ -6,7 +6,14 @@ import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
-import { apiKeyRequired, clientApiKeyRequired } from './middlewares.js';
+import { apiKeyRequired } from './middlewares.js';
+import {
+  hasValidSession,
+  issueSession,
+  revokeSession,
+  sessionRequired,
+  verifyCredentials,
+} from './auth.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { parseKif } from './kif/parser.js';
@@ -40,9 +47,31 @@ const candidateMoveSchema = z.object({
 });
 
 const route = app
-  // --- Web 向け（認証なし） ---
+  // --- 認証 ---
+  .get('/auth/me', async (c) => {
+    if (!(await hasValidSession(c))) return c.body(null, 401);
+    return c.json({ ok: true } as const);
+  })
+  .post(
+    '/auth/login',
+    zv('json', z.object({ username: z.string(), password: z.string() })),
+    async (c) => {
+      const { username, password } = c.req.valid('json');
+      if (!verifyCredentials(username, password)) {
+        return c.json({ error: 'invalid credentials' } as const, 401);
+      }
+      await issueSession(c);
+      return c.json({ ok: true } as const);
+    },
+  )
+  .post('/auth/logout', async (c) => {
+    revokeSession(c);
+    return c.json({ ok: true } as const);
+  })
+  // --- Web 向け（セッション認証） ---
   .get(
     '/kifus',
+    sessionRequired,
     zv('query', z.object({ page: z.coerce.number().min(1).default(1) })),
     async (c) => {
       const { page } = c.req.valid('query');
@@ -83,6 +112,7 @@ const route = app
   )
   .get(
     '/kifus/:id',
+    sessionRequired,
     zv('param', z.object({ id: z.coerce.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
@@ -128,6 +158,7 @@ const route = app
   )
   .post(
     '/kifus',
+    sessionRequired,
     zv('json', z.object({ title: z.string(), kifText: z.string() })),
     async (c) => {
       const { title, kifText } = c.req.valid('json');
@@ -141,6 +172,7 @@ const route = app
   )
   .delete(
     '/kifus/:id',
+    sessionRequired,
     zv('param', z.object({ id: z.coerce.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
@@ -211,7 +243,7 @@ const route = app
   // --- swars 棋譜取得 ---
   .post(
     '/swars/import',
-    clientApiKeyRequired,
+    sessionRequired,
     zv(
       'json',
       z.object({

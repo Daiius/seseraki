@@ -15,4 +15,3 @@ function bearerAuth(envKey: string): MiddlewareHandler {
 }
 
 export const apiKeyRequired = bearerAuth('API_KEY');
-export const clientApiKeyRequired = bearerAuth('CLIENT_API_KEY');

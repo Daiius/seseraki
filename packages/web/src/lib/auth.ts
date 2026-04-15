@@ -16,17 +16,13 @@ export function checkSession(): Promise<boolean> {
   return sessionPromise;
 }
 
-export function invalidateSession(): void {
-  sessionPromise = null;
-}
-
 export async function login(username: string, password: string): Promise<boolean> {
   const res = await client.auth.login.$post({ json: { username, password } });
-  invalidateSession();
+  sessionPromise = res.ok ? Promise.resolve(true) : null;
   return res.ok;
 }
 
 export async function logout(): Promise<void> {
   await client.auth.logout.$post();
-  invalidateSession();
+  sessionPromise = Promise.resolve(false);
 }

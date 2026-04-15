@@ -5,17 +5,10 @@ import { getSignedCookie, setSignedCookie, deleteCookie } from 'hono/cookie';
 export const SESSION_COOKIE_NAME = 'seseraki_session';
 export const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 30; // 30 日
 
-/** 長さが違っても timing-safe に比較（短い方に揃えた後、長さ不一致なら false） */
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
-  if (ab.length !== bb.length) {
-    // 長さ比較自体は timing-safe でなくて良い（長さは秘密ではない）
-    // ダミー比較で定数時間を保つ
-    timingSafeEqual(ab, ab);
-    return false;
-  }
-  return timingSafeEqual(ab, bb);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
 function getSessionSecret(): string {

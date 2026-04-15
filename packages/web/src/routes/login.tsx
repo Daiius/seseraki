@@ -24,7 +24,7 @@ function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
@@ -36,10 +36,17 @@ function LoginPage() {
       }
       if ('credentials' in navigator && 'PasswordCredential' in window) {
         try {
-          const CredCtor = (window as unknown as {
-            PasswordCredential: new (init: { id: string; password: string }) => Credential;
-          }).PasswordCredential;
-          await navigator.credentials.store(new CredCtor({ id: username, password }));
+          const CredCtor = (
+            window as unknown as {
+              PasswordCredential: new (init: {
+                id: string;
+                password: string;
+              }) => Credential;
+            }
+          ).PasswordCredential;
+          await navigator.credentials.store(
+            new CredCtor({ id: username, password }),
+          );
         } catch {
           // ignore: Safari など未対応ブラウザ
         }
@@ -57,11 +64,11 @@ function LoginPage() {
       <form
         onSubmit={handleSubmit}
         className="card bg-base-200 w-full max-w-sm shadow"
-        action="/auth/login"
-        method="post"
       >
         <div className="card-body">
-          <h1 className="card-title font-logo text-3xl justify-center mb-2">細流棋</h1>
+          <h1 className="card-title font-logo text-3xl justify-center mb-2">
+            細流棋
+          </h1>
           <label className="form-control w-full">
             <div className="label">
               <span className="label-text">ユーザー名</span>
@@ -92,8 +99,16 @@ function LoginPage() {
             />
           </label>
           {error && <div className="alert alert-error mt-2">{error}</div>}
-          <button type="submit" className="btn btn-primary mt-4" disabled={submitting}>
-            {submitting ? <span className="loading loading-spinner loading-sm" /> : 'ログイン'}
+          <button
+            type="submit"
+            className="btn btn-primary mt-4"
+            disabled={submitting}
+          >
+            {submitting ? (
+              <span className="loading loading-spinner loading-sm" />
+            ) : (
+              'ログイン'
+            )}
           </button>
         </div>
       </form>

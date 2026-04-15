@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import { count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
 import { apiKeyRequired, clientApiKeyRequired } from './middlewares.js';
@@ -153,7 +153,7 @@ const route = app
     const [kifu] = await db
       .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText, usiMoves: kifus.usiMoves })
       .from(kifus)
-      .where(isNull(kifus.analysisCompletedAt))
+      .where(and(isNull(kifus.analysisCompletedAt), isNotNull(kifus.usiMoves)))
       .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
       .limit(1);
     return c.json(kifu ?? null);

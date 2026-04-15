@@ -28,9 +28,9 @@ pnpm db:seed      # サンプルデータ投入（初回のみ必要、既存デ
 | ファイル | 内容 |
 |---------|------|
 | `.env.database` | MySQL 接続情報 |
-| `.env.server` | API_KEY, CLIENT_API_KEY, CORS_ORIGINS, SWARS_SESSION_COOKIE, SWARS_BASE_URL |
+| `.env.server` | API_KEY, AUTH_USERNAME, AUTH_PASSWORD, SESSION_SECRET, COOKIE_SECURE, COOKIE_PATH, CORS_ORIGINS, SWARS_SESSION_COOKIE, SWARS_BASE_URL |
 | `.env.worker` | ENGINE_*, SERVER_URL, API_KEY, USE_MOCK, POLL_INTERVAL_MS |
-| `.env.web` | API_URL, VITE_API_URL, VITE_CLIENT_API_KEY, VITE_SWARS_USER_ID |
+| `.env.web` | API_URL, VITE_API_URL, VITE_SWARS_USER_ID |
 
 注意: Docker の `--env-file` はインラインコメントに対応していない（行頭の `#` のみ）。
 値の後ろに `# コメント` を書くと値の一部として扱われるので避けること。

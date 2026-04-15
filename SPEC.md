@@ -28,7 +28,7 @@ TypeScript フルスタック、pnpm monorepo 構成。
 
 | 環境 | サービス | 備考 |
 |------|---------|------|
-| VPS (1GB) | web + server + db | nginx の Basic 認証下で公開 |
+| VPS (1GB) | web + server + db | server 側ログインフォームで認証 |
 | デスクトップ PC (32GB) | worker | API_KEY で server に接続。CPU 解析 |
 
 VPS は web アクセス用、デスクトップ PC は解析用に分離。VPS での worker 動作も検討したが、メモリ消費量的に厳しく デスクトップ一択。
@@ -91,7 +91,15 @@ candidateMoves                 -- MultiPV の候補手
 
 ## API
 
-### Web 向け（[未実装] 認証方式検討中）
+### 認証（cookie セッション）
+
+| Method | Path | 説明 |
+|--------|------|------|
+| GET | `/auth/me` | ログイン状態確認。未ログインは 401 |
+| POST | `/auth/login` | body: `{ username, password }`。成功で署名付き cookie 発行 |
+| POST | `/auth/logout` | cookie を破棄 |
+
+### Web 向け（セッション認証）
 
 | Method | Path | 説明 |
 |--------|------|------|
@@ -99,8 +107,9 @@ candidateMoves                 -- MultiPV の候補手
 | GET | `/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
 | POST | `/kifus` | 棋譜登録。body: `{ title, kifText }` → `{ id }` |
 | DELETE | `/kifus/:id` | 棋譜削除（解析結果も CASCADE 削除） |
+| POST | `/swars/import` | swars棋譜取得。body: `{ userId, gtype?, pages? }` |
 
-全リクエストに `hono/logger` でアクセスログを出力。`CORS_ORIGINS` 環境変数（カンマ区切り）で CORS 許可オリジンを設定可能。
+全リクエストに `hono/logger` でアクセスログを出力。`CORS_ORIGINS` 環境変数（カンマ区切り）で CORS 許可オリジンを設定可能（cross-subdomain cookie のため `credentials: true`）。
 
 ### Worker 向け（`Authorization: Bearer <API_KEY>` 必須）
 
@@ -108,12 +117,6 @@ candidateMoves                 -- MultiPV の候補手
 |--------|------|------|
 | GET | `/worker/kifus` | 未解析の最古の棋譜を1件取得（なければ null）。usiMoves を含む |
 | POST | `/worker/analyses` | 解析結果をトランザクションで登録（既存データは DELETE → 再投入） |
-
-### swars 棋譜取得（`Authorization: Bearer <CLIENT_API_KEY>` 必須）
-
-| Method | Path | 説明 |
-|--------|------|------|
-| POST | `/swars/import` | swars棋譜取得。body: `{ userId, gtype?, pages? }` |
 
 Worker POST body:
 ```
@@ -137,9 +140,12 @@ Worker POST body:
 
 | パス | 画面 | 内容 |
 |------|------|------|
+| `/login` | ログイン | ユーザー名 + パスワードフォーム。パスワードマネージャー対応（`autocomplete="username"` / `"current-password"`） |
 | `/` | 棋譜一覧 | テーブル表示。解析済み/未バッジ、勝敗バッジ（VITE_SWARS_USER_ID 設定時）表示。swars 棋譜取得「更新」ボタン。サーバー未接続時は警告を表示 |
 | `/kifus/new` | 棋譜登録 | タイトル + KIF テキスト貼り付けフォーム |
 | `/kifus/$id` | 棋譜詳細 | 将棋盤 + 評価値 + 解析結果 |
+
+`/login` 以外は `__root.tsx` の `beforeLoad` で `/auth/me` を叩いてガード。未ログインなら `/login?redirect=<元の URL>` にリダイレクト。ナビバー右端にログアウトボタン。
 
 ### 棋譜詳細画面の機能
 
@@ -235,11 +241,15 @@ KifuAnalysisResult = {
 
 ## 未実装・計画中
 
-### 認証
+### 認証（実装済み）
 
-- 本番 nginx で Basic 認証を設定（個人用のため）
-- API_KEY（worker 用）と CLIENT_API_KEY（Web フロントエンド用）の二種類を運用中
-- CLIENT_API_KEY は Basic 認証の裏にあるので機密性は低い扱い、漏洩時は差し替え
+- ログインフォーム（`/login`）→ `POST /auth/login` → 署名付き cookie (`seseraki_session`) を発行
+- 認証情報は `AUTH_USERNAME` + `AUTH_PASSWORD`（平文、他の API_KEY / DB 資格情報と同様 `.env.server` を秘密として運用）
+- 認証照合は `crypto.timingSafeEqual` で定数時間比較
+- cookie は HMAC 署名 + 発行時刻埋め込みで stateless。30 日固定有効期限、スライディングなし
+- 署名鍵は `SESSION_SECRET`。cookie 属性は `HttpOnly; SameSite=Lax`、本番は `Secure`、サブパス配信なら `Path=/seseraki`（`COOKIE_SECURE` / `COOKIE_PATH` env var で切り替え）
+- `/kifus/*` と `/swars/import` は `sessionRequired` で保護。`/worker/*` は従来どおり `API_KEY` Bearer
+- 旧 Basic 認証（nginx）および `CLIENT_API_KEY` は廃止。nginx 側の basic_auth ディレクティブは本番設定から別途撤去する
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
 ### swars棋譜取得 (実装済み・ポーリング未実装)
@@ -250,7 +260,7 @@ KifuAnalysisResult = {
 - 履歴ページから対局キー抽出 → 個別棋譜取得 → CSA→KIF 変換 → DB 保存
 - `swarsGameKey` カラムによる重複検知
 - 3 秒間隔のレート制限付きフェッチャー
-- `clientApiKeyRequired` で保護（CLIENT_API_KEY）
+- `sessionRequired` で保護（web のログインセッション経由で呼び出し）
 - Web UI の「更新」ボタンからもトリガー可能
 
 **未実装:**

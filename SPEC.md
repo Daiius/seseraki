@@ -107,7 +107,8 @@ candidateMoves                 -- MultiPV の候補手
 | GET | `/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
 | POST | `/kifus` | 棋譜登録。body: `{ title, kifText }` → `{ id }` |
 | DELETE | `/kifus/:id` | 棋譜削除（解析結果も CASCADE 削除） |
-| POST | `/swars/import` | swars棋譜取得。body: `{ userId, gtype?, pages? }` |
+| POST | `/swars/import` | swars棋譜取得ジョブを起動（非同期）。body: `{ userId, gtype?, pages? }` → 202 + 現在のジョブ状態 |
+| GET | `/swars/import/status` | 現在のジョブ状態を返す（`idle` / `running` / `done` / `error`） |
 
 全リクエストに `hono/logger` でアクセスログを出力。`CORS_ORIGINS` 環境変数（カンマ区切り）で CORS 許可オリジンを設定可能（cross-subdomain cookie のため `credentials: true`）。
 
@@ -248,11 +249,11 @@ KifuAnalysisResult = {
 - 認証照合は `crypto.timingSafeEqual` で定数時間比較
 - cookie は HMAC 署名 + 発行時刻埋め込みで stateless。30 日固定有効期限、スライディングなし
 - 署名鍵は `SESSION_SECRET`。cookie 属性は `HttpOnly; SameSite=Lax`、本番は `Secure`、サブパス配信なら `Path=/seseraki`（`COOKIE_SECURE` / `COOKIE_PATH` env var で切り替え）
-- `/kifus/*` と `/swars/import` は `sessionRequired` で保護。`/worker/*` は従来どおり `API_KEY` Bearer
+- `/kifus/*` と `/swars/import*` は `sessionRequired` で保護。`/worker/*` は従来どおり `API_KEY` Bearer
 - 旧 Basic 認証（nginx）および `CLIENT_API_KEY` は廃止。nginx 側の basic_auth ディレクティブは本番設定から別途撤去する
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
-### swars棋譜取得 (実装済み・ポーリング未実装)
+### swars棋譜取得 (実装済み・非同期ジョブ化)
 
 `POST /swars/import` で手動トリガー。
 
@@ -262,10 +263,12 @@ KifuAnalysisResult = {
 - 3 秒間隔のレート制限付きフェッチャー
 - `sessionRequired` で保護（web のログインセッション経由で呼び出し）
 - Web UI の「更新」ボタンからもトリガー可能
+- 非同期ジョブ化（`swars/job-store.ts`）。`POST /swars/import` は 202 即応答 + バックグラウンド実行、`GET /swars/import/status` で状態取得。シングルトン合流（実行中なら既存ジョブに相乗り）、プロセス再起動でジョブ状態は消える
+- エラー種別を `errorKind: 'cookie_expired' | 'generic'` で分類し、Web UI は cookie 期限切れを固有メッセージで表示
+- Web UI は SWR で `/swars/import/status` を 3 秒間隔でポーリング、`done` / `error` でポーリング停止
 
 **未実装:**
 - 定期ポーリング（1 時間に 1 回の自動取得）
-- Cookie 失効時の通知・再取得フロー
 
 **認証:**
 - `_web_session` Cookie（Rails CookieStore、有効期限約 20 年）

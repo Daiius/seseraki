@@ -12,7 +12,8 @@
     "clsx": "^2",
     "hono": "^4",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "swr": "^2.4.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",

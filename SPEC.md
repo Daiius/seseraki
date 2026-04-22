@@ -240,37 +240,33 @@ KifuAnalysisResult = {
 ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 スキーマ変更時は `pnpm db:migrate`、初回データ投入は `pnpm db:seed` を手動実行。
 
-## 未実装・計画中
-
-### 認証（実装済み）
+## 認証
 
 - ログインフォーム（`/login`）→ `POST /auth/login` → 署名付き cookie (`seseraki_session`) を発行
 - 認証情報は `AUTH_USERNAME` + `AUTH_PASSWORD`（平文、他の API_KEY / DB 資格情報と同様 `.env.server` を秘密として運用）
 - 認証照合は `crypto.timingSafeEqual` で定数時間比較
 - cookie は HMAC 署名 + 発行時刻埋め込みで stateless。30 日固定有効期限、スライディングなし
 - 署名鍵は `SESSION_SECRET`。cookie 属性は `HttpOnly; SameSite=Lax`、本番は `Secure`、サブパス配信なら `Path=/seseraki`（`COOKIE_SECURE` / `COOKIE_PATH` env var で切り替え）
-- `/kifus/*` と `/swars/import*` は `sessionRequired` で保護。`/worker/*` は従来どおり `API_KEY` Bearer
-- 旧 Basic 認証（nginx）および `CLIENT_API_KEY` は廃止。nginx 側の basic_auth ディレクティブは本番設定から別途撤去する
+- `/kifus/*` と `/swars/import*` は `sessionRequired` で保護。`/worker/*` は `API_KEY` Bearer（別系統）
 - ユーザーは自分一人なのでマルチユーザー対応は不要
 
-### swars棋譜取得 (実装済み・非同期ジョブ化)
+## swars棋譜取得
 
-`POST /swars/import` で手動トリガー。
+`POST /swars/import` で手動トリガー（Web UI の「更新」ボタンから呼び出し）。
 
-**実装済み:**
+**取得フロー:**
 - 履歴ページから対局キー抽出 → 個別棋譜取得 → CSA→KIF 変換 → DB 保存
 - `swarsGameKey` カラムによる重複検知
 - 3 秒間隔のレート制限付きフェッチャー
 - `sessionRequired` で保護（web のログインセッション経由で呼び出し）
-- Web UI の「更新」ボタンからもトリガー可能
-- 非同期ジョブ化（`swars/job-store.ts`）。`POST /swars/import` は 202 即応答 + バックグラウンド実行、`GET /swars/import/status` で状態取得。シングルトン合流（実行中なら既存ジョブに相乗り）、プロセス再起動でジョブ状態は消える
+
+**非同期ジョブ化（`swars/job-store.ts`）:**
+- `POST /swars/import` は 202 即応答 + バックグラウンド実行、`GET /swars/import/status` で状態取得
+- シングルトン合流（実行中なら既存ジョブに相乗り）、プロセス再起動でジョブ状態は消える
 - エラー種別を `errorKind: 'cookie_expired' | 'generic'` で分類し、Web UI は cookie 期限切れを固有メッセージで表示
 - Web UI は SWR で `/swars/import/status` を 3 秒間隔でポーリング、`done` / `error` でポーリング停止
 
-**未実装:**
-- 定期ポーリング（1 時間に 1 回の自動取得）
-
-**認証:**
+**swars 側認証:**
 - `_web_session` Cookie（Rails CookieStore、有効期限約 20 年）
 - 手動ブラウザログインで取得（Cloudflare Turnstile のため自動ログイン不可）
 - 環境変数 `SWARS_SESSION_COOKIE` で管理
@@ -279,6 +275,11 @@ KifuAnalysisResult = {
 - リクエスト間隔: 3 秒以上
 - User-Agent: ブラウザ同等の値を設定
 - 非公式アクセスのためアカウント BAN リスクあり（控えめに運用）
+
+## 未実装・計画中
+
+### swars 棋譜の定期取得 (優先度: 中)
+- 1 時間に 1 回程度の自動取得（現状は手動トリガーのみ）
 
 ### 局面単位の再解析 (優先度: 低)
 - 特定局面だけ depth を変えて再解析する機能

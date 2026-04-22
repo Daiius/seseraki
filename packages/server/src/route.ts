@@ -16,6 +16,7 @@ import {
 } from './auth.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
+import { getJob, startJob } from './swars/job-store.js';
 import { parseKif } from './kif/parser.js';
 
 export const app = new Hono();
@@ -259,60 +260,64 @@ const route = app
         return c.json({ error: 'SWARS_SESSION_COOKIE not configured' }, 500);
       }
 
-      const imported: { id: number; gameKey: string }[] = [];
-      const skipped: string[] = [];
-      const errors: { gameKey: string; error: string }[] = [];
+      const state = startJob(async () => {
+        const imported: { id: number; gameKey: string }[] = [];
+        const skipped: string[] = [];
+        const errors: { gameKey: string; error: string }[] = [];
 
-      // 履歴ページから対局キーを収集
-      const allKeys: string[] = [];
-      for (let page = 1; page <= pages; page++) {
-        const keys = await fetchHistoryKeys(userId, gtype, page, cookie);
-        allKeys.push(...keys);
-        if (keys.length === 0) break;
-      }
-
-      // 各対局を取得・変換・保存
-      for (const gameKey of allKeys) {
-        // 重複チェック
-        const [existing] = await db
-          .select({ id: kifus.id })
-          .from(kifus)
-          .where(eq(kifus.swarsGameKey, gameKey))
-          .limit(1);
-        if (existing) {
-          skipped.push(gameKey);
-          continue;
+        const allKeys: string[] = [];
+        for (let page = 1; page <= pages; page++) {
+          const keys = await fetchHistoryKeys(userId, gtype, page, cookie);
+          allKeys.push(...keys);
+          if (keys.length === 0) break;
         }
 
-        try {
-          const gameData = await fetchGameData(gameKey);
-          const kifText = swarsToKif(gameData);
-          const usiMoves = kifToUsiMoves(kifText);
-          const title = formatTitle(gameData);
-          const playedAt = parsePlayedAt(gameKey);
-          const [result] = await db
-            .insert(kifus)
-            .values({
-              title,
-              kifText,
-              usiMoves,
-              sente: gameData.sente,
-              gote: gameData.gote,
-              senteDan: gameData.sente_dan,
-              goteDan: gameData.gote_dan,
-              result: gameData.result,
-              swarsGameKey: gameKey,
-              playedAt,
-            })
-            .$returningId();
-          imported.push({ id: result.id, gameKey });
-        } catch (e) {
-          errors.push({ gameKey, error: String(e) });
-        }
-      }
+        for (const gameKey of allKeys) {
+          const [existing] = await db
+            .select({ id: kifus.id })
+            .from(kifus)
+            .where(eq(kifus.swarsGameKey, gameKey))
+            .limit(1);
+          if (existing) {
+            skipped.push(gameKey);
+            continue;
+          }
 
-      return c.json({ imported, skipped, errors });
+          try {
+            const gameData = await fetchGameData(gameKey);
+            const kifText = swarsToKif(gameData);
+            const usiMoves = kifToUsiMoves(kifText);
+            const title = formatTitle(gameData);
+            const playedAt = parsePlayedAt(gameKey);
+            const [result] = await db
+              .insert(kifus)
+              .values({
+                title,
+                kifText,
+                usiMoves,
+                sente: gameData.sente,
+                gote: gameData.gote,
+                senteDan: gameData.sente_dan,
+                goteDan: gameData.gote_dan,
+                result: gameData.result,
+                swarsGameKey: gameKey,
+                playedAt,
+              })
+              .$returningId();
+            imported.push({ id: result.id, gameKey });
+          } catch (e) {
+            errors.push({ gameKey, error: String(e) });
+          }
+        }
+
+        return { imported, skipped, errors };
+      });
+
+      return c.json(state, 202);
     },
-  );
+  )
+  .get('/swars/import/status', sessionRequired, (c) => {
+    return c.json(getJob());
+  });
 
 export type AppType = typeof route;

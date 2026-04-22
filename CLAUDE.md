@@ -52,6 +52,11 @@ shared パッケージは作らない（Hono RPC で十分なため）。
 server の `package.json` の `exports` で `route.ts` の型を公開し、
 web/worker は `"server": "workspace:*"` で devDependencies として参照。
 
+エンドポイントが server 内部ファイルの型を返すと `hc<AppType>(...)` の
+推論結果が遠い相対パスを参照して TS2742 が出ることがある。
+`type Client = ReturnType<typeof hc<AppType>>` で一旦型を抜き出して
+`export const client: Client = hc<AppType>(...)` と付け直すと回避できる。
+
 ## Worker のローカル実行
 
 Docker 外で worker を動かす場合は `packages/worker/.env.example` を `.env` にコピー。

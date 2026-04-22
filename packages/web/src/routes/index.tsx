@@ -1,6 +1,32 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
+import useSWR from 'swr';
 import { client } from '../lib/honoClient';
+
+type JobStatus =
+  | { status: 'idle' }
+  | { status: 'running'; startedAt: string }
+  | {
+      status: 'done';
+      startedAt: string;
+      finishedAt: string;
+      imported: { id: number; gameKey: string }[];
+      skipped: string[];
+      errors: { gameKey: string; error: string }[];
+    }
+  | {
+      status: 'error';
+      startedAt: string;
+      finishedAt: string;
+      errorKind: 'cookie_expired' | 'generic';
+      errorMessage: string;
+    };
+
+const jobStatusFetcher = async (): Promise<JobStatus> => {
+  const res = await client.swars.import.status.$get();
+  if (!res.ok) throw new Error(`status ${res.status}`);
+  return (await res.json()) as JobStatus;
+};
 
 export const Route = createFileRoute('/')({
   validateSearch: (search: Record<string, unknown>): { page?: number } => ({
@@ -25,36 +51,61 @@ function KifuListPage() {
   const { page = 1 } = Route.useSearch();
   const navigate = useNavigate();
   const router = useRouter();
-  const [importing, setImporting] = useState(false);
+  const [isPolling, setIsPolling] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
 
   const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
+  const { data: jobStatus } = useSWR<JobStatus>(
+    isPolling ? 'swars-import-status' : null,
+    jobStatusFetcher,
+    {
+      refreshInterval: 3000,
+      errorRetryCount: 3,
+      revalidateOnFocus: false,
+      dedupingInterval: 0,
+    },
+  );
+
+  useEffect(() => {
+    if (!jobStatus) return;
+    if (jobStatus.status === 'done') {
+      const count = jobStatus.imported.length;
+      setImportResult(
+        count > 0 ? `${count}件の棋譜を取得しました` : '新しい棋譜はありません',
+      );
+      setIsPolling(false);
+      if (count > 0) router.invalidate();
+    } else if (jobStatus.status === 'error') {
+      setImportResult(
+        jobStatus.errorKind === 'cookie_expired'
+          ? 'SWARS_SESSION_COOKIE が期限切れです。再設定してください'
+          : `取得失敗: ${jobStatus.errorMessage}`,
+      );
+      setIsPolling(false);
+    }
+  }, [jobStatus, router]);
+
   const handleImport = async () => {
     const userId = import.meta.env.VITE_SWARS_USER_ID;
     if (!userId) return;
 
-    setImporting(true);
     setImportResult(null);
+    setIsPolling(true);
     try {
       const res = await client.swars.import.$post({ json: { userId, pages: 1 } });
       if (!res.ok) {
         setImportResult(`取得失敗 (${res.status})`);
-        return;
+        setIsPolling(false);
       }
-      const data = await res.json();
-      const count = data.imported.length;
-      setImportResult(
-        count > 0 ? `${count}件の棋譜を取得しました` : '新しい棋譜はありません',
-      );
-      if (count > 0) router.invalidate();
     } catch {
       setImportResult('サーバーに接続できません');
-    } finally {
-      setImporting(false);
+      setIsPolling(false);
     }
   };
+
+  const importing = isPolling;
 
   return (
     <div>

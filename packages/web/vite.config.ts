@@ -3,18 +3,9 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 
-const apiTarget = process.env.API_URL ?? 'http://localhost:4000';
-
 export default defineConfig({
   plugins: [TanStackRouterVite(), react(), tailwindcss()],
   server: {
-    host: !!process.env.API_URL,
-    proxy: {
-      '/api': {
-        target: apiTarget,
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
+    host: !!process.env.VITE_API_URL,
   },
 });

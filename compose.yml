@@ -99,7 +99,7 @@ services:
       - .env.web
     environment:
       TZ: "Asia/Tokyo"
-    command: pnpm --filter web dev -- --host
+    command: pnpm --filter web dev --host
     ports:
       - "5173:5173"
     depends_on:

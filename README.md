@@ -19,7 +19,7 @@ sequenceDiagram
     participant WK as 棋譜解析
 
     U->>W: 棋譜を閲覧・登録
-    W->>S: /api/* (proxy)
+    W->>S: /api/* または VITE_API_URL
     S->>DB: 読み書き
 
     U->>W: 棋譜詳細を表示

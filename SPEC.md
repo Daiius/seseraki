@@ -13,7 +13,7 @@ TypeScript フルスタック、pnpm monorepo 構成。
                          │ 棋譜取得（手動トリガー）
 ┌─────────┐     ┌───────▼─┐     ┌─────────┐
 │   web   │────▶│ server  │◀────│ worker  │
-│ React   │proxy│ Hono    │API  │ Node.js │
+│ React   │fetch│ Hono    │API  │ Node.js │
 │ Vite    │/api │ Drizzle │KEY  │ USI     │
 └─────────┘     └────┬────┘     └────┬────┘
                      │               │
@@ -42,11 +42,11 @@ VPS は web アクセス用、デスクトップ PC は解析用に分離。VPS 
 | パッケージ | 役割 | 主要技術 |
 |-----------|------|---------|
 | web | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
-| server | API + DB + KIF パース | Hono, Drizzle ORM (beta.20), MySQL, zod |
+| server | API + DB + KIF パース | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
 | worker | 棋譜解析 | USI プロトコル, やねうら王 |
 
 - MySQL: 開発経験が多いため選択
-- Drizzle ORM beta.20: 1.0 正式リリースが近く、早めにキャッチアップする目的
+- Drizzle ORM 1.0.0-beta.22: 1.0 正式リリースが近く、早めにキャッチアップする目的
 
 Hono RPC (`AppType` export + `hc<AppType>`) で server → web/worker 間の型を共有。shared パッケージは持たない。
 Drizzle ORM の型情報を Hono RPC 経由でフロントエンドまで伝えられるのが利点。

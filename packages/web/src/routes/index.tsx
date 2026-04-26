@@ -53,6 +53,7 @@ function KifuListPage() {
   const router = useRouter();
   const [isPolling, setIsPolling] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
+  const [jobStartedAt, setJobStartedAt] = useState<string | null>(null);
 
   const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
@@ -70,12 +71,17 @@ function KifuListPage() {
 
   useEffect(() => {
     if (!jobStatus) return;
+    // POST レスポンス確定前、または startedAt が今回のジョブと一致しない
+    // 残留状態（前回の done/error 等）は UI に反映しない
+    if (!jobStartedAt) return;
+    if (!('startedAt' in jobStatus) || jobStatus.startedAt !== jobStartedAt) return;
     if (jobStatus.status === 'done') {
       const count = jobStatus.imported.length;
       setImportResult(
         count > 0 ? `${count}件の棋譜を取得しました` : '新しい棋譜はありません',
       );
       setIsPolling(false);
+      setJobStartedAt(null);
       if (count > 0) router.invalidate();
     } else if (jobStatus.status === 'error') {
       setImportResult(
@@ -84,8 +90,9 @@ function KifuListPage() {
           : `取得失敗: ${jobStatus.errorMessage}`,
       );
       setIsPolling(false);
+      setJobStartedAt(null);
     }
-  }, [jobStatus, router]);
+  }, [jobStatus, router, jobStartedAt]);
 
   const handleImport = async () => {
     const userId = import.meta.env.VITE_SWARS_USER_ID;
@@ -97,6 +104,13 @@ function KifuListPage() {
       const res = await client.swars.import.$post({ json: { userId, pages: 1 } });
       if (!res.ok) {
         setImportResult(`取得失敗 (${res.status})`);
+        setIsPolling(false);
+        return;
+      }
+      const state = (await res.json()) as JobStatus;
+      if (state.status === 'running') {
+        setJobStartedAt(state.startedAt);
+      } else {
         setIsPolling(false);
       }
     } catch {

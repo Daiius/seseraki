@@ -61,6 +61,9 @@ services:
           target: /workspace/packages/server
           ignore:
             - node_modules/
+            - dist/
+            - "*.tsbuildinfo"
+            - "*.log"
         - action: rebuild
           path: pnpm-lock.yaml
 
@@ -85,6 +88,9 @@ services:
           target: /workspace/packages/worker
           ignore:
             - node_modules/
+            - dist/
+            - "*.tsbuildinfo"
+            - "*.log"
             - Dockerfile
             - Dockerfile.engine
         - action: rebuild
@@ -99,7 +105,7 @@ services:
       - .env.web
     environment:
       TZ: "Asia/Tokyo"
-    command: pnpm --filter web dev -- --host
+    command: pnpm --filter web dev --host
     ports:
       - "5173:5173"
     depends_on:
@@ -111,6 +117,9 @@ services:
           target: /workspace/packages/web
           ignore:
             - node_modules/
+            - dist/
+            - "*.tsbuildinfo"
+            - "*.log"
         - action: rebuild
           path: pnpm-lock.yaml
 

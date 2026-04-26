@@ -8,23 +8,23 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tanstack/react-router": "^1",
-    "clsx": "^2",
-    "hono": "^4",
-    "react": "^19",
-    "react-dom": "^19",
+    "@tanstack/react-router": "^1.168.24",
+    "clsx": "^2.1.1",
+    "hono": "^4.12.15",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "swr": "^2.4.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4",
-    "@tanstack/router-plugin": "^1",
-    "@types/node": "^22",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@vitejs/plugin-react": "^6",
-    "daisyui": "^5",
+    "@tailwindcss/vite": "4.2.2",
+    "@tanstack/router-plugin": "^1.167.27",
+    "@types/node": "^22.19.17",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "daisyui": "^5.5.19",
     "server": "workspace:*",
-    "tailwindcss": "^4",
-    "vite": "^8"
+    "tailwindcss": "4.2.2",
+    "vite": "^8.0.10"
   }
 }

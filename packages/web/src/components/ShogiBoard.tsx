@@ -375,6 +375,15 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         onClickMove={goToMain}
         blunders={blunders}
         userSide={userSide}
+        branch={
+          branchActive && branchCandidate
+            ? {
+                moveNumber: evalMoveNumber + 1,
+                scoreType: branchCandidate.scoreType,
+                scoreValue: branchCandidate.scoreValue,
+              }
+            : null
+        }
       />
     </div>
   );

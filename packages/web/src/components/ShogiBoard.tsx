@@ -219,7 +219,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const lastMoveTo = displayedMove ? lastMoveDestination(displayedMove) : null;
 
   const posEvalText = branchActive && branchCandidate
-    ? `(${formatScore(branchCandidate.scoreType, branchCandidate.scoreValue, evalMoveNumber)}) 分岐中`
+    ? formatScore(branchCandidate.scoreType, branchCandidate.scoreValue, evalMoveNumber)
     : posEval;
 
   const onBranchForward = (rank: number, pv: string[]) => {
@@ -334,7 +334,19 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
               <div className="text-sm text-base-content/60">
                 局面評価値（先手視点）
               </div>
-              <div className="text-lg font-semibold">{posEvalText}</div>
+              <div className="flex items-center gap-2">
+                <span
+                  className={clsx(
+                    'text-lg font-semibold',
+                    branchActive && 'text-base-content/50',
+                  )}
+                >
+                  {posEvalText}
+                </span>
+                {branchActive && (
+                  <span className="badge badge-sm badge-ghost">分岐中</span>
+                )}
+              </div>
             </div>
           )}
 

@@ -38,19 +38,12 @@ function KifuDetailPage() {
   const toJapanese = (usi: string, state?: BoardState) =>
     state ? usiToJapaneseWithPiece(state, usi) : usi;
 
-  // 読み筋を盤面追跡しながら変換
-  const pvToJapanese = (
-    pv: string[],
-    moveNumber: number,
-    firstMove: string,
-  ) => {
+  // 読み筋を盤面追跡しながら変換（pv[0] は候補手と等しい完全列）
+  const pvToJapanese = (pv: string[], moveNumber: number) => {
     let state = getState(moveNumber);
     if (!state) return pv.join(' ');
 
     const parts: string[] = [];
-    // 最初の候補手を適用
-    state = applyMove(state, firstMove);
-
     for (let j = 0; j < pv.length; j++) {
       const pvMoveNum = moveNumber + j;
       const turn = turnSymbol(pvMoveNum);
@@ -226,9 +219,7 @@ function KifuDetailPage() {
                             </td>
                             <td>{c.depth}</td>
                             <td className="font-mono text-xs">
-                              {c.pv
-                                ? pvToJapanese(c.pv, a.moveNumber, c.move)
-                                : ''}
+                              {c.pv ? pvToJapanese(c.pv, a.moveNumber) : ''}
                             </td>
                           </tr>
                         ));

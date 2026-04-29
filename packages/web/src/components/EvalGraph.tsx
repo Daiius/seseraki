@@ -16,6 +16,15 @@ interface EvalGraphProps {
   blunders?: Set<number>;
   /** ユーザーの手番（'sente' | 'gote'）。相手の悪手は透明度を下げる */
   userSide?: 'sente' | 'gote' | null;
+  /**
+   * 分岐モード中の分岐手評価値プロット。
+   * moveNumber は分岐の最初の手を指した後の局面番号、score は分岐手の評価値。
+   */
+  branch?: {
+    moveNumber: number;
+    scoreType: string;
+    scoreValue: number;
+  } | null;
 }
 
 const CLAMP = 3000;
@@ -39,6 +48,7 @@ export function EvalGraph({
   onClickMove,
   blunders,
   userSide,
+  branch,
 }: EvalGraphProps) {
   const points: EvalPoint[] = analyses
     .filter((a) => a.candidates.length > 0)
@@ -168,6 +178,49 @@ export function EvalGraph({
                 />
               );
             })}
+
+        {/* 分岐手の評価値プロット */}
+        {branch && (() => {
+          const branchValue = toSenteValue(
+            branch.scoreType,
+            branch.scoreValue,
+            branch.moveNumber,
+          );
+          const bx = toX(branch.moveNumber);
+          const by = toY(branchValue);
+          const fork = points.find((p) => p.moveNumber === branch.moveNumber - 1);
+          return (
+            <g>
+              {fork && (
+                <line
+                  x1={toX(fork.moveNumber)}
+                  y1={toY(fork.value)}
+                  x2={bx}
+                  y2={by}
+                  className="stroke-success"
+                  strokeWidth={1.5}
+                  strokeDasharray="3 2"
+                  opacity={0.8}
+                />
+              )}
+              <circle
+                cx={bx}
+                cy={by}
+                r={4}
+                className="fill-success stroke-base-100"
+                strokeWidth={2}
+              />
+              <text
+                x={bx + 6}
+                y={by + 3}
+                fontSize={9}
+                className="fill-success"
+              >
+                分岐
+              </text>
+            </g>
+          );
+        })()}
 
         {/* クリック領域 */}
         {onClickMove &&

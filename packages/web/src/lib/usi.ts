@@ -49,7 +49,7 @@ export function detectBlunders(
   return blunders;
 }
 
-function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
+export function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
   const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
   if (scoreType === 'mate') return v > 0 ? 3000 : -3000;
   return Math.max(-3000, Math.min(3000, v));

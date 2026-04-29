@@ -7,7 +7,7 @@ import {
   type BoardState,
   type PieceKind,
 } from '../lib/board';
-import { turnSymbol, formatScore, detectBlunders } from '../lib/usi';
+import { turnSymbol, formatScore, detectBlunders, toSenteEval } from '../lib/usi';
 import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
@@ -379,8 +379,11 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
           branchActive && branchCandidate
             ? {
                 moveNumber: evalMoveNumber + 1,
-                scoreType: branchCandidate.scoreType,
-                scoreValue: branchCandidate.scoreValue,
+                value: toSenteEval(
+                  branchCandidate.scoreType,
+                  branchCandidate.scoreValue,
+                  evalMoveNumber,
+                ),
               }
             : null
         }

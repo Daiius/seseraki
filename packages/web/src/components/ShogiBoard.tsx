@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   buildPositions,
@@ -152,8 +152,14 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
   const [flipped, setFlipped] = useState(userSide === 'gote');
+  const [branchRank, setBranchRank] = useState<number | null>(null);
+  const [branchDepth, setBranchDepth] = useState(0);
 
-  const currentState = positions[moveIndex];
+  const goToMain = (newIndex: number) => {
+    setMoveIndex(newIndex);
+    setBranchRank(null);
+    setBranchDepth(0);
+  };
 
   // moveIndex N の盤面 = N 手指した後の局面
   // この局面に至った手の解析 = moveNumber N-1 の解析結果
@@ -171,13 +177,70 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
     ? formatScore(currentBest.scoreType, currentBest.scoreValue, moveIndex)
     : null;
 
-  const played = moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined;
   const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
 
-  // 直前の指し手の移動先をハイライト用に算出
-  const lastMoveTo = moveIndex === 0
-    ? null
-    : (usiMoves[moveIndex - 1] ? lastMoveDestination(usiMoves[moveIndex - 1]) : null);
+  // 分岐モード判定と分岐用データの算出
+  const branchCandidate = branchRank !== null
+    ? prevAnalysis?.candidates.find((c) => c.rank === branchRank) ?? null
+    : null;
+  const branchPv = branchCandidate?.pv ?? null;
+  const branchActive = branchRank !== null
+    && branchDepth > 0
+    && branchPv !== null
+    && branchPv.length > 0;
+
+  // 表示用：盤面・直前手・直前手前局面・直前手の手番
+  let displayState: BoardState;
+  let displayedMove: string | undefined;
+  let displayedMovePreState: BoardState | undefined;
+  let displayedMoveNum = 0;
+
+  if (branchActive && branchPv) {
+    const base = positions[evalMoveNumber];
+    let st = base;
+    let preSt = base;
+    for (let i = 0; i < branchDepth; i++) {
+      preSt = st;
+      st = applyMove(st, branchPv[i]);
+    }
+    displayState = st;
+    displayedMove = branchPv[branchDepth - 1];
+    displayedMovePreState = preSt;
+    displayedMoveNum = evalMoveNumber + (branchDepth - 1);
+  } else {
+    displayState = positions[moveIndex];
+    if (moveIndex > 0) {
+      displayedMove = usiMoves[moveIndex - 1];
+      displayedMovePreState = positions[moveIndex - 1];
+      displayedMoveNum = moveIndex - 1;
+    }
+  }
+
+  const lastMoveTo = displayedMove ? lastMoveDestination(displayedMove) : null;
+
+  const posEvalText = branchActive && branchCandidate
+    ? `(${formatScore(branchCandidate.scoreType, branchCandidate.scoreValue, evalMoveNumber)}) 分岐中`
+    : posEval;
+
+  const onBranchForward = (rank: number, pv: string[]) => {
+    if (branchRank === rank) {
+      setBranchDepth(Math.min(branchDepth + 1, pv.length));
+    } else {
+      setBranchRank(rank);
+      setBranchDepth(1);
+    }
+  };
+
+  const onBranchBack = (rank: number) => {
+    if (branchRank !== rank) return;
+    const next = branchDepth - 1;
+    if (next <= 0) {
+      setBranchRank(null);
+      setBranchDepth(0);
+    } else {
+      setBranchDepth(next);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -185,15 +248,15 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
       <div className="flex items-center gap-2">
         <button
           className="btn btn-sm btn-ghost"
-          onClick={() => setMoveIndex(0)}
-          disabled={moveIndex === 0}
+          onClick={() => goToMain(0)}
+          disabled={!branchActive && moveIndex === 0}
         >
           ⏮
         </button>
         <button
           className="btn btn-sm btn-ghost"
-          onClick={() => setMoveIndex(Math.max(0, moveIndex - 1))}
-          disabled={moveIndex === 0}
+          onClick={() => goToMain(Math.max(0, moveIndex - 1))}
+          disabled={!branchActive && moveIndex === 0}
         >
           ◀
         </button>
@@ -202,39 +265,44 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
           min={0}
           max={totalMoves}
           value={moveIndex}
-          onChange={(e) => setMoveIndex(Number(e.target.value))}
+          onChange={(e) => goToMain(Number(e.target.value))}
           className="range range-sm flex-1"
         />
         <button
           className="btn btn-sm btn-ghost"
-          onClick={() => setMoveIndex(Math.min(totalMoves, moveIndex + 1))}
-          disabled={moveIndex === totalMoves}
+          onClick={() => goToMain(Math.min(totalMoves, moveIndex + 1))}
+          disabled={!branchActive && moveIndex === totalMoves}
         >
           ▶
         </button>
         <button
           className="btn btn-sm btn-ghost"
-          onClick={() => setMoveIndex(totalMoves)}
-          disabled={moveIndex === totalMoves}
+          onClick={() => goToMain(totalMoves)}
+          disabled={!branchActive && moveIndex === totalMoves}
         >
           ⏭
         </button>
         <span className="text-sm font-mono w-20 text-right">
           {moveIndex} / {totalMoves}
         </span>
+        {branchActive && (
+          <span className="badge badge-sm badge-primary">
+            分岐中 +{branchDepth}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-col md:flex-row gap-6">
         {/* 盤面 */}
         <div className="flex flex-col gap-1">
           <HandDisplay
-            hand={flipped ? currentState.hand.sente : currentState.hand.gote}
+            hand={flipped ? displayState.hand.sente : displayState.hand.gote}
             side={flipped ? 'sente' : 'gote'}
             name={flipped ? sente : gote}
           />
-          <BoardGrid state={currentState} lastMoveTo={lastMoveTo} flipped={flipped} />
+          <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
           <HandDisplay
-            hand={flipped ? currentState.hand.gote : currentState.hand.sente}
+            hand={flipped ? displayState.hand.gote : displayState.hand.sente}
             side={flipped ? 'gote' : 'sente'}
             name={flipped ? gote : sente}
           />
@@ -250,26 +318,23 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         {/* 評価値・候補手情報 */}
         <div className="flex flex-col gap-3 min-w-64">
           {/* 直前の指し手 */}
-          {played && (
+          {displayedMove && displayedMovePreState && (
             <div>
               <div className="text-sm text-base-content/60">指し手</div>
               <div className="text-lg font-bold">
-                {turnSymbol(moveIndex - 1)}
-                {usiToJapaneseWithPiece(
-                  positions[moveIndex - 1],
-                  played,
-                )}
+                {turnSymbol(displayedMoveNum)}
+                {usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}
               </div>
             </div>
           )}
 
           {/* 局面評価値 */}
-          {posEval && (
+          {posEvalText && (
             <div>
               <div className="text-sm text-base-content/60">
                 局面評価値（先手視点）
               </div>
-              <div className="text-lg font-semibold">{posEval}</div>
+              <div className="text-lg font-semibold">{posEvalText}</div>
             </div>
           )}
 
@@ -277,11 +342,15 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
           {prevAnalysis && prevAnalysis.candidates.length > 0 && (
             <CandidateList
               candidates={prevAnalysis.candidates}
-              played={played}
+              played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
               evalMoveNumber={evalMoveNumber}
               positions={positions}
               moveIndex={moveIndex}
               isBlunder={blunders.has(evalMoveNumber)}
+              branchRank={branchRank}
+              branchDepth={branchDepth}
+              onBranchForward={onBranchForward}
+              onBranchBack={onBranchBack}
             />
           )}
         </div>
@@ -291,7 +360,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
       <EvalGraph
         analyses={sortedAnalyses}
         currentMove={moveIndex}
-        onClickMove={setMoveIndex}
+        onClickMove={goToMain}
         blunders={blunders}
         userSide={userSide}
       />
@@ -306,6 +375,10 @@ function CandidateList({
   positions,
   moveIndex,
   isBlunder,
+  branchRank,
+  branchDepth,
+  onBranchForward,
+  onBranchBack,
 }: {
   candidates: Analysis['candidates'];
   played: string | undefined;
@@ -313,6 +386,10 @@ function CandidateList({
   positions: BoardState[];
   moveIndex: number;
   isBlunder: boolean;
+  branchRank: number | null;
+  branchDepth: number;
+  onBranchForward: (rank: number, pv: string[]) => void;
+  onBranchBack: (rank: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const INITIAL_COUNT = 3;
@@ -324,58 +401,95 @@ function CandidateList({
       <div className="mb-1 text-sm text-base-content/60">候補手</div>
       <div className="flex flex-col gap-2">
         {visible.map((c) => {
-                  const isPlayed = played && c.move === played;
-                  const isNotBest = c.rank === 1 && played && !isPlayed;
-                  const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
-                  return (
-                    <div
-                      key={c.rank}
-                      className={clsx(
-                        'rounded-lg p-2 text-sm',
-                        isPlayed && 'bg-base-200',
-                        isNotBest && (isBlunder ? 'border border-error/30' : 'border border-warning/30'),
-                      )}
+          const isPlayed = played && c.move === played;
+          const isNotBest = c.rank === 1 && played && !isPlayed;
+          const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
+          const isActiveBranch = branchRank === c.rank && branchDepth > 0;
+          const pvLen = c.pv?.length ?? 0;
+          const hasPv = pvLen > 0;
+          return (
+            <div
+              key={c.rank}
+              className={clsx(
+                'rounded-lg p-2 text-sm',
+                isPlayed && 'bg-base-200',
+                isNotBest && (isBlunder ? 'border border-error/30' : 'border border-warning/30'),
+                isActiveBranch && 'border-l-4 border-l-primary pl-3',
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-base-content/50">
+                  {c.rank}
+                </span>
+                <span className="font-bold">
+                  {turnSymbol(evalMoveNumber)}
+                  {usiToJapaneseWithPiece(prevState, c.move)}
+                </span>
+                <span className="text-base-content/70">
+                  {formatScore(c.scoreType, c.scoreValue, evalMoveNumber)}
+                </span>
+                <span className="text-xs text-base-content/40">
+                  d{c.depth}
+                </span>
+                {isPlayed && (
+                  <span className="text-xs text-success">実手</span>
+                )}
+                {isNotBest && (
+                  isBlunder
+                    ? <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
+                    : <span className="text-xs text-warning">※</span>
+                )}
+              </div>
+              {hasPv && c.pv && (
+                <>
+                  <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
+                    {(() => {
+                      let st = prevState;
+                      const activeIdx = isActiveBranch ? branchDepth - 1 : -1;
+                      const nodes: ReactNode[] = [];
+                      for (let j = 0; j < c.pv.length; j++) {
+                        const turn = turnSymbol(evalMoveNumber + j);
+                        const text = `${turn}${usiToJapaneseWithPiece(st, c.pv[j])}`;
+                        if (j > 0) nodes.push(' ');
+                        if (j === activeIdx) {
+                          nodes.push(
+                            <strong key={j} className="text-base-content font-bold">
+                              {text}
+                            </strong>,
+                          );
+                        } else {
+                          nodes.push(<span key={j}>{text}</span>);
+                        }
+                        st = applyMove(st, c.pv[j]);
+                      }
+                      return nodes;
+                    })()}
+                  </div>
+                  <div className="mt-1 flex items-center gap-1 pl-5">
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => onBranchBack(c.rank)}
+                      disabled={!isActiveBranch}
+                      title="分岐を戻る"
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-base-content/50">
-                          {c.rank}
-                        </span>
-                        <span className="font-bold">
-                          {turnSymbol(evalMoveNumber)}
-                          {usiToJapaneseWithPiece(prevState, c.move)}
-                        </span>
-                        <span className="text-base-content/70">
-                          {formatScore(c.scoreType, c.scoreValue, evalMoveNumber)}
-                        </span>
-                        <span className="text-xs text-base-content/40">
-                          d{c.depth}
-                        </span>
-                        {isPlayed && (
-                          <span className="text-xs text-success">実手</span>
-                        )}
-                        {isNotBest && (
-                          isBlunder
-                            ? <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
-                            : <span className="text-xs text-warning">※</span>
-                        )}
-                      </div>
-                      {c.pv && c.pv.length > 0 && (
-                        <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
-                          {(() => {
-                            let st = applyMove(prevState, c.move);
-                            return c.pv!
-                              .map((m: string, j: number) => {
-                                const turn = turnSymbol(evalMoveNumber + j);
-                                const text = usiToJapaneseWithPiece(st, m);
-                                st = applyMove(st, m);
-                                return `${turn}${text}`;
-                              })
-                              .join(' ');
-                          })()}
-                        </div>
-                      )}
-                    </div>
-                  );
+                      ◀
+                    </button>
+                    <span className="text-xs font-mono text-base-content/50 w-12 text-center">
+                      {isActiveBranch ? branchDepth : 0}/{pvLen}
+                    </span>
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => onBranchForward(c.rank, c.pv!)}
+                      disabled={isActiveBranch && branchDepth >= pvLen}
+                      title="分岐を進む"
+                    >
+                      ▶
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
         })}
       </div>
       {hasMore && (

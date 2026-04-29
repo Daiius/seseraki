@@ -18,12 +18,14 @@ interface EvalGraphProps {
   userSide?: 'sente' | 'gote' | null;
   /**
    * 分岐モード中の分岐手評価値プロット。
-   * moveNumber は分岐の最初の手を指した後の局面番号、score は分岐手の評価値。
+   * moveNumber はプロット位置（分岐手を指した後の局面番号）、value は
+   * 先手視点に変換済みの評価値（cp、mate は ±3000 にクランプ）。
+   * 視点変換は分岐元の解析局面の手番を基準にすべきでプロット位置の手番ではないため、
+   * 呼び出し側で計算した値を渡してもらう。
    */
   branch?: {
     moveNumber: number;
-    scoreType: string;
-    scoreValue: number;
+    value: number;
   } | null;
 }
 
@@ -181,13 +183,8 @@ export function EvalGraph({
 
         {/* 分岐手の評価値プロット */}
         {branch && (() => {
-          const branchValue = toSenteValue(
-            branch.scoreType,
-            branch.scoreValue,
-            branch.moveNumber,
-          );
           const bx = toX(branch.moveNumber);
-          const by = toY(branchValue);
+          const by = toY(branch.value);
           const fork = points.find((p) => p.moveNumber === branch.moveNumber - 1);
           return (
             <g>

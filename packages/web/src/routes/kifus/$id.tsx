@@ -9,6 +9,7 @@ import {
   type BoardState,
 } from '../../lib/board';
 import { ShogiBoard } from '../../components/ShogiBoard';
+import { KifuExport } from '../../components/KifuExport';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -227,6 +228,27 @@ function KifuDetailPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </details>
+
+            <details className="collapse collapse-arrow bg-base-200">
+              <summary className="collapse-title text-lg font-semibold">
+                LLM 解説用テキスト
+              </summary>
+              <div className="collapse-content">
+                <KifuExport
+                  kifu={{
+                    title: kifu.title,
+                    usiMoves,
+                    sente: kifu.sente,
+                    gote: kifu.gote,
+                    senteDan: kifu.senteDan,
+                    goteDan: kifu.goteDan,
+                    result: kifu.result,
+                    playedAt: kifu.playedAt,
+                    analyses: kifu.analyses,
+                  }}
+                />
               </div>
             </details>
           </>

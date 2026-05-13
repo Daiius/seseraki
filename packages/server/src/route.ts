@@ -95,6 +95,7 @@ const route = app
           playedAt: kifus.playedAt,
           createdAt: kifus.createdAt,
           analyzedAt: kifus.analysisCompletedAt,
+          hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
         })
         .from(kifus)
         .orderBy(desc(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`))
@@ -102,7 +103,11 @@ const route = app
         .offset(offset);
 
       return c.json({
-        kifus: rows.map(({ analyzedAt, ...r }) => ({ ...r, analyzed: analyzedAt !== null })),
+        kifus: rows.map(({ analyzedAt, hasMemo, ...r }) => ({
+          ...r,
+          analyzed: analyzedAt !== null,
+          hasMemo: Boolean(hasMemo),
+        })),
         pagination: {
           page,
           totalPages: Math.ceil(total / limit),
@@ -178,6 +183,19 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       await db.delete(kifus).where(eq(kifus.id, id));
+      return c.json({ ok: true });
+    },
+  )
+  .patch(
+    '/kifus/:id',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number() })),
+    zv('json', z.object({ memo: z.string().nullable() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const { memo } = c.req.valid('json');
+      const normalized = memo && memo.length > 0 ? memo : null;
+      await db.update(kifus).set({ memo: normalized }).where(eq(kifus.id, id));
       return c.json({ ok: true });
     },
   )

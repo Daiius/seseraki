@@ -162,6 +162,7 @@ function KifuListPage() {
                   <th>タイトル</th>
                   {swarsUserId && <th>結果</th>}
                   <th>解析</th>
+                  <th>メモ</th>
                   <th>対局日時</th>
                 </tr>
               </thead>
@@ -205,6 +206,11 @@ function KifuListPage() {
                         >
                           {kifu.analyzed ? '済' : '未'}
                         </span>
+                      )}
+                    </td>
+                    <td>
+                      {kifu.hasMemo && (
+                        <span className="badge badge-info badge-sm">●</span>
                       )}
                     </td>
                     <td>

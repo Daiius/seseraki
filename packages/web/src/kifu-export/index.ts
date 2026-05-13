@@ -233,20 +233,35 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
   const notableMap = new Map(notable.map((n) => [n.moveNumber, n]));
 
   // 依頼プロンプト
-  lines.push('# 対局解説依頼');
+  const userName =
+    input.userSide === 'sente'
+      ? input.sente
+      : input.userSide === 'gote'
+        ? input.gote
+        : null;
+  const opponentName =
+    input.userSide === 'sente'
+      ? input.gote
+      : input.userSide === 'gote'
+        ? input.sente
+        : null;
+
+  lines.push(opponentName ? `# 棋譜解析 vs ${opponentName}` : '# 棋譜解析');
   lines.push('');
 
   if (input.userSide === 'sente' || input.userSide === 'gote') {
-    const side = input.userSide === 'sente' ? '先手' : '後手';
+    const userSideLabel = input.userSide === 'sente' ? '先手' : '後手';
+    const userDisplay = userName ?? userSideLabel;
+    const senteDisplay = input.sente ?? '先手';
+    const goteDisplay = input.gote ?? '後手';
     lines.push(
-      `以下は **${side}（あなた）が指した対局** です。あなたの視点を中心に解説してください（自分の指し手の意図、改善点、勉強になるポイントなど）。`,
+      `以下は先手・${senteDisplay}、後手・${goteDisplay}の対局です。次を含めて解説してください（改善点は${userDisplay}側に絞って構いません）。`,
     );
     lines.push('');
-    lines.push('次を含む形で解説してください。');
     lines.push('- 戦型・序盤の構想');
     lines.push('- 対局の流れと攻防の要点');
-    lines.push('- あなたが指したターニングポイント（悪手・好手）と、その代替案・意図');
-    lines.push('- 全体総評（あなたが次に活かす改善点）');
+    lines.push('- ターニングポイントとなった手（悪手・好手）と、その代替案・意図');
+    lines.push(`- 全体総評（${userDisplay}が次に活かす改善点）`);
   } else {
     lines.push('以下の棋譜と解析結果を踏まえ、次を含む形で解説してください。');
     lines.push('- 戦型・序盤の構想');
@@ -262,13 +277,11 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
   if (input.title) lines.push(`- タイトル: ${input.title}`);
   if (input.sente) {
     const dan = input.senteDan ? `（${input.senteDan}段）` : '';
-    const youMark = input.userSide === 'sente' ? '（あなた）' : '';
-    lines.push(`- 先手: ${input.sente}${dan}${youMark}`);
+    lines.push(`- 先手: ${input.sente}${dan}`);
   }
   if (input.gote) {
     const dan = input.goteDan ? `（${input.goteDan}段）` : '';
-    const youMark = input.userSide === 'gote' ? '（あなた）' : '';
-    lines.push(`- 後手: ${input.gote}${dan}${youMark}`);
+    lines.push(`- 後手: ${input.gote}${dan}`);
   }
   const resultJp = formatResult(input.result);
   if (resultJp) lines.push(`- 結果: ${resultJp}`);

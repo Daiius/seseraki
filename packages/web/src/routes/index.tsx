@@ -158,62 +158,63 @@ function KifuListPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>ID</th>
                   <th>タイトル</th>
-                  {swarsUserId && <th>結果</th>}
-                  <th>解析</th>
+                  <th>状態</th>
                   <th>対局日時</th>
                 </tr>
               </thead>
               <tbody>
-                {kifus.map((kifu) => (
-                  <tr key={kifu.id} className="hover">
-                    <td>{kifu.id}</td>
-                    <td>
-                      <Link
-                        to="/kifus/$id"
-                        params={{ id: String(kifu.id) }}
-                        className="link"
-                      >
-                        {kifu.title}
-                      </Link>
-                    </td>
-                    {swarsUserId && (
+                {kifus.map((kifu) => {
+                  const r = kifu.result;
+                  const isSente = swarsUserId ? kifu.sente === swarsUserId : false;
+                  const isGote = swarsUserId ? kifu.gote === swarsUserId : false;
+                  const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));
+                  const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
+                  const showResultBadge = swarsUserId && (isSente || isGote);
+                  return (
+                    <tr key={kifu.id} className="hover">
                       <td>
-                        {(() => {
-                          const r = kifu.result;
-                          if (!r) return <span className="badge badge-ghost badge-sm">−</span>;
-                          const isSente = kifu.sente === swarsUserId;
-                          const isGote = kifu.gote === swarsUserId;
-                          if (!isSente && !isGote) return <span className="badge badge-ghost badge-sm">−</span>;
-                          const won = (isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN'));
-                          const lost = (isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN'));
-                          if (won) return <span className="badge badge-soft badge-success badge-sm">勝</span>;
-                          if (lost) return <span className="badge badge-soft badge-error badge-sm">負</span>;
-                          return <span className="badge badge-ghost badge-sm">−</span>;
-                        })()}
-                      </td>
-                    )}
-                    <td>
-                      {'analyzed' in kifu && (
-                        <span
-                          className={
-                            kifu.analyzed
-                              ? 'badge badge-success badge-sm'
-                              : 'badge badge-ghost badge-sm'
-                          }
+                        <Link
+                          to="/kifus/$id"
+                          params={{ id: String(kifu.id) }}
+                          className="link"
                         >
-                          {kifu.analyzed ? '済' : '未'}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {kifu.playedAt
-                        ? new Date(kifu.playedAt).toLocaleString('ja-JP')
-                        : new Date(kifu.createdAt).toLocaleString('ja-JP')}
-                    </td>
-                  </tr>
-                ))}
+                          {kifu.title}
+                        </Link>
+                      </td>
+                      <td>
+                        <div className="flex gap-1 items-center">
+                          {showResultBadge && (
+                            won ? <span className="badge badge-soft badge-success badge-sm">勝</span>
+                            : lost ? <span className="badge badge-soft badge-error badge-sm">負</span>
+                            : <span className="badge badge-ghost badge-sm">−</span>
+                          )}
+                          {'analyzed' in kifu && (
+                            <span
+                              className={
+                                kifu.analyzed
+                                  ? 'badge badge-success badge-sm'
+                                  : 'badge badge-ghost badge-sm'
+                              }
+                            >
+                              {kifu.analyzed ? '済' : '未'}
+                            </span>
+                          )}
+                          {kifu.hasMemo && (
+                            <span className="badge badge-sm bg-info/50 text-info-content">
+                              ●
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        {kifu.playedAt
+                          ? new Date(kifu.playedAt).toLocaleString('ja-JP')
+                          : new Date(kifu.createdAt).toLocaleString('ja-JP')}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

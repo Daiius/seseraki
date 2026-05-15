@@ -28,6 +28,7 @@ export const kifus = mysqlTable(
     swarsGameKey: varchar({ length: 255 }).unique(),
     playedAt: timestamp(),
     analysisCompletedAt: timestamp(),
+    memo: text(),
     createdAt: timestamp().notNull().defaultNow(),
     updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
   },

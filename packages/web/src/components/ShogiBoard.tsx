@@ -296,7 +296,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         />
       </div>
 
-      {/* コンパクト情報行: 指し手 | 評価値 | 手数/N | 分岐バッジ */}
+      {/* コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ */}
       <div className="flex items-baseline gap-x-3 gap-y-1 flex-wrap text-sm max-w-3xl">
         {displayedMove && displayedMovePreState ? (
           <span className="font-bold text-base whitespace-nowrap">
@@ -316,14 +316,14 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
             {posEvalText}
           </span>
         )}
-        <span className="font-mono text-base-content/60 whitespace-nowrap ml-auto">
-          {moveIndex} / {totalMoves}
-        </span>
-        {branchActive && (
-          <span className="badge badge-sm badge-primary whitespace-nowrap">
-            分岐 +{branchDepth}
+        <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
+          <span className="font-mono text-base-content/60">
+            {moveIndex} / {totalMoves}
           </span>
-        )}
+          {branchActive && (
+            <span className="badge badge-sm badge-primary">分岐</span>
+          )}
+        </div>
       </div>
 
       {/* コントローラー行 */}
@@ -526,25 +526,25 @@ function CandidateList({
                       return nodes;
                     })()}
                   </div>
-                  <div className="mt-1 flex items-center gap-1 pl-5">
+                  <div className="mt-2 flex items-center gap-2 pl-5">
                     <button
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-outline btn-sm"
                       onClick={() => onBranchBack(c.rank)}
                       disabled={!isActiveBranch}
                       title="分岐を戻る"
                     >
-                      ◀
+                      <IconChevronLeft />
                     </button>
-                    <span className="text-xs font-mono text-base-content/50 w-12 text-center">
+                    <span className="text-sm font-mono text-base-content/60 w-12 text-center">
                       {isActiveBranch ? branchDepth : 0}/{pvLen}
                     </span>
                     <button
-                      className="btn btn-ghost btn-xs"
+                      className="btn btn-outline btn-sm"
                       onClick={() => onBranchForward(c.rank, c.pv!)}
                       disabled={isActiveBranch && branchDepth >= pvLen}
                       title="分岐を進む"
                     >
-                      ▶
+                      <IconChevronRight />
                     </button>
                   </div>
                 </>

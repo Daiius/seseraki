@@ -19,6 +19,41 @@ const HAND_ORDER: PieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
 const COL_LABELS = [9, 8, 7, 6, 5, 4, 3, 2, 1];
 const ROW_LABELS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 
+const ICON_PROPS = {
+  xmlns: 'http://www.w3.org/2000/svg',
+  fill: 'none',
+  viewBox: '0 0 24 24',
+  strokeWidth: 2,
+  stroke: 'currentColor',
+  className: 'size-5',
+} as const;
+
+const IconChevronDoubleLeft = () => (
+  <svg {...ICON_PROPS}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+  </svg>
+);
+const IconChevronLeft = () => (
+  <svg {...ICON_PROPS}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+  </svg>
+);
+const IconChevronRight = () => (
+  <svg {...ICON_PROPS}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+  </svg>
+);
+const IconChevronDoubleRight = () => (
+  <svg {...ICON_PROPS}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
+  </svg>
+);
+const IconFlip = () => (
+  <svg {...ICON_PROPS}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
+  </svg>
+);
+
 interface Analysis {
   id: number;
   moveNumber: number;
@@ -90,12 +125,12 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
   const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
 
   return (
-    <div className="inline-grid grid-cols-[repeat(9,2.5rem)_1.5rem] grid-rows-[1.25rem_repeat(9,2.5rem)]">
+    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.25rem] grid-rows-[1rem_repeat(9,2rem)] md:grid-cols-[repeat(9,2.5rem)_1.5rem] md:grid-rows-[1.25rem_repeat(9,2.5rem)]">
       {/* 筋番号（1行目） */}
       {colLabels.map((col) => (
         <div
           key={`col-${col}`}
-          className="flex items-end justify-center text-xs text-base-content/50"
+          className="flex items-end justify-center text-[10px] md:text-xs text-base-content/50"
         >
           {col}
         </div>
@@ -110,7 +145,7 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
             <div
               key={`${rowIdx}-${colIdx}`}
               className={clsx(
-                'size-10 border border-base-300 flex items-center justify-center text-base font-bold',
+                'size-8 md:size-10 border border-base-300 flex items-center justify-center text-sm md:text-base font-bold',
                 isLastMove && 'bg-primary/15',
               )}
             >
@@ -129,7 +164,7 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
         }),
         <div
           key={`row-${ri}`}
-          className="flex items-center justify-center text-xs text-base-content/50"
+          className="flex items-center justify-center text-[10px] md:text-xs text-base-content/50"
         >
           {rowLabels[ri]}
         </div>,
@@ -243,22 +278,71 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* 手数ナビゲーション */}
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col">
+      {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
+      <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
+      {/* 盤面 */}
+      <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
+        <HandDisplay
+          hand={flipped ? displayState.hand.sente : displayState.hand.gote}
+          side={flipped ? 'sente' : 'gote'}
+          name={flipped ? sente : gote}
+        />
+        <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
+        <HandDisplay
+          hand={flipped ? displayState.hand.gote : displayState.hand.sente}
+          side={flipped ? 'gote' : 'sente'}
+          name={flipped ? gote : sente}
+        />
+      </div>
+
+      {/* コンパクト情報行: 指し手 | 評価値 | 手数/N | 分岐バッジ */}
+      <div className="flex items-baseline gap-x-3 gap-y-1 flex-wrap text-sm max-w-3xl">
+        {displayedMove && displayedMovePreState ? (
+          <span className="font-bold text-base whitespace-nowrap">
+            {turnSymbol(displayedMoveNum)}
+            {usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}
+          </span>
+        ) : (
+          <span className="text-base-content/40 whitespace-nowrap">初期局面</span>
+        )}
+        {posEvalText && (
+          <span
+            className={clsx(
+              'font-semibold whitespace-nowrap',
+              branchActive && 'text-base-content/50',
+            )}
+          >
+            {posEvalText}
+          </span>
+        )}
+        <span className="font-mono text-base-content/60 whitespace-nowrap ml-auto">
+          {moveIndex} / {totalMoves}
+        </span>
+        {branchActive && (
+          <span className="badge badge-sm badge-primary whitespace-nowrap">
+            分岐 +{branchDepth}
+          </span>
+        )}
+      </div>
+
+      {/* コントローラー行 */}
+      <div className="flex items-center gap-2 max-w-3xl">
         <button
-          className="btn btn-sm btn-ghost"
+          className="btn btn-outline md:btn-sm"
           onClick={() => goToMain(0)}
           disabled={!branchActive && moveIndex === 0}
+          title="最初へ"
         >
-          ⏮
+          <IconChevronDoubleLeft />
         </button>
         <button
-          className="btn btn-sm btn-ghost"
+          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
           onClick={() => goToMain(Math.max(0, moveIndex - 1))}
           disabled={!branchActive && moveIndex === 0}
+          title="戻る"
         >
-          ◀
+          <IconChevronLeft />
         </button>
         <input
           type="range"
@@ -266,92 +350,39 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
           max={totalMoves}
           value={moveIndex}
           onChange={(e) => goToMain(Number(e.target.value))}
-          className="range range-sm flex-1"
+          className="range range-sm flex-1 hidden md:block"
         />
         <button
-          className="btn btn-sm btn-ghost"
+          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
           onClick={() => goToMain(Math.min(totalMoves, moveIndex + 1))}
           disabled={!branchActive && moveIndex === totalMoves}
+          title="進む"
         >
-          ▶
+          <IconChevronRight />
         </button>
         <button
-          className="btn btn-sm btn-ghost"
+          className="btn btn-outline md:btn-sm"
           onClick={() => goToMain(totalMoves)}
           disabled={!branchActive && moveIndex === totalMoves}
+          title="最後へ"
         >
-          ⏭
+          <IconChevronDoubleRight />
         </button>
-        <span className="text-sm font-mono w-20 text-right">
-          {moveIndex} / {totalMoves}
-        </span>
-        {branchActive && (
-          <span className="badge badge-sm badge-primary">
-            分岐中 +{branchDepth}
-          </span>
-        )}
+        <button
+          className="btn btn-outline md:btn-sm"
+          onClick={() => setFlipped(!flipped)}
+          title="盤面反転"
+        >
+          <IconFlip />
+        </button>
+      </div>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-6">
-        {/* 盤面 */}
-        <div className="flex flex-col gap-1">
-          <HandDisplay
-            hand={flipped ? displayState.hand.sente : displayState.hand.gote}
-            side={flipped ? 'sente' : 'gote'}
-            name={flipped ? sente : gote}
-          />
-          <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
-          <HandDisplay
-            hand={flipped ? displayState.hand.gote : displayState.hand.sente}
-            side={flipped ? 'gote' : 'sente'}
-            name={flipped ? gote : sente}
-          />
-          <button
-            className="btn btn-ghost btn-xs self-end"
-            onClick={() => setFlipped(!flipped)}
-            title="盤面反転"
-          >
-            🔄
-          </button>
-        </div>
-
-        {/* 評価値・候補手情報 */}
-        <div className="flex flex-col gap-3 min-w-64">
-          {/* 直前の指し手 */}
-          {displayedMove && displayedMovePreState && (
-            <div>
-              <div className="text-sm text-base-content/60">指し手</div>
-              <div className="text-lg font-bold">
-                {turnSymbol(displayedMoveNum)}
-                {usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}
-              </div>
-            </div>
-          )}
-
-          {/* 局面評価値 */}
-          {posEvalText && (
-            <div>
-              <div className="text-sm text-base-content/60">
-                局面評価値（先手視点）
-              </div>
-              <div className="flex items-center gap-2">
-                <span
-                  className={clsx(
-                    'text-lg font-semibold',
-                    branchActive && 'text-base-content/50',
-                  )}
-                >
-                  {posEvalText}
-                </span>
-                {branchActive && (
-                  <span className="badge badge-sm badge-ghost">分岐中</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 候補手一覧（読み筋付き） */}
-          {prevAnalysis && prevAnalysis.candidates.length > 0 && (
+      {/* スクロール領域: 候補手 + 評価値グラフ */}
+      <div className="flex flex-col gap-3 pt-3">
+        {/* 候補手一覧（読み筋付き） */}
+        {prevAnalysis && prevAnalysis.candidates.length > 0 && (
+          <div className="max-w-3xl">
             <CandidateList
               candidates={prevAnalysis.candidates}
               played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
@@ -364,30 +395,30 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
               onBranchForward={onBranchForward}
               onBranchBack={onBranchBack}
             />
-          )}
-        </div>
-      </div>
+          </div>
+        )}
 
-      {/* 評価値グラフ */}
-      <EvalGraph
-        analyses={sortedAnalyses}
-        currentMove={moveIndex}
-        onClickMove={goToMain}
-        blunders={blunders}
-        userSide={userSide}
-        branch={
-          branchActive && branchCandidate
-            ? {
-                moveNumber: evalMoveNumber + 1,
-                value: toSenteEval(
-                  branchCandidate.scoreType,
-                  branchCandidate.scoreValue,
-                  evalMoveNumber,
-                ),
-              }
-            : null
-        }
-      />
+        {/* 評価値グラフ */}
+        <EvalGraph
+          analyses={sortedAnalyses}
+          currentMove={moveIndex}
+          onClickMove={goToMain}
+          blunders={blunders}
+          userSide={userSide}
+          branch={
+            branchActive && branchCandidate
+              ? {
+                  moveNumber: evalMoveNumber + 1,
+                  value: toSenteEval(
+                    branchCandidate.scoreType,
+                    branchCandidate.scoreValue,
+                    evalMoveNumber,
+                  ),
+                }
+              : null
+          }
+        />
+      </div>
     </div>
   );
 }
@@ -432,16 +463,17 @@ function CandidateList({
           const pvLen = c.pv?.length ?? 0;
           const hasPv = pvLen > 0;
           return (
-            <div
+            <details
+              name="candidates"
               key={c.rank}
               className={clsx(
-                'rounded-lg p-2 text-sm',
+                'group rounded-lg p-2 text-sm',
                 isPlayed && 'bg-base-200',
                 isNotBest && (isBlunder ? 'border border-error/30' : 'border border-warning/30'),
                 isActiveBranch && 'border-l-4 border-l-primary pl-3',
               )}
             >
-              <div className="flex items-center gap-2">
+              <summary className="flex items-center gap-2 list-none cursor-pointer md:cursor-default [&::-webkit-details-marker]:hidden">
                 <span className="font-mono text-base-content/50">
                   {c.rank}
                 </span>
@@ -463,7 +495,12 @@ function CandidateList({
                     ? <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
                     : <span className="text-xs text-warning">※</span>
                 )}
-              </div>
+                {hasPv && (
+                  <span className="ml-auto text-xs text-base-content/40 md:hidden">
+                    PV{pvLen} <span className="inline-block transition-transform group-open:rotate-180">▼</span>
+                  </span>
+                )}
+              </summary>
               {hasPv && c.pv && (
                 <>
                   <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
@@ -512,7 +549,7 @@ function CandidateList({
                   </div>
                 </>
               )}
-            </div>
+            </details>
           );
         })}
       </div>

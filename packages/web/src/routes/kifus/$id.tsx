@@ -78,9 +78,34 @@ function KifuDetailPage() {
           ← 一覧
         </Link>
         <h2 className="text-2xl font-bold">{kifu.title}</h2>
-        <button onClick={handleDelete} className="btn btn-error btn-sm ml-auto">
-          削除
-        </button>
+        <div className="dropdown dropdown-end ml-auto">
+          <button
+            tabIndex={0}
+            className="btn btn-ghost btn-sm"
+            aria-label="メニュー"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className="size-5"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
+            </svg>
+          </button>
+          <ul
+            tabIndex={0}
+            className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-32 p-1 shadow"
+          >
+            <li>
+              <button onClick={handleDelete} className="text-error">
+                削除
+              </button>
+            </li>
+          </ul>
+        </div>
       </div>
 
       <div className="flex flex-col gap-6">

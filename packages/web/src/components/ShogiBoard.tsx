@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
 import {
   buildPositions,
@@ -189,11 +189,18 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const [flipped, setFlipped] = useState(userSide === 'gote');
   const [branchRank, setBranchRank] = useState<number | null>(null);
   const [branchDepth, setBranchDepth] = useState(0);
+  const candidateListRef = useRef<HTMLDivElement>(null);
 
   const goToMain = (newIndex: number) => {
     setMoveIndex(newIndex);
     setBranchRank(null);
     setBranchDepth(0);
+    // 本筋を進めたら、開いている候補手 details は内容が変わるので自動で閉じる
+    candidateListRef.current
+      ?.querySelectorAll<HTMLDetailsElement>('details[open]')
+      .forEach((d) => {
+        d.open = false;
+      });
   };
 
   // moveIndex N の盤面 = N 手指した後の局面
@@ -384,6 +391,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
         {prevAnalysis && prevAnalysis.candidates.length > 0 && (
           <div className="max-w-3xl">
             <CandidateList
+              ref={candidateListRef}
               candidates={prevAnalysis.candidates}
               played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
               evalMoveNumber={evalMoveNumber}
@@ -424,6 +432,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
 }
 
 function CandidateList({
+  ref,
   candidates,
   played,
   evalMoveNumber,
@@ -435,6 +444,7 @@ function CandidateList({
   onBranchForward,
   onBranchBack,
 }: {
+  ref?: Ref<HTMLDivElement>;
   candidates: Analysis['candidates'];
   played: string | undefined;
   evalMoveNumber: number;
@@ -452,7 +462,7 @@ function CandidateList({
   const visible = expanded ? candidates : candidates.slice(0, INITIAL_COUNT);
 
   return (
-    <div>
+    <div ref={ref}>
       <div className="mb-1 text-sm text-base-content/60">候補手</div>
       <div className="flex flex-col gap-2">
         {visible.map((c) => {

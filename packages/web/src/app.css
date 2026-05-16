@@ -4,3 +4,23 @@
 @theme {
   --font-logo: 'WDXL Lubrifont JP N', sans-serif;
 }
+
+/* 候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示 */
+@media (min-width: 48rem) {
+  details[name='candidates'] > summary {
+    list-style: none;
+    cursor: default;
+  }
+  details[name='candidates'] > summary::-webkit-details-marker {
+    display: none;
+  }
+  /* Chrome 131+ / Firefox 137+: 折りたたみは ::details-content 疑似要素で表現される */
+  details[name='candidates']::details-content {
+    display: block;
+    content-visibility: visible;
+  }
+  /* 旧仕様（Safari など）向けフォールバック */
+  details[name='candidates']:not([open]) > *:not(summary) {
+    display: block;
+  }
+}

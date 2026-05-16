@@ -1,7 +1,22 @@
+import { useEffect, useState } from 'react';
+
 interface EvalPoint {
   moveNumber: number;
   /** 先手視点の評価値（cp）。mate の場合は ±3000 にクランプ */
   value: number;
+}
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 47.99rem)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 47.99rem)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isMobile;
 }
 
 interface EvalGraphProps {
@@ -30,8 +45,10 @@ interface EvalGraphProps {
 }
 
 const CLAMP = 3000;
-const HEIGHT = 120;
-const PADDING_X = 32;
+const HEIGHT_DESKTOP = 120;
+const HEIGHT_MOBILE = 180;
+const PADDING_X_DESKTOP = 32;
+const PADDING_X_MOBILE = 14;
 const PADDING_Y = 8;
 
 function toSenteValue(
@@ -63,10 +80,16 @@ export function EvalGraph({
       };
     });
 
+  const isMobile = useIsMobile();
+  const HEIGHT = isMobile ? HEIGHT_MOBILE : HEIGHT_DESKTOP;
+  const PADDING_X = isMobile ? PADDING_X_MOBILE : PADDING_X_DESKTOP;
+  const moveSpacing = isMobile ? 2 : 6;
+  const minWidth = isMobile ? 320 : 400;
+
   if (points.length < 2) return null;
 
   const maxMove = points[points.length - 1].moveNumber;
-  const width = Math.max(400, maxMove * 6 + PADDING_X * 2);
+  const width = Math.max(minWidth, maxMove * moveSpacing + PADDING_X * 2);
   const graphW = width - PADDING_X * 2;
   const graphH = HEIGHT - PADDING_Y * 2;
   const midY = PADDING_Y + graphH / 2;
@@ -91,7 +114,8 @@ export function EvalGraph({
     <div className="w-full overflow-x-auto">
       <svg
         viewBox={`0 0 ${width} ${HEIGHT}`}
-        className="w-full min-w-[400px]"
+        preserveAspectRatio="none"
+        className="w-full min-w-[300px] md:min-w-[400px]"
         style={{ height: HEIGHT }}
       >
         {/* 背景 */}
@@ -143,6 +167,17 @@ export function EvalGraph({
         />
 
         {/* 現在位置のハイライト */}
+        {currentMove !== undefined && (
+          <line
+            x1={toX(currentMove)}
+            x2={toX(currentMove)}
+            y1={PADDING_Y}
+            y2={HEIGHT - PADDING_Y}
+            className="stroke-primary"
+            strokeWidth={1}
+            opacity={0.6}
+          />
+        )}
         {currentMove !== undefined &&
           points.find((p) => p.moveNumber === currentMove) && (
             <circle

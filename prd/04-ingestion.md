@@ -25,12 +25,16 @@
 - Web の棋譜登録画面（`/kifus/new`）でタイトル + KIF テキストを貼り付け → `POST /kifus`。
 - server は KIF をパースして次を行う（`packages/server/src/kif`）:
   1. **USI へ変換**して `usiMoves` を作る。
-  2. **対局メタを抽出**（sente/gote/senteDan/goteDan/result/playedAt。[03](./03-data-model.md)）。
-  3. `kifText`（原本）とともに `kifus` に保存し、`{ id }` を返す。
+  2. **（理想）対局メタを抽出**（sente/gote/senteDan/goteDan/result/playedAt。[03](./03-data-model.md)）。
+  3. `kifText`（原本）とタイトルとともに `kifus` に保存し、`{ id }` を返す。
 - 登録直後は未解析（`analysisCompletedAt = null`）。worker が拾って解析する（[05](./05-analysis.md)）。
 
-> **対局タイトルの自動生成**: 抽出した「対戦相手・勝敗」からタイトルを起こす発想（[01](./01-domain.md) §1）。
-> ユーザーはタイトルを手入力でも上書きできる。
+> ⚠️ **現状の gap**: KIF 貼り付け経路（`POST /kifus`）は現在 **`title`（ユーザー入力）+ `kifText` + `usiMoves` のみ保存**し、
+> 対局メタ抽出（上記 2）とタイトル自動生成は**未実装**。対局メタ抽出・タイトル自動生成は**一括取り込み経路で実装済み**
+> （[decisions](./_grilling/decisions.md)）。KIF から棋譜メタを起こすパーサ拡張が理想との gap（[08](./08-roadmap.md)）。
+
+> **対局タイトルの自動生成**（理想）: 抽出した「対戦相手・勝敗」からタイトルを起こす（[01](./01-domain.md) §1）。
+> 現状は一括取り込み経路のみ自動生成し、KIF 貼り付けはユーザー入力タイトル。ユーザーはいつでも手入力で上書きできる。
 
 - **CSA 直接貼り付け**（計画中）も同じ窓口に載せる。CSA→KIF は既存の変換器を再利用し、以降は KIF 経路と共通。
   変換器は一括取り込み専用ではないため、server 内の中立な場所に置く（取り込み専用ディレクトリに縛らない）。

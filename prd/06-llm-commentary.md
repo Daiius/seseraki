@@ -39,8 +39,7 @@
   server は `shared` の生成関数を呼んで Markdown を返す。
 - **web の「LLM プロンプトをコピー」ボタンはこのエンドポイントを叩く**（自前生成せず、書式を単一真実にする）。
   ※ 現状は web が `packages/web/src/kifu-export/` で自前生成しており、この移設が gap（[08](./08-roadmap.md)）。
-- フォーマットの改善は実際に LLM へ貼って講評させたフィードバックに基づく（ローカルの
-  `docs/kifu-export-feedback.md`。`docs/` は gitignore 対象）。
+- フォーマットの改善は実際に LLM へ貼って講評させたフィードバックに基づく（ローカル限定の非公開メモに記録。`.claude-personal/` 参照）。
 
 ## 3. LLM 解説の生成（構想・検証中）
 

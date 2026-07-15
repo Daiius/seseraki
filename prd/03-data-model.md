@@ -3,7 +3,9 @@
 本章は DB スキーマ（Drizzle + MySQL 8.4）と、worker が扱う USI データ型を定める。
 ドメイン用語は [01](./01-domain.md)、投入時の変換・抽出は [04](./04-ingestion.md)、解析での消費は [05](./05-analysis.md) を参照。
 
-> 表記は概念設計。実際の型・制約は Drizzle 実装（`packages/server/src/db`）を正とする。
+> 本章は**理想スキーマ**を定め、**PRD が正典**（[README](./README.md) 時制方針）。現行実装の型・制約は
+> Drizzle（`packages/server/src/db`）を参照し、PRD との差（例: `analysisError` / `commentaries` は現行未実装の gap）は
+> 各所で「計画中」「gap」と明示する。カラム名・enum は本章を正とする。
 > スキーマ変更は `pnpm db:migrate`（`drizzle-kit push --force`）で反映する（[02](./02-architecture.md)）。
 
 ---
@@ -51,7 +53,8 @@ kifus
 - **`analysisError`**: worker がエンジンの異常終了/illegal move を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md)）。
   再試行は error をクリアする（手動 or 再解析アクション）。
-- 対局メタ（sente/gote/dan/result/playedAt）は登録時に KIF から抽出する（[04](./04-ingestion.md)）。取れなければ null。
+- 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み経路では登録時に抽出**して埋める。
+  **KIF 貼り付け経路のメタ抽出は未実装（gap）**（[04](./04-ingestion.md) §3 / [08](./08-roadmap.md)）。取れなければ null。
 
 ## 3. `moveAnalyses`（局面ごとの解析）
 

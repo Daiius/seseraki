@@ -67,7 +67,8 @@ moveAnalyses
 └── UNIQUE(kifuId, moveNumber)
 ```
 
-- 1 局面 = 1 レコード。`moveNumber` は指し手後の局面（0 は初期局面）。
+- 1 局面 = 1 レコード。`moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
+  偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
 - `UNIQUE(kifuId, moveNumber)` で同一局面の二重登録を防ぐ。再解析は DELETE → 再投入（[04](./04-ingestion.md)）。
 
 ## 4. `candidateMoves`（MultiPV の候補手）
@@ -86,7 +87,8 @@ candidateMoves
 ```
 
 - 1 局面につき MultiPV 本数（既定 3）の行が入る。`rank=1` が最善手。
-- `scoreType` / `scoreValue` は**先手視点**のスコア（[01](./01-domain.md) §5）。
+- `scoreType` / `scoreValue` は **USI エンジンが返した手番視点のスコアをそのまま格納**する（正規化しない）。
+  先手視点への変換は表示・判定時に moveNumber の parity で行う（後手番＝奇数は符号反転。[01](./01-domain.md) §5 / [05](./05-analysis.md)）。
 - `pv` は読み筋（USI 指し手列）。Web の分岐再生・悪手判定に使う（[05](./05-analysis.md)）。
 
 ## 5. worker が扱う USI データ型

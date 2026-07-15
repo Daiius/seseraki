@@ -27,14 +27,15 @@
 
 ## アーキ概観
 
-- フルスタック TypeScript の pnpm monorepo: `packages/{web,server,worker,shared}`（+ 将来 `commentator`）。
+- フルスタック TypeScript の pnpm monorepo: 現在は `packages/{web,server,worker}`（理想構成で `shared` を追加、
+  将来 `commentator`。[02](./02-architecture.md) §3 / [08](./08-roadmap.md)）。
 - MySQL 8.4 / Hono(RPC) / Drizzle 1.0 RC / React 19 + Vite + TanStack Router + Tailwind v4 + daisyUI。
 - worker（Node.js + USI + やねうら王）は server とは分離した実行環境で稼働し、API_KEY で server を polling する。
 - 設計の柱: **API 型共有は Hono RPC に集約**しつつ、**将棋ドメインの純ロジックと zod 検証スキーマは `shared`**
   に置いて web/server（将来 commentator）で共有する（[02](./02-architecture.md) §3）。
 
 ```
-        [ 履歴からの一括取り込み / KIF 貼り付け / (将来)KIF ファイル ]
+        [ 履歴からの一括取り込み / KIF 貼り付け / CSA 直接貼り付け ]
                           │  すべて server 側で USI へ変換し kifus に収束
                           ▼
    web (UI) ──fetch /api──> server (Hono) ──> MySQL

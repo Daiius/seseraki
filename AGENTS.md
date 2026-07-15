@@ -31,17 +31,28 @@
 - **DB**: MySQL 8.4 / **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
 - **Front**: React 19 + Vite + TanStack Router + TailwindCSS v4 + daisyUI
 - **worker**: USI + やねうら王。server とは分離した実行環境で **API_KEY polling**（inbound の口を持たない）。
-- **共有方針**: **API 型は Hono RPC** に集約、**将棋ドメインの純ロジック + zod 検証スキーマは `shared`**（[prd/02](./prd/02-architecture.md) §3）。
+- **共有方針**: **API 型は Hono RPC** に集約、**将棋ドメインの純ロジック + zod 検証スキーマは `shared`**（理想。現状は
+  web に存在し `shared` 抽出は gap。[prd/02](./prd/02-architecture.md) §3）。
 
 ### パッケージ
+
+**現在のパッケージ**:
 
 | パッケージ | 役割 |
 |---|---|
 | [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind） |
-| [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み・プロンプト生成 |
+| [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
-| [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（盤面追跡・USI 変換・悪手判定・kifu-export）+ zod 検証スキーマ |
-| `packages/commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
+
+**理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
+
+| パッケージ | 役割 |
+|---|---|
+| `packages/shared` | 将棋ドメインの純ロジック（盤面追跡・USI 変換・悪手判定・kifu-export）+ zod 検証スキーマ（[prd/02](./prd/02-architecture.md) §3.2） |
+| `packages/commentator` | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
+
+> ※ `shared` へのドメインロジック抽出と server のプロンプト生成エンドポイントは gap（未実装）。現状は
+> board/usi/kifu-export が `packages/web` にあり、プロンプトは web が自前生成している。
 
 ## 開発コマンド
 

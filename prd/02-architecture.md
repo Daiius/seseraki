@@ -79,7 +79,7 @@
   - worker を web/server と同居させる案も検討したが、**評価関数のメモリ消費が大きく分離が現実的**。
   - VPS 上での worker 動作はメモリ的に厳しいため、解析は高スペックなデスクトップ PC に寄せる。
 - **本番イメージ**:
-  - server: esbuild でバンドル → distroless で実行（`ghcr.io/daiius/…-server`）。
+  - server: esbuild でバンドル → distroless で実行（コンテナレジストリへ発行。レジストリ/namespace の具体は `.claude-personal/`）。
   - worker: `packages/worker/Dockerfile.prod` で本番ホスト上でビルド。やねうら王 NNUE + 評価関数 +
     定跡を同梱し、esbuild バンドルで実行（[05](./05-analysis.md) §エンジン構成）。
 - 認証は server 側のログインフォーム（[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。

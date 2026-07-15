@@ -41,6 +41,7 @@ kifus
 ├── playedAt: timestamp?         -- 対局日時
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
+├── memo: text?                         -- ユーザー自由記述メモ（PATCH /kifus/:id で編集）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 ```
@@ -55,6 +56,7 @@ kifus
   再試行は error をクリアする（手動 or 再解析アクション）。
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み経路では登録時に抽出**して埋める。
   **KIF 貼り付け経路のメタ抽出は未実装（gap）**（[04](./04-ingestion.md) §3 / [08](./08-roadmap.md)）。取れなければ null。
+- **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
 
 ## 3. `moveAnalyses`（局面ごとの解析）
 

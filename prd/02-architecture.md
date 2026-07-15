@@ -112,7 +112,7 @@
 
 - 初回セットアップ: `pnpm dev` 起動後に `pnpm db:migrate && pnpm db:seed`。スキーマ変更時は `pnpm db:migrate`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・一括取り込み関連 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・ユーザー ID）。
+  - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **Docker 外で worker を動かす**場合は `packages/worker/.env.example` を `.env` にコピー。`USE_MOCK=true` で
   エンジンなしのモック動作が可能（[05](./05-analysis.md)）。

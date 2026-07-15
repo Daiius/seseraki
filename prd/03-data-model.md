@@ -37,7 +37,7 @@ kifus
 ├── senteDan: smallint?          -- 先手段位
 ├── goteDan: smallint?           -- 後手段位
 ├── result: varchar(50)?         -- 対局結果
-├── swarsGameKey: varchar(255) UNIQUE?  -- 一括取り込み由来の対局一意キー（重複検知用・nullable）
+├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
 ├── playedAt: timestamp?         -- 対局日時
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
@@ -47,7 +47,7 @@ kifus
 ```
 
 - **`kifText` は原本**（KIF）。`usiMoves` は登録時に変換した派生物で、解析前でも盤面表示に使える（[05](./05-analysis.md)）。
-- **`swarsGameKey`** は一括取り込み由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
+- **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
@@ -130,7 +130,7 @@ commentaries
 
 ## 7. 未確認・将来の論点
 
-- LLM 解説を DB 保存する場合の `commentaries` テーブル追加（[06](./06-llm-commentary.md) / [08](./08-roadmap.md)）。
+（データモデルの主要論点は下記「決定済み」で解決。`commentaries` は §6 で確定・計画中。）
 
 ### 決定済み
 

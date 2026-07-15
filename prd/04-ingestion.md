@@ -6,15 +6,16 @@
 
 ## 1. 設計思想
 
-- **すべての投入ルートは `kifus` に収束する。** 入口が一括取り込みでも KIF 貼り付けでも、server 側で
-  **KIF→USI 変換 + 対局メタ抽出**を通してから保存する（[01](./01-domain.md) §2）。
+- **すべての投入ルートは `kifus` に収束する。** 入口が swars 一括取り込みでも KIF 貼り付けでも、server 側で
+  **KIF→USI 変換**を通してから保存する（[01](./01-domain.md) §2）。**対局メタ抽出は現状 swars 経路のみ**で、
+  KIF 貼り付けは gap（§3）。
 - worker は変換済み `usiMoves` だけを消費し、KIF パーサーを持たない（[02](./02-architecture.md) / [05](./05-analysis.md)）。
 
 ## 2. 投入ルート一覧
 
 | ルート | 対象 | 変換 | フェーズ |
 |---|---|---|---|
-| **一括取り込み** | 対局履歴 | CSA→KIF→USI（server） | 実装済み（手動トリガー） |
+| **swars 一括取り込み** | swars の対局履歴 | CSA→KIF→USI（server） | 実装済み（手動トリガー） |
 | **KIF 貼り付け** | 他ソフトのエクスポート等 | KIF→USI（server） | 実装済み |
 | **CSA 直接貼り付け** | 他ソフトの CSA 出力 | CSA→KIF→USI（server） | 計画中（既存の CSA→KIF 変換器を再利用） |
 
@@ -39,14 +40,16 @@
 - **CSA 直接貼り付け**（計画中）も同じ窓口に載せる。CSA→KIF は既存の変換器を再利用し、以降は KIF 経路と共通。
   変換器は一括取り込み専用ではないため、server 内の中立な場所に置く（取り込み専用ディレクトリに縛らない）。
 
-## 4. 一括取り込み（半自動）
+## 4. swars 一括取り込み（半自動）
 
-- 対局履歴からまとめて棋譜を取り込むルート。**Web の「更新」ボタン**から手動トリガーし、**非同期ジョブ**で走る。
+- swars の対局履歴からまとめて棋譜を取り込むルート。**Web の「更新」ボタン**から手動トリガーし、**非同期ジョブ**で走る。
+- エンドポイント: `POST /swars/import`（202 即応答・バックグラウンド実行。body `{ userId, gtype?, pages? }`）→
+  `GET /swars/import/status`（`idle` / `running` / `done` / `error`）。いずれも `sessionRequired` で保護（[07](./07-auth-and-privacy.md)）。
 - 取り込んだ棋譜は **CSA→KIF 変換**を経て、以降は §3 と同じ KIF→USI 変換 + 対局メタ抽出 + 保存の下流に載る。
 - 重複は `swarsGameKey`（UNIQUE）で検知し、既取得はスキップする（[03](./03-data-model.md)）。
-- 非同期ジョブは 202 即応答 + 状態ポーリングで進捗を返す（`sessionRequired` で保護。[07](./07-auth-and-privacy.md)）。
+- エラーは `errorKind: 'cookie_expired' | 'generic'` に分類。Web は SWR で status を 3 秒間隔ポーリングし `done`/`error` で停止。
 
-> ⚠️ **取得元・取得の仕組み・アクセス方針・関連する環境変数などの実装/運用の詳細は公開文書に書かない。**
+> ⚠️ **swars の正式名称・取得の詳細な仕組み（履歴/CSA の取得方法）・アクセス姿勢・資格情報は公開文書に書かない。**
 > `.claude-personal/`（gitignore 対象）の運用メモに集約する（[README](./README.md) §公開リポジトリでの秘匿方針）。
 
 ## 5. レビュー・検証

@@ -83,7 +83,7 @@ candidateMoves
 ├── move: varchar(255)           -- 候補手（USI 表記）
 ├── scoreType: varchar(16)       -- "cp"（centipawn） | "mate"
 ├── scoreValue: int
-├── pv: json (string[])          -- 読み筋
+├── pv: json (string[])?         -- 読み筋（nullable）
 ├── depth: int                   -- 探索深さ
 └── UNIQUE(moveAnalysisId, rank)
 ```

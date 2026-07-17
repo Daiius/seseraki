@@ -1,25 +1,32 @@
-// 既存棋譜の playedAt を、新しい KIF タイムゾーン判定（署名で UTC/JST を検出）で
-// 再導出し、sourceTz カラムを埋める一回限りのバックフィル。
+// 既存棋譜（sourceTz 未設定＝この機能より前に投入された行）の playedAt を
+// KIF 署名の TZ 判定で再導出し、sourceTz カラムを埋める一回限りのバックフィル。
 //
 // 背景: 従来パーサは開始日時を JST 決め打ちで解釈していたため、開始日時を UTC で
-// 書き出すアプリ（署名 = 柿木形式コメント + 持ち時間）の棋譜が 9h 手前にずれて保存
-// されていた。kifText から再パースして正しい絶対時刻へ直す。
+// 書き出すアプリの棋譜が 9h 手前にずれて保存されていた。kifText から再パースして直す。
 //
-// 冪等: playedAt は毎回 kifText から絶対値を再計算するので、複数回流しても安全。
-// swars 経路（swarsGameKey あり）は playedAt が gameKey 由来で正しいため触らず、
-// sourceTz を "JST" で埋めるだけ。
+// 安全策:
+//  - 対象は sourceTz IS NULL の行だけ（投入時に TZ を明示選択した行は上書きしない）。
+//  - 既定は **dry-run**（変更内容を表示するだけ）。実際に書き込むには BACKFILL_APPLY=1。
+//  - 妥当性ガード: UTC 補正で playedAt が createdAt を超える（対局が登録より未来）行は
+//    署名の誤検出を疑い、従来値を維持して SKIP・報告する。
+//  - 冪等: playedAt は kifText から絶対値を再計算するので複数回流しても安全。
 //
 // 実行: 接続先は DB_HOST / DB_PORT / MYSQL_* 環境変数（本番は prod 資格情報を export）。
-//   pnpm --filter server exec tsx backfill-source-tz.ts
-// dev DB へ試すときは db:migrate:dev と同様に .env.database を読ませて実行する。
+//   pnpm db:backfill-tz                 # dry-run（確認）
+//   BACKFILL_APPLY=1 pnpm db:backfill-tz  # 実適用
+// dev DB へ試すときは db:backfill-tz:dev（.env.database を読む）。
 
-import { eq, isNull, isNotNull } from 'drizzle-orm';
-import { db, client } from './src/db/index.js';
+import { and, eq, isNull, isNotNull } from 'drizzle-orm';
+import { db } from './src/db/index.js';
 import { kifus } from './src/db/schema.js';
 import { parseKif } from './src/kif/parser.js';
 
+const APPLY = process.env.BACKFILL_APPLY === '1';
+
 try {
-  // 手動貼り付け（swarsGameKey なし）: kifText から playedAt / sourceTz を再導出
+  console.log(APPLY ? '=== APPLY モード（書き込みます）===' : '=== dry-run（BACKFILL_APPLY=1 で実適用）===');
+
+  // 手動貼り付け（swarsGameKey なし）かつ sourceTz 未設定の行だけ再導出
   const manual = await db
     .select({
       id: kifus.id,
@@ -28,15 +35,12 @@ try {
       createdAt: kifus.createdAt,
     })
     .from(kifus)
-    .where(isNull(kifus.swarsGameKey));
+    .where(and(isNull(kifus.swarsGameKey), isNull(kifus.sourceTz)));
 
   let changed = 0;
   let skipped = 0;
   for (const row of manual) {
     const { header } = parseKif(row.kifText);
-    // 妥当性ガード: 対局日時は登録日時より後にならない。UTC 補正(+9h)で
-    // playedAt が createdAt を超えるなら署名の誤検出（本当は JST）を疑い、
-    // 従来値を維持して報告する（正しい既存データを一括で壊さないため）。
     const implausible =
       header.playedAt != null && header.playedAt.getTime() > row.createdAt.getTime();
     if (implausible) {
@@ -46,26 +50,34 @@ try {
       );
       continue;
     }
-    await db
-      .update(kifus)
-      .set({ playedAt: header.playedAt, sourceTz: header.sourceTz })
-      .where(eq(kifus.id, row.id));
     const before = row.playedAt?.toISOString() ?? 'null';
     const after = header.playedAt?.toISOString() ?? 'null';
     if (before !== after) changed++;
     console.log(
       `manual #${row.id}: tz=${header.sourceTz} playedAt ${before} -> ${after}`,
     );
+    if (APPLY) {
+      await db
+        .update(kifus)
+        .set({ playedAt: header.playedAt, sourceTz: header.sourceTz })
+        .where(eq(kifus.id, row.id));
+    }
   }
 
-  // swars 経路: playedAt は正しいので sourceTz のラベルだけ埋める
-  const swars = await db
-    .update(kifus)
-    .set({ sourceTz: 'JST' })
-    .where(isNotNull(kifus.swarsGameKey));
+  // swars 経路（sourceTz 未設定）: playedAt は gameKey 由来で正しいので JST ラベルのみ
+  const swarsTargets = await db
+    .select({ id: kifus.id })
+    .from(kifus)
+    .where(and(isNotNull(kifus.swarsGameKey), isNull(kifus.sourceTz)));
+  if (APPLY && swarsTargets.length > 0) {
+    await db
+      .update(kifus)
+      .set({ sourceTz: 'JST' })
+      .where(and(isNotNull(kifus.swarsGameKey), isNull(kifus.sourceTz)));
+  }
 
   console.log(
-    `done: manual=${manual.length} (playedAt changed=${changed}, skipped=${skipped}), swars labeled=JST`,
+    `done: manual=${manual.length} (playedAt changed=${changed}, skipped=${skipped}), swars labeled=JST x${swarsTargets.length}${APPLY ? '' : ' [dry-run: 未書込]'}`,
   );
   process.exit(0);
 } catch (err) {

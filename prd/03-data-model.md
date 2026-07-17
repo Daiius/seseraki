@@ -52,8 +52,8 @@ kifus
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
 - **`sourceTz`**: `開始日時` にタイムゾーン欄が無い KIF を正しく並べるため、`playedAt` を解釈した TZ を記録する。
-  既定は `"JST"`。開始日時を UTC で書き出すアプリ（署名で検出）は `"UTC"` として +9h 補正した絶対時刻を保存する。
-  swars 経路は `gameKey` 由来で常に `"JST"`（[04](./04-ingestion.md)）。
+  投入時にユーザーが選択（`auto`/`JST`/`UTC`。`auto` は署名から推定＝既定 JST）。UTC のときは +9h 補正した絶対時刻を保存。
+  swars 経路は `gameKey` 由来で常に `"JST"`。reanalyze はこの値を維持する（[04](./04-ingestion.md)）。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより

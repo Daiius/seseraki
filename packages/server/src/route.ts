@@ -17,7 +17,10 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
-import { parseKif } from './kif/parser.js';
+import { parseKif, type KifTimezone } from './kif/parser.js';
+
+/** 投入時の TZ 指定。'auto' は KIF 署名から自動判定 */
+export type SourceTzChoice = 'auto' | KifTimezone;
 
 export const app = new Hono();
 
@@ -45,9 +48,13 @@ interface KifIngestion {
   };
 }
 
-/** KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用） */
-function convertKif(kifText: string): KifIngestion {
-  const parsed = parseKif(kifText);
+/**
+ * KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用）。
+ * @param tz 開始日時の解釈 TZ。'auto'（既定）は KIF 署名から自動判定。
+ *   投入時にユーザーが選んだ値、再解析では保存済み sourceTz を渡す。
+ */
+function convertKif(kifText: string, tz: SourceTzChoice = 'auto'): KifIngestion {
+  const parsed = parseKif(kifText, tz === 'auto' ? undefined : tz);
   const isHeihei = !parsed.header.handicap || parsed.header.handicap === '平手';
   const usiMoves =
     parsed.errors.length === 0 && isHeihei && parsed.moves.length > 0
@@ -207,10 +214,18 @@ const route = app
   .post(
     '/kifus',
     sessionRequired,
-    zv('json', z.object({ title: z.string().optional(), kifText: z.string() })),
+    zv(
+      'json',
+      z.object({
+        title: z.string().optional(),
+        kifText: z.string(),
+        // 開始日時の解釈 TZ。省略/auto は KIF 署名から判定（既定 JST）
+        sourceTz: z.enum(['auto', 'JST', 'UTC']).optional(),
+      }),
+    ),
     async (c) => {
-      const { title, kifText } = c.req.valid('json');
-      const { usiMoves, meta } = convertKif(kifText);
+      const { title, kifText, sourceTz } = c.req.valid('json');
+      const { usiMoves, meta } = convertKif(kifText, sourceTz ?? 'auto');
       const finalTitle = title?.trim() || autoTitle(meta);
       const [result] = await db
         .insert(kifus)
@@ -237,14 +252,17 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const [kifu] = await db
-        .select({ kifText: kifus.kifText })
+        .select({ kifText: kifus.kifText, sourceTz: kifus.sourceTz })
         .from(kifus)
         .where(eq(kifus.id, id));
       if (!kifu) return c.json({ error: 'not found' }, 404);
 
       // kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
       // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
-      const { usiMoves, meta } = convertKif(kifu.kifText);
+      // TZ は投入時のユーザー選択（保存済み sourceTz）を維持する。未設定（旧データ）は
+      // 署名から自動判定にフォールバック。
+      const tz = (kifu.sourceTz as SourceTzChoice | null) ?? 'auto';
+      const { usiMoves, meta } = convertKif(kifu.kifText, tz);
       await db.transaction(async (tx) => {
         // 先に kifus を UPDATE して行ロックを取り、analysisRevision を +1（実行中の旧解析の
         // submit/error 報告は世代不一致で弾かれる）。/worker/analyses も kifus を先ロックするため

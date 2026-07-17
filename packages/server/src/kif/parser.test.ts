@@ -316,6 +316,19 @@ describe("parseKif", () => {
       expect(parseKif(notFirst).header.sourceTz).toBe("JST");
     });
 
+    it("tzOverride を渡すと署名判定より優先する（投入時のユーザー選択）", () => {
+      // 署名上は JST の KIF でも、UTC 指定なら UTC 解釈（+9h ずれる）
+      const jstKif = `開始日時：2026/07/15 15:54:18\n`;
+      const asUtc = parseKif(jstKif, "UTC").header;
+      expect(asUtc.sourceTz).toBe("UTC");
+      expect(asUtc.playedAt?.toISOString()).toBe("2026-07-15T15:54:18.000Z");
+      // 署名上は UTC の KIF でも、JST 指定なら JST 解釈
+      const bKif = `# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`;
+      const asJst = parseKif(bKif, "JST").header;
+      expect(asJst.sourceTz).toBe("JST");
+      expect(asJst.playedAt?.toISOString()).toBe("2026-07-17T05:57:00.000Z");
+    });
+
     it("存在しない日付は正規化せず null にする", () => {
       // JS は 2026/02/30 を 3/2 に正規化するが、それを弾く
       expect(parseKif(`開始日時：2026/02/30 12:00:00\n`).header.playedAt).toBeNull();

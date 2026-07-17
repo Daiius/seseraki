@@ -192,11 +192,16 @@ function deriveResult(moveNum: number, marker: string): string | null {
   return `${winner}_WIN_${reason}`;
 }
 
-export function parseKif(kifText: string): ParsedKif {
+/**
+ * KIF テキストを解析する。
+ * @param tzOverride 開始日時の解釈 TZ を明示指定する。省略時は署名から自動判定
+ *   （[detectKifTimezone]）。ユーザーが投入時に TZ を選んだ場合はその値を渡す。
+ */
+export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
   const lines = kifText.split("\n");
   const moves: KifMove[] = [];
   const errors: ParsedKif["errors"] = [];
-  const sourceTz = detectKifTimezone(kifText);
+  const sourceTz = tzOverride ?? detectKifTimezone(kifText);
   const header: KifHeader = {
     sente: null,
     gote: null,

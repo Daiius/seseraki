@@ -3,6 +3,7 @@
 interface ImportMetaEnv {
   readonly VITE_API_URL?: string;
   readonly VITE_SWARS_USER_ID?: string;
+  readonly VITE_SELF_NAMES?: string;
 }
 
 interface ImportMeta {

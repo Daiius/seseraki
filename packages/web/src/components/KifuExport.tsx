@@ -1,15 +1,9 @@
 import { useMemo, useState } from 'react';
 import { generateKifuMarkdown, type KifuExportInput } from '../kifu-export';
+import { resolveUserSide } from '../lib/self';
 
 export function KifuExport({ kifu }: { kifu: KifuExportInput }) {
-  const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
-  const userSide = swarsUserId
-    ? swarsUserId === kifu.sente
-      ? ('sente' as const)
-      : swarsUserId === kifu.gote
-        ? ('gote' as const)
-        : null
-    : null;
+  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
 
   const markdown = useMemo(
     () => generateKifuMarkdown({ ...kifu, userSide }),

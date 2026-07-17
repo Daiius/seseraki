@@ -26,8 +26,9 @@
 
 ### 2.2 視点の切り替え
 
-- `VITE_SWARS_USER_ID` から先手/後手を判定し、**ユーザー視点のプロンプト**に切り替える
-  （中立視点も可。実装上は `userSide: 'sente' | 'gote' | null`）。
+- 自分の名前候補（`VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID`）から先手/後手を判定し、**ユーザー視点のプロンプト**に
+  切り替える（中立視点も可。実装上は `userSide: 'sente' | 'gote' | null`。両対局者とも候補に一致した場合は
+  中立＝`null`）。
 - 結果コード（`SENTE_WIN_CHECKMATE` 等）は日本語化する。
 
 ### 2.3 実装方針（プロンプト生成は `shared`、配布は server エンドポイント）

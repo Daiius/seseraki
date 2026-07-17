@@ -31,11 +31,49 @@ if (corsOrigins.length > 0) {
   app.use('*', cors({ origin: corsOrigins, credentials: true }));
 }
 
-/** KIF テキストから USI 指し手列を抽出。パースエラー時は null */
-function kifToUsiMoves(kifText: string): string[] | null {
+interface KifIngestion {
+  /** パースエラー・非平手・空のときは null（壊れた部分列を worker に渡さない） */
+  usiMoves: string[] | null;
+  meta: {
+    sente: string | null;
+    gote: string | null;
+    senteDan: number | null;
+    goteDan: number | null;
+    result: string | null;
+    playedAt: Date | null;
+  };
+}
+
+/** KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用） */
+function convertKif(kifText: string): KifIngestion {
   const parsed = parseKif(kifText);
-  if (parsed.moves.length === 0) return null;
-  return parsed.moves.map((m) => m.usi);
+  const isHeihei = !parsed.header.handicap || parsed.header.handicap === '平手';
+  const usiMoves =
+    parsed.errors.length === 0 && isHeihei && parsed.moves.length > 0
+      ? parsed.moves.map((m) => m.usi)
+      : null;
+  return {
+    usiMoves,
+    meta: {
+      sente: parsed.header.sente,
+      gote: parsed.header.gote,
+      senteDan: parsed.header.senteDan,
+      goteDan: parsed.header.goteDan,
+      result: parsed.header.result,
+      playedAt: parsed.header.playedAt,
+    },
+  };
+}
+
+/** タイトル未指定時に対局メタから自動生成する */
+function autoTitle(meta: KifIngestion['meta']): string {
+  if (meta.sente || meta.gote) {
+    return `${meta.sente ?? '?'} vs ${meta.gote ?? '?'}`;
+  }
+  if (meta.playedAt) {
+    return meta.playedAt.toISOString().slice(0, 10);
+  }
+  return '無題';
 }
 
 const candidateMoveSchema = z.object({
@@ -95,6 +133,7 @@ const route = app
           playedAt: kifus.playedAt,
           createdAt: kifus.createdAt,
           analyzedAt: kifus.analysisCompletedAt,
+          analysisError: kifus.analysisError,
           hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
         })
         .from(kifus)
@@ -103,9 +142,10 @@ const route = app
         .offset(offset);
 
       return c.json({
-        kifus: rows.map(({ analyzedAt, hasMemo, ...r }) => ({
+        kifus: rows.map(({ analyzedAt, analysisError, hasMemo, ...r }) => ({
           ...r,
           analyzed: analyzedAt !== null,
+          failed: analysisError !== null,
           hasMemo: Boolean(hasMemo),
         })),
         pagination: {
@@ -165,15 +205,58 @@ const route = app
   .post(
     '/kifus',
     sessionRequired,
-    zv('json', z.object({ title: z.string(), kifText: z.string() })),
+    zv('json', z.object({ title: z.string().optional(), kifText: z.string() })),
     async (c) => {
       const { title, kifText } = c.req.valid('json');
-      const usiMoves = kifToUsiMoves(kifText);
+      const { usiMoves, meta } = convertKif(kifText);
+      const finalTitle = title?.trim() || autoTitle(meta);
       const [result] = await db
         .insert(kifus)
-        .values({ title, kifText, usiMoves })
+        .values({
+          title: finalTitle,
+          kifText,
+          usiMoves,
+          sente: meta.sente,
+          gote: meta.gote,
+          senteDan: meta.senteDan,
+          goteDan: meta.goteDan,
+          result: meta.result,
+          playedAt: meta.playedAt,
+        })
         .$returningId();
       return c.json({ id: result.id }, 201);
+    },
+  )
+  .post(
+    '/kifus/:id/reanalyze',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const [kifu] = await db
+        .select({ kifText: kifus.kifText })
+        .from(kifus)
+        .where(eq(kifus.id, id));
+      if (!kifu) return c.json({ error: 'not found' }, 404);
+
+      // kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
+      // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
+      const { usiMoves, meta } = convertKif(kifu.kifText);
+      await db
+        .update(kifus)
+        .set({
+          usiMoves,
+          sente: meta.sente,
+          gote: meta.gote,
+          senteDan: meta.senteDan,
+          goteDan: meta.goteDan,
+          result: meta.result,
+          playedAt: meta.playedAt,
+          analysisError: null,
+          analysisCompletedAt: null,
+        })
+        .where(eq(kifus.id, id));
+      return c.json({ ok: true }, 201);
     },
   )
   .delete(
@@ -204,11 +287,32 @@ const route = app
     const [kifu] = await db
       .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText, usiMoves: kifus.usiMoves })
       .from(kifus)
-      .where(and(isNull(kifus.analysisCompletedAt), isNotNull(kifus.usiMoves)))
+      .where(
+        and(
+          isNull(kifus.analysisCompletedAt),
+          isNull(kifus.analysisError),
+          isNotNull(kifus.usiMoves),
+        ),
+      )
       .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
       .limit(1);
     return c.json(kifu ?? null);
   })
+  .post(
+    '/worker/kifus/:id/error',
+    apiKeyRequired,
+    zv('param', z.object({ id: z.coerce.number() })),
+    zv('json', z.object({ error: z.string() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const { error } = c.req.valid('json');
+      await db
+        .update(kifus)
+        .set({ analysisError: error })
+        .where(eq(kifus.id, id));
+      return c.json({ ok: true }, 201);
+    },
+  )
   .post(
     '/worker/analyses',
     apiKeyRequired,
@@ -304,7 +408,7 @@ const route = app
           try {
             const gameData = await fetchGameData(gameKey);
             const kifText = swarsToKif(gameData);
-            const usiMoves = kifToUsiMoves(kifText);
+            const { usiMoves } = convertKif(kifText);
             const title = formatTitle(gameData);
             const playedAt = parsePlayedAt(gameKey);
             const [result] = await db

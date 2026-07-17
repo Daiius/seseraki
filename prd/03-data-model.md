@@ -51,9 +51,9 @@ kifus
   KIF 貼り付け等では null。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
-- **`analysisError`**: worker がエンジンの異常終了/illegal move を検知したときに理由を記録する。これにより
-  poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md)）。
-  再試行は error をクリアする（手動 or 再解析アクション）。
+- **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
+  poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
+  再試行は `POST /kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み経路では登録時に抽出**して埋める。
   **KIF 貼り付け経路のメタ抽出は未実装（gap）**（[04](./04-ingestion.md) §3 / [08](./08-roadmap.md)）。取れなければ null。
 - **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。

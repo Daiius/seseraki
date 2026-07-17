@@ -28,15 +28,20 @@
 - Web の「この局面を深く解析」ボタン → worker に解析リクエスト（[05](./05-analysis.md)）。
 - 再解析はその局面の候補手を**最新 1 世代に上書き**（depth 別世代は持たない。決定済み。[03](./03-data-model.md)）。
 
-### KIF 貼り付けのメタ抽出（gap）
+### KIF 貼り付けのメタ抽出・変換堅牢化（gap）
 
-- 現状 `POST /kifus` は `title`（ユーザー入力）+ `kifText` + `usiMoves` のみ保存し、対局メタ（sente/gote/dan/result/playedAt）を
+- 現状 `POST /kifus` は `title`（ユーザー入力・必須）+ `kifText` + `usiMoves` のみ保存し、対局メタ（sente/gote/dan/result/playedAt）を
   抽出しない。手動登録した棋譜では勝敗バッジ・対局日時が欠ける（[04](./04-ingestion.md) §3）。
-- 理想: KIF パーサを拡張してヘッダ（先手/後手/段位/結果/日時）を抽出し、一括取り込み経路と同様にメタ列を埋める + タイトル自動生成。
+- 理想: KIF パーサを拡張して (1) ヘッダ（先手/後手/段位/日時）を抽出、(2) result を終局マーカー＋手番 parity から
+  swars 互換コード（`{SENTE_WIN|GOTE_WIN|DRAW}_{理由}`）に導出、(3) タイトル自動生成（`title` 任意化）、
+  (4) 成駒の一文字略記（`全`=成銀/`圭`=成桂/`杏`=成香）対応・終局マーカー認識・**手合割ガード（非平手→`usiMoves=null`）**で
+  変換を堅牢化。一括取り込み経路と同水準にする（[decisions](./_grilling/decisions.md)）。
 
 ### ポイズンピル対策（gap）
 
-- kifus に `analysisError` を追加し、worker がエンジン失敗を検知したら記録 → poll から除外 → 次へ（[03](./03-data-model.md) / [05](./05-analysis.md) §1.1a）。
+- kifus に `analysisError` を追加し、worker がエンジン失敗（illegal / 異常終了 / timeout）を検知したら記録 →
+  エンジン再起動 → poll から除外 → 次へ（[03](./03-data-model.md) / [05](./05-analysis.md) §1.1a）。submit 失敗は一時扱いで再試行。
+- 失敗棋譜の再試行・既存の壊れ棋譜の復旧は `POST /kifus/:id/reanalyze`（再変換＋メタ再抽出＋error クリア。[04](./04-ingestion.md) §6）。
 - 現状は失敗状態がなく、解析できない棋譜がキューを詰まらせうる（KIF→USI 変換の不備と連動）。
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（gap）

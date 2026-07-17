@@ -243,9 +243,9 @@ const route = app
       // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
       const { usiMoves, meta } = convertKif(kifu.kifText);
       await db.transaction(async (tx) => {
-        // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
-        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
-        // analysisRevision を +1。実行中の旧解析の submit/error 報告は世代不一致で弾かれる
+        // 先に kifus を UPDATE して行ロックを取り、analysisRevision を +1（実行中の旧解析の
+        // submit/error 報告は世代不一致で弾かれる）。/worker/analyses も kifus を先ロックするため
+        // moveAnalyses との取得順が揃いデッドロックしない。
         await tx
           .update(kifus)
           .set({
@@ -261,6 +261,8 @@ const route = app
             analysisRevision: sql`${kifus.analysisRevision} + 1`,
           })
           .where(eq(kifus.id, id));
+        // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
+        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
       });
       return c.json({ ok: true }, 201);
     },
@@ -347,11 +349,14 @@ const route = app
       const { kifuId, revision, analyses } = c.req.valid('json');
       let applied = false;
       await db.transaction(async (tx) => {
-        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析は破棄）
+        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析は破棄）。
+        // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
+        // 世代が進むのを防ぐ）。reanalyze も kifus を先にロックするためデッドロックしない。
         const [current] = await tx
           .select({ revision: kifus.analysisRevision })
           .from(kifus)
-          .where(eq(kifus.id, kifuId));
+          .where(eq(kifus.id, kifuId))
+          .for('update');
         if (!current || current.revision !== revision) return;
         applied = true;
 

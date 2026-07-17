@@ -259,6 +259,18 @@ describe("parseKif", () => {
       expect(header.gote).toBe("藤井聡太 竜王");
       expect(header.goteDan).toBeNull();
     });
+
+    it("開始日時を JST の Date にする", () => {
+      const { header } = parseKif(`開始日時：2026/07/15 15:54:18\n`);
+      expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");
+    });
+
+    it("存在しない日付は正規化せず null にする", () => {
+      // JS は 2026/02/30 を 3/2 に正規化するが、それを弾く
+      expect(parseKif(`開始日時：2026/02/30 12:00:00\n`).header.playedAt).toBeNull();
+      // 不正な時刻も同様
+      expect(parseKif(`開始日時：2026/07/15 25:00:00\n`).header.playedAt).toBeNull();
+    });
   });
 
   describe("結果コードの導出（終局マーカー + 手番 parity）", () => {

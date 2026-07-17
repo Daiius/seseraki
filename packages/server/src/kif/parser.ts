@@ -109,7 +109,18 @@ function parseKifPlayedAt(value: string): Date | null {
   const date = new Date(
     `${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(s)}+09:00`,
   );
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (Number.isNaN(date.getTime())) return null;
+  // JS が存在しない日時（2026/02/30・25:00 等）を正規化して受理しないよう、
+  // JST（=UTC+9・DST なし）の各成分が入力と一致するか往復検証する
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  const matches =
+    jst.getUTCFullYear() === Number(y) &&
+    jst.getUTCMonth() + 1 === Number(mo) &&
+    jst.getUTCDate() === Number(d) &&
+    jst.getUTCHours() === Number(h) &&
+    jst.getUTCMinutes() === Number(mi) &&
+    jst.getUTCSeconds() === Number(s);
+  return matches ? date : null;
 }
 
 /**

@@ -29,6 +29,9 @@ export const kifus = mysqlTable(
     playedAt: timestamp(),
     analysisCompletedAt: timestamp(),
     analysisError: text(),
+    // 解析世代。reanalyze で +1 し、worker の submit/error 報告は取得時と同一世代のみ受理
+    // （実行中の旧解析がリセット後の状態を上書きするのを防ぐ）
+    analysisRevision: int().notNull().default(0),
     memo: text(),
     createdAt: timestamp().notNull().defaultNow(),
     updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),

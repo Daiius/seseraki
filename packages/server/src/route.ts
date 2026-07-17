@@ -242,20 +242,26 @@ const route = app
       // kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
       // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
       const { usiMoves, meta } = convertKif(kifu.kifText);
-      await db
-        .update(kifus)
-        .set({
-          usiMoves,
-          sente: meta.sente,
-          gote: meta.gote,
-          senteDan: meta.senteDan,
-          goteDan: meta.goteDan,
-          result: meta.result,
-          playedAt: meta.playedAt,
-          analysisError: null,
-          analysisCompletedAt: null,
-        })
-        .where(eq(kifus.id, id));
+      await db.transaction(async (tx) => {
+        // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
+        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
+        // analysisRevision を +1。実行中の旧解析の submit/error 報告は世代不一致で弾かれる
+        await tx
+          .update(kifus)
+          .set({
+            usiMoves,
+            sente: meta.sente,
+            gote: meta.gote,
+            senteDan: meta.senteDan,
+            goteDan: meta.goteDan,
+            result: meta.result,
+            playedAt: meta.playedAt,
+            analysisError: null,
+            analysisCompletedAt: null,
+            analysisRevision: sql`${kifus.analysisRevision} + 1`,
+          })
+          .where(eq(kifus.id, id));
+      });
       return c.json({ ok: true }, 201);
     },
   )
@@ -285,7 +291,13 @@ const route = app
   // --- Worker 向け（API_KEY 必須） ---
   .get('/worker/kifus', apiKeyRequired, async (c) => {
     const [kifu] = await db
-      .select({ id: kifus.id, title: kifus.title, kifText: kifus.kifText, usiMoves: kifus.usiMoves })
+      .select({
+        id: kifus.id,
+        title: kifus.title,
+        kifText: kifus.kifText,
+        usiMoves: kifus.usiMoves,
+        analysisRevision: kifus.analysisRevision,
+      })
       .from(kifus)
       .where(
         and(
@@ -302,15 +314,17 @@ const route = app
     '/worker/kifus/:id/error',
     apiKeyRequired,
     zv('param', z.object({ id: z.coerce.number() })),
-    zv('json', z.object({ error: z.string() })),
+    zv('json', z.object({ error: z.string(), revision: z.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const { error } = c.req.valid('json');
-      await db
+      const { error, revision } = c.req.valid('json');
+      // 取得時と同一世代のときだけ記録（reanalyze で世代が進んでいたら旧結果は捨てる）
+      const result = await db
         .update(kifus)
         .set({ analysisError: error })
-        .where(eq(kifus.id, id));
-      return c.json({ ok: true }, 201);
+        .where(and(eq(kifus.id, id), eq(kifus.analysisRevision, revision)));
+      const applied = result[0].affectedRows > 0;
+      return c.json({ ok: true, applied }, 201);
     },
   )
   .post(
@@ -320,6 +334,7 @@ const route = app
       'json',
       z.object({
         kifuId: z.number(),
+        revision: z.number(),
         analyses: z.array(
           z.object({
             moveNumber: z.number(),
@@ -329,8 +344,17 @@ const route = app
       }),
     ),
     async (c) => {
-      const { kifuId, analyses } = c.req.valid('json');
+      const { kifuId, revision, analyses } = c.req.valid('json');
+      let applied = false;
       await db.transaction(async (tx) => {
+        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析は破棄）
+        const [current] = await tx
+          .select({ revision: kifus.analysisRevision })
+          .from(kifus)
+          .where(eq(kifus.id, kifuId));
+        if (!current || current.revision !== revision) return;
+        applied = true;
+
         await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, kifuId));
 
         for (const analysis of analyses) {
@@ -360,7 +384,7 @@ const route = app
           .set({ analysisCompletedAt: new Date() })
           .where(eq(kifus.id, kifuId));
       });
-      return c.json({ ok: true }, 201);
+      return c.json({ ok: true, applied }, 201);
     },
   )
   // --- swars 棋譜取得 ---

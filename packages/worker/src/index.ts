@@ -86,10 +86,31 @@ async function main() {
 
     console.log("[Worker] Ready, waiting for jobs...");
 
+    // エンジンが使える状態か。恒久失敗後の再起動が失敗したら false にし、
+    // 復旧するまで棋譜を取得しない（dead なエンジンで正常棋譜まで失敗扱いする連鎖を防ぐ）
+    let engineReady = true;
+
     const poll = async () => {
       if (!running || analyzing) return;
       analyzing = true;
       try {
+        // エンジンが未復旧なら、棋譜を取得する前に復旧を試みる
+        if (!engineReady) {
+          try {
+            console.log("[Worker] Recovering engine...");
+            await engine.restart();
+            await configureEngine(engine, config);
+            engineReady = true;
+            console.log("[Worker] Engine recovered");
+          } catch (recoverErr) {
+            console.error(
+              "[Worker] Engine recovery failed, will retry:",
+              recoverErr,
+            );
+            return; // 次の poll で再試行。棋譜は掴まない
+          }
+        }
+
         // fetch 失敗はインフラ起因（一時）。次の poll で再試行する
         const kifu = await client.fetchNextKifu();
         if (!kifu) return;
@@ -112,19 +133,26 @@ async function main() {
           const reason = err instanceof Error ? err.message : String(err);
           console.error(`[Worker] Analysis failed for kifu ${kifu.id}:`, reason);
           try {
-            await client.reportError(kifu.id, reason);
+            await client.reportError(kifu.id, kifu.analysisRevision, reason);
           } catch (reportErr) {
             console.error("[Worker] Failed to report error:", reportErr);
           }
-          console.log("[Worker] Restarting engine...");
-          await engine.restart();
-          await configureEngine(engine, config);
+          // エンジン再起動。失敗したら engineReady=false にして、
+          // 復旧するまで次の棋譜を取得しない（連鎖失敗を防ぐ）
+          try {
+            console.log("[Worker] Restarting engine...");
+            await engine.restart();
+            await configureEngine(engine, config);
+          } catch (restartErr) {
+            console.error("[Worker] Engine restart failed:", restartErr);
+            engineReady = false;
+          }
           return;
         }
 
         // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で再試行 ---
         try {
-          await client.submitAnalysis(kifu.id, result);
+          await client.submitAnalysis(kifu.id, kifu.analysisRevision, result);
         } catch (err) {
           console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
           return;

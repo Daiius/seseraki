@@ -57,14 +57,21 @@
 ## 開発コマンド
 
 ```bash
-pnpm dev          # docker compose watch で全サービス起動（db, server, web, worker）
+pnpm dev          # docker compose up --build --watch で全サービス起動（db, server, web, worker）
 pnpm typecheck    # 全パッケージ tsc --noEmit
 pnpm build        # 全パッケージのビルド
-pnpm db:migrate   # スキーマ変更を DB に反映（drizzle-kit push --force）
+pnpm db:push      # dev: スキーマを DB に強制同期（使い捨て DB 向け・drizzle-kit push --force）
+pnpm db:generate  # schema 差分から drizzle/ にバージョン管理マイグレーションを生成
+pnpm db:migrate   # マイグレーションを適用（本番はこちら・未適用分のみ。[prd/02](./prd/02-architecture.md) §6）
+pnpm db:baseline  # 既存 DB を drizzle 管理下に載せる初回登録（本番の既存 DB を 0000 で適用済み記録）
 pnpm db:seed      # サンプルデータ投入（初回のみ）
 pnpm --filter server test   # server のユニットテスト（vitest）
 pnpm --filter worker test   # worker のユニットテスト（vitest）
 ```
+
+> **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
+> にバージョン管理、`db:generate` で生成し `db:migrate` で未適用分だけ適用）。既存 DB を初めて管理下に載せる時は一度だけ
+> `db:baseline` で 0000 を適用済み登録する。本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
 
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

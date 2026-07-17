@@ -38,7 +38,8 @@ kifus
 ├── goteDan: smallint?           -- 後手段位
 ├── result: varchar(50)?         -- 対局結果
 ├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
-├── playedAt: timestamp?         -- 対局日時
+├── playedAt: timestamp?         -- 対局日時（sourceTz で解釈した絶対時刻）
+├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC"。署名判定。[04](./04-ingestion.md)）
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
@@ -50,6 +51,9 @@ kifus
 - **`kifText` は原本**（KIF）。`usiMoves` は登録時に変換した派生物で、解析前でも盤面表示に使える（[05](./05-analysis.md)）。
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
+- **`sourceTz`**: `開始日時` にタイムゾーン欄が無い KIF を正しく並べるため、`playedAt` を解釈した TZ を記録する。
+  既定は `"JST"`。開始日時を UTC で書き出すアプリ（署名で検出）は `"UTC"` として +9h 補正した絶対時刻を保存する。
+  swars 経路は `gameKey` 由来で常に `"JST"`（[04](./04-ingestion.md)）。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより

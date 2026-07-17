@@ -41,6 +41,7 @@ interface KifIngestion {
     goteDan: number | null;
     result: string | null;
     playedAt: Date | null;
+    sourceTz: string;
   };
 }
 
@@ -61,6 +62,7 @@ function convertKif(kifText: string): KifIngestion {
       goteDan: parsed.header.goteDan,
       result: parsed.header.result,
       playedAt: parsed.header.playedAt,
+      sourceTz: parsed.header.sourceTz,
     },
   };
 }
@@ -222,6 +224,7 @@ const route = app
           goteDan: meta.goteDan,
           result: meta.result,
           playedAt: meta.playedAt,
+          sourceTz: meta.sourceTz,
         })
         .$returningId();
       return c.json({ id: result.id }, 201);
@@ -256,6 +259,7 @@ const route = app
             goteDan: meta.goteDan,
             result: meta.result,
             playedAt: meta.playedAt,
+            sourceTz: meta.sourceTz,
             analysisError: null,
             analysisCompletedAt: null,
             analysisRevision: sql`${kifus.analysisRevision} + 1`,
@@ -466,6 +470,7 @@ const route = app
                 result: gameData.result,
                 swarsGameKey: gameKey,
                 playedAt,
+                sourceTz: 'JST',
               })
               .$returningId();
             imported.push({ id: result.id, gameKey });

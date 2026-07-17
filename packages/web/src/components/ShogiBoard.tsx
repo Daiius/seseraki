@@ -92,7 +92,7 @@ function HandDisplay({
   const symbol = side === 'sente' ? '☗' : '☖';
   const label = name ?? (side === 'sente' ? '先手' : '後手');
   return (
-    <div className="text-sm flex items-center">
+    <div className="text-sm lg:text-base flex items-center">
       <span className="font-semibold">{symbol}{label}</span>
       <span className="ml-auto">{pieces.length > 0 ? pieces.join(' ') : 'なし'}</span>
     </div>
@@ -125,12 +125,12 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
   const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
 
   return (
-    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.25rem] grid-rows-[1rem_repeat(9,2rem)] md:grid-cols-[repeat(9,2.5rem)_1.5rem] md:grid-rows-[1.25rem_repeat(9,2.5rem)]">
+    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.25rem] grid-rows-[1rem_repeat(9,2rem)] md:grid-cols-[repeat(9,2.5rem)_1.5rem] md:grid-rows-[1.25rem_repeat(9,2.5rem)] lg:grid-cols-[repeat(9,3rem)_1.75rem] lg:grid-rows-[1.5rem_repeat(9,3rem)] xl:grid-cols-[repeat(9,3.5rem)_2rem] xl:grid-rows-[1.75rem_repeat(9,3.5rem)]">
       {/* 筋番号（1行目） */}
       {colLabels.map((col) => (
         <div
           key={`col-${col}`}
-          className="flex items-end justify-center text-[10px] md:text-xs text-base-content/50"
+          className="flex items-end justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
         >
           {col}
         </div>
@@ -145,7 +145,7 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
             <div
               key={`${rowIdx}-${colIdx}`}
               className={clsx(
-                'size-8 md:size-10 border border-base-300 flex items-center justify-center text-sm md:text-base font-bold',
+                'size-8 md:size-10 lg:size-12 xl:size-14 border border-base-300 flex items-center justify-center text-sm md:text-base lg:text-lg xl:text-xl font-bold',
                 isLastMove && 'bg-primary/15',
               )}
             >
@@ -164,7 +164,7 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
         }),
         <div
           key={`row-${ri}`}
-          className="flex items-center justify-center text-[10px] md:text-xs text-base-content/50"
+          className="flex items-center justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
         >
           {rowLabels[ri]}
         </div>,

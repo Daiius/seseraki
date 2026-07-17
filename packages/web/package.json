@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "@tanstack/react-router": "^1.168.24",
+    "@visx/responsive": "^4.0.0",
+    "@visx/scale": "^4.0.0",
+    "@visx/shape": "^4.0.0",
     "clsx": "^2.1.1",
     "hono": "^4.12.15",
     "react": "^19.2.5",

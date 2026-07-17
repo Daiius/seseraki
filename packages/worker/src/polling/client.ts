@@ -35,6 +35,16 @@ export function createClient(baseUrl: string, apiKey: string) {
       if (!res.ok) throw new Error(`Failed to submit analysis: ${res.status}`);
       return await res.json();
     },
+
+    /** 解析失敗（棋譜起因）を報告し analysisError を記録させる */
+    async reportError(kifuId: number, error: string) {
+      const res = await client.worker.kifus[":id"].error.$post({
+        param: { id: String(kifuId) },
+        json: { error },
+      });
+      if (!res.ok) throw new Error(`Failed to report error: ${res.status}`);
+      return await res.json();
+    },
   };
 }
 

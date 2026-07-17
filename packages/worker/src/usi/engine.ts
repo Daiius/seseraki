@@ -9,6 +9,8 @@ export class UsiEngine {
   private process: ChildProcess | null = null;
   private rl: Interface | null = null;
   private listeners: ((line: string) => void)[] = [];
+  /** プロセス死（close/error）で解決を待っている呼び出しを起こすためのハンドラ */
+  private deathHandlers: ((err: Error) => void)[] = [];
   private dead = false;
 
   constructor(
@@ -17,29 +19,43 @@ export class UsiEngine {
   ) {}
 
   async start(): Promise<void> {
-    this.process = spawn(this.enginePath, this.args, {
+    this.dead = false;
+    const proc = spawn(this.enginePath, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.process = proc;
 
-    this.process.on("error", (err) => {
+    // 再起動後に旧プロセスの遅延イベントが新プロセスの状態を汚さないようガードする
+    const isCurrent = () => this.process === proc;
+
+    const die = (err: Error) => {
+      if (!isCurrent()) return;
       this.dead = true;
+      const handlers = this.deathHandlers;
+      this.deathHandlers = [];
+      for (const handler of handlers) handler(err);
+    };
+
+    proc.on("error", (err) => {
       console.error("[USI] Engine process error:", err.message);
+      die(new Error(`[USI] Engine process error: ${err.message}`));
     });
 
-    this.process.on("close", (code) => {
-      this.dead = true;
+    proc.on("close", (code) => {
       console.log("[USI] Engine process exited with code:", code);
+      die(new Error(`[USI] Engine process exited (code ${code})`));
     });
 
-    this.rl = createInterface({ input: this.process.stdout! });
+    this.rl = createInterface({ input: proc.stdout! });
     this.rl.on("line", (line) => {
+      if (!isCurrent()) return;
       for (const listener of this.listeners) {
         listener(line);
       }
     });
 
     // stderr logging
-    const stderrRl = createInterface({ input: this.process.stderr! });
+    const stderrRl = createInterface({ input: proc.stderr! });
     stderrRl.on("line", (line) => {
       console.error("[USI stderr]", line);
     });
@@ -47,6 +63,16 @@ export class UsiEngine {
     this.sendCommand("usi");
     await this.waitFor("usiok");
     console.log("[USI] Engine initialized (usiok)");
+  }
+
+  /** エンジンを再起動する（呼び出し側は setOption / ready() を再適用すること） */
+  async restart(): Promise<void> {
+    await this.quit();
+    this.process = null;
+    this.rl = null;
+    this.listeners = [];
+    this.deathHandlers = [];
+    await this.start();
   }
 
   async ready(): Promise<void> {
@@ -73,6 +99,11 @@ export class UsiEngine {
         reject(new Error("[USI] Analysis timed out"));
       }, DEFAULT_TIMEOUT_MS);
 
+      const onDeath = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+
       const listener = (line: string) => {
         if (line.startsWith("info string Error!")) {
           console.error("[USI] Engine error:", line);
@@ -92,27 +123,36 @@ export class UsiEngine {
 
       const cleanup = () => {
         clearTimeout(timeout);
-        const idx = this.listeners.indexOf(listener);
-        if (idx !== -1) this.listeners.splice(idx, 1);
+        const li = this.listeners.indexOf(listener);
+        if (li !== -1) this.listeners.splice(li, 1);
+        const di = this.deathHandlers.indexOf(onDeath);
+        if (di !== -1) this.deathHandlers.splice(di, 1);
       };
 
       this.listeners.push(listener);
-      this.sendCommand(position);
-      this.sendCommand(goCommand);
+      this.deathHandlers.push(onDeath);
+      try {
+        this.sendCommand(position);
+        this.sendCommand(goCommand);
+      } catch (err) {
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
   }
 
   async quit(): Promise<void> {
     if (!this.process || this.dead) return;
 
+    const proc = this.process;
     return new Promise<void>((resolve) => {
-      this.process!.on("close", () => resolve());
+      proc.on("close", () => resolve());
       this.sendCommand("quit");
 
       // Force kill after 5 seconds
       setTimeout(() => {
         if (!this.dead) {
-          this.process?.kill("SIGKILL");
+          proc.kill("SIGKILL");
         }
         resolve();
       }, 5_000);
@@ -137,6 +177,11 @@ export class UsiEngine {
         );
       }, timeoutMs);
 
+      const onDeath = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+
       const listener = (line: string) => {
         if (line.trim() === expected) {
           cleanup();
@@ -146,11 +191,14 @@ export class UsiEngine {
 
       const cleanup = () => {
         clearTimeout(timeout);
-        const idx = this.listeners.indexOf(listener);
-        if (idx !== -1) this.listeners.splice(idx, 1);
+        const li = this.listeners.indexOf(listener);
+        if (li !== -1) this.listeners.splice(li, 1);
+        const di = this.deathHandlers.indexOf(onDeath);
+        if (di !== -1) this.deathHandlers.splice(di, 1);
       };
 
       this.listeners.push(listener);
+      this.deathHandlers.push(onDeath);
     });
   }
 

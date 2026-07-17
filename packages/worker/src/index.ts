@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import { UsiEngine } from "./usi/engine.js";
 import { MockTaskSource } from "./polling/mock.js";
 import type { TaskSource } from "./polling/types.js";
@@ -6,19 +6,8 @@ import { analyzeTask } from "./analysis.js";
 import { createClient } from "./polling/client.js";
 import { analyzeKifu } from "./kifu-analysis.js";
 
-async function main() {
-  const config = loadConfig();
-  console.log("[Worker] Starting with config:", {
-    enginePath: config.enginePath,
-    engineDepth: config.engineDepth,
-    pollIntervalMs: config.pollIntervalMs,
-    useMock: config.useMock,
-  });
-
-  // Initialize engine
-  const engine = new UsiEngine(config.enginePath);
-  await engine.start();
-
+/** エンジンのオプションを適用し readyok まで待つ（起動時・再起動時で共用） */
+async function configureEngine(engine: UsiEngine, config: Config): Promise<void> {
   engine.setOption("Threads", String(config.engineThreads));
   engine.setOption("USI_Hash", String(config.engineHash));
   if (config.engineEvalDir) {
@@ -35,6 +24,21 @@ async function main() {
     engine.setOption("BookDepthLimit", "0");
   }
   await engine.ready();
+}
+
+async function main() {
+  const config = loadConfig();
+  console.log("[Worker] Starting with config:", {
+    enginePath: config.enginePath,
+    engineDepth: config.engineDepth,
+    pollIntervalMs: config.pollIntervalMs,
+    useMock: config.useMock,
+  });
+
+  // Initialize engine
+  const engine = new UsiEngine(config.enginePath);
+  await engine.start();
+  await configureEngine(engine, config);
 
   let running = true;
   let analyzing = false;
@@ -84,23 +88,47 @@ async function main() {
 
     const poll = async () => {
       if (!running || analyzing) return;
+      analyzing = true;
       try {
-        analyzing = true;
+        // fetch 失敗はインフラ起因（一時）。次の poll で再試行する
         const kifu = await client.fetchNextKifu();
         if (!kifu) return;
         if (!kifu.usiMoves) {
           console.warn(`[Worker] Skipping kifu ${kifu.id}: no usiMoves`);
           return;
         }
-        console.log(
-          `[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`,
-        );
-        const result = await analyzeKifu(engine, kifu.usiMoves, {
-          depth: config.engineDepth,
-          multiPv: config.engineMultiPv,
-          byoyomi: config.engineByoyomi,
-        });
-        await client.submitAnalysis(kifu.id, result);
+        console.log(`[Worker] Analyzing kifu ${kifu.id}: ${kifu.title}`);
+
+        // --- 棋譜起因（恒久失敗）: illegal move / エンジン死亡 / timeout ---
+        // analysisError を記録して poll から除外し、エンジンを再起動して次へ進む
+        let result;
+        try {
+          result = await analyzeKifu(engine, kifu.usiMoves, {
+            depth: config.engineDepth,
+            multiPv: config.engineMultiPv,
+            byoyomi: config.engineByoyomi,
+          });
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          console.error(`[Worker] Analysis failed for kifu ${kifu.id}:`, reason);
+          try {
+            await client.reportError(kifu.id, reason);
+          } catch (reportErr) {
+            console.error("[Worker] Failed to report error:", reportErr);
+          }
+          console.log("[Worker] Restarting engine...");
+          await engine.restart();
+          await configureEngine(engine, config);
+          return;
+        }
+
+        // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で再試行 ---
+        try {
+          await client.submitAnalysis(kifu.id, result);
+        } catch (err) {
+          console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
+          return;
+        }
         console.log(
           `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
         );

@@ -189,16 +189,20 @@ function KifuListPage() {
                             : lost ? <span className="badge badge-soft badge-error badge-sm">負</span>
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
-                          {'analyzed' in kifu && (
-                            <span
-                              className={
-                                kifu.analyzed
-                                  ? 'badge badge-success badge-sm'
-                                  : 'badge badge-ghost badge-sm'
-                              }
-                            >
-                              {kifu.analyzed ? '済' : '未'}
-                            </span>
+                          {'failed' in kifu && kifu.failed ? (
+                            <span className="badge badge-error badge-sm">失敗</span>
+                          ) : (
+                            'analyzed' in kifu && (
+                              <span
+                                className={
+                                  kifu.analyzed
+                                    ? 'badge badge-success badge-sm'
+                                    : 'badge badge-ghost badge-sm'
+                                }
+                              >
+                                {kifu.analyzed ? '済' : '未'}
+                              </span>
+                            )
                           )}
                           {kifu.hasMemo && (
                             <span className="badge badge-sm bg-info/50 text-info-content">

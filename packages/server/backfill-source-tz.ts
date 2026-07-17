@@ -21,13 +21,31 @@ import { parseKif } from './src/kif/parser.js';
 try {
   // 手動貼り付け（swarsGameKey なし）: kifText から playedAt / sourceTz を再導出
   const manual = await db
-    .select({ id: kifus.id, kifText: kifus.kifText, playedAt: kifus.playedAt })
+    .select({
+      id: kifus.id,
+      kifText: kifus.kifText,
+      playedAt: kifus.playedAt,
+      createdAt: kifus.createdAt,
+    })
     .from(kifus)
     .where(isNull(kifus.swarsGameKey));
 
   let changed = 0;
+  let skipped = 0;
   for (const row of manual) {
     const { header } = parseKif(row.kifText);
+    // 妥当性ガード: 対局日時は登録日時より後にならない。UTC 補正(+9h)で
+    // playedAt が createdAt を超えるなら署名の誤検出（本当は JST）を疑い、
+    // 従来値を維持して報告する（正しい既存データを一括で壊さないため）。
+    const implausible =
+      header.playedAt != null && header.playedAt.getTime() > row.createdAt.getTime();
+    if (implausible) {
+      skipped++;
+      console.warn(
+        `manual #${row.id}: SKIP (tz=${header.sourceTz} → playedAt ${header.playedAt?.toISOString()} > createdAt ${row.createdAt.toISOString()}; 誤検出の疑い。従来値維持)`,
+      );
+      continue;
+    }
     await db
       .update(kifus)
       .set({ playedAt: header.playedAt, sourceTz: header.sourceTz })
@@ -47,7 +65,7 @@ try {
     .where(isNotNull(kifus.swarsGameKey));
 
   console.log(
-    `done: manual=${manual.length} (playedAt changed=${changed}), swars labeled=JST`,
+    `done: manual=${manual.length} (playedAt changed=${changed}, skipped=${skipped}), swars labeled=JST`,
   );
   process.exit(0);
 } catch (err) {

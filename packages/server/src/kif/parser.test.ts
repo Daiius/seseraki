@@ -292,6 +292,30 @@ describe("parseKif", () => {
       ).toBe("JST");
     });
 
+    it("終了日時/場所を持つ JST 系アプリは署名が一致しても UTC と判定しない", () => {
+      // KIF形式コメント + 持ち時間 が揃っていても、終了日時/場所があれば App B ではない
+      const withEnd = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+終了日時：2026/07/17 15:10:00
+持ち時間：10分+30秒
+`;
+      expect(parseKif(withEnd).header.sourceTz).toBe("JST");
+      const withPlace = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+場所：-
+持ち時間：10分+30秒
+`;
+      expect(parseKif(withPlace).header.sourceTz).toBe("JST");
+    });
+
+    it("KIF形式コメントが先頭行でない場合は UTC と判定しない", () => {
+      const notFirst = `開始日時：2026/07/17 14:57:00
+# ----  KIF形式  ----
+持ち時間：10分+30秒
+`;
+      expect(parseKif(notFirst).header.sourceTz).toBe("JST");
+    });
+
     it("存在しない日付は正規化せず null にする", () => {
       // JS は 2026/02/30 を 3/2 に正規化するが、それを弾く
       expect(parseKif(`開始日時：2026/02/30 12:00:00\n`).header.playedAt).toBeNull();

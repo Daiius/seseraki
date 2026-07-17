@@ -109,15 +109,24 @@ function parsePlayer(value: string): { name: string | null; dan: number | null }
 }
 
 /**
- * 手動貼り付け KIF のうち、開始日時を UTC で書き出すアプリの署名。
- * 実データ観測に基づく指紋（先頭の柿木形式コメント行 ＋ 「持ち時間：」ヘッダ）。
- * これに一致した棋譜のみ開始日時を UTC として解釈する。将来 UTC のアプリが
- * 増えたら、その署名をここに足す（未知アプリは既定の JST 扱い＝従来動作）。
+ * 手動貼り付け KIF のうち、開始日時を UTC で書き出すアプリ（App B）の署名。
+ * 実データ観測に基づく指紋で、誤検出（JST のアプリを UTC と誤判定）を避けるため
+ * 十分に絞る。App B の KIF は:
+ *   1. 先頭行が柿木形式コメント `# ---- KIF形式 ----`
+ *   2. `持ち時間：` ヘッダを持つ
+ *   3. JST 系アプリ（例: 終了日時／場所 を書き出すもの）に無い ＝ `終了日時`/`場所` を持たない
+ * の 3 条件をすべて満たす。1 条件だけ（コメント or 持ち時間 単独）では JST 扱いのまま。
+ * これに一致した棋譜のみ開始日時を UTC として解釈する。将来 UTC の別アプリが増えたら
+ * その固有署名をここに足す（未知アプリは既定の JST ＝安全側）。
  */
 function isUtcSourceKif(kifText: string): boolean {
-  return (
-    /^\s*#\s*-+\s*KIF形式\s*-+/m.test(kifText) && /^持ち時間[：:]/m.test(kifText)
-  );
+  const firstContent =
+    kifText.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  const startsWithKifComment = /^#\s*-+\s*KIF形式\s*-+/.test(firstContent);
+  const hasMochiJikan = /^持ち時間[：:]/m.test(kifText);
+  // JST 系アプリが出す終了日時／場所を持つものは App B ではない（誤検出防止）
+  const hasEndTimeOrPlace = /^(終了日時|場所)[：:]/m.test(kifText);
+  return startsWithKifComment && hasMochiJikan && !hasEndTimeOrPlace;
 }
 
 /** KIF テキストから開始日時の解釈タイムゾーンを判定する（既定 JST） */

@@ -1,4 +1,9 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import {
+  createFileRoute,
+  Link,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router';
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { turnSymbol, formatScore, detectBlunders } from '../../lib/usi';
@@ -26,6 +31,7 @@ export const Route = createFileRoute('/kifus/$id')({
 function KifuDetailPage() {
   const kifu = Route.useLoaderData();
   const navigate = useNavigate();
+  const router = useRouter();
 
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
@@ -61,6 +67,15 @@ function KifuDetailPage() {
       param: { id: String(kifu.id) },
     });
     if (res.ok) navigate({ to: '/' });
+  };
+
+  // kifText を再変換して解析状態をリセットし、worker に拾い直させる。
+  // パーサ修正後の既存棋譜の復旧・失敗棋譜の再試行を兼ねる。
+  const handleReanalyze = async () => {
+    const res = await client.kifus[':id'].reanalyze.$post({
+      param: { id: String(kifu.id) },
+    });
+    if (res.ok) router.invalidate();
   };
 
   const blunders = detectBlunders(kifu.analyses, usiMoves);
@@ -100,6 +115,9 @@ function KifuDetailPage() {
             className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-32 p-1 shadow"
           >
             <li>
+              <button onClick={handleReanalyze}>再解析</button>
+            </li>
+            <li>
               <button onClick={handleDelete} className="text-error">
                 削除
               </button>
@@ -109,6 +127,20 @@ function KifuDetailPage() {
       </div>
 
       <div className="flex flex-col gap-6">
+        {kifu.analysisError && (
+          <div className="alert alert-error flex items-start gap-3">
+            <div className="flex-1">
+              <div className="font-semibold">解析失敗</div>
+              <div className="text-sm font-mono break-all opacity-90">
+                {kifu.analysisError}
+              </div>
+            </div>
+            <button className="btn btn-sm" onClick={handleReanalyze}>
+              再解析
+            </button>
+          </div>
+        )}
+
         {usiMoves.length > 0 && (
           <ShogiBoard usiMoves={usiMoves} analyses={kifu.analyses} sente={kifu.sente} gote={kifu.gote} />
         )}

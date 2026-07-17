@@ -4,7 +4,7 @@
 ドメイン用語は [01](./01-domain.md)、投入時の変換・抽出は [04](./04-ingestion.md)、解析での消費は [05](./05-analysis.md) を参照。
 
 > 本章は**理想スキーマ**を定め、**PRD が正典**（[README](./README.md) 時制方針）。現行実装の型・制約は
-> Drizzle（`packages/server/src/db`）を参照し、PRD との差（例: `analysisError` / `commentaries` は現行未実装の gap）は
+> Drizzle（`packages/server/src/db`）を参照し、PRD との差（例: `commentaries` は現行未実装の gap）は
 > 各所で「計画中」「gap」と明示する。カラム名・enum は本章を正とする。
 > スキーマ変更は `pnpm db:migrate`（`drizzle-kit push --force`）で反映する（[02](./02-architecture.md)）。
 
@@ -41,6 +41,7 @@ kifus
 ├── playedAt: timestamp?         -- 対局日時
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
+├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /kifus/:id で編集）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
@@ -51,11 +52,17 @@ kifus
   KIF 貼り付け等では null。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
-- **`analysisError`**: worker がエンジンの異常終了/illegal move を検知したときに理由を記録する。これにより
-  poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md)）。
-  再試行は error をクリアする（手動 or 再解析アクション）。
-- 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み経路では登録時に抽出**して埋める。
-  **KIF 貼り付け経路のメタ抽出は未実装（gap）**（[04](./04-ingestion.md) §3 / [08](./08-roadmap.md)）。取れなければ null。
+- **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
+  poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
+  再試行は `POST /kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
+  **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
+  完了 submit は error なし時のみ適用する（行ロック下で相互排他。重複取得/複数 worker でも矛盾状態を作らない）。
+- **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /worker/kifus` は現在の revision を返し、worker は
+  `POST /worker/analyses` / `POST /worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
+  結果/失敗を適用する。これにより、reanalyze で状態をリセットした後に**実行中だった旧解析の報告が新状態を上書きするのを防ぐ**
+  （旧成功で completed 復活・旧失敗で error 復活を弾く。[05](./05-analysis.md) §1.1a）。
+- 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み・KIF 貼り付けの両経路とも登録時に抽出**して埋める
+  （KIF 経路は `result` を終局マーカー＋手番 parity から導出。[04](./04-ingestion.md) §3）。取れなければ null。
 - **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
 
 ## 3. `moveAnalyses`（局面ごとの解析）

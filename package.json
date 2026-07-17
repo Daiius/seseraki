@@ -2,7 +2,7 @@
   "name": "seseraki",
   "private": true,
   "scripts": {
-    "dev": "docker compose watch",
+    "dev": "docker compose up --build --watch",
     "dev:web": "pnpm --filter web dev",
     "dev:server": "pnpm --filter server dev",
     "dev:worker": "pnpm --filter worker dev",

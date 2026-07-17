@@ -122,7 +122,9 @@ function formatResult(code: string | null | undefined): string | null {
         ? '時間切れ勝ち'
         : code.includes('ILLEGAL')
           ? '反則勝ち'
-          : '勝ち';
+          : code.includes('DECLARATION')
+            ? '入玉宣言勝ち'
+            : '勝ち';
   return `${winner}${reason}`;
 }
 

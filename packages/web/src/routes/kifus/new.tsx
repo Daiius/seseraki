@@ -16,7 +16,9 @@ function NewKifuPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await client.kifus.$post({ json: { title, kifText } });
+      const res = await client.kifus.$post({
+        json: { title: title.trim() || undefined, kifText },
+      });
       if (!res.ok) throw new Error('Failed to create kifu');
       const { id } = await res.json();
       navigate({ to: '/kifus/$id', params: { id: String(id) } });
@@ -32,6 +34,9 @@ function NewKifuPage() {
         <label className="form-control w-full">
           <div className="label">
             <span className="label-text">タイトル</span>
+            <span className="label-text-alt opacity-60">
+              任意・空なら「先手 vs 後手」を自動生成
+            </span>
           </div>
           <input
             type="text"
@@ -39,7 +44,6 @@ function NewKifuPage() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="例: 第82期名人戦 第1局"
-            required
           />
         </label>
         <label className="form-control w-full">

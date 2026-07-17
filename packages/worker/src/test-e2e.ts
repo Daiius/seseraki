@@ -87,7 +87,11 @@ async function main() {
 
   // 4. 結果をサーバーに送信
   console.log("\n--- Step 4: Submit analysis to server ---");
-  const submitResult = await client.submitAnalysis(kifu.id, result);
+  const submitResult = await client.submitAnalysis(
+    kifu.id,
+    kifu.analysisRevision,
+    result,
+  );
   console.log("Server response:", submitResult);
 
   // 5. エンジン終了

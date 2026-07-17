@@ -108,15 +108,19 @@
 | `pnpm build` | 全パッケージのビルド |
 | `pnpm db:push` | dev: スキーマを DB に強制同期（使い捨て DB 向け・`drizzle-kit push --force`） |
 | `pnpm db:generate` | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成 |
-| `pnpm db:migrate` | バージョン管理マイグレーションを適用（未適用分のみ。本番はこちら） |
-| `pnpm db:baseline` | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・DDL は流さない） |
+| `pnpm db:migrate` | バージョン管理マイグレーションを適用（未適用分のみ・接続先は呼び出し環境の env） |
+| `pnpm db:baseline` | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証） |
+| `pnpm db:migrate:dev` / `db:baseline:dev` | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行 |
 | `pnpm db:seed` | サンプルデータ投入（初回のみ。既存データがあればスキップ） |
 | `pnpm --filter server test` / `--filter worker test` | ユニットテスト（vitest） |
 
 - **マイグレーション方式**: **dev は `db:push`**（強制同期・履歴なし・使い捨て DB 向け）、**本番は generate/migrate 方式**
   （`packages/server/drizzle/` にバージョン管理、`db:generate` で生成 → `db:migrate` で未適用分だけ適用）。既存の本番 DB を
-  初めて管理下に載せる時は一度だけ `db:baseline` で 0000 を適用済み登録する（さもないと 0000 の CREATE TABLE が既存表と衝突）。
-  接続先は `DB_HOST` / `DB_PORT` / `MYSQL_*` 環境変数（本番は cloudflared tunnel で localhost に向け、prod 資格情報を与える。具体は `.claude-personal/`）。
+  初めて管理下に載せる時は一度だけ `db:baseline` で 0000 を適用済み登録する（`baseline` は対象 DB に 0000 のテーブル・カラムが
+  実在するかを information_schema で検証し、空 DB / 接続先取り違え / drift なら記録せず中止する）。
+- **接続先の env は上書きしない**: `db:migrate` / `db:baseline` / `db:generate` は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*` を
+  そのまま使う（本番は cloudflared tunnel で localhost に向け prod 資格情報を export して実行。具体は `.claude-personal/`）。
+  dev DB に対して versioned migration を試すときは `.env.database` を読む `db:migrate:dev` / `db:baseline:dev` を使う。
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:push && pnpm db:seed`。dev のスキーマ変更は `pnpm db:push`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
   - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`）。

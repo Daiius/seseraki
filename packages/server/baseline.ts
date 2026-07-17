@@ -241,6 +241,10 @@ try {
     `);
     console.log(`baseline recorded: ${baseline.name}（DDL は実行していません）`);
   }
-} finally {
-  await client.end();
+  // 一発限りの CLI。work は autocommit 済みなので、プールの終了待ちに頼らず明示的に exit する
+  // （cloudflared tunnel 越しだと client.end() が返らずプロセスが終了しないことがあるため）。
+  process.exit(0);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
 }

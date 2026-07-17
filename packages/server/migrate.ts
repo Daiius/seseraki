@@ -13,9 +13,14 @@
 import { migrate } from 'drizzle-orm/mysql2/migrator';
 import { db, client } from './src/db/index.js';
 
+// 一発限りの CLI。処理は各文 autocommit 済みなので、完了後はプールの
+// 終了待ちに頼らず明示的に exit する（cloudflared tunnel 越しだと client.end() の
+// ソケット close が返らずプロセスが終了しないことがあるため）。
 try {
   await migrate(db, { migrationsFolder: './drizzle' });
   console.log('migrations applied (up to date)');
-} finally {
-  await client.end();
+  process.exit(0);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
 }

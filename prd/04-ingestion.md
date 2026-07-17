@@ -26,10 +26,17 @@
 - server は KIF をパースして次を行う（`packages/server/src/kif`）:
   1. **USI へ変換**して `usiMoves` を作る。**パースエラーがある / 手合割が平手でない**場合は変換不能として
      `usiMoves = null` で保存する（§5）。
-  2. **対局メタを抽出**（sente/gote/senteDan/goteDan/result/playedAt）。ヘッダ行（`先手：`/`後手：`/`開始日時：`/
+  2. **対局メタを抽出**（sente/gote/senteDan/goteDan/result/playedAt/sourceTz）。ヘッダ行（`先手：`/`後手：`/`開始日時：`/
      段位表記）から起こす。**result は終局マーカー（`詰み`/`投了`/`切れ負け`/`千日手`/`持将棋` 等）＋ 手番 parity から
      swars 互換コード（`{SENTE_WIN|GOTE_WIN|DRAW}_{理由}`）を導出**し、既存の勝敗バッジ・LLM エクスポートと揃える
      （[03](./03-data-model.md) / [01](./01-domain.md) §6）。`中断` 等の勝敗なしは null。
+     **開始日時のタイムゾーン**: KIF にはタイムゾーン欄が無い。将棋アプリによって `開始日時` を JST で書くもの・UTC で
+     書くものがあり、UTC を JST 決め打ちで読むと 9h ずれて他アプリの棋譜と混ざったとき並びが崩れる。そこで
+     **投入時に TZ を明示指定**できるようにする（`POST /kifus` の `sourceTz`: `auto`（既定）/`JST`/`UTC`）。
+     `auto` は KIF の署名から推定（既定 JST。UTC で書き出すアプリの固有指紋＝「先頭行が柿木形式コメント ＋ `持ち時間：`
+     ＋ `終了日時`/`場所` を持たない」に一致したものだけ UTC）。署名は一意な肯定指紋を作りにくいため**あくまで初期値の
+     提案**で、確定はユーザーの選択に委ねる。決定した TZ を `sourceTz` に残し、`playedAt` は解釈 TZ の絶対時刻で保存する。
+     **reanalyze は保存済み `sourceTz` を維持**する（再パースで TZ を取り違えない）。swars 経路は `gameKey` 由来で常に JST。
   3. `kifText`（原本）とタイトルとともに `kifus` に保存し、`{ id }` を返す。
 - 登録直後は未解析（`analysisCompletedAt = null`）。`usiMoves` があれば worker が拾って解析する（[05](./05-analysis.md)）。
 

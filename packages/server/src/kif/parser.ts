@@ -64,14 +64,24 @@ export interface KifMove {
   usi: string;
 }
 
+/**
+ * 開始日時ヘッダの時刻をどのタイムゾーンとして解釈するか。
+ * KIF 形式にはタイムゾーン欄が無いため、アプリ（署名）ごとに補う。
+ * - JST: 一般的な将棋アプリ（既定）
+ * - UTC: 開始日時を UTC で書き出すアプリ（signature で検出。[detectKifTimezone]）
+ */
+export type KifTimezone = "JST" | "UTC";
+
 /** KIF ヘッダから抽出した対局メタ */
 export interface KifHeader {
   sente: string | null;
   gote: string | null;
   senteDan: number | null;
   goteDan: number | null;
-  /** 対局日時（開始日時ヘッダ由来。JST として解釈） */
+  /** 対局日時（開始日時ヘッダ由来。sourceTz として解釈した絶対時刻） */
   playedAt: Date | null;
+  /** playedAt の解釈に用いたタイムゾーン（署名判定の結果） */
+  sourceTz: KifTimezone;
   /** 手合割の値（例 "平手"）。ヘッダに無ければ null */
   handicap: string | null;
   /** swars 互換の結果コード（例 "GOTE_WIN_CHECKMATE"）。導出不能・中断は null */
@@ -98,28 +108,56 @@ function parsePlayer(value: string): { name: string | null; dan: number | null }
   return { name: trimmed, dan: null };
 }
 
-/** "2026/07/15 15:54:18" 等を Date へ（JST として解釈。swars 経路と揃える） */
-function parseKifPlayedAt(value: string): Date | null {
+/**
+ * 手動貼り付け KIF のうち、開始日時を UTC で書き出すアプリ（App B）の署名。
+ * 実データ観測に基づく指紋で、誤検出（JST のアプリを UTC と誤判定）を避けるため
+ * 十分に絞る。App B の KIF は:
+ *   1. 先頭行が柿木形式コメント `# ---- KIF形式 ----`
+ *   2. `持ち時間：` ヘッダを持つ
+ *   3. JST 系アプリ（例: 終了日時／場所 を書き出すもの）に無い ＝ `終了日時`/`場所` を持たない
+ * の 3 条件をすべて満たす。1 条件だけ（コメント or 持ち時間 単独）では JST 扱いのまま。
+ * これに一致した棋譜のみ開始日時を UTC として解釈する。将来 UTC の別アプリが増えたら
+ * その固有署名をここに足す（未知アプリは既定の JST ＝安全側）。
+ */
+function isUtcSourceKif(kifText: string): boolean {
+  const firstContent =
+    kifText.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  const startsWithKifComment = /^#\s*-+\s*KIF形式\s*-+/.test(firstContent);
+  const hasMochiJikan = /^持ち時間[：:]/m.test(kifText);
+  // JST 系アプリが出す終了日時／場所を持つものは App B ではない（誤検出防止）
+  const hasEndTimeOrPlace = /^(終了日時|場所)[：:]/m.test(kifText);
+  return startsWithKifComment && hasMochiJikan && !hasEndTimeOrPlace;
+}
+
+/** KIF テキストから開始日時の解釈タイムゾーンを判定する（既定 JST） */
+export function detectKifTimezone(kifText: string): KifTimezone {
+  return isUtcSourceKif(kifText) ? "UTC" : "JST";
+}
+
+/** "2026/07/15 15:54:18" 等を Date へ（tz として解釈。swars 経路の JST と揃える） */
+function parseKifPlayedAt(value: string, tz: KifTimezone): Date | null {
   const m = value
     .trim()
     .match(/(\d{4})\/(\d{1,2})\/(\d{1,2})(?:[\s　]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (!m) return null;
   const pad = (s: string) => s.padStart(2, "0");
   const [, y, mo, d, h = "0", mi = "0", s = "0"] = m;
+  const offset = tz === "UTC" ? "+00:00" : "+09:00";
+  const offsetMs = (tz === "UTC" ? 0 : 9) * 60 * 60 * 1000;
   const date = new Date(
-    `${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(s)}+09:00`,
+    `${y}-${pad(mo)}-${pad(d)}T${pad(h)}:${pad(mi)}:${pad(s)}${offset}`,
   );
   if (Number.isNaN(date.getTime())) return null;
   // JS が存在しない日時（2026/02/30・25:00 等）を正規化して受理しないよう、
-  // JST（=UTC+9・DST なし）の各成分が入力と一致するか往復検証する
-  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  // 解釈 tz（DST なし）の各成分が入力と一致するか往復検証する
+  const local = new Date(date.getTime() + offsetMs);
   const matches =
-    jst.getUTCFullYear() === Number(y) &&
-    jst.getUTCMonth() + 1 === Number(mo) &&
-    jst.getUTCDate() === Number(d) &&
-    jst.getUTCHours() === Number(h) &&
-    jst.getUTCMinutes() === Number(mi) &&
-    jst.getUTCSeconds() === Number(s);
+    local.getUTCFullYear() === Number(y) &&
+    local.getUTCMonth() + 1 === Number(mo) &&
+    local.getUTCDate() === Number(d) &&
+    local.getUTCHours() === Number(h) &&
+    local.getUTCMinutes() === Number(mi) &&
+    local.getUTCSeconds() === Number(s);
   return matches ? date : null;
 }
 
@@ -154,16 +192,23 @@ function deriveResult(moveNum: number, marker: string): string | null {
   return `${winner}_WIN_${reason}`;
 }
 
-export function parseKif(kifText: string): ParsedKif {
+/**
+ * KIF テキストを解析する。
+ * @param tzOverride 開始日時の解釈 TZ を明示指定する。省略時は署名から自動判定
+ *   （[detectKifTimezone]）。ユーザーが投入時に TZ を選んだ場合はその値を渡す。
+ */
+export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
   const lines = kifText.split("\n");
   const moves: KifMove[] = [];
   const errors: ParsedKif["errors"] = [];
+  const sourceTz = tzOverride ?? detectKifTimezone(kifText);
   const header: KifHeader = {
     sente: null,
     gote: null,
     senteDan: null,
     goteDan: null,
     playedAt: null,
+    sourceTz,
     handicap: null,
     result: null,
   };
@@ -192,7 +237,7 @@ export function parseKif(kifText: string): ParsedKif {
         header.gote = name;
         header.goteDan = dan;
       } else if (key === "開始日時") {
-        header.playedAt = parseKifPlayedAt(value);
+        header.playedAt = parseKifPlayedAt(value, sourceTz);
       } else if (key === "手合割") {
         header.handicap = value.trim() || null;
       }

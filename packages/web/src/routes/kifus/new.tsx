@@ -10,6 +10,7 @@ function NewKifuPage() {
   const navigate = useNavigate();
   const [title, setTitle] = useState('');
   const [kifText, setKifText] = useState('');
+  const [sourceTz, setSourceTz] = useState<'auto' | 'JST' | 'UTC'>('auto');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -17,7 +18,7 @@ function NewKifuPage() {
     setSubmitting(true);
     try {
       const res = await client.kifus.$post({
-        json: { title: title.trim() || undefined, kifText },
+        json: { title: title.trim() || undefined, kifText, sourceTz },
       });
       if (!res.ok) throw new Error('Failed to create kifu');
       const { id } = await res.json();
@@ -57,6 +58,27 @@ function NewKifuPage() {
             placeholder="KIF形式の棋譜をここに貼り付け..."
             required
           />
+        </label>
+        <label className="form-control w-full max-w-xs">
+          <div className="label">
+            <span className="label-text">開始日時のタイムゾーン</span>
+          </div>
+          <select
+            className="select select-bordered"
+            value={sourceTz}
+            onChange={(e) =>
+              setSourceTz(e.target.value as 'auto' | 'JST' | 'UTC')
+            }
+          >
+            <option value="auto">自動（KIF 署名から判定・不明なら JST）</option>
+            <option value="JST">JST（日本時間）</option>
+            <option value="UTC">UTC（開始日時が UTC のアプリ）</option>
+          </select>
+          <div className="label">
+            <span className="label-text-alt opacity-60">
+              アプリによって開始日時が UTC のことがある。並び順がずれる場合は明示指定する
+            </span>
+          </div>
         </label>
         <button
           type="submit"

@@ -263,6 +263,70 @@ describe("parseKif", () => {
     it("開始日時を JST の Date にする", () => {
       const { header } = parseKif(`開始日時：2026/07/15 15:54:18\n`);
       expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");
+      expect(header.sourceTz).toBe("JST");
+    });
+
+    it("UTC 署名（KIF形式コメント + 持ち時間）の開始日時は UTC として解釈する", () => {
+      // アプリ B は開始日時を UTC で書き出す。JST 決め打ちだと 9h ずれるため署名で判別。
+      const kif = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+手合割：平手
+先手：daiius
+後手：りざーす
+持ち時間：10分+30秒
+   1 ７六歩(77) ( 0:01/00:00:01)
+   2 投了
+`;
+      const { header } = parseKif(kif);
+      expect(header.sourceTz).toBe("UTC");
+      // 14:57 UTC = 05:57Z（＝実際は 23:57 JST の対局）
+      expect(header.playedAt?.toISOString()).toBe("2026-07-17T14:57:00.000Z");
+    });
+
+    it("持ち時間のみ / KIF形式コメントのみでは UTC と判定しない（既定 JST）", () => {
+      expect(
+        parseKif(`開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`).header.sourceTz,
+      ).toBe("JST");
+      expect(
+        parseKif(`# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n`).header.sourceTz,
+      ).toBe("JST");
+    });
+
+    it("終了日時/場所を持つ JST 系アプリは署名が一致しても UTC と判定しない", () => {
+      // KIF形式コメント + 持ち時間 が揃っていても、終了日時/場所があれば App B ではない
+      const withEnd = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+終了日時：2026/07/17 15:10:00
+持ち時間：10分+30秒
+`;
+      expect(parseKif(withEnd).header.sourceTz).toBe("JST");
+      const withPlace = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+場所：-
+持ち時間：10分+30秒
+`;
+      expect(parseKif(withPlace).header.sourceTz).toBe("JST");
+    });
+
+    it("KIF形式コメントが先頭行でない場合は UTC と判定しない", () => {
+      const notFirst = `開始日時：2026/07/17 14:57:00
+# ----  KIF形式  ----
+持ち時間：10分+30秒
+`;
+      expect(parseKif(notFirst).header.sourceTz).toBe("JST");
+    });
+
+    it("tzOverride を渡すと署名判定より優先する（投入時のユーザー選択）", () => {
+      // 署名上は JST の KIF でも、UTC 指定なら UTC 解釈（+9h ずれる）
+      const jstKif = `開始日時：2026/07/15 15:54:18\n`;
+      const asUtc = parseKif(jstKif, "UTC").header;
+      expect(asUtc.sourceTz).toBe("UTC");
+      expect(asUtc.playedAt?.toISOString()).toBe("2026-07-15T15:54:18.000Z");
+      // 署名上は UTC の KIF でも、JST 指定なら JST 解釈
+      const bKif = `# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`;
+      const asJst = parseKif(bKif, "JST").header;
+      expect(asJst.sourceTz).toBe("JST");
+      expect(asJst.playedAt?.toISOString()).toBe("2026-07-17T05:57:00.000Z");
     });
 
     it("存在しない日付は正規化せず null にする", () => {

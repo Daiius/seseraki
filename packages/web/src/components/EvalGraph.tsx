@@ -160,11 +160,14 @@ export function EvalGraph({
                 △
               </text>
 
-              {/* 塗りつぶし（0ラインを基準に上下へ） */}
+              {/* 塗りつぶし（評価値0の中央線を基準に上下へ）。
+                  AreaClosed は y0 未指定だと yScale.range()[0]（＝上端）を基準に閉じるため、
+                  中央線基準にするには y0 を明示する必要がある。 */}
               <AreaClosed<EvalPoint>
                 data={points}
                 x={(p) => toX(p.moveNumber)}
                 y={(p) => toY(p.value)}
+                y0={() => midY}
                 yScale={yScale}
                 className="fill-primary"
                 opacity={0.15}

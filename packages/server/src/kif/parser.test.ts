@@ -275,6 +275,16 @@ describe("parseKif", () => {
       expect(parseKif(`  90 持将棋\n`).header.result).toBe("DRAW_IMPASSE");
       expect(parseKif(`  30 中断\n`).header.result).toBeNull();
     });
+    it("入玉宣言は引き分けでなく宣言側（手番側）の勝ち", () => {
+      // 奇数手 = 先手が宣言 → 先手勝ち
+      expect(parseKif(`  121 入玉宣言\n`).header.result).toBe(
+        "SENTE_WIN_DECLARATION",
+      );
+      // 偶数手 = 後手が宣言 → 後手勝ち
+      expect(parseKif(`  120 入玉宣言\n`).header.result).toBe(
+        "GOTE_WIN_DECLARATION",
+      );
+    });
     it("終局マーカーは errors に入らない（詰み）", () => {
       const r = parseKif(`   1 ７六歩(77)\n  71 詰み\n`);
       expect(r.errors).toEqual([]);

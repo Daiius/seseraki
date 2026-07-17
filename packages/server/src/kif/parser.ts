@@ -119,14 +119,17 @@ function parseKifPlayedAt(value: string): Date | null {
 function deriveResult(moveNum: number, marker: string): string | null {
   if (marker === "中断") return null;
   if (marker === "千日手") return "DRAW_REPETITION";
-  if (marker === "持将棋" || marker === "入玉宣言") return "DRAW_IMPASSE";
+  // 持将棋（点数互角の膠着）は引き分け。入玉宣言（宣言法）は宣言側の勝ちで別物
+  if (marker === "持将棋") return "DRAW_IMPASSE";
 
   const senteToMove = moveNum % 2 === 1; // 奇数手 = 先手番
   const sideToMove = senteToMove ? "SENTE" : "GOTE";
   const opposite = senteToMove ? "GOTE" : "SENTE";
 
-  // 反則勝ち: 指す側が勝ち。それ以外（詰み/投了/切れ負け/反則負け）は指す側が負け
-  const winner = marker === "反則勝ち" ? sideToMove : opposite;
+  // 入玉宣言・反則勝ち は指す側（宣言/主張した側）が勝ち。
+  // それ以外（詰み/投了/切れ負け/反則負け）は指す側が負け
+  const winner =
+    marker === "入玉宣言" || marker === "反則勝ち" ? sideToMove : opposite;
   const reason =
     marker === "詰み"
       ? "CHECKMATE"
@@ -134,7 +137,9 @@ function deriveResult(moveNum: number, marker: string): string | null {
         ? "RESIGN"
         : marker === "切れ負け" || marker === "時間切れ"
           ? "TIMEOUT"
-          : "ILLEGAL"; // 反則勝ち / 反則負け / 反則
+          : marker === "入玉宣言"
+            ? "DECLARATION"
+            : "ILLEGAL"; // 反則勝ち / 反則負け / 反則
   return `${winner}_WIN_${reason}`;
 }
 

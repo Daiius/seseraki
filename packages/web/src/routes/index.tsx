@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from '../lib/honoClient';
+import { resolveUserSide } from '../lib/self';
 
 type JobStatus =
   | { status: 'idle' }
@@ -55,7 +56,6 @@ function KifuListPage() {
   const [importResult, setImportResult] = useState<string | null>(null);
   const [jobStartedAt, setJobStartedAt] = useState<string | null>(null);
 
-  const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
   const { data: jobStatus } = useSWR<JobStatus>(
@@ -166,11 +166,12 @@ function KifuListPage() {
               <tbody>
                 {kifus.map((kifu) => {
                   const r = kifu.result;
-                  const isSente = swarsUserId ? kifu.sente === swarsUserId : false;
-                  const isGote = swarsUserId ? kifu.gote === swarsUserId : false;
+                  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
+                  const isSente = userSide === 'sente';
+                  const isGote = userSide === 'gote';
                   const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));
                   const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
-                  const showResultBadge = swarsUserId && (isSente || isGote);
+                  const showResultBadge = isSente || isGote;
                   return (
                     <tr key={kifu.id} className="hover">
                       <td>

@@ -77,13 +77,18 @@ pnpm dev    # docker compose watch で全サービス起動
 ```bash
 VITE_API_URL=<api-url> \
 VITE_SWARS_USER_ID=<swars-user-id> \
+VITE_SELF_NAMES=<name1,name2,...> \
 pnpm --filter web build
 ```
 
-成果物は `packages/web/dist/` に出力される。
+成果物は `packages/web/dist/` に出力される。`VITE_*` は**ビルド時に埋め込まれる**ため、
+値を変えたら再ビルドが必要（実行時の環境変数変更では反映されない）。
 
 - `VITE_API_URL`: server の URL（省略時は `/api`、同一オリジンで proxy 配信する場合）
-- `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID
+- `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID（取得 API に渡す単一アカウント ID）
+- `VITE_SELF_NAMES`: 自分の対局者名の候補（カンマ区切り・任意）。将棋アプリごとに表示名が
+  異なる場合に列挙し、KIF の対局者名がいずれかに一致すれば自分とみなす。`VITE_SWARS_USER_ID`
+  も自動で候補に含む。
 
 ### server (Docker イメージ)
 

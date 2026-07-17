@@ -8,6 +8,7 @@ import {
   type PieceKind,
 } from '../lib/board';
 import { turnSymbol, formatScore, detectBlunders, toSenteEval } from '../lib/usi';
+import { resolveUserSide } from '../lib/self';
 import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
@@ -177,12 +178,7 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const blunders = detectBlunders(sortedAnalyses, usiMoves);
   const positions = buildPositions(usiMoves);
-  const swarsUserId = import.meta.env.VITE_SWARS_USER_ID as string | undefined;
-  const userSide = swarsUserId
-    ? swarsUserId === sente ? 'sente' as const
-    : swarsUserId === gote ? 'gote' as const
-    : null
-    : null;
+  const { side: userSide, ambiguous: userAmbiguous } = resolveUserSide(sente, gote);
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -286,6 +282,12 @@ export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
 
   return (
     <div className="flex flex-col">
+      {userAmbiguous && (
+        <div className="alert alert-warning mb-2 text-sm">
+          両対局者とも自分の名前候補に一致しています（先手={sente} / 後手={gote}）。
+          自分視点の表示（盤の向き・悪手ハイライト等）は無効化しました。
+        </div>
+      )}
       {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
       <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
       {/* 盤面 */}

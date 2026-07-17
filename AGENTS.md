@@ -57,14 +57,24 @@
 ## 開発コマンド
 
 ```bash
-pnpm dev          # docker compose watch で全サービス起動（db, server, web, worker）
+pnpm dev          # docker compose up --build --watch で全サービス起動（db, server, web, worker）
 pnpm typecheck    # 全パッケージ tsc --noEmit
 pnpm build        # 全パッケージのビルド
-pnpm db:migrate   # スキーマ変更を DB に反映（drizzle-kit push --force）
+pnpm db:push      # dev: スキーマを DB に強制同期（使い捨て DB 向け・drizzle-kit push --force）
+pnpm db:generate  # schema 差分から drizzle/ にバージョン管理マイグレーションを生成
+pnpm db:migrate   # マイグレーション適用（未適用分のみ・接続先は呼び出し環境の DB_HOST/DB_PORT/MYSQL_*）
+pnpm db:baseline  # 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証）
 pnpm db:seed      # サンプルデータ投入（初回のみ）
 pnpm --filter server test   # server のユニットテスト（vitest）
 pnpm --filter worker test   # worker のユニットテスト（vitest）
 ```
+
+> **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
+> にバージョン管理、`db:generate` で生成し `db:migrate` で未適用分だけ適用）。既存 DB を初めて管理下に載せる時は一度だけ
+> `db:baseline` で 0000 を適用済み登録する（対象 DB に 0000 のテーブル・カラムが実在するかを検証し、空/取り違え/drift なら中止）。
+> **`db:migrate`/`db:baseline`/`db:generate` は接続先を呼び出し環境の `DB_HOST`/`DB_PORT`/`MYSQL_*` から取る**（本番は prod 資格情報を
+> export して実行）。dev DB に対して試すときは `.env.database` を読む **`db:migrate:dev` / `db:baseline:dev`** を使う。
+> 本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
 
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

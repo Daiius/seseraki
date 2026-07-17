@@ -6,7 +6,7 @@
 > 本章は**理想スキーマ**を定め、**PRD が正典**（[README](./README.md) 時制方針）。現行実装の型・制約は
 > Drizzle（`packages/server/src/db`）を参照し、PRD との差（例: `commentaries` は現行未実装の gap）は
 > 各所で「計画中」「gap」と明示する。カラム名・enum は本章を正とする。
-> スキーマ変更は `pnpm db:migrate`（`drizzle-kit push --force`）で反映する（[02](./02-architecture.md)）。
+> スキーマ変更は dev では `pnpm db:push`（強制同期）、本番では `pnpm db:generate` → `pnpm db:migrate`（バージョン管理マイグレーション）で反映する（[02](./02-architecture.md) §6）。
 
 ---
 

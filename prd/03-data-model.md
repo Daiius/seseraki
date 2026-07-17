@@ -55,6 +55,8 @@ kifus
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
   再試行は `POST /kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
+  **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
+  完了 submit は error なし時のみ適用する（行ロック下で相互排他。重複取得/複数 worker でも矛盾状態を作らない）。
 - **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /worker/kifus` は現在の revision を返し、worker は
   `POST /worker/analyses` / `POST /worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
   結果/失敗を適用する。これにより、reanalyze で状態をリセットした後に**実行中だった旧解析の報告が新状態を上書きするのを防ぐ**

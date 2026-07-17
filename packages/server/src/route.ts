@@ -320,11 +320,18 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { error, revision } = c.req.valid('json');
-      // 取得時と同一世代のときだけ記録（reanalyze で世代が進んでいたら旧結果は捨てる）
+      // 同一世代 かつ 未完了 のときだけ記録（compare-and-set・単文で原子的）。
+      // completed 済みには error を立てない → completedAt と analysisError は排他になる。
       const result = await db
         .update(kifus)
         .set({ analysisError: error })
-        .where(and(eq(kifus.id, id), eq(kifus.analysisRevision, revision)));
+        .where(
+          and(
+            eq(kifus.id, id),
+            eq(kifus.analysisRevision, revision),
+            isNull(kifus.analysisCompletedAt),
+          ),
+        );
       const applied = result[0].affectedRows > 0;
       return c.json({ ok: true, applied }, 201);
     },
@@ -353,11 +360,17 @@ const route = app
         // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
         // 世代が進むのを防ぐ）。reanalyze も kifus を先にロックするためデッドロックしない。
         const [current] = await tx
-          .select({ revision: kifus.analysisRevision })
+          .select({
+            revision: kifus.analysisRevision,
+            error: kifus.analysisError,
+          })
           .from(kifus)
           .where(eq(kifus.id, kifuId))
           .for('update');
-        if (!current || current.revision !== revision) return;
+        // 同一世代 かつ 失敗記録なし のときだけ適用。既に error が立っていれば結果は保存しない
+        // → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
+        if (!current || current.revision !== revision || current.error !== null)
+          return;
         applied = true;
 
         await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, kifuId));

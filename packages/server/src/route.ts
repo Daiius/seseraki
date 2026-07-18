@@ -22,7 +22,7 @@ import { parseKif, type KifTimezone } from './kif/parser.js';
 /** 投入時の TZ 指定。'auto' は KIF 署名から自動判定 */
 export type SourceTzChoice = 'auto' | KifTimezone;
 
-export const app = new Hono();
+export const app = new Hono().basePath('/api');
 
 const corsOrigins = (process.env.CORS_ORIGINS ?? '')
   .split(',')

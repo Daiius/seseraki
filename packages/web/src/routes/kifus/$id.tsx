@@ -19,7 +19,7 @@ import { KifuMemo } from '../../components/KifuMemo';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
-    const res = await client.kifus[':id'].$get({
+    const res = await client.api.kifus[':id'].$get({
       param: { id: params.id },
     });
     if (!res.ok) throw new Error('Kifu not found');
@@ -63,7 +63,7 @@ function KifuDetailPage() {
 
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
-    const res = await client.kifus[':id'].$delete({
+    const res = await client.api.kifus[':id'].$delete({
       param: { id: String(kifu.id) },
     });
     if (res.ok) navigate({ to: '/' });
@@ -72,7 +72,7 @@ function KifuDetailPage() {
   // kifText を再変換して解析状態をリセットし、worker に拾い直させる。
   // パーサ修正後の既存棋譜の復旧・失敗棋譜の再試行を兼ねる。
   const handleReanalyze = async () => {
-    const res = await client.kifus[':id'].reanalyze.$post({
+    const res = await client.api.kifus[':id'].reanalyze.$post({
       param: { id: String(kifu.id) },
     });
     if (res.ok) router.invalidate();

@@ -105,6 +105,9 @@ services:
       - .env.web
     environment:
       TZ: "Asia/Tokyo"
+      # 同一オリジン配信: ブラウザは /api を叩き、Vite が compose 内の server へ素通しで転送。
+      # server は basePath('/api') なのでパスは書き換えない。.env.web の VITE_API_URL は不要。
+      DEV_API_TARGET: "http://server:4000"
     command: pnpm --filter web dev --host
     ports:
       - "5173:5173"

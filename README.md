@@ -19,7 +19,7 @@ sequenceDiagram
     participant WK as 棋譜解析
 
     U->>W: 棋譜を閲覧・登録
-    W->>S: /api/* または VITE_API_URL
+    W->>S: /api/*（同一オリジン）
     S->>DB: 読み書き
 
     U->>W: 棋譜詳細を表示
@@ -72,10 +72,13 @@ pnpm dev    # docker compose watch で全サービス起動
 
 ## 本番ビルド
 
+web / API は**同一オリジン**で配信する。ブラウザは常に同一オリジンの `/api` を叩き、
+リバースプロキシが `/api` を**書き換えず素通し**で server へ渡す（server は `basePath('/api')`）。
+dev の Vite proxy と同じ規約なので、環境ごとの差が出ない。
+
 ### web (静的ファイルを nginx 等に配置)
 
 ```bash
-VITE_API_URL=<api-url> \
 VITE_SWARS_USER_ID=<swars-user-id> \
 VITE_SELF_NAMES=<name1,name2,...> \
 pnpm --filter web build
@@ -84,11 +87,26 @@ pnpm --filter web build
 成果物は `packages/web/dist/` に出力される。`VITE_*` は**ビルド時に埋め込まれる**ため、
 値を変えたら再ビルドが必要（実行時の環境変数変更では反映されない）。
 
-- `VITE_API_URL`: server の URL（省略時は `/api`、同一オリジンで proxy 配信する場合）
+- `VITE_API_URL`: 通常は**未設定**でよい（同一オリジンの `/api` にフォールバック）。
+  別オリジンの server を直接叩く特殊構成のときだけ設定する。
 - `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID（取得 API に渡す単一アカウント ID）
 - `VITE_SELF_NAMES`: 自分の対局者名の候補（カンマ区切り・任意）。将棋アプリごとに表示名が
   異なる場合に列挙し、KIF の対局者名がいずれかに一致すれば自分とみなす。`VITE_SWARS_USER_ID`
   も自動で候補に含む。
+
+### リバースプロキシ (nginx 例)
+
+```nginx
+# /api/* は素通しで server へ（末尾スラッシュを付けない＝/api を strip しない）
+location /api/ {
+    proxy_pass http://server:4000;
+}
+# それ以外は SPA（静的成果物）を配信し、未知パスは index.html へフォールバック
+location / {
+    root /var/www/seseraki;   # packages/web/dist を配置
+    try_files $uri /index.html;
+}
+```
 
 ### server (Docker イメージ)
 

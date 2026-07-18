@@ -3,13 +3,16 @@ import type { AppType } from "server";
 import type { KifuAnalysisResult } from "../kifu-analysis.js";
 
 export function createClient(baseUrl: string, apiKey: string) {
+  // server は basePath('/api') 配下。worker は server を直叩きするので baseUrl は
+  // SERVER_URL のまま、呼び出しで `client.api.worker.*` と basePath を明示する
+  // （実 URL は `${SERVER_URL}/api/worker/...` になる）。
   const client = hc<AppType>(baseUrl, {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   return {
     /** 未解析の最古の棋譜を1件取得（なければ null） */
     async fetchNextKifu() {
-      const res = await client.worker.kifus.$get();
+      const res = await client.api.worker.kifus.$get();
       if (!res.ok) throw new Error(`Failed to fetch kifus: ${res.status}`);
       return await res.json();
     },
@@ -20,7 +23,7 @@ export function createClient(baseUrl: string, apiKey: string) {
       revision: number,
       result: KifuAnalysisResult,
     ) {
-      const res = await client.worker.analyses.$post({
+      const res = await client.api.worker.analyses.$post({
         json: {
           kifuId,
           revision,
@@ -43,7 +46,7 @@ export function createClient(baseUrl: string, apiKey: string) {
 
     /** 解析失敗（棋譜起因）を報告し analysisError を記録させる（revision = 取得時の解析世代） */
     async reportError(kifuId: number, revision: number, error: string) {
-      const res = await client.worker.kifus[":id"].error.$post({
+      const res = await client.api.worker.kifus[":id"].error.$post({
         param: { id: String(kifuId) },
         json: { error, revision },
       });

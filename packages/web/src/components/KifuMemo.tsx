@@ -18,7 +18,7 @@ export function KifuMemo({
     setError(null);
     setSaving(true);
     try {
-      const res = await client.kifus[':id'].$patch({
+      const res = await client.api.kifus[':id'].$patch({
         param: { id: String(kifuId) },
         json: { memo: draft },
       });

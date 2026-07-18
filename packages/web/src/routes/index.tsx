@@ -24,7 +24,7 @@ type JobStatus =
     };
 
 const jobStatusFetcher = async (): Promise<JobStatus> => {
-  const res = await client.swars.import.status.$get();
+  const res = await client.api.swars.import.status.$get();
   if (!res.ok) throw new Error(`status ${res.status}`);
   return (await res.json()) as JobStatus;
 };
@@ -36,7 +36,7 @@ export const Route = createFileRoute('/')({
   loaderDeps: ({ search }) => ({ page: search.page ?? 1 }),
   loader: async ({ deps: { page } }) => {
     try {
-      const res = await client.kifus.$get({ query: { page } });
+      const res = await client.api.kifus.$get({ query: { page } });
       if (!res.ok) return { kifus: [], pagination: null, error: `サーバーエラー (${res.status})` };
       const data = await res.json();
       return { kifus: data.kifus, pagination: data.pagination, error: null };
@@ -101,7 +101,7 @@ function KifuListPage() {
     setImportResult(null);
     setIsPolling(true);
     try {
-      const res = await client.swars.import.$post({ json: { userId, pages: 1 } });
+      const res = await client.api.swars.import.$post({ json: { userId, pages: 1 } });
       if (!res.ok) {
         setImportResult(`取得失敗 (${res.status})`);
         setIsPolling(false);

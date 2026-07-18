@@ -17,7 +17,7 @@ function NewKifuPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await client.kifus.$post({
+      const res = await client.api.kifus.$post({
         json: { title: title.trim() || undefined, kifText, sourceTz },
       });
       if (!res.ok) throw new Error('Failed to create kifu');

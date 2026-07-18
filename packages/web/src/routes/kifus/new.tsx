@@ -35,7 +35,7 @@ function NewKifuPage() {
         <label className="form-control w-full">
           <div className="label">
             <span className="label-text">タイトル</span>
-            <span className="label-text-alt opacity-60">
+            <span className="label-text-alt whitespace-normal text-right opacity-60">
               任意・空なら「先手 vs 後手」を自動生成
             </span>
           </div>
@@ -74,7 +74,7 @@ function NewKifuPage() {
             <option value="JST">JST（日本時間）</option>
             <option value="UTC">UTC（開始日時が UTC のアプリ）</option>
           </select>
-          <div className="label">
+          <div className="label whitespace-normal">
             <span className="label-text-alt opacity-60">
               アプリによって開始日時が UTC のことがある。並び順がずれる場合は明示指定する
             </span>

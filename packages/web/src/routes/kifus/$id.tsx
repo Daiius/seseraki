@@ -87,7 +87,7 @@ function KifuDetailPage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div>
       <div className="flex items-center gap-4 mb-4">
         <Link to="/" className="btn btn-ghost btn-sm">
           ← 一覧

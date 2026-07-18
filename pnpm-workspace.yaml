@@ -2,3 +2,7 @@ packages:
   - "packages/*"
 allowBuilds:
   esbuild: true
+# pnpm 10+ は package.json の "pnpm" フィールドを読まないため overrides はここに置く。
+# @azure/msal 経由で入る古い uuid(8.x, deprecated) を 14 系へ引き上げる。
+overrides:
+  uuid@<14: "^14.0.0"

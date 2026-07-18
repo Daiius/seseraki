@@ -94,19 +94,12 @@ pnpm --filter web build
   異なる場合に列挙し、KIF の対局者名がいずれかに一致すれば自分とみなす。`VITE_SWARS_USER_ID`
   も自動で候補に含む。
 
-### リバースプロキシ (nginx 例)
+### リバースプロキシ
 
-```nginx
-# /api/* は素通しで server へ（末尾スラッシュを付けない＝/api を strip しない）
-location /api/ {
-    proxy_pass http://server:4000;
-}
-# それ以外は SPA（静的成果物）を配信し、未知パスは index.html へフォールバック
-location / {
-    root /var/www/seseraki;   # packages/web/dist を配置
-    try_files $uri /index.html;
-}
-```
+同一オリジン配信の契約は「**`/api` を strip せず（書き換えず）そのまま server へ転送し、
+それ以外は SPA（静的成果物）を配信して未知パスは index.html へフォールバックする**」ことのみ。
+具体的なプロキシ設定（location・upstream・静的配置パス・TLS など）は公開リポには置かず、
+ローカル運用メモ（gitignore 対象の `.claude-personal/`）で管理する。
 
 ### server (Docker イメージ)
 

@@ -71,7 +71,11 @@
 - **KIF→USI 変換は server が棋譜登録時に一度だけ行う**（[04](./04-ingestion.md)）。変換済み `usiMoves` を DB に保持し、
   worker と Web 盤面はこれを消費する。worker は KIF パーサーを持たない（[05](./05-analysis.md)）。
 - **解析結果の登録はトランザクション**で行い、既存データは DELETE → 再投入で冪等に上書きする（[03](./03-data-model.md) / [04](./04-ingestion.md)）。
-- web は Vite dev server が `/api` プレフィックスを除去しつつ server にプロキシする（開発時）。
+- **web / API は同一オリジン配信**。ブラウザは常に同一オリジンの `/api` を叩き、server が
+  `basePath('/api')` で `/api/...` を**本来の形として所有**する。各環境のプロキシ（開発時は Vite の
+  `server.proxy`、本番はリバースプロキシ）は **`/api` を書き換えず素通し**で server へ渡す（strip/rewrite
+  しない）。これにより dev / 本番でパスの扱いが揃い、環境差が出ない。worker は server を直叩きするため
+  `${SERVER_URL}/api/worker/...` を叩く。同一オリジンのため CORS も不要。
 
 ## 5. デプロイ姿勢
 

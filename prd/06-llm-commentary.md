@@ -36,7 +36,7 @@
 - プロンプト生成は**純関数**（React 非依存・I/O 非依存）で、**`shared` パッケージに置く**
   （入出力は独立した型 `KifuExportInput` / 生成 Markdown。[02](./02-architecture.md) §3.2）。
   盤面追跡・USI→日本語・悪手判定といった依存ロジックも `shared` に集約する（[05](./05-analysis.md)）。
-- **server がプロンプト生成エンドポイントを提供する**（例 `GET /kifus/:id/commentary-prompt`）。
+- **server がプロンプト生成エンドポイントを提供する**（例 `GET /api/kifus/:id/commentary-prompt`）。
   server は `shared` の生成関数を呼んで Markdown を返す。
 - **web の「LLM プロンプトをコピー」ボタンはこのエンドポイントを叩く**（自前生成せず、書式を単一真実にする）。
   ※ 現状は web が `packages/web/src/kifu-export/` で自前生成しており、この移設が gap（[08](./08-roadmap.md)）。

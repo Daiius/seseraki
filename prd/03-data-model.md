@@ -62,7 +62,7 @@ kifus
   **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
   完了 submit は error なし時のみ適用する（行ロック下で相互排他。重複取得/複数 worker でも矛盾状態を作らない）。
 - **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /api/worker/kifus` は現在の revision を返し、worker は
-  `POST /api/worker/analyses` / `POST /api/worker/api/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
+  `POST /api/worker/analyses` / `POST /api/worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
   結果/失敗を適用する。これにより、reanalyze で状態をリセットした後に**実行中だった旧解析の報告が新状態を上書きするのを防ぐ**
   （旧成功で completed 復活・旧失敗で error 復活を弾く。[05](./05-analysis.md) §1.1a）。
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み・KIF 貼り付けの両経路とも登録時に抽出**して埋める

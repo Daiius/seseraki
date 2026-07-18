@@ -12,10 +12,11 @@
   秘密として運用）。照合は `crypto.timingSafeEqual` で**定数時間比較**。
 - cookie は **HMAC 署名 + 発行時刻埋め込みで stateless**。**30 日固定有効期限**（スライディングなし）。
   署名鍵は `SESSION_SECRET`。
-- cookie 属性: `HttpOnly; SameSite=Lax`、本番は `Secure`、`Path=/`（既定。`COOKIE_SECURE` / `COOKIE_PATH`
-  env で切替）。web と `/api` は**同一オリジン配信**なので Path は両者を包含する必要がある。サブパス配信時は
-  web と `/api` の**共通プレフィックス**（例 `/seseraki`）を `COOKIE_PATH` に設定する（`/api` だけ・SPA だけを
-  指す値だと cookie が届かずログイン直後から 401 になる）。
+- cookie 属性: `HttpOnly; SameSite=Lax`、本番は `Secure`、**`Path=/` 固定**（`COOKIE_SECURE` / `COOKIE_PATH`
+  env で切替）。現在の配信契約（web は origin 直下、API は origin 直下の `/api`）では `/` 以外にすると web か
+  `/api` の一方に cookie が届かずログイン直後から 401 になる。サブパス配信を正式支援するには、web と API を
+  同一プレフィックス下（例 `/seseraki` と `/seseraki/api`）へ置く URL・proxy 契約と client base URL の対応が
+  別途必要（現状は未対応）。
 
 ### 認証 API
 

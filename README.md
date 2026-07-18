@@ -23,7 +23,7 @@ sequenceDiagram
     S->>DB: 読み書き
 
     U->>W: 棋譜詳細を表示
-    W->>S: GET /kifus/:id
+    W->>S: GET /api/kifus/:id
     S-->>W: 棋譜 + 解析結果
     W-->>U: 将棋盤<br>評価値グラフ<br>候補手
 
@@ -42,11 +42,11 @@ sequenceDiagram
     participant E as yaneuraou<br/>+ 水匠5 + 定跡
 
     loop ポーリング
-        WK->>S: GET /worker/kifus (API_KEY)
+        WK->>S: GET /api/worker/kifus (API_KEY)
         S-->>WK: 未解析の棋譜
         WK->>E: USI 通信で解析
         E-->>WK: 評価値<br>候補手<br>読み筋
-        WK->>S: POST /worker/analyses
+        WK->>S: POST /api/worker/analyses
         S->>DB: 解析結果を保存
     end
 

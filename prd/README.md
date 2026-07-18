@@ -55,7 +55,7 @@
 
 - 秘密情報（`.env*`・API_KEY・DB 資格情報・session cookie の値）。
 - 本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ構成）。PRD は**姿勢のみ**記述する。
-- **`swars` はコードに実在するコードネーム**（`swarsGameKey`・`/swars/import`・`SWARS_*` 環境変数等）。
+- **`swars` はコードに実在するコードネーム**（`swarsGameKey`・`/api/swars/import`・`SWARS_*` 環境変数等）。
   PRD でも**実装と一致させて `swars` 表記を用いる**（識別子・エンドポイント・環境変数名を消して実装と乖離させない）。
   一方で **swars の正式名称・取得の詳細な仕組み・アクセス姿勢・資格情報**は公開文書に書かず、gitignore 対象の
   **`.claude-personal/`** に置き「存在すれば参照」する。

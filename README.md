@@ -19,11 +19,11 @@ sequenceDiagram
     participant WK as 棋譜解析
 
     U->>W: 棋譜を閲覧・登録
-    W->>S: /api/* または VITE_API_URL
+    W->>S: /api/*（同一オリジン）
     S->>DB: 読み書き
 
     U->>W: 棋譜詳細を表示
-    W->>S: GET /kifus/:id
+    W->>S: GET /api/kifus/:id
     S-->>W: 棋譜 + 解析結果
     W-->>U: 将棋盤<br>評価値グラフ<br>候補手
 
@@ -42,11 +42,11 @@ sequenceDiagram
     participant E as yaneuraou<br/>+ 水匠5 + 定跡
 
     loop ポーリング
-        WK->>S: GET /worker/kifus (API_KEY)
+        WK->>S: GET /api/worker/kifus (API_KEY)
         S-->>WK: 未解析の棋譜
         WK->>E: USI 通信で解析
         E-->>WK: 評価値<br>候補手<br>読み筋
-        WK->>S: POST /worker/analyses
+        WK->>S: POST /api/worker/analyses
         S->>DB: 解析結果を保存
     end
 
@@ -72,10 +72,13 @@ pnpm dev    # docker compose watch で全サービス起動
 
 ## 本番ビルド
 
+web / API は**同一オリジン**で配信する。ブラウザは常に同一オリジンの `/api` を叩き、
+リバースプロキシが `/api` を**書き換えず素通し**で server へ渡す（server は `basePath('/api')`）。
+dev の Vite proxy と同じ規約なので、環境ごとの差が出ない。
+
 ### web (静的ファイルを nginx 等に配置)
 
 ```bash
-VITE_API_URL=<api-url> \
 VITE_SWARS_USER_ID=<swars-user-id> \
 VITE_SELF_NAMES=<name1,name2,...> \
 pnpm --filter web build
@@ -84,11 +87,19 @@ pnpm --filter web build
 成果物は `packages/web/dist/` に出力される。`VITE_*` は**ビルド時に埋め込まれる**ため、
 値を変えたら再ビルドが必要（実行時の環境変数変更では反映されない）。
 
-- `VITE_API_URL`: server の URL（省略時は `/api`、同一オリジンで proxy 配信する場合）
+- `VITE_API_URL`: 通常は**未設定**でよい（同一オリジンの `/api` にフォールバック）。
+  別オリジンの server を直接叩く特殊構成のときだけ設定する。
 - `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID（取得 API に渡す単一アカウント ID）
 - `VITE_SELF_NAMES`: 自分の対局者名の候補（カンマ区切り・任意）。将棋アプリごとに表示名が
   異なる場合に列挙し、KIF の対局者名がいずれかに一致すれば自分とみなす。`VITE_SWARS_USER_ID`
   も自動で候補に含む。
+
+### リバースプロキシ
+
+同一オリジン配信の契約は「**`/api` を strip せず（書き換えず）そのまま server へ転送し、
+それ以外は SPA（静的成果物）を配信して未知パスは index.html へフォールバックする**」ことのみ。
+具体的なプロキシ設定（location・upstream・静的配置パス・TLS など）は公開リポには置かず、
+ローカル運用メモ（gitignore 対象の `.claude-personal/`）で管理する。
 
 ### server (Docker イメージ)
 

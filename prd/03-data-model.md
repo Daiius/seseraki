@@ -43,7 +43,7 @@ kifus
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
-├── memo: text?                         -- ユーザー自由記述メモ（PATCH /kifus/:id で編集）
+├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 ```
@@ -58,16 +58,16 @@ kifus
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
-  再試行は `POST /kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
+  再試行は `POST /api/kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
   **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
   完了 submit は error なし時のみ適用する（行ロック下で相互排他。重複取得/複数 worker でも矛盾状態を作らない）。
-- **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /worker/kifus` は現在の revision を返し、worker は
-  `POST /worker/analyses` / `POST /worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
+- **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /api/worker/kifus` は現在の revision を返し、worker は
+  `POST /api/worker/analyses` / `POST /api/worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
   結果/失敗を適用する。これにより、reanalyze で状態をリセットした後に**実行中だった旧解析の報告が新状態を上書きするのを防ぐ**
   （旧成功で completed 復活・旧失敗で error 復活を弾く。[05](./05-analysis.md) §1.1a）。
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み・KIF 貼り付けの両経路とも登録時に抽出**して埋める
   （KIF 経路は `result` を終局マーカー＋手番 parity から導出。[04](./04-ingestion.md) §3）。取れなければ null。
-- **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
+- **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /api/kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
 
 ## 3. `moveAnalyses`（局面ごとの解析）
 

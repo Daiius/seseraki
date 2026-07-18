@@ -6,7 +6,7 @@ export function checkSession(): Promise<boolean> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
       try {
-        const res = await client.auth.me.$get();
+        const res = await client.api.auth.me.$get();
         return res.ok;
       } catch {
         return false;
@@ -17,12 +17,12 @@ export function checkSession(): Promise<boolean> {
 }
 
 export async function login(username: string, password: string): Promise<boolean> {
-  const res = await client.auth.login.$post({ json: { username, password } });
+  const res = await client.api.auth.login.$post({ json: { username, password } });
   sessionPromise = res.ok ? Promise.resolve(true) : null;
   return res.ok;
 }
 
 export async function logout(): Promise<void> {
-  await client.auth.logout.$post();
+  await client.api.auth.logout.$post();
   sessionPromise = Promise.resolve(false);
 }

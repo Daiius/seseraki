@@ -95,12 +95,12 @@
 
 `pnpm dev`（`docker compose up --build --watch`）で全サービスを起動する。
 
-| サービス | ポート | 備考 |
-|---|---|---|
-| db | 3306 | MySQL 8.4, named volume で永続 |
-| server | 4000 | `.env.database` + `.env.server` |
-| web | 5173 | Vite dev server, `.env.web` |
-| worker | - | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
+| サービス | ポート | ホスト公開 | 備考 |
+|---|---|---|---|
+| db | 3306 | なし（`scripts/db-forward.sh` で都度 forward） | MySQL 8.4, named volume で永続 |
+| server | 4000 | なし（web の `/api` proxy・compose 網内で到達） | `.env.database` + `.env.server` |
+| web | 5173 | あり（唯一の外向き口。remote は `127.0.0.1:<port>`） | Vite dev server, `.env.web` |
+| worker | - | なし | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
 
 - ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 - **主要コマンド**:
@@ -129,5 +129,9 @@
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
   - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
+- **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
+  db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。
 - **Docker 外で worker を動かす**場合は `packages/worker/.env.example` を `.env` にコピー。`USE_MOCK=true` で
-  エンジンなしのモック動作が可能（[05](./05-analysis.md)）。
+  エンジンなしのモック動作が可能（[05](./05-analysis.md)）。server はホスト公開しないため、接続先
+  `SERVER_URL` は **web の公開口＝`/api` proxy**（`http://localhost:5173`。worker は `${SERVER_URL}/api/worker/...`
+  を叩くので proxy 経由で server に届く）に向ける。

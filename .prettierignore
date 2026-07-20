@@ -1,0 +1,3 @@
+# Markdown（PRD/README 等）は手管理。日本語散文＋`API_KEY` のような bare underscore を
+# prettier が強調記法と誤認して識別子を壊す（例: API_KEY→API*KEY）ため、整形対象外にする。
+*.md

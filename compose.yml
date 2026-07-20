@@ -2,13 +2,13 @@ services:
   db:
     image: mysql:8.4
     environment:
-      TZ: "Asia/Tokyo"
+      TZ: 'Asia/Tokyo'
     env_file:
       - .env.database
     volumes:
       - db-data:/var/lib/mysql
-    ports:
-      - "3306:3306"
+    # host には公開しない（compose 網内からのみ到達）。ホスト実行の db ツール
+    # （pnpm db:push / db:seed / *:dev）は scripts/db-forward.sh が都度 port-forward する。
     cap_add:
       - SYS_NICE
     healthcheck:
@@ -45,15 +45,20 @@ services:
       - .env.database
       - .env.server
     environment:
-      TZ: "Asia/Tokyo"
+      TZ: 'Asia/Tokyo'
+      # https 配信時（リモート = Cloudflare が終端）は secure cookie を強制。
+      # ローカルは既定 false。remote は .env.remote で COOKIE_SECURE=true を渡す。
+      COOKIE_SECURE: '${COOKIE_SECURE:-false}'
     command: pnpm --filter server start
     depends_on:
       db:
         condition: service_healthy
+    # host には公開しない。ブラウザは web(Vite) の /api proxy 経由で server に届き
+    # （DEV_API_TARGET=http://server:4000）、compose 内 worker も compose 網内で
+    # server:4000 に繋ぐ。Docker 外 worker を使う場合は SERVER_URL を web の /api proxy
+    # （http://localhost:5173）へ向ける（prd/02 §6）。
     expose:
-      - "4000"
-    ports:
-      - "4000:4000"
+      - '4000'
     develop:
       watch:
         - action: sync+restart
@@ -62,8 +67,8 @@ services:
           ignore:
             - node_modules/
             - dist/
-            - "*.tsbuildinfo"
-            - "*.log"
+            - '*.tsbuildinfo'
+            - '*.log'
         - action: rebuild
           path: pnpm-lock.yaml
 
@@ -75,7 +80,7 @@ services:
     env_file:
       - .env.worker
     environment:
-      TZ: "Asia/Tokyo"
+      TZ: 'Asia/Tokyo'
     cpus: 1
     command: pnpm --filter worker start
     depends_on:
@@ -89,8 +94,8 @@ services:
           ignore:
             - node_modules/
             - dist/
-            - "*.tsbuildinfo"
-            - "*.log"
+            - '*.tsbuildinfo'
+            - '*.log'
             - Dockerfile
             - Dockerfile.engine
         - action: rebuild
@@ -104,13 +109,18 @@ services:
     env_file:
       - .env.web
     environment:
-      TZ: "Asia/Tokyo"
+      TZ: 'Asia/Tokyo'
       # 同一オリジン配信: ブラウザは /api を叩き、Vite が compose 内の server へ素通しで転送。
       # server は basePath('/api') なのでパスは書き換えない。.env.web の VITE_API_URL は不要。
-      DEV_API_TARGET: "http://server:4000"
+      DEV_API_TARGET: 'http://server:4000'
+      # リモート公開時のみ設定（vite.config.ts が allowedHosts / HMR wss:443 を条件付与）。
+      # ローカルは localhost（＝リモート差分なし）。
+      DEV_ALLOWED_HOST: '${DEV_ALLOWED_HOST:-localhost}'
     command: pnpm --filter web dev --host
+    # ローカルは 5173 を公開。リモートは .env.remote の WEB_BIND=127.0.0.1:<port> で
+    # cloudflared 向けに 127.0.0.1 の1ポートだけ公開する。
     ports:
-      - "5173:5173"
+      - '${WEB_BIND:-5173}:5173'
     depends_on:
       - server
     develop:
@@ -121,8 +131,8 @@ services:
           ignore:
             - node_modules/
             - dist/
-            - "*.tsbuildinfo"
-            - "*.log"
+            - '*.tsbuildinfo'
+            - '*.log'
         - action: rebuild
           path: pnpm-lock.yaml
 

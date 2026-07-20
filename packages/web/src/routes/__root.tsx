@@ -7,6 +7,7 @@ import {
   useRouterState,
 } from '@tanstack/react-router';
 import { checkSession, logout } from '../lib/auth';
+import { Logo } from '../components/Logo';
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -34,8 +35,8 @@ function RootComponent() {
       {!isLogin && (
         <nav className="navbar bg-base-200">
           <div className="flex-1">
-            <Link to="/" className="btn btn-ghost text-2xl font-logo">
-              細流棋
+            <Link to="/" className="btn btn-ghost text-2xl" aria-label="細流棋">
+              <Logo />
             </Link>
           </div>
           <div className="flex-none gap-2">

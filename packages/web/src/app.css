@@ -1,10 +1,6 @@
 @import 'tailwindcss';
 @plugin 'daisyui';
 
-@theme {
-  --font-logo: 'WDXL Lubrifont JP N', sans-serif;
-}
-
 /* 候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示 */
 @media (min-width: 48rem) {
   details[name='candidates'] > summary {

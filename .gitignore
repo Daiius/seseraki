@@ -7,6 +7,5 @@ dist/
 !.env.*.example
 docs/
 .claude/
-.claude-personal/
 .playwright-mcp/
 

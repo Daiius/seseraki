@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { checkSession, login } from '../lib/auth';
+import { Logo } from '../components/Logo';
 
 type LoginSearch = { redirect?: string };
 
@@ -66,8 +67,8 @@ function LoginPage() {
         className="card bg-base-200 w-full max-w-sm shadow"
       >
         <div className="card-body">
-          <h1 className="card-title font-logo text-3xl justify-center mb-2">
-            細流棋
+          <h1 className="card-title text-3xl justify-center mb-2">
+            <Logo />
           </h1>
           <label className="form-control w-full">
             <div className="label">

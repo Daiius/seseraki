@@ -106,6 +106,9 @@ importers:
       daisyui:
         specifier: ^5.5.19
         version: 5.5.19
+      opentype.js:
+        specifier: ^2.0.0
+        version: 2.0.0
       server:
         specifier: workspace:*
         version: link:../server
@@ -1873,6 +1876,10 @@ packages:
   open@10.2.0:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
+
+  opentype.js@2.0.0:
+    resolution: {integrity: sha512-kCyjv6xdDY1W/jLWZ/L3QhhTlKUqDZMQ5+Jdlw12b3dXkKNpYBqqlMMj0YDQPShWFTMwgZI1hG14kN3XUDSg/A==}
+    hasBin: true
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
@@ -3720,6 +3727,8 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
     optional: true
+
+  opentype.js@2.0.0: {}
 
   pathe@2.0.3: {}
 

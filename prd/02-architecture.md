@@ -24,13 +24,13 @@
 
 ## 2. 技術スタック
 
-| パッケージ | 役割 | 主要技術 |
-|---|---|---|
-| `web` | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
-| `server` | API + DB + KIF パース + 一括取り込み + プロンプト生成 | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
-| `worker` | 棋譜解析 | USI プロトコル, やねうら王 |
-| `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3） | TypeScript（React/node 非依存の純 TS）, zod |
-| `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |
+| パッケージ            | 役割                                                     | 主要技術                                                       |
+| --------------------- | -------------------------------------------------------- | -------------------------------------------------------------- |
+| `web`                 | 棋譜管理 UI                                              | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
+| `server`              | API + DB + KIF パース + 一括取り込み + プロンプト生成    | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod                  |
+| `worker`              | 棋譜解析                                                 | USI プロトコル, やねうら王                                     |
+| `shared`              | 将棋ドメインの純ロジック + zod 検証スキーマ（§3）        | TypeScript（React/node 非依存の純 TS）, zod                    |
+| `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md)                                   |
 
 - **DB は MySQL 8.4**（開発経験が多いため選択。named volume で永続。`docker compose down -v` で初期化）。
 - **Drizzle ORM 1.0.0-beta.22**: 1.0 正式リリースが近く、早めにキャッチアップする目的で beta を採用。
@@ -95,28 +95,28 @@
 
 `pnpm dev`（`docker compose up --build --watch`）で全サービスを起動する。
 
-| サービス | ポート | 備考 |
-|---|---|---|
-| db | 3306 | MySQL 8.4, named volume で永続 |
-| server | 4000 | `.env.database` + `.env.server` |
-| web | 5173 | Vite dev server, `.env.web` |
-| worker | - | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
+| サービス | ポート | ホスト公開                                           | 備考                                                      |
+| -------- | ------ | ---------------------------------------------------- | --------------------------------------------------------- |
+| db       | 3306   | なし（`scripts/db-forward.sh` で都度 forward）       | MySQL 8.4, named volume で永続                            |
+| server   | 4000   | なし（web の `/api` proxy・compose 網内で到達）      | `.env.database` + `.env.server`                           |
+| web      | 5173   | あり（唯一の外向き口。remote は `127.0.0.1:<port>`） | Vite dev server, `.env.web`                               |
+| worker   | -      | なし                                                 | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
 
 - ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 - **主要コマンド**:
 
-| コマンド | 内容 |
-|---|---|
-| `pnpm dev` | docker compose up --build --watch で db + server + web + worker を起動 |
-| `pnpm typecheck` | 全パッケージ `tsc --noEmit` |
-| `pnpm build` | 全パッケージのビルド |
-| `pnpm db:push` | dev: スキーマを DB に強制同期（使い捨て DB 向け・`drizzle-kit push --force`） |
-| `pnpm db:generate` | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成 |
-| `pnpm db:migrate` | バージョン管理マイグレーションを適用（未適用分のみ・接続先は呼び出し環境の env） |
-| `pnpm db:baseline` | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証） |
-| `pnpm db:migrate:dev` / `db:baseline:dev` | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行 |
-| `pnpm db:seed` | サンプルデータ投入（初回のみ。既存データがあればスキップ） |
-| `pnpm --filter server test` / `--filter worker test` | ユニットテスト（vitest） |
+| コマンド                                             | 内容                                                                                 |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `pnpm dev`                                           | docker compose up --build --watch で db + server + web + worker を起動               |
+| `pnpm typecheck`                                     | 全パッケージ `tsc --noEmit`                                                          |
+| `pnpm build`                                         | 全パッケージのビルド                                                                 |
+| `pnpm db:push`                                       | dev: スキーマを DB に強制同期（使い捨て DB 向け・`drizzle-kit push --force`）        |
+| `pnpm db:generate`                                   | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成             |
+| `pnpm db:migrate`                                    | バージョン管理マイグレーションを適用（未適用分のみ・接続先は呼び出し環境の env）     |
+| `pnpm db:baseline`                                   | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証） |
+| `pnpm db:migrate:dev` / `db:baseline:dev`            | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行                   |
+| `pnpm db:seed`                                       | サンプルデータ投入（初回のみ。既存データがあればスキップ）                           |
+| `pnpm --filter server test` / `--filter worker test` | ユニットテスト（vitest）                                                             |
 
 - **マイグレーション方式**: **dev は `db:push`**（強制同期・履歴なし・使い捨て DB 向け）、**本番は generate/migrate 方式**
   （`packages/server/drizzle/` にバージョン管理、`db:generate` で生成 → `db:migrate` で未適用分だけ適用）。既存の本番 DB を
@@ -127,7 +127,11 @@
   dev DB に対して versioned migration を試すときは `.env.database` を読む `db:migrate:dev` / `db:baseline:dev` を使う。
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:push && pnpm db:seed`。dev のスキーマ変更は `pnpm db:push`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
+  - `.env.database`（MySQL 接続）/ `.env.server`（認証・API*KEY・`SWARS*\*`等）/`.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
+- **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
+  db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。
 - **Docker 外で worker を動かす**場合は `packages/worker/.env.example` を `.env` にコピー。`USE_MOCK=true` で
-  エンジンなしのモック動作が可能（[05](./05-analysis.md)）。
+  エンジンなしのモック動作が可能（[05](./05-analysis.md)）。server はホスト公開しないため、接続先
+  `SERVER_URL` は **web の公開口＝ `/api` proxy**（`http://localhost:5173`。worker は `${SERVER_URL}/api/worker/...`
+  を叩くので proxy 経由で server に届く）に向ける。

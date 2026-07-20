@@ -85,6 +85,12 @@ pnpm --filter worker test   # worker のユニットテスト（vitest）
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。
 
+## Git / PR 運用
+
+- **レビュー中の PR は追加コミットを積む**。`git commit --amend` + `git push --force` はしない
+  （レビュー bot はコミット単位で追随でき、対応履歴も追いやすい）。
+- 最終的な履歴整形は **squash マージ**に任せる（PR タイトルが正典コミットになる）。
+
 ## 公開リポジトリ方針
 
 本リポジトリは公開のため、コード・文書に以下を持ち込まない（詳細は [prd/README.md](./prd/README.md) §秘匿方針）:

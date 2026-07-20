@@ -81,6 +81,9 @@ services:
       - .env.worker
     environment:
       TZ: 'Asia/Tokyo'
+      # 接続先は compose 内 server に固定（web の DEV_API_TARGET と同じ流儀）。
+      # .env.worker が本番向きでも dev/remote compose の worker は本番を叩かない保険。
+      SERVER_URL: 'http://server:4000'
     cpus: 1
     command: pnpm --filter worker start
     depends_on:

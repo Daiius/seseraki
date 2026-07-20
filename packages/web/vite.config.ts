@@ -16,7 +16,9 @@ const isRemote = !!allowedHost && allowedHost !== 'localhost';
 export default defineConfig({
   plugins: [TanStackRouterVite(), react(), tailwindcss()],
   server: {
-    host: true,
+    // 単体起動（pnpm dev:web）では loopback。compose は command の --host で 0.0.0.0 に、
+    // remote は allowedHosts と併せて外向き公開する（下の isRemote 分岐）。
+    host: isRemote,
     proxy: {
       '/api': { target: apiTarget, changeOrigin: true, ws: true },
     },

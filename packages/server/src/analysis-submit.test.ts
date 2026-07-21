@@ -7,21 +7,29 @@ import {
 } from './analysis-submit.js';
 
 describe('isChunkAcceptable', () => {
-  it('同一世代 かつ 失敗記録なし なら受理する', () => {
-    expect(isChunkAcceptable({ revision: 3, error: null }, 3)).toBe(true);
+  const open = { revision: 3, error: null, completedAt: null };
+
+  it('同一世代 かつ 失敗記録なし かつ 未完了 なら受理する', () => {
+    expect(isChunkAcceptable(open, 3)).toBe(true);
   });
 
   it('世代が進んでいたら破棄する（reanalyze 後に届いた旧解析のチャンク）', () => {
-    expect(isChunkAcceptable({ revision: 4, error: null }, 3)).toBe(false);
+    expect(isChunkAcceptable({ ...open, revision: 4 }, 3)).toBe(false);
   });
 
   it('取得時より世代が古い（ありえない）ケースも破棄する', () => {
-    expect(isChunkAcceptable({ revision: 2, error: null }, 3)).toBe(false);
+    expect(isChunkAcceptable({ ...open, revision: 2 }, 3)).toBe(false);
   });
 
   it('失敗が記録済みなら破棄する（completedAt と analysisError を排他に保つ）', () => {
     expect(
-      isChunkAcceptable({ revision: 3, error: 'illegal move at move 57' }, 3),
+      isChunkAcceptable({ ...open, error: 'illegal move at move 57' }, 3),
+    ).toBe(false);
+  });
+
+  it('完了済みなら破棄する（完了後の解析結果は不変・遅延チャンクで上書きしない）', () => {
+    expect(
+      isChunkAcceptable({ ...open, completedAt: new Date('2026-07-21') }, 3),
     ).toBe(false);
   });
 

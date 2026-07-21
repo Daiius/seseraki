@@ -6,12 +6,26 @@
 //   2. 前世代の全消去 → `reanalyze` の DELETE（submit 側は DELETE しない）
 //   3. 完了の確定 → `isAnalysisComplete`（件数が `usiMoves.length + 1` に達したら）
 
-/** submit を受理してよいか（取得時と同一世代 かつ 失敗記録なし）。prd/05 §1.1a */
+/**
+ * submit を受理してよいか（取得時と同一世代 かつ 失敗記録なし かつ 未完了）。prd/05 §1.1a
+ *
+ * **完了済みへのチャンクは破棄する**。同じ世代を掴んだ worker が 2 つあると（`GET /api/worker/kifus`
+ * に lease は無い）、片方が完了させた後に遅れて届いたチャンクが完了済みの結果を部分的に上書きし、
+ * 異なる実行の評価値が混ざる。完了後の解析結果は不変にする（作り直しは `reanalyze` の経路のみ）。
+ */
 export function isChunkAcceptable<
-  T extends { revision: number; error: string | null },
+  T extends {
+    revision: number;
+    error: string | null;
+    completedAt: Date | null;
+  },
 >(current: T | undefined, revision: number): current is T {
   if (!current) return false;
-  return current.revision === revision && current.error === null;
+  return (
+    current.revision === revision &&
+    current.error === null &&
+    current.completedAt === null
+  );
 }
 
 /**

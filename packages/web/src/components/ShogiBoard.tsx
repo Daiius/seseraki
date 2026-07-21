@@ -283,6 +283,12 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
   // キーボード操作: ←→ で 1 手戻る/進む、Home/End で最初/最後へ。
   // 分岐中の ←→ は分岐内を移動し、先頭で戻ると本筋へ復帰する（Home/End は常に本筋）。
   useEffect(() => {
+    // 端での打鍵は局面が動かないので何もしない（goToMain は開いている候補手 details を
+    // 閉じるため、呼ぶだけで閲覧中の読み筋が消える）。分岐が残っているときは解除のため呼ぶ。
+    const navigateMain = (next: number) => {
+      if (next !== moveIndex || branchRank !== null) goToMain(next);
+    };
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       // 入力欄（スライダー含む）にフォーカスがあるときはブラウザ既定の操作に任せる
@@ -298,17 +304,17 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
       switch (e.key) {
         case 'ArrowLeft':
           if (branchActive && branchRank !== null) onBranchBack(branchRank);
-          else goToMain(Math.max(0, moveIndex - 1));
+          else navigateMain(Math.max(0, moveIndex - 1));
           break;
         case 'ArrowRight':
           if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
-          else goToMain(Math.min(totalMoves, moveIndex + 1));
+          else navigateMain(Math.min(totalMoves, moveIndex + 1));
           break;
         case 'Home':
-          goToMain(0);
+          navigateMain(0);
           break;
         case 'End':
-          goToMain(totalMoves);
+          navigateMain(totalMoves);
           break;
         default:
           return;

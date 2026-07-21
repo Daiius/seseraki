@@ -30,6 +30,9 @@
 - フルスタック TypeScript の **pnpm monorepo**。
 - **DB**: MySQL 8.4 / **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
 - **Front**: React 19 + Vite + TanStack Router + TailwindCSS v4 + daisyUI
+  - **メモ化は React Compiler に委ねる**。`useMemo` / `useCallback` / `React.memo` は原則書かない
+    （`packages/web/vite.config.ts` で `reactCompilerPreset` を有効化済み）。
+    手書きで足したくなったら、まず Rules of React 違反でコンパイラが諦めていないかを疑う。
 - **worker**: USI + やねうら王。server とは分離した実行環境で **API_KEY polling**（inbound の口を持たない）。
 - **共有方針**: **API 型は Hono RPC** に集約、**将棋ドメインの純ロジック + zod 検証スキーマは `shared`**（理想。現状は
   web に存在し `shared` 抽出は gap。[prd/02](./prd/02-architecture.md) §3）。

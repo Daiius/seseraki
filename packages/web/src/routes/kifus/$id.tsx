@@ -10,7 +10,6 @@ import { turnSymbol, formatScore, detectBlunders } from '../../lib/usi';
 import {
   buildPositions,
   usiToJapaneseWithPiece,
-  applyMove,
   type BoardState,
 } from '../../lib/board';
 import { ShogiBoard } from '../../components/ShogiBoard';
@@ -45,21 +44,6 @@ function KifuDetailPage() {
   // USI 手を駒名付き日本語に変換（盤面がなければフォールバック）
   const toJapanese = (usi: string, state?: BoardState) =>
     state ? usiToJapaneseWithPiece(state, usi) : usi;
-
-  // 読み筋を盤面追跡しながら変換（pv[0] は候補手と等しい完全列）
-  const pvToJapanese = (pv: string[], moveNumber: number) => {
-    let state = getState(moveNumber);
-    if (!state) return pv.join(' ');
-
-    const parts: string[] = [];
-    for (let j = 0; j < pv.length; j++) {
-      const pvMoveNum = moveNumber + j;
-      const turn = turnSymbol(pvMoveNum);
-      parts.push(`${turn}${usiToJapaneseWithPiece(state, pv[j])}`);
-      state = applyMove(state, pv[j]);
-    }
-    return parts.join(' ');
-  };
 
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
@@ -220,68 +204,6 @@ function KifuDetailPage() {
                             </td>
                           </tr>
                         );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </details>
-
-            <details className="collapse collapse-arrow bg-base-200">
-              <summary className="collapse-title text-lg font-semibold">
-                候補手詳細
-              </summary>
-              <div className="collapse-content">
-                <div className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>手数</th>
-                        <th>指し手</th>
-                        <th>順位</th>
-                        <th>候補手</th>
-                        <th>評価値</th>
-                        <th>深さ</th>
-                        <th>読み筋</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {kifu.analyses.flatMap((a) => {
-                        const turn = turnSymbol(a.moveNumber);
-                        const state = getState(a.moveNumber);
-                        const played = usiMoves[a.moveNumber];
-                        return a.candidates.map((c, i) => (
-                          <tr key={`${a.id}-${c.rank}`}>
-                            {i === 0 && (
-                              <>
-                                <td rowSpan={a.candidates.length}>
-                                  {a.moveNumber}
-                                </td>
-                                <td rowSpan={a.candidates.length}>
-                                  {played
-                                    ? `${turn}${toJapanese(played, state)}`
-                                    : '-'}
-                                </td>
-                              </>
-                            )}
-                            <td>{c.rank}</td>
-                            <td>
-                              {turn}
-                              {toJapanese(c.move, state)}
-                            </td>
-                            <td>
-                              {formatScore(
-                                c.scoreType,
-                                c.scoreValue,
-                                a.moveNumber,
-                              )}
-                            </td>
-                            <td>{c.depth}</td>
-                            <td className="font-mono text-xs">
-                              {c.pv ? pvToJapanese(c.pv, a.moveNumber) : ''}
-                            </td>
-                          </tr>
-                        ));
                       })}
                     </tbody>
                   </table>

@@ -5,7 +5,17 @@
  * 移植できるよう、入出力を独立した型で表現する。
  */
 
-import { detectBlunders, toSenteEval, turnSymbol } from '../lib/usi';
+import { turnSymbol } from '../lib/usi';
+import {
+  DEFAULT_THRESHOLDS,
+  computeMoveLosses,
+  formatLoss,
+  labelOf,
+  labelText,
+  type MoveLabel,
+  type MoveLoss,
+  type Thresholds,
+} from '../lib/cpl';
 import {
   applyMove,
   buildPositions,
@@ -39,23 +49,28 @@ export interface KifuExportInput {
   playedAt?: string | null;
   /** ユーザー視点プロンプトのための識別。null/undefined なら中立視点 */
   userSide?: 'sente' | 'gote' | null;
+  /** 悪手判定の閾値。省略時は既定（prd/05-analysis.md §2.5） */
+  thresholds?: Thresholds;
   analyses: ExportAnalysis[];
 }
 
-type NotableLabel = 'blunder' | 'good' | 'reference';
+/** 段階ラベルが付かないが損失の大きい上位手は「参考」として拾う */
+type NotableLabel = 'blunder' | 'dubious' | 'mate' | 'reference';
 
 interface NotablePosition {
   moveNumber: number;
-  scoreBefore: number;
-  scoreAfter: number;
-  delta: number;
+  /**
+   * 先手視点の局面評価値（表示用の文字列）。**mate は `±M11` のまま出す**
+   * ——`toSenteEval` の ±3000 クランプを通すと詰み手数が消え、cp の 3000 と区別できなくなる。
+   * 実手後の局面が未解析なら scoreAfter は null。
+   */
+  scoreBefore: string;
+  scoreAfter: string | null;
+  loss: MoveLoss;
   label: NotableLabel;
 }
 
 const DEFAULT_TOP_N = 5;
-const LABEL_DELTA_THRESHOLD = 150;
-/** scoreBefore がこれ以上の絶対値なら勝負が決した局面とみなし、注目局面から除外 */
-const DECIDED_THRESHOLD = 1000;
 
 const HAND_ORDER: PieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
 const HAND_NAME: Record<string, string> = {
@@ -84,10 +99,6 @@ function formatScoreCompact(
     return '詰み';
   }
   return v >= 0 ? `+${v}` : `${v}`;
-}
-
-function formatSente(value: number): string {
-  return value >= 0 ? `+${value}` : `${value}`;
 }
 
 function formatHand(side: Partial<Record<PieceKind, number>>): string {
@@ -128,85 +139,73 @@ function formatResult(code: string | null | undefined): string | null {
   return `${winner}${reason}`;
 }
 
+/**
+ * 注目局面を CPL で選ぶ（prd/06-llm-commentary.md §2.1）。
+ * **悪手と詰み系は全部**拾い、残りを損失の大きい順に topN まで埋める。
+ * **疑問手を全部入れると 1 局で数十節に膨らむ**ため、疑問手は評価値推移表の備考だけに出す。
+ */
 function selectNotablePositions(
   analyses: ExportAnalysis[],
-  usiMoves: string[],
+  losses: Map<number, MoveLoss>,
+  thresholds: Thresholds,
   topN = DEFAULT_TOP_N,
 ): NotablePosition[] {
-  const sorted = [...analyses]
-    .filter((a) => a.candidates.length > 0)
-    .sort((a, b) => a.moveNumber - b.moveNumber);
-  const blunders = detectBlunders(sorted, usiMoves);
+  const byMoveNumber = new Map(analyses.map((a) => [a.moveNumber, a]));
 
-  type Entry = {
-    moveNumber: number;
-    scoreBefore: number;
-    scoreAfter: number;
-    delta: number;
-    absDelta: number;
-    isBlunder: boolean;
-  };
+  const entries: NotablePosition[] = [];
+  for (const loss of losses.values()) {
+    // 勝負が決した局面のぬるい手は注目から外す（詰み系は cp の量ではないので対象外）。
+    // 判定側と同じ基準に揃えてあり、グラフのマーカーと食い違わない
+    if (!loss.mate && loss.bestCp !== null && Math.abs(loss.bestCp) >= thresholds.decided) {
+      continue;
+    }
 
-  const entries: Entry[] = [];
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const curr = sorted[i];
-    const next = sorted[i + 1];
-    if (next.moveNumber !== curr.moveNumber + 1) continue;
-
-    const currBest = curr.candidates.find((c) => c.rank === 1);
-    const nextBest = next.candidates.find((c) => c.rank === 1);
-    if (!currBest || !nextBest) continue;
-
-    const scoreBefore = toSenteEval(currBest.scoreType, currBest.scoreValue, curr.moveNumber);
-    const scoreAfter = toSenteEval(nextBest.scoreType, nextBest.scoreValue, next.moveNumber);
-
-    // 勝負が決した局面以降の悪手・好手は注目局面から除外
-    if (Math.abs(scoreBefore) >= DECIDED_THRESHOLD) continue;
-
-    const isSenteTurn = curr.moveNumber % 2 === 0;
-    const delta = isSenteTurn ? scoreAfter - scoreBefore : scoreBefore - scoreAfter;
+    const currBest = byMoveNumber.get(loss.moveNumber)?.candidates.find((c) => c.rank === 1);
+    if (!currBest) continue;
+    const nextBest = byMoveNumber
+      .get(loss.moveNumber + 1)
+      ?.candidates.find((c) => c.rank === 1);
 
     entries.push({
-      moveNumber: curr.moveNumber,
-      scoreBefore,
-      scoreAfter,
-      delta,
-      absDelta: Math.abs(delta),
-      isBlunder: blunders.has(curr.moveNumber),
+      moveNumber: loss.moveNumber,
+      scoreBefore: formatScoreCompact(currBest.scoreType, currBest.scoreValue, loss.moveNumber),
+      scoreAfter: nextBest
+        ? formatScoreCompact(nextBest.scoreType, nextBest.scoreValue, loss.moveNumber + 1)
+        : null,
+      loss,
+      label: labelOf(loss, thresholds) ?? 'reference',
     });
   }
 
-  const topByDelta = [...entries]
-    .sort((a, b) => b.absDelta - a.absDelta)
+  const labeled = entries.filter((e) => e.label === 'blunder' || e.label === 'mate');
+  // 補完の対象からも疑問手を外す。ここに残すと「疑問手は備考のみ」が損失上位の疑問手だけ破れる
+  const topByLoss = [...entries]
+    .filter((e) => e.loss.loss !== null && e.label !== 'dubious')
+    .sort((a, b) => b.loss.loss! - a.loss.loss!)
     .slice(0, topN);
-  const blunderEntries = entries.filter((e) => e.isBlunder);
 
   const seen = new Set<number>();
-  const merged: Entry[] = [];
-  for (const e of [...topByDelta, ...blunderEntries]) {
+  const merged: NotablePosition[] = [];
+  for (const e of [...labeled, ...topByLoss]) {
     if (seen.has(e.moveNumber)) continue;
     seen.add(e.moveNumber);
     merged.push(e);
   }
   merged.sort((a, b) => a.moveNumber - b.moveNumber);
+  return merged;
+}
 
-  return merged.map((e) => {
-    let label: NotableLabel;
-    if (e.isBlunder) {
-      label = 'blunder';
-    } else if (e.absDelta >= LABEL_DELTA_THRESHOLD) {
-      label = e.delta < 0 ? 'blunder' : 'good';
-    } else {
-      label = 'reference';
-    }
-    return {
-      moveNumber: e.moveNumber,
-      scoreBefore: e.scoreBefore,
-      scoreAfter: e.scoreAfter,
-      delta: e.delta,
-      label,
-    };
-  });
+/**
+ * 評価値推移表の備考欄。段階ラベルが無ければ空文字。
+ * **注目局面に選ばれたかではなく、その手の判定そのもの**を出す（疑問手はここにだけ出る）。
+ */
+function moveNote(loss: MoveLoss, label: MoveLabel): string {
+  if (label === 'mate') return `×${labelText(loss, 'mate') ?? '詰み系'}`;
+  // 近似（実手が候補外）は注目局面の見出しと同じく ≈ を添える
+  const lossStr = `${loss.approximate ? '≈' : ''}${loss.loss}cp 損`;
+  if (label === 'blunder') return `⚠悪手（${lossStr}）`;
+  if (label === 'dubious') return `?疑問手（${lossStr}）`;
+  return '';
 }
 
 function formatPlayedAt(iso: string): string {
@@ -231,8 +230,10 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
   const lines: string[] = [];
   const positions = buildPositions(input.usiMoves);
   const sortedAnalyses = [...input.analyses].sort((a, b) => a.moveNumber - b.moveNumber);
-  const notable = selectNotablePositions(sortedAnalyses, input.usiMoves);
-  const notableMap = new Map(notable.map((n) => [n.moveNumber, n]));
+  const thresholds = input.thresholds ?? DEFAULT_THRESHOLDS;
+  const analyzed = sortedAnalyses.filter((a) => a.candidates.length > 0);
+  const losses = computeMoveLosses(analyzed, input.usiMoves);
+  const notable = selectNotablePositions(analyzed, losses, thresholds);
 
   // 依頼プロンプト
   const userName =
@@ -262,7 +263,7 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
     lines.push('');
     lines.push('- 戦型・序盤の構想');
     lines.push('- 対局の流れと攻防の要点');
-    lines.push('- ターニングポイントとなった手（悪手・好手）と、その代替案・意図');
+    lines.push('- ターニングポイントとなった手（悪手・疑問手）と、その代替案・意図');
     lines.push(`- 全体総評（${userDisplay}が次に活かす改善点）`);
   } else {
     lines.push('以下の棋譜と解析結果を踏まえ、次を含む形で解説してください。');
@@ -291,7 +292,10 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
   lines.push('');
 
   // 評価値推移
-  lines.push('## 評価値推移（先手視点 cp、正＝先手有利。⚠＝悪手、◎＝好手）');
+  lines.push(
+    '## 評価値推移（先手視点 cp、正＝先手有利。⚠＝悪手、?＝疑問手、×＝詰み系。'
+      + `損失＝最善手の評価 − 実手の評価。悪手 ${thresholds.blunder}cp / 疑問手 ${thresholds.dubious}cp 以上）`,
+  );
   lines.push('');
   lines.push('| 手数 | 指し手 | 評価値 | 備考 |');
   lines.push('|---:|---|---:|---|');
@@ -307,13 +311,9 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
     const evalStr = best
       ? formatScoreCompact(best.scoreType, best.scoreValue, a.moveNumber)
       : '-';
-    const note = notableMap.get(idx);
-    let noteStr = '';
-    if (note) {
-      if (note.label === 'blunder') noteStr = '⚠悪手';
-      else if (note.label === 'good') noteStr = '◎好手';
-    }
-    lines.push(`| ${a.moveNumber} | ${moveStr} | ${evalStr} | ${noteStr} |`);
+    const loss = losses.get(idx);
+    const note = loss ? moveNote(loss, labelOf(loss, thresholds)) : '';
+    lines.push(`| ${a.moveNumber} | ${moveStr} | ${evalStr} | ${note} |`);
   }
   lines.push('');
 
@@ -329,15 +329,12 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
       const turn = turnSymbol(idx);
       const playedJp = moveJp(preState, played);
 
-      const labelText =
-        n.label === 'blunder' ? '悪手' : n.label === 'good' ? '好手' : '参考';
-      const beforeStr = formatSente(n.scoreBefore);
-      const afterStr = formatSente(n.scoreAfter);
-      const deltaStr = formatSente(n.delta);
+      const label = n.label === 'reference' ? '参考' : labelText(n.loss, n.label) ?? '参考';
+      const lossStr = formatLoss(n.loss);
+      const evalStr = `評価値 ${n.scoreBefore} → ${n.scoreAfter ?? '（未解析）'}`;
+      const parts = [label, ...(lossStr ? [lossStr] : []), evalStr];
 
-      lines.push(
-        `### ${idx + 1} 手目 ${turn}${playedJp}（${labelText}、評価値 ${beforeStr} → ${afterStr}、手番側 ${deltaStr}cp）`,
-      );
+      lines.push(`### ${idx + 1} 手目 ${turn}${playedJp}（${parts.join('、')}）`);
       lines.push('');
 
       if (preState) {

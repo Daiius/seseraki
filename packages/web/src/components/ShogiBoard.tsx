@@ -6,7 +6,16 @@ import {
   type BoardState,
   type PieceKind,
 } from '../lib/board';
-import { turnSymbol, formatScore, detectBlunders, toSenteEval } from '../lib/usi';
+import { turnSymbol, formatScore, toSenteEval } from '../lib/usi';
+import {
+  computeMoveLosses,
+  formatLoss,
+  labelOf,
+  labelText,
+  type MoveLabel,
+  type MoveLoss,
+  type Thresholds,
+} from '../lib/cpl';
 import { resolveUserSide } from '../lib/self';
 import { EvalGraph } from './EvalGraph';
 
@@ -75,6 +84,8 @@ interface Props {
   analyses: Analysis[];
   sente?: string | null;
   gote?: string | null;
+  /** 悪手判定の閾値（ページ側で localStorage から読み込んで配る） */
+  thresholds: Thresholds;
 }
 
 function HandDisplay({
@@ -175,9 +186,9 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
   );
 }
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresholds }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
-  const blunders = detectBlunders(sortedAnalyses, usiMoves);
+  const losses = computeMoveLosses(sortedAnalyses, usiMoves);
   const { side: userSide, ambiguous: userAmbiguous } = resolveUserSide(sente, gote);
 
   const totalMoves = positions.length - 1;
@@ -223,6 +234,9 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
     : null;
 
   const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
+
+  // 初期局面では「直前の実手」が無いので判定を出さない（evalMoveNumber は 0 に丸められている）
+  const currentLoss = moveIndex > 0 ? losses.get(evalMoveNumber) ?? null : null;
 
   // 分岐モード判定と分岐用データの算出
   const branchCandidate = branchRank !== null
@@ -477,7 +491,8 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
               evalMoveNumber={evalMoveNumber}
               positions={positions}
               moveIndex={moveIndex}
-              isBlunder={blunders.has(evalMoveNumber)}
+              loss={currentLoss}
+              label={currentLoss ? labelOf(currentLoss, thresholds) : null}
               branchRank={branchRank}
               branchDepth={branchDepth}
               onBranchForward={onBranchForward}
@@ -491,7 +506,8 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           analyses={sortedAnalyses}
           currentMove={moveIndex}
           onClickMove={goToMain}
-          blunders={blunders}
+          losses={losses}
+          thresholds={thresholds}
           userSide={userSide}
           branch={
             branchActive && branchCandidate
@@ -518,7 +534,8 @@ function CandidateList({
   evalMoveNumber,
   positions,
   moveIndex,
-  isBlunder,
+  loss,
+  label,
   branchRank,
   branchDepth,
   onBranchForward,
@@ -530,7 +547,8 @@ function CandidateList({
   evalMoveNumber: number;
   positions: BoardState[];
   moveIndex: number;
-  isBlunder: boolean;
+  loss: MoveLoss | null;
+  label: MoveLabel;
   branchRank: number | null;
   branchDepth: number;
   onBranchForward: (rank: number, pv: string[]) => void;
@@ -541,9 +559,27 @@ function CandidateList({
   const hasMore = candidates.length > INITIAL_COUNT;
   const visible = expanded ? candidates : candidates.slice(0, INITIAL_COUNT);
 
+  // 段階（悪手 / 疑問手）と詰み系で色分けする。悪手と詰み系は error、疑問手は warning。
+  const isSevere = label === 'blunder' || label === 'mate';
+  const lossText = loss ? formatLoss(loss) : null;
+
   return (
     <div ref={ref}>
-      <div className="mb-1 text-sm text-base-content/60">候補手</div>
+      <div className="mb-1 flex items-center gap-2 text-sm text-base-content/60">
+        <span>候補手</span>
+        {/* CPL が第一級の指標なので、ラベルが付かない手でも損失そのものは常に出す */}
+        {label && loss && (
+          <span
+            className={clsx(
+              'badge badge-sm',
+              isSevere ? 'badge-error' : 'badge-warning',
+            )}
+          >
+            {labelText(loss, label)}
+          </span>
+        )}
+        {lossText && <span className="font-mono">{lossText}</span>}
+      </div>
       <div className="flex flex-col gap-2">
         {visible.map((c) => {
           const isPlayed = played && c.move === played;
@@ -559,7 +595,8 @@ function CandidateList({
               className={clsx(
                 'group rounded-lg p-2 text-sm',
                 isPlayed && 'bg-base-200',
-                isNotBest && (isBlunder ? 'border border-error/30' : 'border border-warning/30'),
+                isNotBest && isSevere && 'border border-error/30',
+                isNotBest && label === 'dubious' && 'border border-warning/30',
                 isActiveBranch && 'border-l-4 border-l-primary pl-3',
               )}
             >
@@ -580,10 +617,14 @@ function CandidateList({
                 {isPlayed && (
                   <span className="text-xs text-success">実手</span>
                 )}
-                {isNotBest && (
-                  isBlunder
-                    ? <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
-                    : <span className="text-xs text-warning">※</span>
+                {isNotBest && label === 'mate' && (
+                  <span className="text-xs text-error">×</span>
+                )}
+                {isNotBest && label === 'blunder' && (
+                  <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
+                )}
+                {isNotBest && label === 'dubious' && (
+                  <span className="text-xs text-warning">※</span>
                 )}
                 {hasPv && (
                   <span className="ml-auto text-xs text-base-content/40 md:hidden">

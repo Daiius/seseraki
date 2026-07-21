@@ -60,6 +60,10 @@
 - ✅ **ポイズンピルは worker 側の失敗状態で受ける**（`analysisError`。投入時検証は best-effort。[05](./05-analysis.md) §1.1a）。
 - ✅ **KIF→USI 変換は server 側で登録時に一度だけ**: worker は KIF パーサーを持たず `usiMoves` を消費（[04](./04-ingestion.md)）。
 - ✅ **worker は解析用の別ホストに分離**: 評価関数のメモリ消費が大きく、VPS 同居は非現実的（[02](./02-architecture.md) §5）。
+- ✅ **worker は単一インスタンス運用**: 解析結果はチャンクで追記されるため、同一棋譜を複数 worker が
+  並行解析すると 1 棋譜に複数実行の値が混ざる。防ぐには poll 時の lease（列の追加）が要るが、
+  **並行解析の需要が無いので運用前提で受ける**（[05](./05-analysis.md) §1.1c / [03](./03-data-model.md) §2）。
+  複数 worker で解析を並列化したくなったら、lease の導入をそのとき設計する。
 - ✅ **DB は MySQL 8.4**（開発経験）/ **Drizzle 1.0.0-beta.22**（1.0 追従目的）（[02](./02-architecture.md) §2）。
 - ✅ **シングルユーザー**: owner 分離・マルチユーザー対応は持たない（[07](./07-auth-and-privacy.md)）。
 - ✅ **一括取り込みの詳細は非公開**: 取得元・仕組み・アクセス方針は公開文書に書かず `.claude-personal/` に置く（[README](./README.md) §秘匿方針）。

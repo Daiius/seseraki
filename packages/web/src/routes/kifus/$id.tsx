@@ -10,10 +10,12 @@ import { client } from '../../lib/honoClient';
 import { buildPositions } from '../../lib/board';
 import { formatUpdatedAgo } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
+import { useThresholds } from '../../lib/thresholds';
 import { ShogiBoard } from '../../components/ShogiBoard';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
+import { ThresholdSettings } from '../../components/ThresholdSettings';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -42,6 +44,9 @@ function KifuDetailPage() {
   // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを id で照合する
   const { progress, now } = useAnalysisProgress();
   const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
+
+  // 悪手判定の閾値は localStorage 保持。盤面・グラフ・LLM 解説用テキストで同じ値を使う
+  const { thresholds, setThresholds } = useThresholds();
 
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
@@ -198,6 +203,7 @@ function KifuDetailPage() {
             analyses={kifu.analyses}
             sente={kifu.sente}
             gote={kifu.gote}
+            thresholds={thresholds}
           />
         )}
 
@@ -219,9 +225,16 @@ function KifuDetailPage() {
                 goteDan: kifu.goteDan,
                 result: kifu.result,
                 playedAt: kifu.playedAt,
+                thresholds,
                 analyses: kifu.analyses,
               }}
             />
+          </LazyDetails>
+        )}
+
+        {usiMoves.length > 0 && (
+          <LazyDetails title="悪手判定のしきい値">
+            <ThresholdSettings thresholds={thresholds} onChange={setThresholds} />
           </LazyDetails>
         )}
 

@@ -5,6 +5,7 @@ import { resolveUserSide } from '../lib/self';
 export function KifuExport({ kifu }: { kifu: KifuExportInput }) {
   const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
 
+  // 注目局面の選定は判定と同じ閾値を使う（ページ側から渡ってくる）
   const markdown = generateKifuMarkdown({ ...kifu, userSide });
   const [copied, setCopied] = useState(false);
 

@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react';
 import { ParentSize } from '@visx/responsive';
 import { scaleLinear } from '@visx/scale';
 import { LinePath, AreaClosed } from '@visx/shape';
+import {
+  formatLoss,
+  labelOf,
+  labelText,
+  type MoveLoss,
+  type Thresholds,
+} from '../lib/cpl';
 
 interface EvalPoint {
   moveNumber: number;
@@ -30,8 +37,9 @@ interface EvalGraphProps {
   /** 現在のスライダー位置（ハイライト用） */
   currentMove?: number;
   onClickMove?: (moveNumber: number) => void;
-  /** 悪手と判定された手番のセット */
-  blunders?: Set<number>;
+  /** 実手ごとの CPL（キーは実手を指す前の局面）。悪手・詰み系マーカーの元 */
+  losses?: Map<number, MoveLoss>;
+  thresholds?: Thresholds;
   /** ユーザーの手番（'sente' | 'gote'）。相手の悪手は透明度を下げる */
   userSide?: 'sente' | 'gote' | null;
   /**
@@ -48,6 +56,21 @@ interface EvalGraphProps {
 }
 
 const CLAMP = 3000;
+/**
+ * 詰み系マーカーの色。**短手数ほど真っ赤**、長手数ほど通常の悪手マーカー（`--color-error`）の赤に
+ * 近づける（prd/05-analysis.md §2.4）。長手数の詰みは気づくのが困難なので、短手数の見逃しほど
+ * 強く目立たせる。飽和手数に強い根拠は無く「これ以上は気づけなくて当然」の目安（表示の濃淡であって
+ * 判定の閾値ではないため、多少ずれても判定結果は変わらない）。
+ */
+const MATE_VIVID = 'oklch(0.62 0.28 27)';
+const MATE_MOVES_SATURATE = 17;
+function mateColor(moves: number): string {
+  const t = Math.max(
+    0,
+    Math.min(1, (MATE_MOVES_SATURATE - moves) / (MATE_MOVES_SATURATE - 1)),
+  );
+  return `color-mix(in oklab, ${MATE_VIVID} ${Math.round(t * 100)}%, var(--color-error))`;
+}
 const HEIGHT_DESKTOP = 120;
 const HEIGHT_MOBILE = 180;
 const PADDING_X_DESKTOP = 32;
@@ -68,7 +91,8 @@ export function EvalGraph({
   analyses,
   currentMove,
   onClickMove,
-  blunders,
+  losses,
+  thresholds,
   userSide,
   branch,
 }: EvalGraphProps) {
@@ -82,6 +106,31 @@ export function EvalGraph({
         value: toSenteValue(best.scoreType, best.scoreValue, a.moveNumber),
       };
     });
+
+  const pointByMove = new Map(points.map((p) => [p.moveNumber, p]));
+  // マーカーは実手後の局面（moveNumber + 1）に置く。詰みで終わった棋譜は最終局面の解析が無く
+  // 点が存在しないため、その手を指す前の局面に置いて末尾に出す（頓死を見えなくしないため）。
+  // 疑問手はグラフに出さない——俯瞰の用途では悪手と詰み系に絞る（prd/05-analysis.md §2.4）。
+  const markers =
+    losses && thresholds
+      ? [...losses.values()].flatMap((loss) => {
+          const label = labelOf(loss, thresholds);
+          if (label !== 'blunder' && label !== 'mate') return [];
+          const point =
+            pointByMove.get(loss.moveNumber + 1) ?? pointByMove.get(loss.moveNumber);
+          if (!point) return [];
+          const isSenteMove = loss.moveNumber % 2 === 0;
+          return [
+            {
+              loss,
+              label,
+              point,
+              isSenteMove,
+              isUserMove: !userSide || (userSide === 'sente' ? isSenteMove : !isSenteMove),
+            },
+          ];
+        })
+      : [];
 
   const isMobile = useIsMobile();
   const HEIGHT = isMobile ? HEIGHT_MOBILE : HEIGHT_DESKTOP;
@@ -206,32 +255,66 @@ export function EvalGraph({
                   />
                 )}
 
-              {/* 悪手マーカー（先手▲/後手▽、相手の悪手は透明度を下げる） */}
-              {blunders &&
-                points
-                  .filter((p) => blunders.has(p.moveNumber - 1))
-                  .map((p) => {
-                    const cx = toX(p.moveNumber);
-                    const cy = toY(p.value);
-                    const size = 5;
-                    // blunder の moveNumber は p.moveNumber - 1（指した局面）
-                    const blunderMoveNumber = p.moveNumber - 1;
-                    const isSenteMove = blunderMoveNumber % 2 === 0;
-                    const isUserBlunder = !userSide || (userSide === 'sente' ? isSenteMove : !isSenteMove);
-                    // 先手=上向き三角(▲)、後手=下向き三角(▽)
-                    const pts = isSenteMove
-                      ? `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`
-                      : `${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`;
-                    return (
-                      <polygon
-                        key={`blunder-${p.moveNumber}`}
-                        points={pts}
-                        className="fill-error stroke-base-100"
-                        strokeWidth={1}
-                        opacity={isUserBlunder ? 1 : 0.35}
-                      />
-                    );
-                  })}
+              {/*
+                視覚要素の意味を三分離する（prd/05-analysis.md §2.4）:
+                形（× / ▲▽）= 詰み系か悪手か / 色の赤さ = 詰み手数 / 透明度 = 自分か相手か。
+              */}
+              {markers.map(({ loss, label, point, isSenteMove, isUserMove }) => {
+                const cx = toX(point.moveNumber);
+                const cy = toY(point.value);
+                const size = 5;
+                const title = `${loss.moveNumber + 1}手目 ${labelText(loss, label)}${
+                  formatLoss(loss) ? `（${formatLoss(loss)}）` : ''
+                }`;
+
+                if (label === 'mate' && loss.mate) {
+                  const stroke = mateColor(loss.mate.moves);
+                  const cross = [
+                    [cx - size, cy - size, cx + size, cy + size],
+                    [cx - size, cy + size, cx + size, cy - size],
+                  ];
+                  return (
+                    <g key={`mark-${loss.moveNumber}`} opacity={isUserMove ? 1 : 0.35}>
+                      <title>{title}</title>
+                      {/* 折れ線に重なっても形が読めるよう背景色で縁取ってから色を乗せる */}
+                      {cross.map(([x1, y1, x2, y2], i) => (
+                        <line
+                          key={`halo-${i}`}
+                          x1={x1} y1={y1} x2={x2} y2={y2}
+                          className="stroke-base-100"
+                          strokeWidth={5}
+                          strokeLinecap="round"
+                        />
+                      ))}
+                      {cross.map(([x1, y1, x2, y2], i) => (
+                        <line
+                          key={`cross-${i}`}
+                          x1={x1} y1={y1} x2={x2} y2={y2}
+                          stroke={stroke}
+                          strokeWidth={2.5}
+                          strokeLinecap="round"
+                        />
+                      ))}
+                    </g>
+                  );
+                }
+
+                // 先手=上向き三角(▲)、後手=下向き三角(▽)
+                const pts = isSenteMove
+                  ? `${cx},${cy - size} ${cx - size},${cy + size} ${cx + size},${cy + size}`
+                  : `${cx},${cy + size} ${cx - size},${cy - size} ${cx + size},${cy - size}`;
+                return (
+                  <polygon
+                    key={`mark-${loss.moveNumber}`}
+                    points={pts}
+                    className="fill-error stroke-base-100"
+                    strokeWidth={1}
+                    opacity={isUserMove ? 1 : 0.35}
+                  >
+                    <title>{title}</title>
+                  </polygon>
+                );
+              })}
 
               {/* 分岐手の評価値プロット */}
               {branch && (() => {

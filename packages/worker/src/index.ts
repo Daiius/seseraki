@@ -128,6 +128,15 @@ async function main() {
             depth: config.engineDepth,
             multiPv: config.engineMultiPv,
             byoyomi: config.engineByoyomi,
+            // 進捗報告は待たずに投げっぱなしにし、失敗も握りつぶす。server が落ちている・
+            // 遅いときに解析まで止まるのは本末転倒（進捗は表示のためだけの揮発情報）
+            onProgress: (analyzed, total) => {
+              void client
+                .reportProgress(kifu.id, kifu.analysisRevision, analyzed, total)
+                .catch((err: unknown) => {
+                  console.warn("[Worker] Failed to report progress:", err);
+                });
+            },
           });
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);

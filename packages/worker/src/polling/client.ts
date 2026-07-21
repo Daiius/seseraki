@@ -44,6 +44,23 @@ export function createClient(baseUrl: string, apiKey: string) {
       return await res.json();
     },
 
+    /**
+     * 解析の進捗を報告する（revision = 取得時の解析世代）。
+     * server 側はメモリに載せるだけで DB を書かない。呼び出し側は失敗を握りつぶす（解析を止めない）。
+     */
+    async reportProgress(
+      kifuId: number,
+      revision: number,
+      analyzed: number,
+      total: number,
+    ) {
+      const res = await client.api.worker.analyses.progress.$post({
+        json: { kifuId, revision, analyzed, total },
+      });
+      if (!res.ok) throw new Error(`Failed to report progress: ${res.status}`);
+      return await res.json();
+    },
+
     /** 解析失敗（棋譜起因）を報告し analysisError を記録させる（revision = 取得時の解析世代） */
     async reportError(kifuId: number, revision: number, error: string) {
       const res = await client.api.worker.kifus[":id"].error.$post({

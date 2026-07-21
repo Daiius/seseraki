@@ -62,13 +62,19 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
  * @param options.depth - 解析深さ (default: 10)
  * @param options.multiPv - 候補手数 (default: 3)
  * @param options.byoyomi - 秒読み(ms)。設定時は depth より優先
+ * @param options.onProgress - 1 局面解析するたびに呼ばれる (解析済み局面数, 全局面数)
  */
 export async function analyzeKifu(
   engine: UsiEngine,
   usiMoves: string[],
-  options: { depth?: number; multiPv?: number; byoyomi?: number } = {},
+  options: {
+    depth?: number;
+    multiPv?: number;
+    byoyomi?: number;
+    onProgress?: (analyzed: number, total: number) => void;
+  } = {},
 ): Promise<KifuAnalysisResult> {
-  const { depth = 10, multiPv = 3, byoyomi } = options;
+  const { depth = 10, multiPv = 3, byoyomi, onProgress } = options;
   const goCommand = byoyomi
     ? `go btime 0 wtime 0 byoyomi ${byoyomi}`
     : `go depth ${depth}`;
@@ -108,6 +114,10 @@ export async function analyzeKifu(
       moveNumber: i,
       candidates,
     });
+
+    // 進捗は**毎局面**報告する。N 局面ごとにすると N の適正値が 1 局面あたりの所要時間
+    // （MATERIAL/NNUE・depth/byoyomi で桁が変わる）に依存し、固定値の根拠が置けない
+    onProgress?.(i + 1, usiMoves.length + 1);
   }
 
   // MultiPV を 1 に戻す

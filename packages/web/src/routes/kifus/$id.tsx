@@ -8,6 +8,8 @@ import {
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { buildPositions } from '../../lib/board';
+import { formatUpdatedAgo } from '../../lib/analysisProgress';
+import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { ShogiBoard } from '../../components/ShogiBoard';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
@@ -36,6 +38,10 @@ function KifuDetailPage() {
     message: string;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを id で照合する
+  const { progress, now } = useAnalysisProgress();
+  const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
 
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
@@ -143,6 +149,27 @@ function KifuDetailPage() {
             )}
           >
             <span>{actionResult.message}</span>
+          </div>
+        )}
+
+        {analyzing && (
+          <div
+            role="status"
+            className="alert alert-info flex-col items-start gap-2 sm:flex-row sm:items-center"
+          >
+            <span className="flex-1">
+              解析中 {analyzing.analyzed}/{analyzing.total}
+              {/* 経過時間を出して停止の判断は人に委ねる（閾値で stale を決めない） */}
+              <span className="ml-2 text-sm opacity-80">
+                {formatUpdatedAgo(analyzing, now)}
+              </span>
+            </span>
+            {/* 色は付けない。alert-info の上に progress-info を置くと同色で見えなくなる */}
+            <progress
+              className="progress w-full sm:w-56"
+              value={analyzing.analyzed}
+              max={analyzing.total}
+            />
           </div>
         )}
 

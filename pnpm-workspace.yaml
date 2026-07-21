@@ -6,3 +6,5 @@ allowBuilds:
 # @azure/msal 経由で入る古い uuid(8.x, deprecated) を 14 系へ引き上げる。
 overrides:
   uuid@<14: "^14.0.0"
+  # transitive な shell-quote の DoS/エスケープ欠陥（GHSA）を patch 版へ引き上げる。
+  shell-quote@<1.9.0: "^1.9.0"

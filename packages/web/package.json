@@ -14,7 +14,7 @@
     "@visx/scale": "^4.0.0",
     "@visx/shape": "^4.0.0",
     "clsx": "^2.1.1",
-    "hono": "^4.12.15",
+    "hono": "^4.12.25",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "swr": "^2.4.1"
@@ -30,6 +30,6 @@
     "opentype.js": "^2.0.0",
     "server": "workspace:*",
     "tailwindcss": "4.2.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.16"
   }
 }

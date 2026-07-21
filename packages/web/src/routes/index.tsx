@@ -236,9 +236,19 @@ function KifuListPage() {
                         </div>
                       </td>
                       <td>
-                        {kifu.playedAt
-                          ? new Date(kifu.playedAt).toLocaleString('ja-JP')
-                          : new Date(kifu.createdAt).toLocaleString('ja-JP')}
+                        {kifu.playedAt ? (
+                          new Date(kifu.playedAt).toLocaleString('ja-JP')
+                        ) : (
+                          // 対局日時が取れなかった棋譜は登録日時で代替表示・並び替えされる
+                          // （`coalesce(playedAt, createdAt)` 降順）。どちらの日時かを明示する
+                          <span
+                            className="text-base-content/60"
+                            title="対局日時が取得できなかったため、登録日時を表示しています"
+                          >
+                            {new Date(kifu.createdAt).toLocaleString('ja-JP')}
+                            <span className="ml-1 text-xs">（登録）</span>
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );

@@ -116,7 +116,7 @@
 | `pnpm db:baseline` | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証） |
 | `pnpm db:migrate:dev` / `db:baseline:dev` | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行 |
 | `pnpm db:seed` | サンプルデータ投入（初回のみ。既存データがあればスキップ） |
-| `pnpm --filter server test` / `--filter worker test` | ユニットテスト（vitest） |
+| `pnpm --filter server test` / `--filter worker test` / `--filter web test` | ユニットテスト（vitest。§7） |
 
 - **マイグレーション方式**: **dev は `db:push`**（強制同期・履歴なし・使い捨て DB 向け）、**本番は generate/migrate 方式**
   （`packages/server/drizzle/` にバージョン管理、`db:generate` で生成 → `db:migrate` で未適用分だけ適用）。既存の本番 DB を
@@ -135,3 +135,17 @@
   エンジンなしのモック動作が可能（[05](./05-analysis.md)）。server はホスト公開しないため、接続先
   `SERVER_URL` は **web の公開口＝`/api` proxy**（`http://localhost:5173`。worker は `${SERVER_URL}/api/worker/...`
   を叩くので proxy 経由で server に届く）に向ける。
+
+## 7. テスト方針
+
+テストは**全パッケージ vitest**。テストファイルは対象と同じ場所に `*.test.ts` で置く（co-located）。
+
+- **純ドメインロジックはテストする。** 盤面追跡・KIF/CSA パース・USI 変換・悪手判定・
+  クエリ組み立てのように、入出力が値で閉じているものが対象。これらの失敗モードは
+  **静かに壊れる**（盤面がずれる・棋譜が欠ける）ため型検査では捕まらない。
+- **UI・DB 接続はテストを書かない。** 描画・ルーティング・実 DB への疎通は、
+  PR の「目視確認が必要な点」に回して人が確認する。DOM 環境（jsdom / testing-library）は
+  持ち込まず、web のテストも **node 環境の純ロジックのみ**を対象にする。
+  必要になった時点で、UI テスト基盤の導入是非を改めて判断する。
+- **`shared` 抽出（§3.2）ではテストも一緒に移す。** 純ロジックは `shared` へ移る予定なので、
+  テストは移動先に付いていく前提で書く（対象を import する以外の依存を持たせない）。

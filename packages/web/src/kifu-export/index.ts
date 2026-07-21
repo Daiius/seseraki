@@ -178,8 +178,9 @@ function selectNotablePositions(
   }
 
   const labeled = entries.filter((e) => e.label === 'blunder' || e.label === 'mate');
+  // 補完の対象からも疑問手を外す。ここに残すと「疑問手は備考のみ」が損失上位の疑問手だけ破れる
   const topByLoss = [...entries]
-    .filter((e) => e.loss.loss !== null)
+    .filter((e) => e.loss.loss !== null && e.label !== 'dubious')
     .sort((a, b) => b.loss.loss! - a.loss.loss!)
     .slice(0, topN);
 

@@ -1,6 +1,6 @@
 import { hc } from "hono/client";
 import type { AppType } from "server";
-import type { KifuAnalysisResult } from "../kifu-analysis.js";
+import type { MoveAnalysis } from "../kifu-analysis.js";
 
 export function createClient(baseUrl: string, apiKey: string) {
   // server は basePath('/api') 配下。worker は server を直叩きするので baseUrl は
@@ -10,24 +10,30 @@ export function createClient(baseUrl: string, apiKey: string) {
     headers: { Authorization: `Bearer ${apiKey}` },
   });
   return {
-    /** 未解析の最古の棋譜を1件取得（なければ null） */
+    /**
+     * 未解析の最古の棋譜を1件取得（なければ null）。
+     * `analyzedCount` は既に server に入っている局面数＝解析を再開する局面番号。
+     */
     async fetchNextKifu() {
       const res = await client.api.worker.kifus.$get();
       if (!res.ok) throw new Error(`Failed to fetch kifus: ${res.status}`);
       return await res.json();
     },
 
-    /** 解析結果をサーバーに送信（revision = 取得時の解析世代） */
+    /**
+     * 解析結果のチャンクをサーバーに送信（revision = 取得時の解析世代）。
+     * server は追記 upsert し、全局面が揃った時点で完了を確定する（`{ applied, completed }` を返す）。
+     */
     async submitAnalysis(
       kifuId: number,
       revision: number,
-      result: KifuAnalysisResult,
+      analyses: MoveAnalysis[],
     ) {
       const res = await client.api.worker.analyses.$post({
         json: {
           kifuId,
           revision,
-          analyses: result.analyses.map((a) => ({
+          analyses: analyses.map((a) => ({
             moveNumber: a.moveNumber,
             candidates: a.candidates.map((c) => ({
               rank: c.rank,

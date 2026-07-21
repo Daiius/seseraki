@@ -56,45 +56,48 @@ async function main() {
   engine.setOption("Threads", "1");
   await engine.ready();
 
-  // 3. 棋譜を解析
+  // 3. 棋譜を解析し、チャンクごとにサーバーへ送信（本番と同じ経路）
   console.log(`\n--- Step 3: Analyze kifu #${kifu.id}: "${kifu.title}" ---`);
   console.log(`Moves: ${kifu.usiMoves.length}`);
+  console.log(`Resuming from position ${kifu.analyzedCount}`);
 
-  const result = await analyzeKifu(engine, kifu.usiMoves, {
+  const usiMoves = kifu.usiMoves;
+  const result = await analyzeKifu(engine, usiMoves, {
     depth: 5,
     multiPv: 3,
+    startMoveNumber: kifu.analyzedCount,
+    // 短時間で終わるサンプルでもチャンクが複数回に分かれるよう短めにする
+    chunkIntervalMs: 1000,
+    onChunk: async (chunk) => {
+      for (const a of chunk.slice(0, 3)) {
+        const top = a.candidates[0];
+        if (!top) continue;
+        const scoreStr =
+          top.score.type === "mate"
+            ? `mate ${top.score.value}`
+            : `${top.score.value}cp`;
+        const played = usiMoves[a.moveNumber];
+        console.log(
+          `  [${a.moveNumber}] played=${played ?? "(end)"} best=${top.move} (${scoreStr})`,
+        );
+      }
+      const submitResult = await client.submitAnalysis(
+        kifu.id,
+        kifu.analysisRevision,
+        chunk,
+      );
+      console.log(
+        `  submitted ${chunk.length} positions ->`,
+        submitResult,
+      );
+    },
   });
 
-  console.log(`\nAnalysis complete: ${result.totalMoves} moves`);
-
-  // 結果サマリー
-  for (const a of result.analyses.slice(0, 3)) {
-    const top = a.candidates[0];
-    if (top) {
-      const scoreStr =
-        top.score.type === "mate"
-          ? `mate ${top.score.value}`
-          : `${top.score.value}cp`;
-      const played = kifu.usiMoves[a.moveNumber];
-      console.log(
-        `  [${a.moveNumber}] played=${played ?? "(end)"} best=${top.move} (${scoreStr})`,
-      );
-    }
-  }
-  if (result.analyses.length > 3) {
-    console.log(`  ... (${result.analyses.length - 3} more)`);
-  }
-
-  // 4. 結果をサーバーに送信
-  console.log("\n--- Step 4: Submit analysis to server ---");
-  const submitResult = await client.submitAnalysis(
-    kifu.id,
-    kifu.analysisRevision,
-    result,
+  console.log(
+    `\nAnalysis complete: ${result.totalMoves} moves (${result.analyzed} positions analyzed)`,
   );
-  console.log("Server response:", submitResult);
 
-  // 5. エンジン終了
+  // 4. エンジン終了
   await engine.quit();
 
   console.log("\n=== E2E Test Complete ===");

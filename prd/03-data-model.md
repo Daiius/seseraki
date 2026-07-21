@@ -82,7 +82,19 @@ moveAnalyses
 
 - 1 局面 = 1 レコード。`moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
   偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
-- `UNIQUE(kifuId, moveNumber)` で同一局面の二重登録を防ぐ。再解析は DELETE → 再投入（[04](./04-ingestion.md)）。
+- 解析結果は**チャンクに分けて追記**される（[05](./05-analysis.md) §1.1c）。**一意性と完了の担保は
+  次の 3 箇所に分散する**（submit が「DELETE → 全件 INSERT」だった頃は 1 箇所だった。列の追加はない）:
+
+| 担保するもの | 担保する場所 |
+|---|---|
+| 同一 `moveNumber` の重複防止 | `UNIQUE(kifuId, moveNumber)` を使った upsert（再送された局面は既存行を使い回し、`candidateMoves` を入れ直す） |
+| 前世代の全消去 | **`reanalyze` の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は DELETE しない） |
+| 完了の確定 | 件数が `usiMoves.length + 1` に達したときの `analysisCompletedAt`（submit と同一トランザクション内で server が判定） |
+
+- ⚠ **`reanalyze` の DELETE を落とすと前世代の行が残る**（手数の異なる棋譜に差し替わったときに、
+  古い末尾の局面が孤立して残り、件数による完了判定も狂う）。
+- 途中まで入っている件数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。
+  [05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。
 
 ## 4. `candidateMoves`（MultiPV の候補手）
 
@@ -120,9 +132,11 @@ UsiScore = { type: "cp", value: number } | { type: "mate", value: number }
 CandidateMove = { rank, move, score: UsiScore, pv: string[], depth }
 
 MoveAnalysis  = { moveNumber, candidates: CandidateMove[] }
-
-KifuAnalysisResult = { totalMoves, analyses: MoveAnalysis[] }
 ```
+
+- **submit の単位は `MoveAnalysis[]`（チャンク）**。worker は棋譜 1 局分を貯めず、経過時間で区切って
+  送る（[05](./05-analysis.md) §1.1c）。解析を終えたときに worker が持つのはサマリ
+  （`KifuAnalysisSummary = { totalMoves, analyzed }`）だけで、局面ごとの結果は送信済み。
 
 ## 6. `commentaries`（LLM 解説・計画中）
 

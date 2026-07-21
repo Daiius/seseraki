@@ -85,6 +85,13 @@ export interface Hand {
   gote: Partial<Record<PieceKind, number>>;
 }
 
+/**
+ * 局面。**不変（immutable）として扱う。**
+ *
+ * `applyMove` は変化した行・持ち駒だけを差し替えた新しい state を返し、
+ * 変化のない行と駒オブジェクトは元の state と共有する（構造共有）。
+ * そのため受け取った側は `board` / `hand` / `Piece` を破壊的に変更してはならない。
+ */
 export interface BoardState {
   board: Square[][];
   hand: Hand;
@@ -103,25 +110,43 @@ export function createInitialState(): BoardState {
 }
 
 /**
- * 盤面をディープコピー
+ * 指定マスだけを差し替えた board を返す（変化のない行は元の配列をそのまま共有する）。
+ * updates は先頭から順に適用する（同じマスを 2 度指定した場合は後勝ち）。
  */
-export function cloneState(state: BoardState): BoardState {
-  return {
-    board: state.board.map((row) => row.map((sq) => (sq ? { ...sq } : null))),
-    hand: {
-      sente: { ...state.hand.sente },
-      gote: { ...state.hand.gote },
-    },
-    sideToMove: state.sideToMove,
-  };
+function withSquares(
+  board: Square[][],
+  updates: [row: number, col: number, square: Square][],
+): Square[][] {
+  const next = [...board];
+  for (const [row, col, square] of updates) {
+    if (next[row] === board[row]) next[row] = [...board[row]];
+    next[row][col] = square;
+  }
+  return next;
+}
+
+/**
+ * 片側の持ち駒だけを差し替えた hand を返す
+ */
+function withHand(
+  hand: Hand,
+  side: Side,
+  pieces: Partial<Record<PieceKind, number>>,
+): Hand {
+  return side === 'sente'
+    ? { sente: pieces, gote: hand.gote }
+    : { sente: hand.sente, gote: pieces };
 }
 
 /**
  * USI の手を適用して新しい盤面を返す（元の盤面は変更しない）
+ *
+ * 変化したマス（移動元・移動先）と手番側の持ち駒だけを差分コピーし、
+ * 残りは元の state と共有する（`BoardState` の不変契約が前提）。
  */
 export function applyMove(state: BoardState, usiMove: string): BoardState {
-  const next = cloneState(state);
-  const side = next.sideToMove;
+  const side = state.sideToMove;
+  const nextSide: Side = side === 'sente' ? 'gote' : 'sente';
 
   // 駒打ち: "B*5c"
   const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d[a-i])$/);
@@ -129,12 +154,14 @@ export function applyMove(state: BoardState, usiMove: string): BoardState {
     const [, piece, to] = dropMatch;
     const [toR, toC] = usiToIndex(to);
     const kind = USI_DROP_PIECE[piece];
-    next.board[toR][toC] = { kind, side };
-    const h = next.hand[side];
+    const h = { ...state.hand[side] };
     h[kind] = (h[kind] ?? 0) - 1;
     if (h[kind]! <= 0) delete h[kind];
-    next.sideToMove = side === 'sente' ? 'gote' : 'sente';
-    return next;
+    return {
+      board: withSquares(state.board, [[toR, toC, { kind, side }]]),
+      hand: withHand(state.hand, side, h),
+      sideToMove: nextSide,
+    };
   }
 
   // 通常の移動: "7g7f" or "7g7f+"
@@ -144,22 +171,23 @@ export function applyMove(state: BoardState, usiMove: string): BoardState {
     const [fromR, fromC] = usiToIndex(from);
     const [toR, toC] = usiToIndex(to);
 
-    const piece = next.board[fromR][fromC];
+    const piece = state.board[fromR][fromC];
     if (!piece) {
       // 不正な手だが壊さないようにスキップ
-      next.sideToMove = side === 'sente' ? 'gote' : 'sente';
-      return next;
+      return { ...state, sideToMove: nextSide };
     }
 
     // 取った駒を持ち駒に
-    const captured = next.board[toR][toC];
+    const captured = state.board[toR][toC];
+    let hand = state.hand;
     if (captured) {
       let capturedKind = captured.kind;
       if (UNPROMOTE_MAP[capturedKind]) {
         capturedKind = UNPROMOTE_MAP[capturedKind]!;
       }
-      const h = next.hand[side];
+      const h = { ...state.hand[side] };
       h[capturedKind] = (h[capturedKind] ?? 0) + 1;
+      hand = withHand(state.hand, side, h);
     }
 
     // 移動
@@ -167,15 +195,19 @@ export function applyMove(state: BoardState, usiMove: string): BoardState {
     if (promote && PROMOTE_MAP[kind]) {
       kind = PROMOTE_MAP[kind]!;
     }
-    next.board[toR][toC] = { kind, side };
-    next.board[fromR][fromC] = null;
-    next.sideToMove = side === 'sente' ? 'gote' : 'sente';
-    return next;
+    // 移動先 → 移動元の順（移動元 == 移動先の不正な手でも空マスになる旧挙動を保つ）
+    return {
+      board: withSquares(state.board, [
+        [toR, toC, { kind, side }],
+        [fromR, fromC, null],
+      ]),
+      hand,
+      sideToMove: nextSide,
+    };
   }
 
   // パース不能な手はスキップ
-  next.sideToMove = side === 'sente' ? 'gote' : 'sente';
-  return next;
+  return { ...state, sideToMove: nextSide };
 }
 
 /**
@@ -183,12 +215,11 @@ export function applyMove(state: BoardState, usiMove: string): BoardState {
  * 返り値: [初期局面, 1手目後, 2手目後, ...]
  */
 export function buildPositions(usiMoves: string[]): BoardState[] {
-  const positions: BoardState[] = [];
   let state = createInitialState();
-  positions.push(cloneState(state));
+  const positions: BoardState[] = [state];
   for (const move of usiMoves) {
     state = applyMove(state, move);
-    positions.push(cloneState(state));
+    positions.push(state);
   }
   return positions;
 }

@@ -15,6 +15,7 @@ import {
 import { ShogiBoard } from '../../components/ShogiBoard';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
+import { LazyDetails } from '../../components/LazyDetails';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -27,6 +28,18 @@ export const Route = createFileRoute('/kifus/$id')({
   component: KifuDetailPage,
 });
 
+/** 局面評価値テーブルが必要とする解析データ（loader の戻り値の部分集合） */
+interface Analysis {
+  id: number;
+  moveNumber: number;
+  candidates: {
+    rank: number;
+    move: string;
+    scoreType: string;
+    scoreValue: number;
+  }[];
+}
+
 function KifuDetailPage() {
   const kifu = Route.useLoaderData();
   const navigate = useNavigate();
@@ -34,16 +47,8 @@ function KifuDetailPage() {
 
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
-  // USI 指し手列から盤面を構築
+  // USI 指し手列から盤面を構築。全局面はここで 1 度だけ作り、盤面・表へ配る
   const positions = buildPositions(usiMoves);
-
-  // moveNumber → その局面の BoardState
-  const getState = (moveNumber: number): BoardState | undefined =>
-    positions[moveNumber];
-
-  // USI 手を駒名付き日本語に変換（盤面がなければフォールバック）
-  const toJapanese = (usi: string, state?: BoardState) =>
-    state ? usiToJapaneseWithPiece(state, usi) : usi;
 
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
@@ -60,14 +65,6 @@ function KifuDetailPage() {
       param: { id: String(kifu.id) },
     });
     if (res.ok) router.invalidate();
-  };
-
-  const blunders = detectBlunders(kifu.analyses, usiMoves);
-
-  const getPositionEval = (a: (typeof kifu.analyses)[number]) => {
-    const best = a.candidates.find((c) => c.rank === 1);
-    if (!best) return null;
-    return { scoreType: best.scoreType, scoreValue: best.scoreValue };
   };
 
   return (
@@ -126,123 +123,130 @@ function KifuDetailPage() {
         )}
 
         {usiMoves.length > 0 && (
-          <ShogiBoard usiMoves={usiMoves} analyses={kifu.analyses} sente={kifu.sente} gote={kifu.gote} />
+          <ShogiBoard
+            usiMoves={usiMoves}
+            positions={positions}
+            analyses={kifu.analyses}
+            sente={kifu.sente}
+            gote={kifu.gote}
+          />
         )}
 
-        <details className="collapse collapse-arrow bg-base-200">
-          <summary className="collapse-title text-lg font-semibold">
-            KIF
-          </summary>
-          <div className="collapse-content">
-            <pre className="text-sm font-mono whitespace-pre-wrap">
-              {kifu.kifText}
-            </pre>
-          </div>
-        </details>
+        <LazyDetails title="KIF">
+          <pre className="text-sm font-mono whitespace-pre-wrap">
+            {kifu.kifText}
+          </pre>
+        </LazyDetails>
 
         {kifu.analyses.length > 0 && (
           <>
-            <details className="collapse collapse-arrow bg-base-200">
-              <summary className="collapse-title text-lg font-semibold">
-                局面評価値
-              </summary>
-              <div className="collapse-content">
-                <div className="overflow-x-auto">
-                  <table className="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>手数</th>
-                        <th>指し手</th>
-                        <th>局面評価値（先手視点）</th>
-                        <th>最善手</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {kifu.analyses.map((a) => {
-                        const posEval = getPositionEval(a);
-                        const best = a.candidates.find((c) => c.rank === 1);
-                        const turn = turnSymbol(a.moveNumber);
-                        const state = getState(a.moveNumber);
-                        const played = usiMoves[a.moveNumber];
-                        const isBestMove =
-                          best && played && best.move === played;
-                        return (
-                          <tr key={a.id}>
-                            <td>{a.moveNumber}</td>
-                            <td>
-                              {played
-                                ? `${turn}${toJapanese(played, state)}`
-                                : '-'}
-                            </td>
-                            <td>
-                              {posEval
-                                ? formatScore(
-                                    posEval.scoreType,
-                                    posEval.scoreValue,
-                                    a.moveNumber,
-                                  )
-                                : '-'}
-                            </td>
-                            <td>
-                              {best ? (
-                                <span
-                                  className={clsx(
-                                    !isBestMove && (blunders.has(a.moveNumber) ? 'text-error' : 'text-warning'),
-                                  )}
-                                >
-                                  {turn}
-                                  {toJapanese(best.move, state)}
-                                  {!isBestMove && (
-                                    blunders.has(a.moveNumber)
-                                      ? ` ${turn}`
-                                      : ' ※'
-                                  )}
-                                </span>
-                              ) : (
-                                '-'
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </details>
+            <LazyDetails title="局面評価値">
+              <PositionEvalTable
+                analyses={kifu.analyses}
+                usiMoves={usiMoves}
+                positions={positions}
+              />
+            </LazyDetails>
 
-            <details className="collapse collapse-arrow bg-base-200">
-              <summary className="collapse-title text-lg font-semibold">
-                LLM 解説用テキスト
-              </summary>
-              <div className="collapse-content">
-                <KifuExport
-                  kifu={{
-                    title: kifu.title,
-                    usiMoves,
-                    sente: kifu.sente,
-                    gote: kifu.gote,
-                    senteDan: kifu.senteDan,
-                    goteDan: kifu.goteDan,
-                    result: kifu.result,
-                    playedAt: kifu.playedAt,
-                    analyses: kifu.analyses,
-                  }}
-                />
-              </div>
-            </details>
+            <LazyDetails title="LLM 解説用テキスト">
+              <KifuExport
+                kifu={{
+                  title: kifu.title,
+                  usiMoves,
+                  sente: kifu.sente,
+                  gote: kifu.gote,
+                  senteDan: kifu.senteDan,
+                  goteDan: kifu.goteDan,
+                  result: kifu.result,
+                  playedAt: kifu.playedAt,
+                  analyses: kifu.analyses,
+                }}
+              />
+            </LazyDetails>
           </>
         )}
 
-        <details className="collapse collapse-arrow bg-base-200">
-          <summary className="collapse-title text-lg font-semibold">
-            メモ
-          </summary>
-          <div className="collapse-content">
-            <KifuMemo kifuId={kifu.id} memo={kifu.memo} />
-          </div>
-        </details>
+        <LazyDetails title="メモ">
+          <KifuMemo kifuId={kifu.id} memo={kifu.memo} />
+        </LazyDetails>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 全局面の評価値・最善手を並べた表。
+ * 局面数ぶんの行と日本語変換を伴うため、折り畳みを開くまでマウントされない
+ * （`LazyDetails`）。
+ */
+function PositionEvalTable({
+  analyses,
+  usiMoves,
+  positions,
+}: {
+  analyses: Analysis[];
+  usiMoves: string[];
+  positions: BoardState[];
+}) {
+  const blunders = detectBlunders(analyses, usiMoves);
+
+  // USI 手を駒名付き日本語に変換（盤面がなければフォールバック）
+  const toJapanese = (usi: string, state?: BoardState) =>
+    state ? usiToJapaneseWithPiece(state, usi) : usi;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="table table-sm">
+        <thead>
+          <tr>
+            <th>手数</th>
+            <th>指し手</th>
+            <th>局面評価値（先手視点）</th>
+            <th>最善手</th>
+          </tr>
+        </thead>
+        <tbody>
+          {analyses.map((a) => {
+            const best = a.candidates.find((c) => c.rank === 1);
+            const turn = turnSymbol(a.moveNumber);
+            const state = positions[a.moveNumber];
+            const played = usiMoves[a.moveNumber];
+            const isBestMove = best && played && best.move === played;
+            return (
+              <tr key={a.id}>
+                <td>{a.moveNumber}</td>
+                <td>
+                  {played ? `${turn}${toJapanese(played, state)}` : '-'}
+                </td>
+                <td>
+                  {best
+                    ? formatScore(best.scoreType, best.scoreValue, a.moveNumber)
+                    : '-'}
+                </td>
+                <td>
+                  {best ? (
+                    <span
+                      className={clsx(
+                        !isBestMove && (blunders.has(a.moveNumber) ? 'text-error' : 'text-warning'),
+                      )}
+                    >
+                      {turn}
+                      {toJapanese(best.move, state)}
+                      {!isBestMove && (
+                        blunders.has(a.moveNumber)
+                          ? ` ${turn}`
+                          : ' ※'
+                      )}
+                    </span>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

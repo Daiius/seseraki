@@ -1,7 +1,6 @@
 import { useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
 import {
-  buildPositions,
   applyMove,
   usiToJapaneseWithPiece,
   type BoardState,
@@ -71,6 +70,8 @@ interface Analysis {
 
 interface Props {
   usiMoves: string[];
+  /** usiMoves から構築済みの全局面（ページ側で 1 度だけ構築して渡す） */
+  positions: BoardState[];
   analyses: Analysis[];
   sente?: string | null;
   gote?: string | null;
@@ -174,10 +175,9 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
   );
 }
 
-export function ShogiBoard({ usiMoves, analyses, sente, gote }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const blunders = detectBlunders(sortedAnalyses, usiMoves);
-  const positions = buildPositions(usiMoves);
   const { side: userSide, ambiguous: userAmbiguous } = resolveUserSide(sente, gote);
 
   const totalMoves = positions.length - 1;

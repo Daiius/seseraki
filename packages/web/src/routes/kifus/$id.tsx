@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   createFileRoute,
   Link,
@@ -45,6 +46,14 @@ function KifuDetailPage() {
   const navigate = useNavigate();
   const router = useRouter();
 
+  // 削除・再解析の結果表示。失敗を握り潰すとボタンを押しても何も起きないように見えるため、
+  // 成否をここに出す（成功時の再解析も画面変化が乏しいので通知する）
+  const [actionResult, setActionResult] = useState<{
+    kind: 'error' | 'info';
+    message: string;
+  } | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
   // USI 指し手列から盤面を構築。全局面はここで 1 度だけ作り、盤面・表へ配る
@@ -52,19 +61,47 @@ function KifuDetailPage() {
 
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
-    const res = await client.api.kifus[':id'].$delete({
-      param: { id: String(kifu.id) },
-    });
-    if (res.ok) navigate({ to: '/' });
+    setActionResult(null);
+    setBusy(true);
+    try {
+      const res = await client.api.kifus[':id'].$delete({
+        param: { id: String(kifu.id) },
+      });
+      if (!res.ok) {
+        setActionResult({ kind: 'error', message: `削除に失敗しました (${res.status})` });
+        return;
+      }
+      navigate({ to: '/' });
+    } catch {
+      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   // kifText を再変換して解析状態をリセットし、worker に拾い直させる。
   // パーサ修正後の既存棋譜の復旧・失敗棋譜の再試行を兼ねる。
   const handleReanalyze = async () => {
-    const res = await client.api.kifus[':id'].reanalyze.$post({
-      param: { id: String(kifu.id) },
-    });
-    if (res.ok) router.invalidate();
+    setActionResult(null);
+    setBusy(true);
+    try {
+      const res = await client.api.kifus[':id'].reanalyze.$post({
+        param: { id: String(kifu.id) },
+      });
+      if (!res.ok) {
+        setActionResult({ kind: 'error', message: `再解析に失敗しました (${res.status})` });
+        return;
+      }
+      setActionResult({
+        kind: 'info',
+        message: '再解析を開始しました。完了までしばらくかかります',
+      });
+      router.invalidate();
+    } catch {
+      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -96,10 +133,16 @@ function KifuDetailPage() {
             className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-32 p-1 shadow"
           >
             <li>
-              <button onClick={handleReanalyze}>再解析</button>
+              <button onClick={handleReanalyze} disabled={busy}>
+                再解析
+              </button>
             </li>
             <li>
-              <button onClick={handleDelete} className="text-error">
+              <button
+                onClick={handleDelete}
+                className="text-error"
+                disabled={busy}
+              >
                 削除
               </button>
             </li>
@@ -108,6 +151,18 @@ function KifuDetailPage() {
       </div>
 
       <div className="flex flex-col gap-6">
+        {actionResult && (
+          <div
+            role="alert"
+            className={clsx(
+              'alert',
+              actionResult.kind === 'error' ? 'alert-error' : 'alert-info',
+            )}
+          >
+            <span>{actionResult.message}</span>
+          </div>
+        )}
+
         {kifu.analysisError && (
           <div className="alert alert-error flex items-start gap-3">
             <div className="flex-1">
@@ -116,7 +171,11 @@ function KifuDetailPage() {
                 {kifu.analysisError}
               </div>
             </div>
-            <button className="btn btn-sm" onClick={handleReanalyze}>
+            <button
+              className="btn btn-sm"
+              onClick={handleReanalyze}
+              disabled={busy}
+            >
               再解析
             </button>
           </div>

@@ -23,6 +23,9 @@ type JobStatus =
       errorMessage: string;
     };
 
+// server 側の zod スキーマ（`POST /api/swars/import` の `pages: 1..10`）と揃える
+const MAX_IMPORT_PAGES = 10;
+
 const jobStatusFetcher = async (): Promise<JobStatus> => {
   const res = await client.api.swars.import.status.$get();
   if (!res.ok) throw new Error(`status ${res.status}`);
@@ -55,6 +58,8 @@ function KifuListPage() {
   const [isPolling, setIsPolling] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
   const [jobStartedAt, setJobStartedAt] = useState<string | null>(null);
+  // 遡って取得する対局履歴のページ数。常用は 1 ページなので既定に戻す（永続化しない）
+  const [importPages, setImportPages] = useState(1);
 
   const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
 
@@ -101,7 +106,9 @@ function KifuListPage() {
     setImportResult(null);
     setIsPolling(true);
     try {
-      const res = await client.api.swars.import.$post({ json: { userId, pages: 1 } });
+      const res = await client.api.swars.import.$post({
+        json: { userId, pages: importPages },
+      });
       if (!res.ok) {
         setImportResult(`取得失敗 (${res.status})`);
         setIsPolling(false);
@@ -126,13 +133,29 @@ function KifuListPage() {
       <div className="flex items-center gap-4 mb-4">
         <h2 className="text-2xl font-bold">棋譜一覧</h2>
         {import.meta.env.VITE_SWARS_USER_ID ? (
-          <button
-            className="btn btn-sm btn-outline"
-            disabled={importing}
-            onClick={handleImport}
-          >
-            {importing ? <span className="loading loading-spinner loading-xs" /> : '更新'}
-          </button>
+          <div className="join">
+            <select
+              className="join-item select select-sm select-bordered"
+              value={importPages}
+              disabled={importing}
+              onChange={(e) => setImportPages(Number(e.target.value))}
+              aria-label="取得ページ数"
+              title="遡って取得する対局履歴のページ数（取り込み済みの対局はスキップされる）"
+            >
+              {Array.from({ length: MAX_IMPORT_PAGES }, (_, i) => i + 1).map((p) => (
+                <option key={p} value={p}>
+                  {p}ページ
+                </option>
+              ))}
+            </select>
+            <button
+              className="join-item btn btn-sm btn-outline"
+              disabled={importing}
+              onClick={handleImport}
+            >
+              {importing ? <span className="loading loading-spinner loading-xs" /> : '更新'}
+            </button>
+          </div>
         ) : (
           <span className="text-xs text-base-content/50">
             VITE_SWARS_USER_ID が未設定のため更新ボタンを表示できません

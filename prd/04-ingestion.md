@@ -55,6 +55,8 @@
 ## 4. swars 一括取り込み（半自動）
 
 - swars の対局履歴からまとめて棋譜を取り込むルート。**Web の「更新」ボタン**から手動トリガーし、**非同期ジョブ**で走る。
+- **遡るページ数は Web から指定する**（ボタン隣のセレクト・1〜10・既定 1）。常用は最新 1 ページだが、初回セットアップや
+  久しぶりの取り込みでは過去分を遡る必要があるため。選択は永続化せず、リロードで既定に戻す（[decisions](./_grilling/decisions.md)）。
 - エンドポイント: `POST /api/swars/import`（202 即応答・バックグラウンド実行。body `{ userId, gtype?, pages? }`）→
   `GET /api/swars/import/status`（`idle` / `running` / `done` / `error`）。いずれも `sessionRequired` で保護（[07](./07-auth-and-privacy.md)）。
 - 取り込んだ棋譜は **CSA→KIF 変換**を経て、以降は §3 と同じ KIF→USI 変換 + 対局メタ抽出 + 保存の下流に載る。

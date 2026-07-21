@@ -2,6 +2,20 @@ import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from '../lib/honoClient';
+import {
+  DEFAULT_ORDER,
+  DEFAULT_SORT,
+  describeFilters,
+  isFiltered,
+  ORDERS,
+  OUTCOMES,
+  SORTS,
+  STATUSES,
+  type Order,
+  type Outcome,
+  type Sort,
+  type Status,
+} from '../lib/kifuListFilter';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 
 type JobStatus =
@@ -26,19 +40,10 @@ type JobStatus =
 // server 側の zod スキーマ（`POST /api/swars/import` の `pages: 1..10`）と揃える
 const MAX_IMPORT_PAGES = 10;
 
-// 一覧の絞り込み・並べ替え。値は server 側の zod スキーマ（`GET /api/kifus`）と揃える
+// 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
 // server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
 // 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
 const MAX_SEARCH_LENGTH = 100;
-const STATUSES = ['all', 'analyzed', 'unanalyzed', 'failed'] as const;
-const OUTCOMES = ['all', 'win', 'loss'] as const;
-const SORTS = ['playedAt', 'createdAt', 'title'] as const;
-const ORDERS = ['asc', 'desc'] as const;
-
-type Status = (typeof STATUSES)[number];
-type Outcome = (typeof OUTCOMES)[number];
-type Sort = (typeof SORTS)[number];
-type Order = (typeof ORDERS)[number];
 
 // 生成される routeTree が `IndexRoute` の型でこれを参照するため export が要る
 export interface KifuListSearch {
@@ -87,8 +92,8 @@ export const Route = createFileRoute('/')({
     outcome: option(OUTCOMES, search.outcome, 'all'),
     from: dateParam(search.from),
     to: dateParam(search.to),
-    sort: option(SORTS, search.sort, 'playedAt'),
-    order: option(ORDERS, search.order, 'desc'),
+    sort: option(SORTS, search.sort, DEFAULT_SORT),
+    order: option(ORDERS, search.order, DEFAULT_ORDER),
   }),
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
@@ -97,8 +102,8 @@ export const Route = createFileRoute('/')({
     outcome: search.outcome ?? 'all',
     from: search.from,
     to: search.to,
-    sort: search.sort ?? 'playedAt',
-    order: search.order ?? 'desc',
+    sort: search.sort ?? DEFAULT_SORT,
+    order: search.order ?? DEFAULT_ORDER,
   }),
   loader: async ({ deps }) => {
     try {
@@ -129,8 +134,8 @@ function KifuListPage() {
     outcome = 'all',
     from,
     to,
-    sort = 'playedAt',
-    order = 'desc',
+    sort = DEFAULT_SORT,
+    order = DEFAULT_ORDER,
   } = Route.useSearch();
   const navigate = useNavigate();
   const router = useRouter();
@@ -183,7 +188,9 @@ function KifuListPage() {
   };
 
   // 並べ替えは絞り込みではないので、件数が変わらない＝空表示の文言には影響しない
-  const filtered = Boolean(q || status !== 'all' || outcome !== 'all' || from || to);
+  const filtered = isFiltered({ q, status, outcome, from, to });
+  // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
+  const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
   const canFilterByOutcome = getSelfNames().length > 0;
 
   const { data: jobStatus } = useSWR<JobStatus>(
@@ -285,87 +292,105 @@ function KifuListPage() {
           </span>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <input
-          type="search"
-          className="input input-sm input-bordered w-56"
-          placeholder="タイトル・対局者名で検索"
-          value={queryDraft}
-          maxLength={MAX_SEARCH_LENGTH}
-          onChange={(e) => setQueryDraft(e.target.value)}
-          aria-label="タイトル・対局者名で検索"
-        />
-        <select
-          className="select select-sm select-bordered"
-          value={status}
-          onChange={(e) => updateFilter({ status: e.target.value as Status })}
-          aria-label="解析状態で絞り込み"
-        >
-          <option value="all">状態: すべて</option>
-          <option value="analyzed">解析済み</option>
-          <option value="unanalyzed">未解析</option>
-          <option value="failed">解析失敗</option>
-        </select>
-        {canFilterByOutcome && (
-          <select
-            className="select select-sm select-bordered"
-            value={outcome}
-            onChange={(e) => updateFilter({ outcome: e.target.value as Outcome })}
-            aria-label="勝敗で絞り込み"
-          >
-            <option value="all">勝敗: すべて</option>
-            <option value="win">勝ち</option>
-            <option value="loss">負け</option>
-          </select>
-        )}
-        <div className="flex items-center gap-1">
-          <input
-            type="date"
-            className="input input-sm input-bordered"
-            value={from ?? ''}
-            max={to}
-            onChange={(e) => updateFilter({ from: e.target.value || undefined })}
-            aria-label="期間の開始日"
-          />
-          <span className="text-base-content/60">〜</span>
-          <input
-            type="date"
-            className="input input-sm input-bordered"
-            value={to ?? ''}
-            min={from}
-            onChange={(e) => updateFilter({ to: e.target.value || undefined })}
-            aria-label="期間の終了日"
-          />
+      {/*
+        フィルタバーは既定で畳む（暫定・#50）。現状の絞り込み軸だけでは常時出しておくほど使わず、
+        一覧の上部を占有するため。畳んだままでも条件が読めるよう summary に要約を出し、自動では開かない。
+        中身が軽く開閉のたびに入力状態を作り直したくないので、LazyDetails ではなく素の <details> を使う。
+      */}
+      <details className="collapse collapse-arrow bg-base-200 mb-2">
+        <summary className="collapse-title py-2 text-sm font-semibold">
+          <span className="flex items-baseline gap-2">
+            <span className="shrink-0">検索</span>
+            {filterSummary && (
+              <span className="truncate font-normal text-base-content/70">{filterSummary}</span>
+            )}
+          </span>
+        </summary>
+        <div className="collapse-content">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              className="input input-sm input-bordered w-56"
+              placeholder="タイトル・対局者名で検索"
+              value={queryDraft}
+              maxLength={MAX_SEARCH_LENGTH}
+              onChange={(e) => setQueryDraft(e.target.value)}
+              aria-label="タイトル・対局者名で検索"
+            />
+            <select
+              className="select select-sm select-bordered"
+              value={status}
+              onChange={(e) => updateFilter({ status: e.target.value as Status })}
+              aria-label="解析状態で絞り込み"
+            >
+              <option value="all">状態: すべて</option>
+              <option value="analyzed">解析済み</option>
+              <option value="unanalyzed">未解析</option>
+              <option value="failed">解析失敗</option>
+            </select>
+            {canFilterByOutcome && (
+              <select
+                className="select select-sm select-bordered"
+                value={outcome}
+                onChange={(e) => updateFilter({ outcome: e.target.value as Outcome })}
+                aria-label="勝敗で絞り込み"
+              >
+                <option value="all">勝敗: すべて</option>
+                <option value="win">勝ち</option>
+                <option value="loss">負け</option>
+              </select>
+            )}
+            <div className="flex items-center gap-1">
+              <input
+                type="date"
+                className="input input-sm input-bordered"
+                value={from ?? ''}
+                max={to}
+                onChange={(e) => updateFilter({ from: e.target.value || undefined })}
+                aria-label="期間の開始日"
+              />
+              <span className="text-base-content/60">〜</span>
+              <input
+                type="date"
+                className="input input-sm input-bordered"
+                value={to ?? ''}
+                min={from}
+                onChange={(e) => updateFilter({ to: e.target.value || undefined })}
+                aria-label="期間の終了日"
+              />
+            </div>
+            <div className="join">
+              <select
+                className="join-item select select-sm select-bordered"
+                value={sort}
+                onChange={(e) => updateFilter({ sort: e.target.value as Sort })}
+                aria-label="並べ替えの基準"
+              >
+                <option value="playedAt">対局日時順</option>
+                <option value="createdAt">登録日時順</option>
+                <option value="title">タイトル順</option>
+              </select>
+              <button
+                className="join-item btn btn-sm btn-outline"
+                onClick={() => updateFilter({ order: order === 'desc' ? 'asc' : 'desc' })}
+                title={order === 'desc' ? '降順（新しい順）' : '昇順（古い順）'}
+                aria-label="並び順を切り替え"
+              >
+                {order === 'desc' ? '↓' : '↑'}
+              </button>
+            </div>
+            {(filtered || sort !== DEFAULT_SORT || order !== DEFAULT_ORDER) && (
+              <button className="btn btn-sm btn-ghost" onClick={clearFilters}>
+                条件をクリア
+              </button>
+            )}
+          </div>
         </div>
-        <div className="join">
-          <select
-            className="join-item select select-sm select-bordered"
-            value={sort}
-            onChange={(e) => updateFilter({ sort: e.target.value as Sort })}
-            aria-label="並べ替えの基準"
-          >
-            <option value="playedAt">対局日時順</option>
-            <option value="createdAt">登録日時順</option>
-            <option value="title">タイトル順</option>
-          </select>
-          <button
-            className="join-item btn btn-sm btn-outline"
-            onClick={() => updateFilter({ order: order === 'desc' ? 'asc' : 'desc' })}
-            title={order === 'desc' ? '降順（新しい順）' : '昇順（古い順）'}
-            aria-label="並び順を切り替え"
-          >
-            {order === 'desc' ? '↓' : '↑'}
-          </button>
-        </div>
-        {(filtered || sort !== 'playedAt' || order !== 'desc') && (
-          <button className="btn btn-sm btn-ghost" onClick={clearFilters}>
-            条件をクリア
-          </button>
-        )}
-        {pagination && (
-          <span className="text-sm text-base-content/60">{pagination.total}件</span>
-        )}
-      </div>
+      </details>
+      {/* 件数は折り畳みの外に出す（閉じている間も見えるように） */}
+      {pagination && (
+        <div className="mb-4 text-sm text-base-content/60">{pagination.total}件</div>
+      )}
       {importResult && (
         <div className="alert alert-info mb-4">{importResult}</div>
       )}

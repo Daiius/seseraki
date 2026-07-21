@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 
@@ -13,8 +14,15 @@ const apiTarget = process.env.DEV_API_TARGET ?? 'http://localhost:4000';
 const allowedHost = process.env.DEV_ALLOWED_HOST;
 const isRemote = !!allowedHost && allowedHost !== 'localhost';
 
+// メモ化は React Compiler に委ねる（AGENTS.md）。babel は react() の後に置き、
+// JSX 変換後のコードへコンパイラを掛ける。
 export default defineConfig({
-  plugins: [TanStackRouterVite(), react(), tailwindcss()],
+  plugins: [
+    TanStackRouterVite(),
+    react(),
+    babel({ presets: [reactCompilerPreset()] }),
+    tailwindcss(),
+  ],
   server: {
     // 単体起動（pnpm dev:web）では loopback。compose は command の --host で 0.0.0.0 に、
     // remote は allowedHosts と併せて外向き公開する（下の isRemote 分岐）。

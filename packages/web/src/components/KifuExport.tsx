@@ -1,14 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { generateKifuMarkdown, type KifuExportInput } from '../kifu-export';
 import { resolveUserSide } from '../lib/self';
 
 export function KifuExport({ kifu }: { kifu: KifuExportInput }) {
   const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
 
-  const markdown = useMemo(
-    () => generateKifuMarkdown({ ...kifu, userSide }),
-    [kifu, userSide],
-  );
+  const markdown = generateKifuMarkdown({ ...kifu, userSide });
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {

@@ -102,7 +102,13 @@ candidateMoves
 - 1 局面につき MultiPV 本数（既定 3）の行が入る。`rank=1` が最善手。
 - `scoreType` / `scoreValue` は **USI エンジンが返した手番視点のスコアをそのまま格納**する（正規化しない）。
   先手視点への変換は表示・判定時に moveNumber の parity で行う（後手番＝奇数は符号反転。[01](./01-domain.md) §5 / [05](./05-analysis.md)）。
-- `pv` は読み筋（USI 指し手列）。Web の分岐再生・悪手判定に使う（[05](./05-analysis.md)）。
+- `pv` は読み筋（USI 指し手列）。利用先は**読み筋を人に見せる 3 箇所**（[05](./05-analysis.md) §2.2 /
+  [06](./06-llm-commentary.md)）:
+  1. 盤面直下の候補手一覧での読み筋表示（日本語表記に変換して並べる）
+  2. 分岐再生（読み筋を 1 手ずつ盤面に進める）
+  3. LLM 解説用テキストの注目局面の読み筋
+- **悪手判定は `pv` を参照しない**（`rank` / `move` / `scoreType` / `scoreValue` だけで決まる。
+  [05](./05-analysis.md) §2.3）。
 
 ## 5. worker が扱う USI データ型
 

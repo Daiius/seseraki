@@ -6,6 +6,11 @@ import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
 import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
+import {
+  kifuListOrderBy,
+  kifuListQuerySchema,
+  kifuListWhere,
+} from './kifu-list-query.js';
 import { apiKeyRequired } from './middlewares.js';
 import {
   hasValidSession,
@@ -120,15 +125,19 @@ const route = app
   .get(
     '/kifus',
     sessionRequired,
-    zv('query', z.object({ page: z.coerce.number().min(1).default(1) })),
+    zv('query', kifuListQuerySchema),
     async (c) => {
-      const { page } = c.req.valid('query');
+      const query = c.req.valid('query');
+      const { page } = query;
       const limit = 50;
       const offset = (page - 1) * limit;
 
+      const where = kifuListWhere(query);
+
       const [{ total }] = await db
         .select({ total: count() })
-        .from(kifus);
+        .from(kifus)
+        .where(where);
 
       const rows = await db
         .select({
@@ -146,7 +155,8 @@ const route = app
           hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
         })
         .from(kifus)
-        .orderBy(desc(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`))
+        .where(where)
+        .orderBy(...kifuListOrderBy(query))
         .limit(limit)
         .offset(offset);
 

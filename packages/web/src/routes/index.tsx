@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from '../lib/honoClient';
-import { resolveUserSide } from '../lib/self';
+import { getSelfNames, resolveUserSide } from '../lib/self';
 
 type JobStatus =
   | { status: 'idle' }
@@ -26,6 +26,47 @@ type JobStatus =
 // server 側の zod スキーマ（`POST /api/swars/import` の `pages: 1..10`）と揃える
 const MAX_IMPORT_PAGES = 10;
 
+// 一覧の絞り込み・並べ替え。値は server 側の zod スキーマ（`GET /api/kifus`）と揃える
+// server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
+// 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
+const MAX_SEARCH_LENGTH = 100;
+const STATUSES = ['all', 'analyzed', 'unanalyzed', 'failed'] as const;
+const OUTCOMES = ['all', 'win', 'loss'] as const;
+const SORTS = ['playedAt', 'createdAt', 'title'] as const;
+const ORDERS = ['asc', 'desc'] as const;
+
+type Status = (typeof STATUSES)[number];
+type Outcome = (typeof OUTCOMES)[number];
+type Sort = (typeof SORTS)[number];
+type Order = (typeof ORDERS)[number];
+
+// 生成される routeTree が `IndexRoute` の型でこれを参照するため export が要る
+export interface KifuListSearch {
+  page?: number;
+  q?: string;
+  status?: Status;
+  outcome?: Outcome;
+  from?: string;
+  to?: string;
+  sort?: Sort;
+  order?: Order;
+}
+
+/** 許可値でなければ既定に落とす。既定値は `undefined` にして URL に載せない */
+function option<T extends string>(
+  values: readonly T[],
+  raw: unknown,
+  fallback: T,
+): T | undefined {
+  const value = values.find((v) => v === raw);
+  return value && value !== fallback ? value : undefined;
+}
+
+/** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
+function dateParam(raw: unknown): string | undefined {
+  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
+}
+
 const jobStatusFetcher = async (): Promise<JobStatus> => {
   const res = await client.api.swars.import.status.$get();
   if (!res.ok) throw new Error(`status ${res.status}`);
@@ -33,13 +74,42 @@ const jobStatusFetcher = async (): Promise<JobStatus> => {
 };
 
 export const Route = createFileRoute('/')({
-  validateSearch: (search: Record<string, unknown>): { page?: number } => ({
+  validateSearch: (search: Record<string, unknown>): KifuListSearch => ({
     page: Number(search.page) || undefined,
+    // 検索語は trim しない（入力中の末尾スペースが打鍵のたびに消えてしまうため）。
+    // 前後の空白は server 側の zod が落とす。長すぎる URL 直入力は捨てずに切り詰める
+    // （拒否して一覧全体をエラーにするより、頭 100 字で検索した方が扱いやすい）
+    q:
+      typeof search.q === 'string' && search.q !== ''
+        ? search.q.slice(0, MAX_SEARCH_LENGTH)
+        : undefined,
+    status: option(STATUSES, search.status, 'all'),
+    outcome: option(OUTCOMES, search.outcome, 'all'),
+    from: dateParam(search.from),
+    to: dateParam(search.to),
+    sort: option(SORTS, search.sort, 'playedAt'),
+    order: option(ORDERS, search.order, 'desc'),
   }),
-  loaderDeps: ({ search }) => ({ page: search.page ?? 1 }),
-  loader: async ({ deps: { page } }) => {
+  loaderDeps: ({ search }) => ({
+    page: search.page ?? 1,
+    q: search.q,
+    status: search.status ?? 'all',
+    outcome: search.outcome ?? 'all',
+    from: search.from,
+    to: search.to,
+    sort: search.sort ?? 'playedAt',
+    order: search.order ?? 'desc',
+  }),
+  loader: async ({ deps }) => {
     try {
-      const res = await client.api.kifus.$get({ query: { page } });
+      const res = await client.api.kifus.$get({
+        query: {
+          ...deps,
+          // 勝敗で絞るときだけ自分の名前候補を渡す。server は「自分」を知らないため
+          // 判定材料をここから供給する（VITE_SELF_NAMES ∪ VITE_SWARS_USER_ID が単一の正）
+          self: deps.outcome === 'all' ? undefined : getSelfNames().join(','),
+        },
+      });
       if (!res.ok) return { kifus: [], pagination: null, error: `サーバーエラー (${res.status})` };
       const data = await res.json();
       return { kifus: data.kifus, pagination: data.pagination, error: null };
@@ -52,7 +122,16 @@ export const Route = createFileRoute('/')({
 
 function KifuListPage() {
   const { kifus, pagination, error } = Route.useLoaderData();
-  const { page = 1 } = Route.useSearch();
+  const {
+    page = 1,
+    q = '',
+    status = 'all',
+    outcome = 'all',
+    from,
+    to,
+    sort = 'playedAt',
+    order = 'desc',
+  } = Route.useSearch();
   const navigate = useNavigate();
   const router = useRouter();
   const [isPolling, setIsPolling] = useState(false);
@@ -60,8 +139,52 @@ function KifuListPage() {
   const [jobStartedAt, setJobStartedAt] = useState<string | null>(null);
   // 遡って取得する対局履歴のページ数。常用は 1 ページなので既定に戻す（永続化しない）
   const [importPages, setImportPages] = useState(1);
+  // 検索語は打鍵ごとに URL を書き換えず、入力欄のドラフトを debounce して反映する
+  const [queryDraft, setQueryDraft] = useState(q);
 
-  const goToPage = (p: number) => navigate({ to: '/', search: { page: p } });
+  // 戻る/進む・「条件をクリア」など URL 側が変わったときは入力欄を追従させる
+  useEffect(() => {
+    setQueryDraft(q);
+  }, [q]);
+
+  useEffect(() => {
+    if (queryDraft === q) return;
+    const timer = setTimeout(() => {
+      navigate({
+        to: '/',
+        search: (prev: KifuListSearch) => ({
+          ...prev,
+          q: queryDraft || undefined,
+          page: undefined,
+        }),
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [queryDraft, q, navigate]);
+
+  const goToPage = (p: number) =>
+    navigate({
+      to: '/',
+      search: (prev: KifuListSearch) => ({ ...prev, page: p > 1 ? p : undefined }),
+    });
+
+  // 絞り込みを変えたらページは 1 に戻す（前のページ番号のまま 0 件になるのを防ぐ）
+  const updateFilter = (patch: KifuListSearch) =>
+    navigate({
+      to: '/',
+      search: (prev: KifuListSearch) => ({ ...prev, ...patch, page: undefined }),
+    });
+
+  const clearFilters = () => {
+    // ドラフトも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
+    // 上の同期 effect が発火せず、保留中のタイマーがクリア後に検索語を書き戻してしまう
+    setQueryDraft('');
+    navigate({ to: '/', search: {} });
+  };
+
+  // 並べ替えは絞り込みではないので、件数が変わらない＝空表示の文言には影響しない
+  const filtered = Boolean(q || status !== 'all' || outcome !== 'all' || from || to);
+  const canFilterByOutcome = getSelfNames().length > 0;
 
   const { data: jobStatus } = useSWR<JobStatus>(
     isPolling ? 'swars-import-status' : null,
@@ -162,6 +285,87 @@ function KifuListPage() {
           </span>
         )}
       </div>
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <input
+          type="search"
+          className="input input-sm input-bordered w-56"
+          placeholder="タイトル・対局者名で検索"
+          value={queryDraft}
+          maxLength={MAX_SEARCH_LENGTH}
+          onChange={(e) => setQueryDraft(e.target.value)}
+          aria-label="タイトル・対局者名で検索"
+        />
+        <select
+          className="select select-sm select-bordered"
+          value={status}
+          onChange={(e) => updateFilter({ status: e.target.value as Status })}
+          aria-label="解析状態で絞り込み"
+        >
+          <option value="all">状態: すべて</option>
+          <option value="analyzed">解析済み</option>
+          <option value="unanalyzed">未解析</option>
+          <option value="failed">解析失敗</option>
+        </select>
+        {canFilterByOutcome && (
+          <select
+            className="select select-sm select-bordered"
+            value={outcome}
+            onChange={(e) => updateFilter({ outcome: e.target.value as Outcome })}
+            aria-label="勝敗で絞り込み"
+          >
+            <option value="all">勝敗: すべて</option>
+            <option value="win">勝ち</option>
+            <option value="loss">負け</option>
+          </select>
+        )}
+        <div className="flex items-center gap-1">
+          <input
+            type="date"
+            className="input input-sm input-bordered"
+            value={from ?? ''}
+            max={to}
+            onChange={(e) => updateFilter({ from: e.target.value || undefined })}
+            aria-label="期間の開始日"
+          />
+          <span className="text-base-content/60">〜</span>
+          <input
+            type="date"
+            className="input input-sm input-bordered"
+            value={to ?? ''}
+            min={from}
+            onChange={(e) => updateFilter({ to: e.target.value || undefined })}
+            aria-label="期間の終了日"
+          />
+        </div>
+        <div className="join">
+          <select
+            className="join-item select select-sm select-bordered"
+            value={sort}
+            onChange={(e) => updateFilter({ sort: e.target.value as Sort })}
+            aria-label="並べ替えの基準"
+          >
+            <option value="playedAt">対局日時順</option>
+            <option value="createdAt">登録日時順</option>
+            <option value="title">タイトル順</option>
+          </select>
+          <button
+            className="join-item btn btn-sm btn-outline"
+            onClick={() => updateFilter({ order: order === 'desc' ? 'asc' : 'desc' })}
+            title={order === 'desc' ? '降順（新しい順）' : '昇順（古い順）'}
+            aria-label="並び順を切り替え"
+          >
+            {order === 'desc' ? '↓' : '↑'}
+          </button>
+        </div>
+        {(filtered || sort !== 'playedAt' || order !== 'desc') && (
+          <button className="btn btn-sm btn-ghost" onClick={clearFilters}>
+            条件をクリア
+          </button>
+        )}
+        {pagination && (
+          <span className="text-sm text-base-content/60">{pagination.total}件</span>
+        )}
+      </div>
       {importResult && (
         <div className="alert alert-info mb-4">{importResult}</div>
       )}
@@ -169,12 +373,21 @@ function KifuListPage() {
         <div className="alert alert-warning mb-4">{error}</div>
       )}
       {kifus.length === 0 && !error ? (
-        <p className="text-base-content/60">
-          棋譜がまだありません。
-          <Link to="/kifus/new" className="link link-primary">
-            登録する
-          </Link>
-        </p>
+        filtered ? (
+          <p className="text-base-content/60">
+            条件に一致する棋譜がありません。
+            <button className="link link-primary" onClick={clearFilters}>
+              条件をクリア
+            </button>
+          </p>
+        ) : (
+          <p className="text-base-content/60">
+            棋譜がまだありません。
+            <Link to="/kifus/new" className="link link-primary">
+              登録する
+            </Link>
+          </p>
+        )
       ) : (
         <>
           <div className="overflow-x-auto">

@@ -88,9 +88,15 @@ moveAnalyses
 | 担保するもの | 担保する場所 |
 |---|---|
 | 同一 `moveNumber` の重複防止 | `UNIQUE(kifuId, moveNumber)` を使った upsert（再送された局面は既存行を使い回し、`candidateMoves` を入れ直す） |
+| `moveNumber` が棋譜の局面であること | submit 時に **`0 <= moveNumber <= usiMoves.length` を検証**し、外れていれば 1 件でも書かずに 400（下記 ⚠） |
 | 前世代の全消去 | **`reanalyze` の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は DELETE しない） |
 | 完了の確定 | 件数が `usiMoves.length + 1` に達したときの `analysisCompletedAt`（submit と同一トランザクション内で server が判定） |
 
+- ⚠ **完了を件数で決めるので、`moveNumber` の有効範囲は submit 側で担保する必要がある**。範囲外の行を
+  受け入れると、**必要な局面が欠けたまま件数だけが `usiMoves.length + 1` に達して完了扱いになる**
+  （例: 2 手の棋譜に `0 / 1 / 99` が入ると 3 件で完了）。完了すると poll から外れるため自動再開でも
+  修復されない。範囲を保証すれば `UNIQUE(kifuId, moveNumber)` が値の重複を防ぐので、
+  **件数 = 全局面数 ⇒ 全局面が揃っている**が成り立つ。
 - ⚠ **`reanalyze` の DELETE を落とすと前世代の行が残る**（手数の異なる棋譜に差し替わったときに、
   古い末尾の局面が孤立して残り、件数による完了判定も狂う）。
 - 途中まで入っている件数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。

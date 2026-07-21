@@ -15,6 +15,30 @@ export function isChunkAcceptable<
 }
 
 /**
+ * チャンクの `moveNumber` がすべて棋譜の有効範囲（`0..usiMoves.length`）に収まるか。
+ *
+ * 完了を件数で判定する（{@link isAnalysisComplete}）以上、**範囲外の行を受け入れると
+ * 「必要な局面が欠けたまま件数だけ達する」ことがありうる**（例: 2 手の棋譜に 0/1/99 が入ると
+ * 3 件で完了扱いになる）。しかも完了すると poll 対象から外れるため、自動再開でも修復されない。
+ *
+ * 範囲を保証すれば、`UNIQUE(kifuId, moveNumber)` が値の重複を防ぐので
+ * **件数 = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。
+ */
+export function isChunkInRange(
+  chunk: { moveNumber: number }[],
+  usiMoves: string[] | null,
+): boolean {
+  // usiMoves が無い棋譜は解析対象にならない（poll から除外される）。書き込みは受け付けない
+  if (usiMoves === null) return chunk.length === 0;
+  return chunk.every(
+    (a) =>
+      Number.isInteger(a.moveNumber) &&
+      a.moveNumber >= 0 &&
+      a.moveNumber <= usiMoves.length,
+  );
+}
+
+/**
  * 解析が完了したか（`moveAnalyses` の件数が全局面数に達したか）。
  *
  * worker の `isFinal` ではなく **server が件数で判定する**。「揃っていれば完了」という

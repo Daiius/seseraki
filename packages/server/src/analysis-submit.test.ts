@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isAnalysisComplete,
   isChunkAcceptable,
+  isChunkInRange,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
 
@@ -26,6 +27,39 @@ describe('isChunkAcceptable', () => {
 
   it('棋譜が消えていたら破棄する', () => {
     expect(isChunkAcceptable(undefined, 3)).toBe(false);
+  });
+});
+
+describe('isChunkInRange', () => {
+  const usiMoves = ['7g7f', '3c3d', '2g2f'];
+
+  it('初期局面（0）から最終局面（usiMoves.length）までは受理する', () => {
+    expect(
+      isChunkInRange([{ moveNumber: 0 }, { moveNumber: 3 }], usiMoves),
+    ).toBe(true);
+  });
+
+  it('棋譜の手数を超える moveNumber は拒否する（欠番のまま件数だけ達するのを防ぐ）', () => {
+    expect(
+      isChunkInRange([{ moveNumber: 0 }, { moveNumber: 99 }], usiMoves),
+    ).toBe(false);
+  });
+
+  it('負の moveNumber は拒否する', () => {
+    expect(isChunkInRange([{ moveNumber: -1 }], usiMoves)).toBe(false);
+  });
+
+  it('整数でない moveNumber は拒否する', () => {
+    expect(isChunkInRange([{ moveNumber: 1.5 }], usiMoves)).toBe(false);
+  });
+
+  it('空チャンクは受理する（完了確定のために送る最終チャンク）', () => {
+    expect(isChunkInRange([], usiMoves)).toBe(true);
+    expect(isChunkInRange([], null)).toBe(true);
+  });
+
+  it('usiMoves が無い棋譜への書き込みは拒否する', () => {
+    expect(isChunkInRange([{ moveNumber: 0 }], null)).toBe(false);
   });
 });
 

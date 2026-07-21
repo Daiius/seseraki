@@ -28,6 +28,7 @@ import {
 import {
   isAnalysisComplete,
   isChunkAcceptable,
+  isChunkInRange,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
@@ -447,7 +448,8 @@ const route = app
         revision: z.number(),
         analyses: z.array(
           z.object({
-            moveNumber: z.number(),
+            // 上限（棋譜の手数）は usiMoves を読んでからでないと判定できないのでハンドラ内で見る
+            moveNumber: z.number().int().min(0),
             candidates: z.array(candidateMoveSchema),
           }),
         ),
@@ -457,6 +459,9 @@ const route = app
       const { kifuId, revision, analyses } = c.req.valid('json');
       let applied = false;
       let completed = false;
+      // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して
+      // 完了扱いになりうる（完了すると poll 対象から外れ、自動再開でも直らない）
+      let outOfRange = false;
       await db.transaction(async (tx) => {
         // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析のチャンクは破棄）。
         // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
@@ -473,6 +478,12 @@ const route = app
         // 同一世代 かつ 失敗記録なし のときだけ適用。既に error が立っていれば結果は保存しない
         // → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
         if (!isChunkAcceptable(current, revision)) return;
+        // 有効範囲（0..usiMoves.length）を保証してはじめて「件数 = 揃った局面数」が成り立つ
+        // （UNIQUE(kifuId, moveNumber) が値の重複を防ぐため）。範囲外は書かずに 400 で返す
+        if (!isChunkInRange(analyses, current.usiMoves)) {
+          outOfRange = true;
+          return;
+        }
         applied = true;
 
         // チャンクは**追記**する（DELETE しない）。前世代の全消去は `reanalyze` の DELETE が
@@ -543,6 +554,9 @@ const route = app
             .where(eq(kifus.id, kifuId));
         }
       });
+      if (outOfRange) {
+        return c.json({ error: 'moveNumber out of range' } as const, 400);
+      }
       // 完了したときだけ「解析中」を落とす。途中のチャンクで落とすと、進捗表示が次の報告まで
       // 消えてしまう（旧世代の破棄されたチャンクでも触らない）
       if (completed) clearProgress(kifuId);

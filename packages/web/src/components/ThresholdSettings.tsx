@@ -1,10 +1,12 @@
 import { DEFAULT_THRESHOLDS, type Thresholds } from '../lib/cpl';
+import { applyThresholdInput } from '../lib/thresholds';
 
 /**
  * 悪手判定のしきい値設定（prd/05-analysis.md §2.5）。
  *
  * CPL 自体はしきい値に依存しない（しきい値は表示のフィルタ）ので、変更しても再解析は要らない。
  * 値はブラウザの localStorage に保存され、全棋譜に効く。
+ * 入力の解釈（空欄の無視・`疑問手 <= 悪手` の追従）は `applyThresholdInput` に寄せてある。
  */
 export function ThresholdSettings({
   thresholds,
@@ -13,12 +15,10 @@ export function ThresholdSettings({
   thresholds: Thresholds;
   onChange: (next: Thresholds) => void;
 }) {
-  // 疑問手 > 悪手 になると疑問手が一切出なくなるため、片方を動かしたらもう片方を追従させて
-  // 不整合な状態を作らせない
-  const setBlunder = (value: number) =>
-    onChange({ ...thresholds, blunder: value, dubious: Math.min(thresholds.dubious, value) });
-  const setDubious = (value: number) =>
-    onChange({ ...thresholds, dubious: value, blunder: Math.max(thresholds.blunder, value) });
+  const handleInput = (field: keyof Thresholds, raw: string) => {
+    const next = applyThresholdInput(thresholds, field, raw);
+    if (next) onChange(next);
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -32,19 +32,19 @@ export function ThresholdSettings({
           label="悪手"
           hint="この損失(cp)以上"
           value={thresholds.blunder}
-          onChange={setBlunder}
+          onInput={(raw) => handleInput('blunder', raw)}
         />
         <ThresholdField
           label="疑問手"
           hint="この損失(cp)以上・悪手未満"
           value={thresholds.dubious}
-          onChange={setDubious}
+          onInput={(raw) => handleInput('dubious', raw)}
         />
         <ThresholdField
           label="決着"
           hint="評価値がこの絶対値(cp)以上ならラベルを付けない"
           value={thresholds.decided}
-          onChange={(value) => onChange({ ...thresholds, decided: value })}
+          onInput={(raw) => handleInput('decided', raw)}
         />
       </div>
       <button
@@ -66,12 +66,12 @@ function ThresholdField({
   label,
   hint,
   value,
-  onChange,
+  onInput,
 }: {
   label: string;
   hint: string;
   value: number;
-  onChange: (value: number) => void;
+  onInput: (raw: string) => void;
 }) {
   return (
     <label className="form-control flex flex-col gap-1 sm:w-64">
@@ -81,12 +81,7 @@ function ThresholdField({
         min={0}
         step={10}
         value={value}
-        onChange={(e) => {
-          const next = Number(e.target.value);
-          // 空欄・負値は無視する（NaN を保存すると既定へのフォールバックが必要になる）
-          if (!Number.isFinite(next) || next < 0) return;
-          onChange(next);
-        }}
+        onChange={(e) => onInput(e.target.value)}
         className="input input-bordered input-sm w-full"
       />
       <span className="text-xs text-base-content/60">{hint}</span>

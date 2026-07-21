@@ -60,6 +60,35 @@ function saveThresholds(thresholds: Thresholds): void {
   }
 }
 
+/**
+ * 入力欄の生の文字列を閾値に反映する。反映しない入力では **null** を返す。
+ *
+ * - **空欄は無視する。** `Number('')` は 0 になるため素直に変換すると、値を消して打ち直すだけの操作が
+ *   「閾値 0 の保存」になる（決着 0 なら全局面が決着扱いでラベルが消える）。
+ * - 数値でない・負値も無視する。
+ * - **`dubious <= blunder` を保つ**ため、片方を動かしたらもう片方を追従させる
+ *   （疑問手 > 悪手 だと `labelOf` が悪手を先に判定し、疑問手が一切出なくなる）。
+ */
+export function applyThresholdInput(
+  thresholds: Thresholds,
+  field: keyof Thresholds,
+  raw: string,
+): Thresholds | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return null;
+
+  switch (field) {
+    case 'blunder':
+      return { ...thresholds, blunder: value, dubious: Math.min(thresholds.dubious, value) };
+    case 'dubious':
+      return { ...thresholds, dubious: value, blunder: Math.max(thresholds.blunder, value) };
+    case 'decided':
+      return { ...thresholds, decided: value };
+  }
+}
+
 export function useThresholds() {
   const [thresholds, setState] = useState<Thresholds>(loadThresholds);
   const setThresholds = (next: Thresholds) => {

@@ -8,7 +8,7 @@ import {
   type CplAnalysis,
   type Thresholds,
 } from './cpl';
-import { parseThresholds } from './thresholds';
+import { applyThresholdInput, parseThresholds } from './thresholds';
 
 /** rank 順の候補手を組み立てる（cp 既定・`m` 接頭辞で mate） */
 function candidates(...moves: [move: string, score: number | `m${number}`][]) {
@@ -241,11 +241,58 @@ describe('parseThresholds', () => {
     });
   });
 
-  it('正規化した閾値では疑問手が機能する', () => {
+  it('正規化した閾値では悪手が先に判定される', () => {
     const t = parseThresholds('{"blunder":"broken","dubious":500,"decided":1000}');
     const loss = { moveNumber: 0, bestCp: 0, loss: 320, approximate: false, mate: null };
 
     expect(labelOf(loss, t)).toBe('blunder');
     expect(t.dubious).toBeLessThanOrEqual(t.blunder);
+  });
+});
+
+describe('applyThresholdInput', () => {
+  const base = DEFAULT_THRESHOLDS;
+
+  it('空欄は無視する（Number("") の 0 を保存しない）', () => {
+    // 値を消して打ち直す操作で「決着 0 ＝全局面が決着扱い」になってしまうため
+    expect(applyThresholdInput(base, 'decided', '')).toBeNull();
+    expect(applyThresholdInput(base, 'decided', '   ')).toBeNull();
+    expect(applyThresholdInput(base, 'blunder', '')).toBeNull();
+    expect(applyThresholdInput(base, 'dubious', '')).toBeNull();
+  });
+
+  it('数値でない・負の入力は無視する', () => {
+    expect(applyThresholdInput(base, 'blunder', 'abc')).toBeNull();
+    expect(applyThresholdInput(base, 'blunder', '-1')).toBeNull();
+  });
+
+  it('悪手を下げると疑問手が追従する', () => {
+    expect(applyThresholdInput(base, 'blunder', '100')).toEqual({
+      blunder: 100,
+      dubious: 100,
+      decided: 1000,
+    });
+    // 疑問手を上回ったままなら動かさない
+    expect(applyThresholdInput(base, 'blunder', '400')).toEqual({
+      blunder: 400,
+      dubious: 150,
+      decided: 1000,
+    });
+  });
+
+  it('疑問手を上げると悪手が追従する', () => {
+    expect(applyThresholdInput(base, 'dubious', '500')).toEqual({
+      blunder: 500,
+      dubious: 500,
+      decided: 1000,
+    });
+  });
+
+  it('決着は他の閾値に影響しない', () => {
+    expect(applyThresholdInput(base, 'decided', '2000')).toEqual({
+      blunder: 300,
+      dubious: 150,
+      decided: 2000,
+    });
   });
 });

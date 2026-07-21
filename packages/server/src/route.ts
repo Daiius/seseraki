@@ -25,6 +25,12 @@ import {
   getProgress,
   setProgress,
 } from './analysis-progress.js';
+import {
+  isAnalysisComplete,
+  isChunkAcceptable,
+  isChunkInRange,
+  resolveExistingMoveAnalyses,
+} from './analysis-submit.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
@@ -357,7 +363,15 @@ const route = app
       )
       .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
       .limit(1);
-    return c.json(kifu ?? null);
+    if (!kifu) return c.json(null);
+    // 既に入っている局面数を返し、worker はその続き（moveNumber = analyzedCount）から解析する
+    // （チャンク submit の中断からの再開。prd/05 §1.1c）。チャンク submit の失敗は解析ごと中断する
+    // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる
+    const [{ analyzedCount }] = await db
+      .select({ analyzedCount: count() })
+      .from(moveAnalyses)
+      .where(eq(moveAnalyses.kifuId, kifu.id));
+    return c.json({ ...kifu, analyzedCount });
   })
   .post(
     '/worker/kifus/:id/error',
@@ -434,7 +448,8 @@ const route = app
         revision: z.number(),
         analyses: z.array(
           z.object({
-            moveNumber: z.number(),
+            // 上限（棋譜の手数）は usiMoves を読んでからでないと判定できないのでハンドラ内で見る
+            moveNumber: z.number().int().min(0),
             candidates: z.array(candidateMoveSchema),
           }),
         ),
@@ -443,56 +458,111 @@ const route = app
     async (c) => {
       const { kifuId, revision, analyses } = c.req.valid('json');
       let applied = false;
+      let completed = false;
+      // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して
+      // 完了扱いになりうる（完了すると poll 対象から外れ、自動再開でも直らない）
+      let outOfRange = false;
       await db.transaction(async (tx) => {
-        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析は破棄）。
+        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析のチャンクは破棄）。
         // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
         // 世代が進むのを防ぐ）。reanalyze も kifus を先にロックするためデッドロックしない。
         const [current] = await tx
           .select({
             revision: kifus.analysisRevision,
             error: kifus.analysisError,
+            completedAt: kifus.analysisCompletedAt,
+            usiMoves: kifus.usiMoves,
           })
           .from(kifus)
           .where(eq(kifus.id, kifuId))
           .for('update');
-        // 同一世代 かつ 失敗記録なし のときだけ適用。既に error が立っていれば結果は保存しない
-        // → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
-        if (!current || current.revision !== revision || current.error !== null)
+        // 同一世代 かつ 失敗記録なし かつ 未完了 のときだけ適用。既に error が立っていれば結果は
+        // 保存しない → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
+        // 完了済みも弾く＝完了後の解析結果は不変（遅れて届いたチャンクで部分的に上書きされない）。
+        if (!isChunkAcceptable(current, revision)) return;
+        // 有効範囲（0..usiMoves.length）を保証してはじめて「件数 = 揃った局面数」が成り立つ
+        // （UNIQUE(kifuId, moveNumber) が値の重複を防ぐため）。範囲外は書かずに 400 で返す
+        if (!isChunkInRange(analyses, current.usiMoves)) {
+          outOfRange = true;
           return;
+        }
         applied = true;
 
-        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, kifuId));
-
-        for (const analysis of analyses) {
-          const [inserted] = await tx
-            .insert(moveAnalyses)
-            .values({
-              kifuId,
-              moveNumber: analysis.moveNumber,
+        // チャンクは**追記**する（DELETE しない）。前世代の全消去は `reanalyze` の DELETE が
+        // 唯一の経路になる（prd/03 §3・§7）。
+        if (analyses.length > 0) {
+          const existing = await tx
+            .select({
+              id: moveAnalyses.id,
+              moveNumber: moveAnalyses.moveNumber,
             })
-            .$returningId();
-          if (analysis.candidates.length > 0) {
-            await tx.insert(candidateMoves).values(
-              analysis.candidates.map((candidate) => ({
-                moveAnalysisId: inserted.id,
-                rank: candidate.rank,
-                move: candidate.move,
-                scoreType: candidate.scoreType,
-                scoreValue: candidate.scoreValue,
-                pv: candidate.pv ?? null,
-                depth: candidate.depth,
-              })),
+            .from(moveAnalyses)
+            .where(
+              and(
+                eq(moveAnalyses.kifuId, kifuId),
+                inArray(
+                  moveAnalyses.moveNumber,
+                  analyses.map((a) => a.moveNumber),
+                ),
+              ),
             );
+          // 同一 moveNumber の再送は既存行を使い回して候補手を入れ直す（行が二重に増えない）
+          for (const { analysis, existingId } of resolveExistingMoveAnalyses(
+            analyses,
+            existing,
+          )) {
+            let moveAnalysisId = existingId;
+            if (moveAnalysisId === null) {
+              const [inserted] = await tx
+                .insert(moveAnalyses)
+                .values({
+                  kifuId,
+                  moveNumber: analysis.moveNumber,
+                })
+                .$returningId();
+              moveAnalysisId = inserted.id;
+            } else {
+              await tx
+                .delete(candidateMoves)
+                .where(eq(candidateMoves.moveAnalysisId, moveAnalysisId));
+            }
+            if (analysis.candidates.length > 0) {
+              await tx.insert(candidateMoves).values(
+                analysis.candidates.map((candidate) => ({
+                  moveAnalysisId,
+                  rank: candidate.rank,
+                  move: candidate.move,
+                  scoreType: candidate.scoreType,
+                  scoreValue: candidate.scoreValue,
+                  pv: candidate.pv ?? null,
+                  depth: candidate.depth,
+                })),
+              );
+            }
           }
         }
-        await tx
-          .update(kifus)
-          .set({ analysisCompletedAt: new Date() })
-          .where(eq(kifus.id, kifuId));
+
+        // 完了は **server が件数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
+        // 同じトランザクション内で数えて立てるので、チャンク境界や worker のクラッシュ位置に依存しない。
+        const [{ stored }] = await tx
+          .select({ stored: count() })
+          .from(moveAnalyses)
+          .where(eq(moveAnalyses.kifuId, kifuId));
+        completed = isAnalysisComplete(stored, current.usiMoves);
+        if (completed) {
+          await tx
+            .update(kifus)
+            .set({ analysisCompletedAt: new Date() })
+            .where(eq(kifus.id, kifuId));
+        }
       });
-      // 完了したので「解析中」を落とす（適用されなかった旧世代の submit では触らない）
-      if (applied) clearProgress(kifuId);
-      return c.json({ ok: true, applied }, 201);
+      if (outOfRange) {
+        return c.json({ error: 'moveNumber out of range' } as const, 400);
+      }
+      // 完了したときだけ「解析中」を落とす。途中のチャンクで落とすと、進捗表示が次の報告まで
+      // 消えてしまう（旧世代の破棄されたチャンクでも触らない）
+      if (completed) clearProgress(kifuId);
+      return c.json({ ok: true, applied, completed }, 201);
     },
   )
   // --- swars 棋譜取得 ---

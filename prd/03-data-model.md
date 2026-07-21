@@ -60,7 +60,14 @@ kifus
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
   再試行は `POST /api/kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
   **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
-  完了 submit は error なし時のみ適用する（行ロック下で相互排他。重複取得/複数 worker でも矛盾状態を作らない）。
+  解析結果のチャンクは error なし時のみ適用する（行ロック下で相互排他。重複取得があっても
+  **この 2 つの状態が矛盾することはない**）。
+  **完了済みの棋譜へのチャンクも受理しない**（＝完了後の解析結果は不変。遅れて届いたチャンクが
+  完了済みの結果を部分的に上書きしうるため。作り直しは `reanalyze` の経路だけ。[05](./05-analysis.md) §1.1c）。
+  - ⚠ ただし**完了前のチャンクの混在までは防がない**。`GET /api/worker/kifus` は lease を取らないので、
+    2 つの worker が同じ棋譜・同じ世代を掴めば、1 棋譜の解析結果に複数実行の値が混ざる。
+    **worker の単一インスタンス運用を前提として受ける**（並行解析には lease 列が要り、
+    [05](./05-analysis.md) §1.1c のとおり承認範囲外）。
 - **`analysisRevision`**: 解析世代。`reanalyze` で +1 する。`GET /api/worker/kifus` は現在の revision を返し、worker は
   `POST /api/worker/analyses` / `POST /api/worker/kifus/:id/error` に取得時 revision を添える。server は **同一 revision のときだけ**
   結果/失敗を適用する。これにより、reanalyze で状態をリセットした後に**実行中だった旧解析の報告が新状態を上書きするのを防ぐ**
@@ -82,7 +89,25 @@ moveAnalyses
 
 - 1 局面 = 1 レコード。`moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
   偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
-- `UNIQUE(kifuId, moveNumber)` で同一局面の二重登録を防ぐ。再解析は DELETE → 再投入（[04](./04-ingestion.md)）。
+- 解析結果は**チャンクに分けて追記**される（[05](./05-analysis.md) §1.1c）。**一意性と完了の担保は
+  次の 3 箇所に分散する**（submit が「DELETE → 全件 INSERT」だった頃は 1 箇所だった。列の追加はない）:
+
+| 担保するもの | 担保する場所 |
+|---|---|
+| 同一 `moveNumber` の重複防止 | `UNIQUE(kifuId, moveNumber)` を使った upsert（再送された局面は既存行を使い回し、`candidateMoves` を入れ直す） |
+| `moveNumber` が棋譜の局面であること | submit 時に **`0 <= moveNumber <= usiMoves.length` を検証**し、外れていれば 1 件でも書かずに 400（下記 ⚠） |
+| 前世代の全消去 | **`reanalyze` の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は DELETE しない） |
+| 完了の確定 | 件数が `usiMoves.length + 1` に達したときの `analysisCompletedAt`（submit と同一トランザクション内で server が判定） |
+
+- ⚠ **完了を件数で決めるので、`moveNumber` の有効範囲は submit 側で担保する必要がある**。範囲外の行を
+  受け入れると、**必要な局面が欠けたまま件数だけが `usiMoves.length + 1` に達して完了扱いになる**
+  （例: 2 手の棋譜に `0 / 1 / 99` が入ると 3 件で完了）。完了すると poll から外れるため自動再開でも
+  修復されない。範囲を保証すれば `UNIQUE(kifuId, moveNumber)` が値の重複を防ぐので、
+  **件数 = 全局面数 ⇒ 全局面が揃っている**が成り立つ。
+- ⚠ **`reanalyze` の DELETE を落とすと前世代の行が残る**（手数の異なる棋譜に差し替わったときに、
+  古い末尾の局面が孤立して残り、件数による完了判定も狂う）。
+- 途中まで入っている件数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。
+  [05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。
 
 ## 4. `candidateMoves`（MultiPV の候補手）
 
@@ -120,9 +145,11 @@ UsiScore = { type: "cp", value: number } | { type: "mate", value: number }
 CandidateMove = { rank, move, score: UsiScore, pv: string[], depth }
 
 MoveAnalysis  = { moveNumber, candidates: CandidateMove[] }
-
-KifuAnalysisResult = { totalMoves, analyses: MoveAnalysis[] }
 ```
+
+- **submit の単位は `MoveAnalysis[]`（チャンク）**。worker は棋譜 1 局分を貯めず、経過時間で区切って
+  送る（[05](./05-analysis.md) §1.1c）。解析を終えたときに worker が持つのはサマリ
+  （`KifuAnalysisSummary = { totalMoves, analyzed }`）だけで、局面ごとの結果は送信済み。
 
 ## 6. `commentaries`（LLM 解説・計画中）
 

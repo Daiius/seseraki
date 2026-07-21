@@ -4,7 +4,7 @@ import { MockTaskSource } from "./polling/mock.js";
 import type { TaskSource } from "./polling/types.js";
 import { analyzeTask } from "./analysis.js";
 import { createClient } from "./polling/client.js";
-import { analyzeKifu } from "./kifu-analysis.js";
+import { analyzeKifu, ChunkSubmitError } from "./kifu-analysis.js";
 
 /** エンジンのオプションを適用し readyok まで待つ（起動時・再起動時で共用） */
 async function configureEngine(engine: UsiEngine, config: Config): Promise<void> {
@@ -128,6 +128,8 @@ async function main() {
             depth: config.engineDepth,
             multiPv: config.engineMultiPv,
             byoyomi: config.engineByoyomi,
+            // 途中まで入っている棋譜は続きから解析する（prd/05 §1.1c）
+            startMoveNumber: kifu.analyzedCount,
             // 進捗報告は待たずに投げっぱなしにし、失敗も握りつぶす。server が落ちている・
             // 遅いときに解析まで止まるのは本末転倒（進捗は表示のためだけの揮発情報）
             onProgress: (analyzed, total) => {
@@ -137,8 +139,26 @@ async function main() {
                   console.warn("[Worker] Failed to report progress:", err);
                 });
             },
+            // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
+            // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）
+            onChunk: async (analyses) => {
+              try {
+                await client.submitAnalysis(
+                  kifu.id,
+                  kifu.analysisRevision,
+                  analyses,
+                );
+              } catch (err) {
+                throw new ChunkSubmitError(err);
+              }
+            },
           });
         } catch (err) {
+          // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で続きから再開 ---
+          if (err instanceof ChunkSubmitError) {
+            console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
+            return;
+          }
           const reason = err instanceof Error ? err.message : String(err);
           console.error(`[Worker] Analysis failed for kifu ${kifu.id}:`, reason);
           try {
@@ -159,15 +179,9 @@ async function main() {
           return;
         }
 
-        // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で再試行 ---
-        try {
-          await client.submitAnalysis(kifu.id, kifu.analysisRevision, result);
-        } catch (err) {
-          console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
-          return;
-        }
+        // 完了（analysisCompletedAt）は server が件数で確定する（prd/05 §1.1c）
         console.log(
-          `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves)`,
+          `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves, ${result.analyzed} positions analyzed)`,
         );
       } catch (err) {
         console.error("[Worker] Error:", err);

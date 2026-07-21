@@ -58,16 +58,21 @@ async function main() {
   engine.setOption("Threads", "1");
   await engine.ready();
 
-  // depth 5, MultiPV 3 で解析（MATERIAL版なのでスコアは簡易的）
+  // depth 5, MultiPV 3 で解析（MATERIAL版なのでスコアは簡易的）。
+  // 結果はチャンクで渡ってくるので、表示用に手元で集める
+  const analyses: MoveAnalysis[] = [];
   const result = await analyzeKifu(engine, SAMPLE_USI_MOVES, {
     depth: 5,
     multiPv: 3,
+    onChunk: async (chunk) => {
+      analyses.push(...chunk);
+    },
   });
 
   console.log("\n=== Analysis Results ===\n");
   console.log(`Total moves: ${result.totalMoves}\n`);
 
-  for (const a of result.analyses) {
+  for (const a of analyses) {
     console.log(formatAnalysis(a, SAMPLE_USI_MOVES));
     console.log();
   }

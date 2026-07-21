@@ -70,7 +70,9 @@
 
 - **KIF→USI 変換は server が棋譜登録時に一度だけ行う**（[04](./04-ingestion.md)）。変換済み `usiMoves` を DB に保持し、
   worker と Web 盤面はこれを消費する。worker は KIF パーサーを持たない（[05](./05-analysis.md)）。
-- **解析結果の登録はトランザクション**で行い、既存データは DELETE → 再投入で冪等に上書きする（[03](./03-data-model.md) / [04](./04-ingestion.md)）。
+- **解析結果の登録はトランザクション**で行う。通常の submit は**局面（`moveNumber`）単位の追記 upsert**で、
+  同じ局面の再送は入れ直しになる（1 チャンク = 1 トランザクション）。**前世代の全消去は `reanalyze` の
+  DELETE が唯一の経路**（[03](./03-data-model.md) §3 / [04](./04-ingestion.md) §7 / [05](./05-analysis.md) §1.1c）。
 - **web / API は同一オリジン配信**。ブラウザは常に同一オリジンの `/api` を叩き、server が
   `basePath('/api')` で `/api/...` を**本来の形として所有**する。各環境のプロキシ（開発時は Vite の
   `server.proxy`、本番はリバースプロキシ）は **`/api` を書き換えず素通し**で server へ渡す（strip/rewrite

@@ -34,10 +34,15 @@ export interface Thresholds {
   decided: number;
 }
 
+/**
+ * 実運用の感触に合わせた既定値（2026-07-22 に 300 / 150 / 1000 から引き上げ）。
+ * 低い値ではラベルが付きすぎて目印として機能せず、決着 1000cp は逆転しうる局面のラベルを消していた。
+ * **保存済みの値は移行しない**（既定は「まだ設定していない人に出す初期値」）。
+ */
 export const DEFAULT_THRESHOLDS: Thresholds = {
-  blunder: 300,
-  dubious: 150,
-  decided: 1000,
+  blunder: 600,
+  dubious: 300,
+  decided: 3000,
 };
 
 /**

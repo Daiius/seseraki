@@ -26,10 +26,10 @@ function analysis(moveNumber: number, ...args: Parameters<typeof candidates>): C
 
 describe('computeMoveLosses', () => {
   it('実手が候補内なら、その候補のスコアとの差を損失にする（近似ではない）', () => {
-    // 3 位の手を選んで 400cp 損した。旧判定は「実手が候補内なら悪手にしない」ため
+    // 3 位の手を選んで 700cp 損した。旧判定は「実手が候補内なら悪手にしない」ため
     // これを永久に取りこぼしていた（issue #28）
     const analyses = [
-      analysis(0, ['7g7f', 100], ['2g2f', 60], ['5g5f', -300]),
+      analysis(0, ['7g7f', 100], ['2g2f', 60], ['5g5f', -600]),
       analysis(1, ['3c3d', -300]),
     ];
     const losses = computeMoveLosses(analyses, ['5g5f', '3c3d']);
@@ -37,7 +37,7 @@ describe('computeMoveLosses', () => {
     expect(losses.get(0)).toEqual({
       moveNumber: 0,
       bestCp: 100,
-      loss: 400,
+      loss: 700,
       approximate: false,
       mate: null,
     });
@@ -154,30 +154,30 @@ describe('labelOf', () => {
   const base = { moveNumber: 0, bestCp: 0, approximate: false, mate: null };
 
   it('閾値の境界で段階が切り替わる', () => {
-    expect(labelOf({ ...base, loss: 300 }, DEFAULT_THRESHOLDS)).toBe('blunder');
-    expect(labelOf({ ...base, loss: 299 }, DEFAULT_THRESHOLDS)).toBe('dubious');
-    expect(labelOf({ ...base, loss: 150 }, DEFAULT_THRESHOLDS)).toBe('dubious');
-    expect(labelOf({ ...base, loss: 149 }, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(labelOf({ ...base, loss: 600 }, DEFAULT_THRESHOLDS)).toBe('blunder');
+    expect(labelOf({ ...base, loss: 599 }, DEFAULT_THRESHOLDS)).toBe('dubious');
+    expect(labelOf({ ...base, loss: 300 }, DEFAULT_THRESHOLDS)).toBe('dubious');
+    expect(labelOf({ ...base, loss: 299 }, DEFAULT_THRESHOLDS)).toBeNull();
   });
 
   it('閾値を変えても CPL は変わらず、ラベルだけが変わる', () => {
     const analyses = [
-      analysis(0, ['7g7f', 100], ['2g2f', -100]),
+      analysis(0, ['7g7f', 100], ['2g2f', -300]),
       analysis(1, ['3c3d', 100]),
     ];
-    const loose: Thresholds = { blunder: 500, dubious: 250, decided: 1000 };
+    const loose: Thresholds = { blunder: 1000, dubious: 500, decided: 3000 };
     const l = computeMoveLosses(analyses, ['2g2f', '3c3d']).get(0)!;
 
-    expect(l.loss).toBe(200);
+    expect(l.loss).toBe(400);
     expect(labelOf(l, DEFAULT_THRESHOLDS)).toBe('dubious');
     expect(labelOf(l, loose)).toBeNull();
   });
 
   it('勝負が決した局面にはラベルを付けない（CPL は保持する）', () => {
-    const decided = { ...base, bestCp: 1200, loss: 800 };
+    const decided = { ...base, bestCp: 3200, loss: 800 };
     expect(labelOf(decided, DEFAULT_THRESHOLDS)).toBeNull();
-    expect(labelOf(decided, { ...DEFAULT_THRESHOLDS, decided: 2000 })).toBe('blunder');
-    expect(labelOf({ ...base, bestCp: -1200, loss: 800 }, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(labelOf(decided, { ...DEFAULT_THRESHOLDS, decided: 5000 })).toBe('blunder');
+    expect(labelOf({ ...base, bestCp: -3200, loss: 800 }, DEFAULT_THRESHOLDS)).toBeNull();
   });
 
   it('詰み系は決着閾値に関係なくラベルが付く', () => {
@@ -227,10 +227,10 @@ describe('parseThresholds', () => {
   });
 
   it('値ごとのフォールバックで疑問手 > 悪手 になっても正規化する', () => {
-    // blunder だけ壊れると既定の 300 に戻り、生き残った dubious 500 が上回ってしまう
-    expect(parseThresholds('{"blunder":"broken","dubious":500,"decided":1000}')).toEqual({
-      blunder: 300,
-      dubious: 300,
+    // blunder だけ壊れると既定に戻り、生き残った dubious 900 が上回ってしまう
+    expect(parseThresholds('{"blunder":"broken","dubious":900,"decided":1000}')).toEqual({
+      blunder: DEFAULT_THRESHOLDS.blunder,
+      dubious: DEFAULT_THRESHOLDS.blunder,
       decided: 1000,
     });
     // 保存値そのものが不整合な場合も同じ
@@ -242,8 +242,8 @@ describe('parseThresholds', () => {
   });
 
   it('正規化した閾値では悪手が先に判定される', () => {
-    const t = parseThresholds('{"blunder":"broken","dubious":500,"decided":1000}');
-    const loss = { moveNumber: 0, bestCp: 0, loss: 320, approximate: false, mate: null };
+    const t = parseThresholds('{"blunder":"broken","dubious":900,"decided":1000}');
+    const loss = { moveNumber: 0, bestCp: 0, loss: 700, approximate: false, mate: null };
 
     expect(labelOf(loss, t)).toBe('blunder');
     expect(t.dubious).toBeLessThanOrEqual(t.blunder);
@@ -270,28 +270,28 @@ describe('applyThresholdInput', () => {
     expect(applyThresholdInput(base, 'blunder', '100')).toEqual({
       blunder: 100,
       dubious: 100,
-      decided: 1000,
+      decided: 3000,
     });
     // 疑問手を上回ったままなら動かさない
     expect(applyThresholdInput(base, 'blunder', '400')).toEqual({
       blunder: 400,
-      dubious: 150,
-      decided: 1000,
+      dubious: 300,
+      decided: 3000,
     });
   });
 
   it('疑問手を上げると悪手が追従する', () => {
-    expect(applyThresholdInput(base, 'dubious', '500')).toEqual({
-      blunder: 500,
-      dubious: 500,
-      decided: 1000,
+    expect(applyThresholdInput(base, 'dubious', '900')).toEqual({
+      blunder: 900,
+      dubious: 900,
+      decided: 3000,
     });
   });
 
   it('決着は他の閾値に影響しない', () => {
     expect(applyThresholdInput(base, 'decided', '2000')).toEqual({
-      blunder: 300,
-      dubious: 150,
+      blunder: 600,
+      dubious: 300,
       decided: 2000,
     });
   });

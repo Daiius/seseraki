@@ -15,7 +15,6 @@ import { ShogiBoard } from '../../components/ShogiBoard';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
-import { ThresholdSettings } from '../../components/ThresholdSettings';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -45,8 +44,9 @@ function KifuDetailPage() {
   const { progress, now } = useAnalysisProgress();
   const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
 
-  // 悪手判定の閾値は localStorage 保持。盤面・グラフ・LLM 解説用テキストで同じ値を使う
-  const { thresholds, setThresholds } = useThresholds();
+  // 悪手判定の閾値は localStorage 保持。盤面・グラフ・LLM 解説用テキストで同じ値を使う。
+  // 変更 UI は全棋譜に効く設定なので `/settings` にある（§2.5）
+  const { thresholds } = useThresholds();
 
   const usiMoves: string[] = kifu.usiMoves ?? [];
 
@@ -229,12 +229,6 @@ function KifuDetailPage() {
                 analyses: kifu.analyses,
               }}
             />
-          </LazyDetails>
-        )}
-
-        {usiMoves.length > 0 && (
-          <LazyDetails title="悪手判定のしきい値">
-            <ThresholdSettings thresholds={thresholds} onChange={setThresholds} />
           </LazyDetails>
         )}
 

@@ -21,6 +21,7 @@ import {
 } from './auth.js';
 import {
   clearProgress,
+  getClearToken,
   getProgress,
   setProgress,
 } from './analysis-progress.js';
@@ -400,6 +401,11 @@ const route = app
       // 進捗は表示専用でメモリにしか残らないため、トランザクションも行ロックも張らない。
       // ただし submit / error 報告と同じ世代照合はする（reanalyze 後に届いた旧解析の進捗を出さない）。
       // 完了・失敗済みも弾く＝ submit と進捗報告が前後しても「終わったのに解析中」が残らない。
+      //
+      // ⚠ DB を読む `await` の間に submit / error / reanalyze / 削除が完了しうる。その場合は
+      // 古い判定のまま書き込むと「終わったのに解析中」が復活するため、読む前に clear トークンを
+      // 取り、記録時に一致を確かめる（compare-and-set。`analysis-progress.ts`）。
+      const token = getClearToken();
       const [kifu] = await db
         .select({
           revision: kifus.analysisRevision,
@@ -408,12 +414,13 @@ const route = app
         })
         .from(kifus)
         .where(eq(kifus.id, kifuId));
-      const applied =
+      const valid =
         kifu !== undefined &&
         kifu.revision === revision &&
         kifu.completedAt === null &&
         kifu.error === null;
-      if (applied) setProgress({ kifuId, revision, analyzed, total });
+      const applied =
+        valid && setProgress({ kifuId, revision, analyzed, total }, token);
       return c.json({ ok: true, applied });
     },
   )

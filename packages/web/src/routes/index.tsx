@@ -16,6 +16,8 @@ import {
   type Sort,
   type Status,
 } from '../lib/kifuListFilter';
+import { formatUpdatedAgo } from '../lib/analysisProgress';
+import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 
 type JobStatus =
@@ -188,6 +190,11 @@ function KifuListPage() {
   };
 
   // 並べ替えは絞り込みではないので、件数が変わらない＝空表示の文言には影響しない
+  // 解析中の棋譜は高々 1 件。一覧のバッジを「未」から「解析中 N/M」に差し替えるために使う。
+  // 進捗はメモリにあり SQL で絞り込めないため、状態フィルタには「解析中」を足さない
+  // （絞り込み・件数・ページングを server 側の SQL に揃える方針を崩さない。prd/04 §6.1）
+  const { progress, now } = useAnalysisProgress();
+
   const filtered = isFiltered({ q, status, outcome, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
   const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
@@ -433,6 +440,8 @@ function KifuListPage() {
                   const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));
                   const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
                   const showResultBadge = isSente || isGote;
+                  const analyzing =
+                    progress && progress.kifuId === kifu.id ? progress : null;
                   return (
                     <tr key={kifu.id} className="hover">
                       <td>
@@ -451,7 +460,17 @@ function KifuListPage() {
                             : lost ? <span className="badge badge-soft badge-error badge-sm">負</span>
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
-                          {'failed' in kifu && kifu.failed ? (
+                          {analyzing ? (
+                            <>
+                              <span className="badge badge-info badge-sm">
+                                解析中 {analyzing.analyzed}/{analyzing.total}
+                              </span>
+                              {/* 経過時間を添える。進捗が動くこと自体が worker の生存確認になる */}
+                              <span className="text-xs text-base-content/60">
+                                {formatUpdatedAgo(analyzing, now)}
+                              </span>
+                            </>
+                          ) : 'failed' in kifu && kifu.failed ? (
                             <span className="badge badge-error badge-sm">失敗</span>
                           ) : (
                             'analyzed' in kifu && (

@@ -19,6 +19,11 @@ import {
   sessionRequired,
   verifyCredentials,
 } from './auth.js';
+import {
+  clearProgress,
+  getProgress,
+  setProgress,
+} from './analysis-progress.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
@@ -296,6 +301,8 @@ const route = app
         // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
         await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
       });
+      // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
+      clearProgress(id);
       return c.json({ ok: true }, 201);
     },
   )
@@ -306,9 +313,16 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       await db.delete(kifus).where(eq(kifus.id, id));
+      // 消えた棋譜の「解析中」が残らないように（行が無くなるので以降の報告も弾かれる）
+      clearProgress(id);
       return c.json({ ok: true });
     },
   )
+  // 解析中の棋譜の進捗（メモリ参照のみ・DB を触らない）。解析中は高々 1 件なので、
+  // 一覧も詳細もこれ 1 つを見て自分の id と一致したら表示する
+  .get('/analysis/progress', sessionRequired, (c) => {
+    return c.json(getProgress());
+  })
   .patch(
     '/kifus/:id',
     sessionRequired,
@@ -365,7 +379,42 @@ const route = app
           ),
         );
       const applied = result[0].affectedRows > 0;
+      if (applied) clearProgress(id);
       return c.json({ ok: true, applied }, 201);
+    },
+  )
+  .post(
+    '/worker/analyses/progress',
+    apiKeyRequired,
+    zv(
+      'json',
+      z.object({
+        kifuId: z.number(),
+        revision: z.number(),
+        analyzed: z.number().min(0),
+        total: z.number().min(1),
+      }),
+    ),
+    async (c) => {
+      const { kifuId, revision, analyzed, total } = c.req.valid('json');
+      // 進捗は表示専用でメモリにしか残らないため、トランザクションも行ロックも張らない。
+      // ただし submit / error 報告と同じ世代照合はする（reanalyze 後に届いた旧解析の進捗を出さない）。
+      // 完了・失敗済みも弾く＝ submit と進捗報告が前後しても「終わったのに解析中」が残らない。
+      const [kifu] = await db
+        .select({
+          revision: kifus.analysisRevision,
+          completedAt: kifus.analysisCompletedAt,
+          error: kifus.analysisError,
+        })
+        .from(kifus)
+        .where(eq(kifus.id, kifuId));
+      const applied =
+        kifu !== undefined &&
+        kifu.revision === revision &&
+        kifu.completedAt === null &&
+        kifu.error === null;
+      if (applied) setProgress({ kifuId, revision, analyzed, total });
+      return c.json({ ok: true, applied });
     },
   )
   .post(
@@ -434,6 +483,8 @@ const route = app
           .set({ analysisCompletedAt: new Date() })
           .where(eq(kifus.id, kifuId));
       });
+      // 完了したので「解析中」を落とす（適用されなかった旧世代の submit では触らない）
+      if (applied) clearProgress(kifuId);
       return c.json({ ok: true, applied }, 201);
     },
   )

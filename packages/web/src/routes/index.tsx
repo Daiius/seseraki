@@ -27,6 +27,9 @@ type JobStatus =
 const MAX_IMPORT_PAGES = 10;
 
 // 一覧の絞り込み・並べ替え。値は server 側の zod スキーマ（`GET /api/kifus`）と揃える
+// server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
+// 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
+const MAX_SEARCH_LENGTH = 100;
 const STATUSES = ['all', 'analyzed', 'unanalyzed', 'failed'] as const;
 const OUTCOMES = ['all', 'win', 'loss'] as const;
 const SORTS = ['playedAt', 'createdAt', 'title'] as const;
@@ -74,8 +77,12 @@ export const Route = createFileRoute('/')({
   validateSearch: (search: Record<string, unknown>): KifuListSearch => ({
     page: Number(search.page) || undefined,
     // 検索語は trim しない（入力中の末尾スペースが打鍵のたびに消えてしまうため）。
-    // 前後の空白は server 側の zod が落とす
-    q: typeof search.q === 'string' && search.q !== '' ? search.q : undefined,
+    // 前後の空白は server 側の zod が落とす。長すぎる URL 直入力は捨てずに切り詰める
+    // （拒否して一覧全体をエラーにするより、頭 100 字で検索した方が扱いやすい）
+    q:
+      typeof search.q === 'string' && search.q !== ''
+        ? search.q.slice(0, MAX_SEARCH_LENGTH)
+        : undefined,
     status: option(STATUSES, search.status, 'all'),
     outcome: option(OUTCOMES, search.outcome, 'all'),
     from: dateParam(search.from),
@@ -284,6 +291,7 @@ function KifuListPage() {
           className="input input-sm input-bordered w-56"
           placeholder="タイトル・対局者名で検索"
           value={queryDraft}
+          maxLength={MAX_SEARCH_LENGTH}
           onChange={(e) => setQueryDraft(e.target.value)}
           aria-label="タイトル・対局者名で検索"
         />

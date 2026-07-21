@@ -199,6 +199,13 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
       });
   };
 
+  // 本筋を 1 手単位で動かす共通口（キーボード操作・盤面の左右タップ）。
+  // 端での操作は局面が動かないので何もしない（goToMain は開いている候補手 details を
+  // 閉じるため、呼ぶだけで閲覧中の読み筋が消える）。分岐が残っているときは解除のため呼ぶ。
+  const navigateMain = (next: number) => {
+    if (next !== moveIndex || branchRank !== null) goToMain(next);
+  };
+
   // moveIndex N の盤面 = N 手指した後の局面
   // この局面に至った手の解析 = moveNumber N-1 の解析結果
   // moveIndex 0 の場合は moveNumber 0（初期局面からの候補手）
@@ -283,12 +290,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
   // キーボード操作: ←→ で 1 手戻る/進む、Home/End で最初/最後へ。
   // 分岐中の ←→ は分岐内を移動し、先頭で戻ると本筋へ復帰する（Home/End は常に本筋）。
   useEffect(() => {
-    // 端での打鍵は局面が動かないので何もしない（goToMain は開いている候補手 details を
-    // 閉じるため、呼ぶだけで閲覧中の読み筋が消える）。分岐が残っているときは解除のため呼ぶ。
-    const navigateMain = (next: number) => {
-      if (next !== moveIndex || branchRank !== null) goToMain(next);
-    };
-
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       // 入力欄（スライダー含む）にフォーカスがあるときはブラウザ既定の操作に任せる
@@ -330,7 +331,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
     branchActive,
     branchRank,
     branchPv,
-    goToMain,
+    navigateMain,
     onBranchForward,
     onBranchBack,
   ]);
@@ -352,7 +353,29 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           side={flipped ? 'sente' : 'gote'}
           name={flipped ? sente : gote}
         />
-        <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
+        {/*
+          盤面の左右タップで手を送る（モバイル用）。挙動は下の ◀ ▶ ボタンと機械的に同じで、
+          分岐中にタップすると本筋へ復帰する（キーボードの ←→ は分岐内を移動するので非対称）。
+          左右は盤面反転に依らず**画面基準**（◀ が左・▶ が右というボタンの並びに合わせる）。
+          タブ順からは外す（同じ操作はコントローラー行のボタンが担うため）。
+        */}
+        <div className="relative w-fit select-none">
+          <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="1手戻る"
+            className="absolute inset-y-0 left-0 w-1/2 touch-manipulation"
+            onClick={() => navigateMain(Math.max(0, moveIndex - 1))}
+          />
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="1手進む"
+            className="absolute inset-y-0 right-0 w-1/2 touch-manipulation"
+            onClick={() => navigateMain(Math.min(totalMoves, moveIndex + 1))}
+          />
+        </div>
         <HandDisplay
           hand={flipped ? displayState.hand.gote : displayState.hand.sente}
           side={flipped ? 'gote' : 'sente'}

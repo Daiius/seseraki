@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, type Ref } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
 import {
   applyMove,
@@ -280,6 +280,55 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
     }
   };
 
+  // キーボード操作: ←→ で 1 手戻る/進む、Home/End で最初/最後へ。
+  // 分岐中の ←→ は分岐内を移動し、先頭で戻ると本筋へ復帰する（Home/End は常に本筋）。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      // 入力欄（スライダー含む）にフォーカスがあるときはブラウザ既定の操作に任せる
+      const target = e.target;
+      if (
+        target instanceof HTMLElement
+        && (target.isContentEditable
+          || target.tagName === 'INPUT'
+          || target.tagName === 'TEXTAREA'
+          || target.tagName === 'SELECT')
+      ) return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          if (branchActive && branchRank !== null) onBranchBack(branchRank);
+          else goToMain(Math.max(0, moveIndex - 1));
+          break;
+        case 'ArrowRight':
+          if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
+          else goToMain(Math.min(totalMoves, moveIndex + 1));
+          break;
+        case 'Home':
+          goToMain(0);
+          break;
+        case 'End':
+          goToMain(totalMoves);
+          break;
+        default:
+          return;
+      }
+      // ページのスクロールを起こさない
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    moveIndex,
+    totalMoves,
+    branchActive,
+    branchRank,
+    branchPv,
+    goToMain,
+    onBranchForward,
+    onBranchBack,
+  ]);
+
   return (
     <div className="flex flex-col">
       {userAmbiguous && (
@@ -341,7 +390,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           className="btn btn-outline md:btn-sm"
           onClick={() => goToMain(0)}
           disabled={!branchActive && moveIndex === 0}
-          title="最初へ"
+          title="最初へ (Home)"
         >
           <IconChevronDoubleLeft />
         </button>
@@ -349,7 +398,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           className="btn btn-outline flex-1 md:btn-sm md:flex-none"
           onClick={() => goToMain(Math.max(0, moveIndex - 1))}
           disabled={!branchActive && moveIndex === 0}
-          title="戻る"
+          title="戻る (←)"
         >
           <IconChevronLeft />
         </button>
@@ -365,7 +414,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           className="btn btn-outline flex-1 md:btn-sm md:flex-none"
           onClick={() => goToMain(Math.min(totalMoves, moveIndex + 1))}
           disabled={!branchActive && moveIndex === totalMoves}
-          title="進む"
+          title="進む (→)"
         >
           <IconChevronRight />
         </button>
@@ -373,7 +422,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote }: Props
           className="btn btn-outline md:btn-sm"
           onClick={() => goToMain(totalMoves)}
           disabled={!branchActive && moveIndex === totalMoves}
-          title="最後へ"
+          title="最後へ (End)"
         >
           <IconChevronDoubleRight />
         </button>

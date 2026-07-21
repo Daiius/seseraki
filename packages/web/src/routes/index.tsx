@@ -168,7 +168,12 @@ function KifuListPage() {
       search: (prev: KifuListSearch) => ({ ...prev, ...patch, page: undefined }),
     });
 
-  const clearFilters = () => navigate({ to: '/', search: {} });
+  const clearFilters = () => {
+    // ドラフトも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
+    // 上の同期 effect が発火せず、保留中のタイマーがクリア後に検索語を書き戻してしまう
+    setQueryDraft('');
+    navigate({ to: '/', search: {} });
+  };
 
   // 並べ替えは絞り込みではないので、件数が変わらない＝空表示の文言には影響しない
   const filtered = Boolean(q || status !== 'all' || outcome !== 'all' || from || to);

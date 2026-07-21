@@ -19,6 +19,11 @@ function toPositive(value: unknown, fallback: number): number {
 /**
  * localStorage の生の文字列を閾値に変換する。
  * 手で書き換えられていても壊れないよう、値ごとに既定へフォールバックする。
+ *
+ * ⚠ **値ごとのフォールバックは `dubious > blunder` を作りうる**（片方だけ壊れた保存値で、
+ * 生き残った値と既定値が組み合わさる）。この状態だと `labelOf` が悪手を先に判定するため
+ * 疑問手が一切出なくなり、設定画面にも矛盾した値が並ぶ。UI の変更処理と同じく
+ * **`dubious <= blunder` に正規化**して不整合な状態をロード直後にも作らせない。
  */
 export function parseThresholds(raw: string | null): Thresholds {
   if (!raw) return DEFAULT_THRESHOLDS;
@@ -30,9 +35,10 @@ export function parseThresholds(raw: string | null): Thresholds {
   }
   if (typeof parsed !== 'object' || parsed === null) return DEFAULT_THRESHOLDS;
   const v = parsed as Partial<Record<keyof Thresholds, unknown>>;
+  const blunder = toPositive(v.blunder, DEFAULT_THRESHOLDS.blunder);
   return {
-    blunder: toPositive(v.blunder, DEFAULT_THRESHOLDS.blunder),
-    dubious: toPositive(v.dubious, DEFAULT_THRESHOLDS.dubious),
+    blunder,
+    dubious: Math.min(toPositive(v.dubious, DEFAULT_THRESHOLDS.dubious), blunder),
     decided: toPositive(v.decided, DEFAULT_THRESHOLDS.decided),
   };
 }

@@ -225,4 +225,27 @@ describe('parseThresholds', () => {
       decided: DEFAULT_THRESHOLDS.decided,
     });
   });
+
+  it('値ごとのフォールバックで疑問手 > 悪手 になっても正規化する', () => {
+    // blunder だけ壊れると既定の 300 に戻り、生き残った dubious 500 が上回ってしまう
+    expect(parseThresholds('{"blunder":"broken","dubious":500,"decided":1000}')).toEqual({
+      blunder: 300,
+      dubious: 300,
+      decided: 1000,
+    });
+    // 保存値そのものが不整合な場合も同じ
+    expect(parseThresholds('{"blunder":200,"dubious":400,"decided":1000}')).toEqual({
+      blunder: 200,
+      dubious: 200,
+      decided: 1000,
+    });
+  });
+
+  it('正規化した閾値では疑問手が機能する', () => {
+    const t = parseThresholds('{"blunder":"broken","dubious":500,"decided":1000}');
+    const loss = { moveNumber: 0, bestCp: 0, loss: 320, approximate: false, mate: null };
+
+    expect(labelOf(loss, t)).toBe('blunder');
+    expect(t.dubious).toBeLessThanOrEqual(t.blunder);
+  });
 });

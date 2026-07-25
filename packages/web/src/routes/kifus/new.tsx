@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { client } from '../../lib/honoClient';
+import { ClipboardIcon } from '../../components/icons';
 
 export const Route = createFileRoute('/kifus/new')({
   component: NewKifuPage,
@@ -12,6 +13,17 @@ function NewKifuPage() {
   const [kifText, setKifText] = useState('');
   const [sourceTz, setSourceTz] = useState<'auto' | 'JST' | 'UTC'>('auto');
   const [submitting, setSubmitting] = useState(false);
+
+  // クリップボードの KIF を貼り付ける。空・失敗時は既存入力を壊さず知らせるだけ。
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text.trim()) setKifText(text);
+      else alert('クリップボードにテキストがありません');
+    } catch (e) {
+      alert(`ペーストに失敗しました: ${e}`);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +62,16 @@ function NewKifuPage() {
         <label className="form-control w-full">
           <div className="label">
             <span className="label-text">KIF テキスト</span>
+            {/* モバイルはアイコンのみ・sm+ でラベル。フットプリントを小さく保つ */}
+            <button
+              type="button"
+              onClick={handlePaste}
+              className="btn btn-xs btn-ghost gap-1"
+              aria-label="クリップボードからペースト"
+            >
+              <ClipboardIcon className="size-4" />
+              <span className="hidden sm:inline">クリップボードからペースト</span>
+            </button>
           </div>
           <textarea
             className="textarea textarea-bordered w-full h-64 font-mono"

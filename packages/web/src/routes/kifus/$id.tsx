@@ -13,6 +13,7 @@ import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';
 import { ShogiBoard } from '../../components/ShogiBoard';
 import { AnalyzingAlert } from '../../components/AnalyzingAlert';
+import { CopyButton } from '../../components/CopyButton';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
@@ -196,9 +197,16 @@ function KifuDetailPage() {
         )}
 
         <LazyDetails title="KIF">
-          <pre className="text-sm font-mono whitespace-pre-wrap">
-            {kifu.kifText}
-          </pre>
+          <div className="flex flex-col gap-2">
+            <CopyButton
+              text={kifu.kifText}
+              label="KIF をコピー"
+              className="btn-outline self-end"
+            />
+            <pre className="text-sm font-mono whitespace-pre-wrap">
+              {kifu.kifText}
+            </pre>
+          </div>
         </LazyDetails>
 
         {kifu.analyses.length > 0 && (

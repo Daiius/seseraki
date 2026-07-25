@@ -33,9 +33,15 @@ pnpm dev
 
 # remote 公開（.env.remote を用意して）
 cp .env.remote.example .env.remote   # 値を埋める（gitignore 対象）
-docker compose --env-file .env.remote up -d --build
-docker compose --env-file .env.remote watch   # 別ターミナル: 編集→同期→HMR
+pnpm dev:remote          # 起動（-d --build。remote 差分は .env.remote 由来）
+pnpm dev:remote:watch    # 別ターミナル: 編集→同期→HMR
+pnpm dev:remote:logs     # ログ追尾（任意）
+pnpm dev:remote:down     # 停止（db volume は残す）
 ```
+
+`dev:remote*` は `docker compose --env-file .env.remote <up|watch|logs|down>` の薄いラッパー。
+前段の Cloudflare Tunnel（cloudflared）は compose 外（systemd 常駐）なので、これらは compose
+スタックだけを起動/停止する。tunnel の起動・停止は別途。
 
 前段プロキシ（Cloudflare Tunnel の ingress を `http://localhost:${WEB_BIND のポート}` へ、
 Access で許可メール限定 等）の具体設定と実ドメインは公開しない（各自の環境／`.claude-personal/`）。

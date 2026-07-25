@@ -12,6 +12,7 @@ import { formatUpdatedAgo } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';
 import { ShogiBoard } from '../../components/ShogiBoard';
+import { AnalyzingAlert } from '../../components/AnalyzingAlert';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
@@ -158,24 +159,11 @@ function KifuDetailPage() {
         )}
 
         {analyzing && (
-          <div
-            role="status"
-            className="alert alert-info flex-col items-start gap-2 sm:flex-row sm:items-center"
-          >
-            <span className="flex-1">
-              解析中 {analyzing.analyzed}/{analyzing.total}
-              {/* 経過時間を出して停止の判断は人に委ねる（閾値で stale を決めない） */}
-              <span className="ml-2 text-sm opacity-80">
-                {formatUpdatedAgo(analyzing, now)}
-              </span>
-            </span>
-            {/* 色は付けない。alert-info の上に progress-info を置くと同色で見えなくなる */}
-            <progress
-              className="progress w-full sm:w-56"
-              value={analyzing.analyzed}
-              max={analyzing.total}
-            />
-          </div>
+          <AnalyzingAlert
+            analyzed={analyzing.analyzed}
+            total={analyzing.total}
+            agoText={formatUpdatedAgo(analyzing, now)}
+          />
         )}
 
         {kifu.analysisError && (

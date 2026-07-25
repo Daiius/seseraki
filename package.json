@@ -4,7 +4,9 @@
   "packageManager": "pnpm@11.13.0",
   "scripts": {
     "dev": "docker compose up --build --watch",
-    "dev:remote": "docker compose --env-file .env.remote up -d --build",
+    "dev:remote": "docker compose --env-file .env.remote up --build --watch",
+    "dev:remote:logs": "docker compose --env-file .env.remote logs -f",
+    "dev:remote:down": "docker compose --env-file .env.remote down",
     "dev:web": "pnpm --filter web dev",
     "dev:server": "pnpm --filter server dev",
     "dev:worker": "pnpm --filter worker dev",

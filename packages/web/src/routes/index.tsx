@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from '../lib/honoClient';
@@ -16,7 +16,6 @@ import {
   type Sort,
   type Status,
 } from '../lib/kifuListFilter';
-import { formatUpdatedAgo } from '../lib/analysisProgress';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 
@@ -193,7 +192,7 @@ function KifuListPage() {
   // 解析中の棋譜は高々 1 件。一覧のバッジを「未」から「解析中 N/M」に差し替えるために使う。
   // 進捗はメモリにあり SQL で絞り込めないため、状態フィルタには「解析中」を足さない
   // （絞り込み・件数・ページングを server 側の SQL に揃える方針を崩さない。prd/04 §6.1）
-  const { progress, now } = useAnalysisProgress();
+  const { progress } = useAnalysisProgress();
 
   const filtered = isFiltered({ q, status, outcome, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
@@ -461,15 +460,25 @@ function KifuListPage() {
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
                           {analyzing ? (
-                            <>
-                              <span className="badge badge-info badge-sm">
-                                解析中 {analyzing.analyzed}/{analyzing.total}
-                              </span>
-                              {/* 経過時間を添える。進捗が動くこと自体が worker の生存確認になる */}
-                              <span className="text-xs text-base-content/60">
-                                {formatUpdatedAgo(analyzing, now)}
-                              </span>
-                            </>
+                            // 他の状態バッジ（済/未/勝/負）と同じ一文字幅に収める。円環そのものが
+                            // N/M を表すので文字は出さない。経過時間（何分前に更新）は幅が無いので
+                            // 一覧では省き、詳細画面に委ねる。進捗が動くこと自体が生存確認になる
+                            <span
+                              role="progressbar"
+                              aria-label={`解析中 ${analyzing.analyzed}/${analyzing.total}`}
+                              aria-valuenow={analyzing.analyzed}
+                              aria-valuemax={analyzing.total}
+                              title={`解析中 ${analyzing.analyzed}/${analyzing.total}`}
+                              className="radial-progress text-info"
+                              style={{
+                                '--value':
+                                  analyzing.total > 0
+                                    ? Math.round((analyzing.analyzed / analyzing.total) * 100)
+                                    : 0,
+                                '--size': '1.1rem',
+                                '--thickness': '2px',
+                              } as CSSProperties}
+                            />
                           ) : 'failed' in kifu && kifu.failed ? (
                             <span className="badge badge-error badge-sm">失敗</span>
                           ) : (

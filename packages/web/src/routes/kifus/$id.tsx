@@ -160,7 +160,9 @@ function KifuDetailPage() {
         {analyzing && (
           <div
             role="status"
-            className="alert alert-info flex-col items-start gap-2 sm:flex-row sm:items-center"
+            // alert は grid（grid-auto-flow:column）なので flex-col/flex-row は効かない。
+            // 揃えは align-items で決まる。items-center で文言と progress を縦中央に揃える
+            className="alert alert-info items-center gap-2"
           >
             <span className="flex-1">
               解析中 {analyzing.analyzed}/{analyzing.total}

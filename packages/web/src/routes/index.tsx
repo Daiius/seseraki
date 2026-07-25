@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
-import useSWR from 'swr';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 import {
   DEFAULT_ORDER,
@@ -19,28 +18,6 @@ import {
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
-
-type JobStatus =
-  | { status: 'idle' }
-  | { status: 'running'; startedAt: string }
-  | {
-      status: 'done';
-      startedAt: string;
-      finishedAt: string;
-      imported: { id: number; gameKey: string }[];
-      skipped: string[];
-      errors: { gameKey: string; error: string }[];
-    }
-  | {
-      status: 'error';
-      startedAt: string;
-      finishedAt: string;
-      errorKind: 'cookie_expired' | 'generic';
-      errorMessage: string;
-    };
-
-// server 側の zod スキーマ（`POST /api/swars/import` の `pages: 1..10`）と揃える
-const MAX_IMPORT_PAGES = 10;
 
 // 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
 // server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
@@ -73,12 +50,6 @@ function option<T extends string>(
 function dateParam(raw: unknown): string | undefined {
   return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
 }
-
-const jobStatusFetcher = async (): Promise<JobStatus> => {
-  const res = await client.api.swars.import.status.$get();
-  if (!res.ok) throw new Error(`status ${res.status}`);
-  return (await res.json()) as JobStatus;
-};
 
 export const Route = createFileRoute('/')({
   validateSearch: (search: Record<string, unknown>): KifuListSearch => ({
@@ -140,12 +111,6 @@ function KifuListPage() {
     order = DEFAULT_ORDER,
   } = Route.useSearch();
   const navigate = useNavigate();
-  const router = useRouter();
-  const [isPolling, setIsPolling] = useState(false);
-  const [importResult, setImportResult] = useState<string | null>(null);
-  const [jobStartedAt, setJobStartedAt] = useState<string | null>(null);
-  // 遡って取得する対局履歴のページ数。常用は 1 ページなので既定に戻す（永続化しない）
-  const [importPages, setImportPages] = useState(1);
   // 検索語は打鍵ごとに URL を書き換えず、入力欄のドラフトを debounce して反映する
   const [queryDraft, setQueryDraft] = useState(q);
 
@@ -200,104 +165,10 @@ function KifuListPage() {
   const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
   const canFilterByOutcome = getSelfNames().length > 0;
 
-  const { data: jobStatus } = useSWR<JobStatus>(
-    isPolling ? 'swars-import-status' : null,
-    jobStatusFetcher,
-    {
-      refreshInterval: 3000,
-      errorRetryCount: 3,
-      revalidateOnFocus: false,
-      dedupingInterval: 0,
-    },
-  );
-
-  useEffect(() => {
-    if (!jobStatus) return;
-    // POST レスポンス確定前、または startedAt が今回のジョブと一致しない
-    // 残留状態（前回の done/error 等）は UI に反映しない
-    if (!jobStartedAt) return;
-    if (!('startedAt' in jobStatus) || jobStatus.startedAt !== jobStartedAt) return;
-    if (jobStatus.status === 'done') {
-      const count = jobStatus.imported.length;
-      setImportResult(
-        count > 0 ? `${count}件の棋譜を取得しました` : '新しい棋譜はありません',
-      );
-      setIsPolling(false);
-      setJobStartedAt(null);
-      if (count > 0) router.invalidate();
-    } else if (jobStatus.status === 'error') {
-      setImportResult(
-        jobStatus.errorKind === 'cookie_expired'
-          ? 'SWARS_SESSION_COOKIE が期限切れです。再設定してください'
-          : `取得失敗: ${jobStatus.errorMessage}`,
-      );
-      setIsPolling(false);
-      setJobStartedAt(null);
-    }
-  }, [jobStatus, router, jobStartedAt]);
-
-  const handleImport = async () => {
-    const userId = import.meta.env.VITE_SWARS_USER_ID;
-    if (!userId) return;
-
-    setImportResult(null);
-    setIsPolling(true);
-    try {
-      const res = await client.api.swars.import.$post({
-        json: { userId, pages: importPages },
-      });
-      if (!res.ok) {
-        setImportResult(`取得失敗 (${res.status})`);
-        setIsPolling(false);
-        return;
-      }
-      const state = (await res.json()) as JobStatus;
-      if (state.status === 'running') {
-        setJobStartedAt(state.startedAt);
-      } else {
-        setIsPolling(false);
-      }
-    } catch {
-      setImportResult('サーバーに接続できません');
-      setIsPolling(false);
-    }
-  };
-
-  const importing = isPolling;
-
   return (
     <div>
       <div className="flex items-center gap-4 mb-4">
         <h2 className="text-2xl font-bold">棋譜一覧</h2>
-        {import.meta.env.VITE_SWARS_USER_ID ? (
-          <div className="join">
-            <select
-              className="join-item select select-sm select-bordered"
-              value={importPages}
-              disabled={importing}
-              onChange={(e) => setImportPages(Number(e.target.value))}
-              aria-label="取得ページ数"
-              title="遡って取得する対局履歴のページ数（取り込み済みの対局はスキップされる）"
-            >
-              {Array.from({ length: MAX_IMPORT_PAGES }, (_, i) => i + 1).map((p) => (
-                <option key={p} value={p}>
-                  {p}ページ
-                </option>
-              ))}
-            </select>
-            <button
-              className="join-item btn btn-sm btn-outline"
-              disabled={importing}
-              onClick={handleImport}
-            >
-              {importing ? <span className="loading loading-spinner loading-xs" /> : '更新'}
-            </button>
-          </div>
-        ) : (
-          <span className="text-xs text-base-content/50">
-            VITE_SWARS_USER_ID が未設定のため更新ボタンを表示できません
-          </span>
-        )}
       </div>
       {/*
         フィルタバーは既定で畳む（暫定・#50）。現状の絞り込み軸だけでは常時出しておくほど使わず、
@@ -397,9 +268,6 @@ function KifuListPage() {
       {/* 件数は折り畳みの外に出す（閉じている間も見えるように） */}
       {pagination && (
         <div className="mb-4 text-sm text-base-content/60">{pagination.total}件</div>
-      )}
-      {importResult && (
-        <div className="alert alert-info mb-4">{importResult}</div>
       )}
       {error && (
         <div className="alert alert-warning mb-4">{error}</div>

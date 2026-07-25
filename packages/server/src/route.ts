@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
@@ -110,6 +110,21 @@ const candidateMoveSchema = z.object({
   pv: z.array(z.string()).optional(),
   depth: z.number(),
 });
+
+// 将棋ウォーズ自動取り込み（`/swars/*`）は恒常的に無効。SWARS 側で KIF を手軽にコピーできる
+// ようになり自動取り込みが不要になったこと、およびグレー領域の機能なので露出を絞ることが理由
+// （prd/04 §4）。**実装（swars/ モジュール・下のジョブ起動ロジック）は残す**が、フロント/API から
+// は到達できない。env フラグではなくコード上の定数なので、再有効化には明示的なコード変更が要る。
+// 型は boolean（リテラル true にしない）——後続のハンドラ実装を「到達不能コード」にしないため。
+const SWARS_IMPORT_DISABLED: boolean = true;
+
+// 無効化ガード。認証・body 検証より前に置き、**常時 404** にする（無効な口では認証状態も晒さない）。
+const swarsDisabled: MiddlewareHandler = async (c, next) => {
+  if (SWARS_IMPORT_DISABLED) {
+    return c.json({ error: 'swars import is disabled' } as const, 404);
+  }
+  await next();
+};
 
 const route = app
   // --- 認証 ---
@@ -568,6 +583,7 @@ const route = app
   // --- swars 棋譜取得 ---
   .post(
     '/swars/import',
+    swarsDisabled,
     sessionRequired,
     zv(
       'json',
@@ -641,7 +657,7 @@ const route = app
       return c.json(state, 202);
     },
   )
-  .get('/swars/import/status', sessionRequired, (c) => {
+  .get('/swars/import/status', swarsDisabled, sessionRequired, (c) => {
     return c.json(getJob());
   });
 

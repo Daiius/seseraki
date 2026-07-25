@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as KifusNewRouteImport } from './routes/kifus/new'
 import { Route as KifusIdRouteImport } from './routes/kifus/$id'
@@ -23,6 +24,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevGalleryRoute = DevGalleryRouteImport.update({
+  id: '/dev-gallery',
+  path: '/dev-gallery',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -43,6 +49,7 @@ const KifusIdRoute = KifusIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
   '/kifus/$id': typeof KifusIdRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
   '/kifus/$id': typeof KifusIdRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
   '/kifus/$id': typeof KifusIdRoute
@@ -65,14 +74,34 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/settings' | '/kifus/$id' | '/kifus/new'
+  fullPaths:
+    | '/'
+    | '/dev-gallery'
+    | '/login'
+    | '/settings'
+    | '/kifus/$id'
+    | '/kifus/new'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/settings' | '/kifus/$id' | '/kifus/new'
-  id: '__root__' | '/' | '/login' | '/settings' | '/kifus/$id' | '/kifus/new'
+  to:
+    | '/'
+    | '/dev-gallery'
+    | '/login'
+    | '/settings'
+    | '/kifus/$id'
+    | '/kifus/new'
+  id:
+    | '__root__'
+    | '/'
+    | '/dev-gallery'
+    | '/login'
+    | '/settings'
+    | '/kifus/$id'
+    | '/kifus/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DevGalleryRoute: typeof DevGalleryRoute
   LoginRoute: typeof LoginRoute
   SettingsRoute: typeof SettingsRoute
   KifusIdRoute: typeof KifusIdRoute
@@ -93,6 +122,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev-gallery': {
+      id: '/dev-gallery'
+      path: '/dev-gallery'
+      fullPath: '/dev-gallery'
+      preLoaderRoute: typeof DevGalleryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -121,6 +157,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DevGalleryRoute: DevGalleryRoute,
   LoginRoute: LoginRoute,
   SettingsRoute: SettingsRoute,
   KifusIdRoute: KifusIdRoute,

@@ -12,6 +12,9 @@ import { Logo } from '../components/Logo';
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     if (location.pathname === '/login') return;
+    // DEV 専用の UI ギャラリーは認証を通さず開けるようにする（props で状態を固定して
+    // スクショ確認するための置き場。本番ではルート自体が中身を出さない）
+    if (import.meta.env.DEV && location.pathname === '/dev-gallery') return;
     const authed = await checkSession();
     if (!authed) {
       throw redirect({ to: '/login', search: { redirect: location.href } });

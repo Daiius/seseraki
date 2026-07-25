@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from '../lib/honoClient';
@@ -18,6 +18,7 @@ import {
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
+import { AnalyzingRadial } from '../components/AnalyzingRadial';
 
 type JobStatus =
   | { status: 'idle' }
@@ -460,24 +461,9 @@ function KifuListPage() {
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
                           {analyzing ? (
-                            // 他の状態バッジ（済/未/勝/負）と同じ一文字幅に収める。円環そのものが
-                            // N/M を表すので文字は出さない。経過時間（何分前に更新）は幅が無いので
-                            // 一覧では省き、詳細画面に委ねる。進捗が動くこと自体が生存確認になる
-                            <span
-                              role="progressbar"
-                              aria-label={`解析中 ${analyzing.analyzed}/${analyzing.total}`}
-                              aria-valuenow={analyzing.analyzed}
-                              aria-valuemax={analyzing.total}
-                              title={`解析中 ${analyzing.analyzed}/${analyzing.total}`}
-                              className="radial-progress text-info"
-                              style={{
-                                '--value':
-                                  analyzing.total > 0
-                                    ? Math.round((analyzing.analyzed / analyzing.total) * 100)
-                                    : 0,
-                                '--size': '1.1rem',
-                                '--thickness': '2px',
-                              } as CSSProperties}
+                            <AnalyzingRadial
+                              analyzed={analyzing.analyzed}
+                              total={analyzing.total}
                             />
                           ) : 'failed' in kifu && kifu.failed ? (
                             <span className="badge badge-error badge-sm">失敗</span>

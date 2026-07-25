@@ -15,7 +15,7 @@
 ```
    web (React/Vite) ──fetch /api──> server (Hono/Drizzle) ──> MySQL 8.4
                                         ▲    │
-                                        │    │ 履歴からの一括取り込み（手動トリガー・非同期ジョブ）
+                                        │    │ （旧: 履歴からの一括取り込み。無効化・実装残置。04 §4）
                                         │    ▼
                           API_KEY polling（未解析棋譜取得 / 解析結果登録）
                                         │
@@ -27,7 +27,7 @@
 | パッケージ | 役割 | 主要技術 |
 |---|---|---|
 | `web` | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
-| `server` | API + DB + KIF パース + 一括取り込み + プロンプト生成 | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
+| `server` | API + DB + KIF パース + プロンプト生成（+ 無効化済み swars 一括取り込みの残置実装。04 §4） | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
 | `worker` | 棋譜解析 | USI プロトコル, やねうら王 |
 | `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3） | TypeScript（React/node 非依存の純 TS）, zod |
 | `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |

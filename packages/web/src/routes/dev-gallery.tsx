@@ -2,6 +2,8 @@ import { type ReactNode } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
 import { AnalyzingAlert } from '../components/AnalyzingAlert';
+import { CopyButton } from '../components/CopyButton';
+import { ClipboardIcon } from '../components/icons';
 
 /**
  * DEV 専用の UI ギャラリー。特定の表示状態（解析中など）を、認証も API も loader も通さず
@@ -52,6 +54,25 @@ function Gallery() {
 
       <Case title="詳細・解析中 alert（文言と progress の縦中央揃え）">
         <AnalyzingAlert analyzed={12} total={150} agoText="3秒前に更新" />
+      </Case>
+
+      <Case title="コピーボタン（モバイルはアイコンのみ・sm+ でラベル）">
+        <div className="flex flex-wrap gap-2">
+          <CopyButton text="サンプル" label="KIF をコピー" className="btn-outline" />
+          <CopyButton text="サンプル" label="クリップボードにコピー" className="btn-primary" />
+        </div>
+      </Case>
+
+      <Case title="ペーストボタン（登録画面の KIF 欄ラベル右）">
+        {/* new.tsx と同じマークアップ。モバイルはアイコンのみ */}
+        <button
+          type="button"
+          className="btn btn-xs btn-ghost gap-1"
+          aria-label="クリップボードからペースト"
+        >
+          <ClipboardIcon className="size-4" />
+          <span className="hidden sm:inline">クリップボードからペースト</span>
+        </button>
       </Case>
     </div>
   );

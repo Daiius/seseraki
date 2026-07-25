@@ -14,7 +14,7 @@
 
 | ルート | 対象 | 変換 | フェーズ |
 |---|---|---|---|
-| **swars 一括取り込み** | swars の対局履歴 | CSA→KIF→USI（server） | 実装済み（手動トリガー） |
+| **swars 一括取り込み** | swars の対局履歴 | CSA→KIF→USI（server） | **無効化**（実装は残置・フロント/API 遮断。§4） |
 | **KIF 貼り付け** | 他ソフトのエクスポート等 | KIF→USI（server） | 実装済み |
 | **CSA 直接貼り付け** | 他ソフトの CSA 出力 | CSA→KIF→USI（server） | 計画中（既存の CSA→KIF 変換器を再利用） |
 
@@ -52,16 +52,31 @@
 - **CSA 直接貼り付け**（計画中）も同じ窓口に載せる。CSA→KIF は既存の変換器を再利用し、以降は KIF 経路と共通。
   変換器は一括取り込み専用ではないため、server 内の中立な場所に置く（取り込み専用ディレクトリに縛らない）。
 
-## 4. swars 一括取り込み（半自動）
+## 4. swars 一括取り込み（無効化）
 
-- swars の対局履歴からまとめて棋譜を取り込むルート。**Web の「更新」ボタン**から手動トリガーし、**非同期ジョブ**で走る。
-- **遡るページ数は Web から指定する**（ボタン隣のセレクト・1〜10・既定 1）。常用は最新 1 ページだが、初回セットアップや
-  久しぶりの取り込みでは過去分を遡る必要があるため。選択は永続化せず、リロードで既定に戻す（[decisions](./_grilling/decisions.md)）。
-- エンドポイント: `POST /api/swars/import`（202 即応答・バックグラウンド実行。body `{ userId, gtype?, pages? }`）→
-  `GET /api/swars/import/status`（`idle` / `running` / `done` / `error`）。いずれも `sessionRequired` で保護（[07](./07-auth-and-privacy.md)）。
+> 🚫 **このルートは恒常的に無効化している（フロント/API 遮断）。** swars 側で KIF を手軽にコピーできる
+> ようになり自動取り込みが不要になったこと、およびグレー領域の機能なので露出を絞ることが理由
+> （決定・[decisions](./_grilling/decisions.md)）。**実装は残置**し、KIF は §3 の貼り付け（+ クリップボード
+> ペースト。[05](./05-analysis.md) §2.5）で入れる。
+
+**遮断のかたち**:
+
+- **フロント**: 一覧（`/`）の「更新」ボタン・ページ数セレクト・ポーリングは**撤去**した。
+- **API**: `POST /api/swars/import` / `GET /api/swars/import/status` は**常時 404**（`swars import is disabled`）。
+  ガードは `sessionRequired` より前に置き、認証状態を晒さず 404 する。
+- **実装は残す**: `swars/` モジュール（履歴/CSA 取得・CSA→KIF 変換・ジョブストア）と server 側のジョブ起動
+  ロジックはコードに残る（到達不能だが削除しない）。再有効化は **env フラグではなくコード上の定数
+  （`SWARS_IMPORT_DISABLED`）を落とす明示的なコード変更**を要する。
+
+以下は無効化前の仕様（実装が残っているため参考として残す）:
+
+- swars の対局履歴からまとめて棋譜を取り込むルート。手動トリガーの**非同期ジョブ**で走った。
+  遡るページ数は Web から指定（1〜10・既定 1・非永続）。
+- エンドポイント: `POST /api/swars/import`（202 即応答・バックグラウンド）→
+  `GET /api/swars/import/status`（`idle` / `running` / `done` / `error`）。
 - 取り込んだ棋譜は **CSA→KIF 変換**を経て、以降は §3 と同じ KIF→USI 変換 + 対局メタ抽出 + 保存の下流に載る。
-- 重複は `swarsGameKey`（UNIQUE）で検知し、既取得はスキップする（[03](./03-data-model.md)）。
-- エラーは `errorKind: 'cookie_expired' | 'generic'` に分類。Web は SWR で status を 3 秒間隔ポーリングし `done`/`error` で停止。
+- 重複は `swarsGameKey`（UNIQUE）で検知しスキップ（[03](./03-data-model.md)）。
+- エラーは `errorKind: 'cookie_expired' | 'generic'` に分類。Web は SWR で status を 3 秒間隔ポーリングし `done`/`error` で停止した。
 
 > ⚠️ **swars の正式名称・取得の詳細な仕組み（履歴/CSA の取得方法）・アクセス姿勢・資格情報は公開文書に書かない。**
 > `.claude-personal/`（gitignore 対象）の運用メモに集約する（[README](./README.md) §公開リポジトリでの秘匿方針）。
@@ -91,8 +106,8 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | POST | `/api/kifus/:id/reanalyze` | `kifText` を再パースし `usiMoves`＋メタ列を再生成、**旧 `moveAnalyses` を削除**し `analysisError`/`analysisCompletedAt` をクリア、**`analysisRevision` を +1** して再キュー（`title`/`memo` は温存）。トランザクション実行。パーサ修正後の既存棋譜の復旧と失敗棋譜の再試行を兼ねる（[05](./05-analysis.md) §1.1a / [03](./03-data-model.md)） |
 | DELETE | `/api/kifus/:id` | 棋譜削除（解析結果も CASCADE） |
 | GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuId, revision, analyzed, total, updatedAt }` または `null`）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
-| POST | `/api/swars/import` | swars 取り込みジョブ起動（202・非同期。§4） |
-| GET | `/api/swars/import/status` | swars 取り込みジョブ状態（§4） |
+| ~~POST~~ | ~~`/api/swars/import`~~ | **無効（常時 404）**。swars 取り込みジョブ起動だったもの（§4） |
+| ~~GET~~ | ~~`/api/swars/import/status`~~ | **無効（常時 404）**。swars 取り込みジョブ状態だったもの（§4） |
 
 ### 6.1 `GET /api/kifus` のクエリ
 
@@ -145,6 +160,6 @@ worker からの投入は `Authorization: Bearer <API_KEY>` 必須の別系統�
 
 ## 8. 未確認・将来の論点
 
-- **swars 一括取り込みの定期化**（現状は手動トリガーのみ。頻度・アクセス運用は `.claude-personal/`。[08](./08-roadmap.md)）。
+- ~~**swars 一括取り込みの定期化**~~ — 取り込み自体を**無効化**したため取り下げ（実装は残置。§4）。
 - **CSA 直接貼り付け**の実装（決定済み・計画中。§2）。KIF ファイルアップロード / SFEN は**対象外**（決定）。
 - KIF 貼り付けの重複検知（現状なし）。

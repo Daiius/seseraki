@@ -33,7 +33,8 @@
 
 | 系統 | 対象 | 認証 |
 |---|---|---|
-| セッション | 棋譜 CRUD・一括取り込み系エンドポイント | `sessionRequired`（web のログイン cookie） |
+| セッション | 棋譜 CRUD 系エンドポイント | `sessionRequired`（web のログイン cookie） |
+| （無効） | `/api/swars/*`（一括取り込み系） | **常時 404**。認証前に遮断（無効化・[04](./04-ingestion.md) §4） |
 | API_KEY | `/api/worker/*` | `Authorization: Bearer <API_KEY>`（別系統） |
 
 - **worker 認証はユーザー認証と別系統**。worker は inbound の口を持たず、API_KEY で server を polling する

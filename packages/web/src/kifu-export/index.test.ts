@@ -100,3 +100,22 @@ describe('generateKifuMarkdown', () => {
     expect(tableRow(md, 4)).not.toContain('悪手');
   });
 });
+
+describe('対局情報の段級表示', () => {
+  it('段は漢数字（1 は初段）で出す', () => {
+    const md = markdown({ sente: 'Daiius', senteDan: 1, gote: 'coffee0418', goteDan: 2 });
+    expect(md).toContain('- 先手: Daiius（初段）');
+    expect(md).toContain('- 後手: coffee0418（二段）');
+  });
+
+  it('級（負数）は「N級」で出す', () => {
+    const md = markdown({ sente: 'Daiius', senteDan: 1, gote: 'Nair41', goteDan: -1 });
+    expect(md).toContain('- 後手: Nair41（1級）');
+    expect(md).not.toContain('-1段');
+  });
+
+  it('段級が無ければ名前だけ出す', () => {
+    const md = markdown({ sente: 'Player1', senteDan: null });
+    expect(md).toContain('- 先手: Player1\n');
+  });
+});

@@ -521,4 +521,17 @@ describe("parseRank", () => {
     expect(parseRank("0級")).toBeNull();
     expect(parseRank("初級")).toBeNull(); // 「初」は初段のみ
   });
+
+  it("妥当な範囲を超える段級は null にする（DB の smallint を超えさせない）", () => {
+    // 境界: 九段 / 30級 までは受ける
+    expect(parseRank("9段")).toBe(9);
+    expect(parseRank("30級")).toBe(-30);
+    // 範囲外
+    expect(parseRank("10段")).toBeNull();
+    expect(parseRank("31級")).toBeNull();
+    // smallint（-32768〜32767）を超える桁、および Number() が Infinity になる桁数
+    expect(parseRank("32768段")).toBeNull();
+    expect(parseRank("99999級")).toBeNull();
+    expect(parseRank(`${"9".repeat(400)}段`)).toBeNull();
+  });
 });

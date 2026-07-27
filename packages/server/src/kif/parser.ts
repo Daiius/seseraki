@@ -122,10 +122,18 @@ function parseRankNumber(text: string): number | null {
   return tens * 10 + ones;
 }
 
+// 段級として妥当な上限。段は九段まで、級は将棋ウォーズの最下位である 30 級まで。
+// これを超える値は段級ではなく誤記・異常入力とみなす。桁数無制限の数字を通すと
+// DB の senteDan / goteDan（符号付き smallint）の範囲を超え、登録・再解析が
+// 保存時に失敗するため、パーサ側で弾いておく。
+const MAX_DAN = 9;
+const MAX_KYU = 30;
+
 /**
  * 段級表記を数値へ。段は正・級は負で表す（初段=1 / 九段=9 / 1級=-1 / 10級=-10）。
  * 値の大小がそのまま棋力の順序になるため、格上格下の比較にそのまま使える。
  * DB の senteDan / goteDan（符号付き smallint）もこの表現で保持する。
+ * 妥当な範囲（[MAX_DAN] / [MAX_KYU]）を外れる値は段級として解釈せず null を返す。
  */
 export function parseRank(value: string): number | null {
   const trimmed = value.trim();
@@ -139,7 +147,11 @@ export function parseRank(value: string): number | null {
   if (numText === "初") return kind === "段" ? 1 : null;
   const n = parseRankNumber(numText);
   if (n === null || n <= 0) return null;
-  return kind === "段" ? n : -n;
+  // 桁数の多い入力は Number() が Infinity / 精度落ちの値を返しうるため、
+  // 上限比較の前に整数であることを確かめる
+  if (!Number.isSafeInteger(n)) return null;
+  if (kind === "段") return n <= MAX_DAN ? n : null;
+  return n <= MAX_KYU ? -n : null;
 }
 
 /**

@@ -298,6 +298,31 @@ describe("parseKif", () => {
       expect(header.senteDan).toBe(3);
     });
 
+    describe("名前欄末尾と段級行が両方ある場合は段級行を優先する", () => {
+      it("段級行が名前行より後にあっても優先する", () => {
+        const { header } = parseKif(`先手：羽生善治 九段\n先手段級：三段\n`);
+        expect(header.sente).toBe("羽生善治");
+        expect(header.senteDan).toBe(3);
+      });
+
+      it("段級行が名前行より先にあっても優先する（出現順に依らない）", () => {
+        const { header } = parseKif(`先手段級：三段\n先手：羽生善治 九段\n`);
+        expect(header.sente).toBe("羽生善治");
+        expect(header.senteDan).toBe(3);
+      });
+
+      it("後手も同様に出現順へ依存しない", () => {
+        const { header } = parseKif(`後手段級：1級\n後手：Nair41 五段\n`);
+        expect(header.gote).toBe("Nair41");
+        expect(header.goteDan).toBe(-1);
+      });
+
+      it("段級行が解釈できないときは名前欄末尾へフォールバックする", () => {
+        const { header } = parseKif(`先手段級：達人\n先手：羽生善治 九段\n`);
+        expect(header.senteDan).toBe(9);
+      });
+    });
+
     it("開始日時を JST の Date にする", () => {
       const { header } = parseKif(`開始日時：2026/07/15 15:54:18\n`);
       expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");

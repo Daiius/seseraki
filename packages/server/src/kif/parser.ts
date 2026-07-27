@@ -284,6 +284,11 @@ export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
   let prevCol = 0;
   let prevRow = 0;
 
+  // 独立した段級行（`先手段級：`）から段級を取れたか。名前欄末尾の段級（`先手：羽生善治 九段`）
+  // より段級行を優先するため、ヘッダの出現順に依らず後から上書きされないようにする。
+  let senteRankFromLine = false;
+  let goteRankFromLine = false;
+
   // 各マスの成り状態を追跡（"col,row" → boolean）
   // KIF は駒名が成り後の名前になる表記を使うため、
   // USI の "+" を付けるべきかどうかの判定に必要
@@ -302,16 +307,25 @@ export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
       if (key === "先手") {
         const { name, dan } = parsePlayer(value);
         header.sente = name;
-        // 段級が別行にある形式（将棋ウォーズ）で、先に読んだ段級を消さない
-        if (dan !== null) header.senteDan = dan;
+        // 名前欄末尾の段級は、段級行が無い（まだ取れていない）ときだけ採る
+        if (dan !== null && !senteRankFromLine) header.senteDan = dan;
       } else if (key === "後手") {
         const { name, dan } = parsePlayer(value);
         header.gote = name;
-        if (dan !== null) header.goteDan = dan;
+        if (dan !== null && !goteRankFromLine) header.goteDan = dan;
       } else if (key === "先手段級") {
-        header.senteDan = parseRank(value);
+        // 解釈できない段級行は情報が無いので、名前欄末尾へのフォールバックを残す
+        const rank = parseRank(value);
+        if (rank !== null) {
+          header.senteDan = rank;
+          senteRankFromLine = true;
+        }
       } else if (key === "後手段級") {
-        header.goteDan = parseRank(value);
+        const rank = parseRank(value);
+        if (rank !== null) {
+          header.goteDan = rank;
+          goteRankFromLine = true;
+        }
       } else if (key === "開始日時") {
         header.playedAt = parseKifPlayedAt(value, sourceTz);
       } else if (key === "手合割") {

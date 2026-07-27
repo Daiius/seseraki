@@ -208,6 +208,18 @@ function moveNote(loss: MoveLoss, label: MoveLabel): string {
   return '';
 }
 
+/** 段位の数値 → 漢数字表記（1 は「初段」）。九段より上は無いので数値のまま出す */
+const DAN_KANJI = ['', '初', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/**
+ * 段級の数値表現（段=正 / 級=負。server 側 KifHeader.senteDan と同じ）を表記へ戻す。
+ * 例: 1→初段 / 9→九段 / -1→1級
+ */
+function formatRank(rank: number): string {
+  if (rank > 0) return `${DAN_KANJI[rank] ?? rank}段`;
+  return `${-rank}級`;
+}
+
 function formatPlayedAt(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -279,12 +291,12 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
   lines.push('');
   if (input.title) lines.push(`- タイトル: ${input.title}`);
   if (input.sente) {
-    const dan = input.senteDan ? `（${input.senteDan}段）` : '';
-    lines.push(`- 先手: ${input.sente}${dan}`);
+    const rank = input.senteDan ? `（${formatRank(input.senteDan)}）` : '';
+    lines.push(`- 先手: ${input.sente}${rank}`);
   }
   if (input.gote) {
-    const dan = input.goteDan ? `（${input.goteDan}段）` : '';
-    lines.push(`- 後手: ${input.gote}${dan}`);
+    const rank = input.goteDan ? `（${formatRank(input.goteDan)}）` : '';
+    lines.push(`- 後手: ${input.gote}${rank}`);
   }
   const resultJp = formatResult(input.result);
   if (resultJp) lines.push(`- 結果: ${resultJp}`);

@@ -76,7 +76,9 @@ export type KifTimezone = "JST" | "UTC";
 export interface KifHeader {
   sente: string | null;
   gote: string | null;
+  /** 先手の段級。段は正・級は負（初段=1 / 九段=9 / 1級=-1）。[parseRank] */
   senteDan: number | null;
+  /** 後手の段級。表現は [senteDan] と同じ */
   goteDan: number | null;
   /** 対局日時（開始日時ヘッダ由来。sourceTz として解釈した絶対時刻） */
   playedAt: Date | null;
@@ -95,15 +97,81 @@ export interface ParsedKif {
   header: KifHeader;
 }
 
-/** "先手：羽生善治 九段" 等から名前と段位を分離する */
+/**
+ * 段級表記の本体（数字部と「段」「級」）。名前欄の末尾からの切り出しにも使うため
+ * 単体で定義する。数字部は 算用数字 / 全角数字 / 漢数字 / 「初」 を受ける。
+ */
+const RANK_BODY = /(?:初|[0-9]+|[０-９]+|[一二三四五六七八九十]+)[\s　]*[段級]/;
+
+/** 段級の数字部を数値へ（算用数字 / 全角数字 / 漢数字。将棋ウォーズの級位は十の位まで） */
+function parseRankNumber(text: string): number | null {
+  if (/^[0-9]+$/.test(text)) return Number(text);
+  if (/^[０-９]+$/.test(text)) {
+    return Number(
+      text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)),
+    );
+  }
+  // 漢数字。「十」を境に十の位と一の位へ分ける（十=10 / 十二=12 / 二十=20 / 二十五=25）
+  const tenIndex = text.indexOf("十");
+  if (tenIndex === -1) return KANJI_MAP[text] ?? null;
+  const tensPart = text.slice(0, tenIndex);
+  const onesPart = text.slice(tenIndex + 1);
+  const tens = tensPart === "" ? 1 : (KANJI_MAP[tensPart] ?? null);
+  const ones = onesPart === "" ? 0 : (KANJI_MAP[onesPart] ?? null);
+  if (tens === null || ones === null) return null;
+  return tens * 10 + ones;
+}
+
+// 段級として妥当な上限。段は九段まで、級は将棋ウォーズの最下位である 30 級まで。
+// これを超える値は段級ではなく誤記・異常入力とみなす。桁数無制限の数字を通すと
+// DB の senteDan / goteDan（符号付き smallint）の範囲を超え、登録・再解析が
+// 保存時に失敗するため、パーサ側で弾いておく。
+const MAX_DAN = 9;
+const MAX_KYU = 30;
+
+/**
+ * 段級表記を数値へ。段は正・級は負で表す（初段=1 / 九段=9 / 1級=-1 / 10級=-10）。
+ * 値の大小がそのまま棋力の順序になるため、格上格下の比較にそのまま使える。
+ * DB の senteDan / goteDan（符号付き smallint）もこの表現で保持する。
+ * 妥当な範囲（[MAX_DAN] / [MAX_KYU]）を外れる値は段級として解釈せず null を返す。
+ */
+export function parseRank(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const m = trimmed.match(
+    /^(初|[0-9]+|[０-９]+|[一二三四五六七八九十]+)[\s　]*([段級])$/,
+  );
+  if (!m) return null;
+  const [, numText, kind] = m;
+  // 「初」は初段のみ（「初級」という段級表記は無い）
+  if (numText === "初") return kind === "段" ? 1 : null;
+  const n = parseRankNumber(numText);
+  if (n === null || n <= 0) return null;
+  // 桁数の多い入力は Number() が Infinity / 精度落ちの値を返しうるため、
+  // 上限比較の前に整数であることを確かめる
+  if (!Number.isSafeInteger(n)) return null;
+  if (kind === "段") return n <= MAX_DAN ? n : null;
+  return n <= MAX_KYU ? -n : null;
+}
+
+/**
+ * "先手：羽生善治 九段" 等から名前と段級を分離する。
+ * 将棋ウォーズのように段級が別行（"先手段級："）の場合、ここでは dan は取れず null を返す。
+ */
 function parsePlayer(value: string): { name: string | null; dan: number | null } {
   const trimmed = value.trim();
   if (!trimmed) return { name: null, dan: null };
-  const danMatch = trimmed.match(/[\s　]([一二三四五六七八九])段[\s　]*$/);
-  if (danMatch) {
-    const dan = KANJI_MAP[danMatch[1]] ?? null;
-    const name = trimmed.slice(0, danMatch.index).trim();
-    return { name: name || null, dan };
+  // 空白区切りで末尾に付いた段級のみ分離する（名前の一部を段級と誤認しないため）
+  const rankMatch = trimmed.match(
+    new RegExp(`[\\s　](${RANK_BODY.source})[\\s　]*$`),
+  );
+  if (rankMatch) {
+    const dan = parseRank(rankMatch[1]);
+    // 「藤井聡太 竜王」のような段級以外の称号は名前側に残す
+    if (dan !== null) {
+      const name = trimmed.slice(0, rankMatch.index).trim();
+      return { name: name || null, dan };
+    }
   }
   return { name: trimmed, dan: null };
 }
@@ -216,6 +284,11 @@ export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
   let prevCol = 0;
   let prevRow = 0;
 
+  // 独立した段級行（`先手段級：`）から段級を取れたか。名前欄末尾の段級（`先手：羽生善治 九段`）
+  // より段級行を優先するため、ヘッダの出現順に依らず後から上書きされないようにする。
+  let senteRankFromLine = false;
+  let goteRankFromLine = false;
+
   // 各マスの成り状態を追跡（"col,row" → boolean）
   // KIF は駒名が成り後の名前になる表記を使うため、
   // USI の "+" を付けるべきかどうかの判定に必要
@@ -225,17 +298,34 @@ export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
     const line = lines[i];
 
     // ヘッダ行（対局メタ）の抽出
-    const headerMatch = line.match(/^(先手|後手|開始日時|手合割)[：:]\s*(.*)$/);
+    // ※ 「先手段級」は「先手」より先に置く（交替は左優先。短い方が先だと取りこぼす）
+    const headerMatch = line.match(
+      /^(先手段級|後手段級|先手|後手|開始日時|手合割)[：:]\s*(.*)$/,
+    );
     if (headerMatch) {
       const [, key, value] = headerMatch;
       if (key === "先手") {
         const { name, dan } = parsePlayer(value);
         header.sente = name;
-        header.senteDan = dan;
+        // 名前欄末尾の段級は、段級行が無い（まだ取れていない）ときだけ採る
+        if (dan !== null && !senteRankFromLine) header.senteDan = dan;
       } else if (key === "後手") {
         const { name, dan } = parsePlayer(value);
         header.gote = name;
-        header.goteDan = dan;
+        if (dan !== null && !goteRankFromLine) header.goteDan = dan;
+      } else if (key === "先手段級") {
+        // 解釈できない段級行は情報が無いので、名前欄末尾へのフォールバックを残す
+        const rank = parseRank(value);
+        if (rank !== null) {
+          header.senteDan = rank;
+          senteRankFromLine = true;
+        }
+      } else if (key === "後手段級") {
+        const rank = parseRank(value);
+        if (rank !== null) {
+          header.goteDan = rank;
+          goteRankFromLine = true;
+        }
       } else if (key === "開始日時") {
         header.playedAt = parseKifPlayedAt(value, sourceTz);
       } else if (key === "手合割") {

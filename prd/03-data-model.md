@@ -34,8 +34,8 @@ kifus
 ├── usiMoves: json (string[])?   -- USI 形式の指し手列（登録時に KIF から変換）
 ├── sente: varchar(100)?         -- 先手プレイヤー名
 ├── gote: varchar(100)?          -- 後手プレイヤー名
-├── senteDan: smallint?          -- 先手段位
-├── goteDan: smallint?           -- 後手段位
+├── senteDan: smallint?          -- 先手段級（段=正 1〜9 / 級=負 -1〜-30。[01](./01-domain.md) §3）
+├── goteDan: smallint?           -- 後手段級（同上。カラム名は Dan だが段位限定ではない）
 ├── result: varchar(50)?         -- 対局結果
 ├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
 ├── playedAt: timestamp?         -- 対局日時（sourceTz で解釈した絶対時刻）

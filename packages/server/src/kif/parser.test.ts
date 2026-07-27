@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseKif } from "./parser.js";
+import { parseKif, parseRank } from "./parser.js";
 
 /** ヘルパー: KIF テキストから USI 指し手列を取得 */
 function parseToUsi(kifText: string): string[] {
@@ -260,6 +260,69 @@ describe("parseKif", () => {
       expect(header.goteDan).toBeNull();
     });
 
+    it("将棋ウォーズ形式の段級行（別行）を取り込む", () => {
+      const kif = `開始日時：2026/07/27 22:05:56
+終了日時：2026/07/27 22:25:56
+場所：将棋ウォーズ
+持ち時間：10分切れ負け
+手合割：平手
+初期局面：通常
+先手：coffee0418
+先手段級：二段
+後手：Daiius
+後手段級：初段
+手数----指手---------消費時間--
+1 ７六歩(77)   ( 0:01/00:00:01)
+2 投了
+`;
+      const { header } = parseKif(kif);
+      expect(header.sente).toBe("coffee0418");
+      expect(header.senteDan).toBe(2);
+      expect(header.gote).toBe("Daiius");
+      expect(header.goteDan).toBe(1); // 初段
+    });
+
+    it("級位は負数にする（値の大小がそのまま棋力の順序になる）", () => {
+      const { header } = parseKif(
+        `先手：Daiius\n先手段級：初段\n後手：Nair41\n後手段級：1級\n`,
+      );
+      expect(header.senteDan).toBe(1);
+      expect(header.goteDan).toBe(-1);
+      // 格上格下の判定に符号付きの比較をそのまま使える
+      expect(header.senteDan!).toBeGreaterThan(header.goteDan!);
+    });
+
+    it("段級行を名前行が上書きしない（段級行が先に来ても保持する）", () => {
+      const { header } = parseKif(`先手段級：三段\n先手：Daiius\n`);
+      expect(header.sente).toBe("Daiius");
+      expect(header.senteDan).toBe(3);
+    });
+
+    describe("名前欄末尾と段級行が両方ある場合は段級行を優先する", () => {
+      it("段級行が名前行より後にあっても優先する", () => {
+        const { header } = parseKif(`先手：羽生善治 九段\n先手段級：三段\n`);
+        expect(header.sente).toBe("羽生善治");
+        expect(header.senteDan).toBe(3);
+      });
+
+      it("段級行が名前行より先にあっても優先する（出現順に依らない）", () => {
+        const { header } = parseKif(`先手段級：三段\n先手：羽生善治 九段\n`);
+        expect(header.sente).toBe("羽生善治");
+        expect(header.senteDan).toBe(3);
+      });
+
+      it("後手も同様に出現順へ依存しない", () => {
+        const { header } = parseKif(`後手段級：1級\n後手：Nair41 五段\n`);
+        expect(header.gote).toBe("Nair41");
+        expect(header.goteDan).toBe(-1);
+      });
+
+      it("段級行が解釈できないときは名前欄末尾へフォールバックする", () => {
+        const { header } = parseKif(`先手段級：達人\n先手：羽生善治 九段\n`);
+        expect(header.senteDan).toBe(9);
+      });
+    });
+
     it("開始日時を JST の Date にする", () => {
       const { header } = parseKif(`開始日時：2026/07/15 15:54:18\n`);
       expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");
@@ -458,5 +521,42 @@ describe("parseKif", () => {
       expect(r.header.gote).toBe("daiius");
       expect(r.header.result).toBe("GOTE_WIN_CHECKMATE");
     });
+  });
+});
+
+describe("parseRank", () => {
+  it("段は正・級は負にする", () => {
+    expect(parseRank("初段")).toBe(1);
+    expect(parseRank("二段")).toBe(2);
+    expect(parseRank("九段")).toBe(9);
+    expect(parseRank("1級")).toBe(-1);
+    expect(parseRank("10級")).toBe(-10);
+  });
+
+  it("全角数字・漢数字の級位も受ける", () => {
+    expect(parseRank("１級")).toBe(-1);
+    expect(parseRank("十級")).toBe(-10);
+    expect(parseRank("三十級")).toBe(-30);
+    expect(parseRank("二十五級")).toBe(-25);
+  });
+
+  it("段級でない表記は null にする", () => {
+    expect(parseRank("竜王")).toBeNull();
+    expect(parseRank("")).toBeNull();
+    expect(parseRank("0級")).toBeNull();
+    expect(parseRank("初級")).toBeNull(); // 「初」は初段のみ
+  });
+
+  it("妥当な範囲を超える段級は null にする（DB の smallint を超えさせない）", () => {
+    // 境界: 九段 / 30級 までは受ける
+    expect(parseRank("9段")).toBe(9);
+    expect(parseRank("30級")).toBe(-30);
+    // 範囲外
+    expect(parseRank("10段")).toBeNull();
+    expect(parseRank("31級")).toBeNull();
+    // smallint（-32768〜32767）を超える桁、および Number() が Infinity になる桁数
+    expect(parseRank("32768段")).toBeNull();
+    expect(parseRank("99999級")).toBeNull();
+    expect(parseRank(`${"9".repeat(400)}段`)).toBeNull();
   });
 });

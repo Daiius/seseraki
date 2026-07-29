@@ -55,6 +55,19 @@ function KifuDetailPage() {
   // USI 指し手列から盤面を構築。全局面はここで 1 度だけ作り、盤面へ渡す
   const positions = buildPositions(usiMoves);
 
+  /**
+   * kebab メニューを閉じる。
+   *
+   * daisyUI の dropdown は JS を持たず `:focus` / `:focus-within` で開閉するため、
+   * 中の項目を押してもフォーカスが内側に残ったままで開きっぱなしになる。
+   * 押した要素のフォーカスを明示的に外して閉じる。
+   */
+  const closeMenu = () => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  };
+
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
     setActionResult(null);
@@ -128,14 +141,24 @@ function KifuDetailPage() {
             tabIndex={0}
             className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-32 p-1 shadow"
           >
+            {/* メニュー項目は押しても dropdown が閉じないので、実行前に明示的に閉じる */}
             <li>
-              <button onClick={handleReanalyze} disabled={busy}>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  void handleReanalyze();
+                }}
+                disabled={busy}
+              >
                 再解析
               </button>
             </li>
             <li>
               <button
-                onClick={handleDelete}
+                onClick={() => {
+                  closeMenu();
+                  void handleDelete();
+                }}
                 className="text-error"
                 disabled={busy}
               >

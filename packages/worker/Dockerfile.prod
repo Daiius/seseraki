@@ -8,6 +8,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG EDITION=YANEURAOU_ENGINE_NNUE
+# ⚠ **既定の OTHER は SIMD 最適化が一切効かない**。どの CPU でも動く代わりに NNUE の評価が
+# 数倍遅く、同じ思考時間で読める深さがはっきり落ちる（実測: OTHER 3.5M nps / depth 14 に対し、
+# Zen4 機で ZEN3AVX512VNNI は 10.2M nps / depth 16 ＝ **約 2.9 倍**）。
+#
+# 稼働ホストが決まっているなら、その命令セットに合わせた値を**ビルド時に注入する**:
+#
+#   docker build -f packages/worker/Dockerfile.prod --build-arg TARGET_CPU=ZEN3AVX512VNNI .
+#
+# 選び方（やねうら王 source/Makefile の TARGET_CPU 一覧より）:
+#   ZEN3AVX512VNNI … Zen3/Zen4 で AVX512-VNNI がある場合の最速
+#   ZEN3           … Zen3 以降（AVX2 + BMI2）
+#   AVX2 / SSE42   … Intel 系はこちら
+#   OTHER          … 最適化なし。移植性優先の既定値
+# 生成されるバイナリは指定した命令セットを持つ CPU でしか動かない（無いと起動時に SIGILL）。
+# 移送先が変わるときは `lscpu` で対応を確認すること。
 ARG TARGET_CPU=OTHER
 
 RUN git clone --depth 1 https://github.com/yaneurao/YaneuraOu.git /yaneuraou

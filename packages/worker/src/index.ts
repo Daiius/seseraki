@@ -10,6 +10,14 @@ import { analyzeKifu, ChunkSubmitError } from "./kifu-analysis.js";
 async function configureEngine(engine: UsiEngine, config: Config): Promise<void> {
   engine.setOption("Threads", String(config.engineThreads));
   engine.setOption("USI_Hash", String(config.engineHash));
+  // 読み筋(PV)を置換表から延長して出力させる。byoyomi で探索を打ち切ると、最後に出る
+  // info 行が探索途中の暫定値になり、pv が 1〜2 手しか埋まっていないことがある
+  // （新しい最善手が見つかった直後に時間切れになるケース）。そのままだと候補手一覧の
+  // 読み筋が「2 手だけ」で表示され、先の展開が分からない。
+  // 検討モードにすると、やねうら王が pv を置換表から辿って補完するので、打ち切られた
+  // 局面でも読める長さの読み筋が出る（実測: 2 手 → 20 手超）。
+  // 探索アルゴリズムには影響しない（pv を出力する瞬間に置換表を辿るだけ）。
+  engine.setOption("ConsiderationMode", "true");
   if (config.engineEvalDir) {
     engine.setOption("EvalDir", config.engineEvalDir);
   }

@@ -36,6 +36,13 @@ export function parseInfoLine(line: string): UsiInfo {
       case "multipv":
         info.multipv = Number(tokens[++i]);
         break;
+      // lowerbound / upperbound は値を取らない単独フラグ（score の直後、pv より前に来る）
+      case "lowerbound":
+        info.bound = "lower";
+        break;
+      case "upperbound":
+        info.bound = "upper";
+        break;
       case "pv":
         // pv consumes all remaining tokens
         info.pv = tokens.slice(i + 1);

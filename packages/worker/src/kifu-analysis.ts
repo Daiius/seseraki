@@ -63,8 +63,29 @@ export class ChunkSubmitError extends Error {
 export const CHUNK_INTERVAL_MS = 30_000;
 
 /**
+ * 同じ multipv 番号について、後から来た info 行で上書きしてよいかを判定する。
+ *
+ * 基本は「後の行ほど深い結果」なので上書きしてよい。ただし byoyomi で探索を打ち切ると
+ * **最後の行が探索途中の暫定値**になることがあり、そのまま採ると直前に出ていた完全な
+ * 読み筋を捨てて pv が 1〜2 手しかない候補手を保存してしまう。
+ *
+ * - fail low/high の行（lowerbound/upperbound）: score は上限/下限でしかなく、pv も
+ *   再探索前の途中経過。確定した行が既にあるならそちらを残す。
+ * - pv を持たない行: 読み筋として使えないので確定した行を残す。
+ *
+ * なお bound が付かないまま pv が途中で切れる経路（打ち切り時に最善手が入れ替わり、
+ * 新しい手の pv がまだ埋まっていない）はここでは判別できない。そちらは
+ * `ConsiderationMode` で pv を置換表から延長させて対処する（index.ts の configureEngine）。
+ */
+function shouldReplace(next: UsiInfo, prev: UsiInfo): boolean {
+  if (!next.pv?.length) return false;
+  if (next.bound && !prev.bound) return false;
+  return true;
+}
+
+/**
  * MultiPV の info 行群から各 PV の最終結果を抽出する
- * (同じ multipv 番号の最後の info を採用)
+ * (同じ multipv 番号の最後の info を採用。ただし暫定値への後退は採らない)
  */
 function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
   const best = new Map<number, UsiInfo>();
@@ -72,6 +93,8 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
   for (const info of infoLines) {
     const pvNum = info.multipv ?? 1;
     // 同じ PV 番号は後のもので上書き（より深い結果）
+    const prev = best.get(pvNum);
+    if (prev && !shouldReplace(info, prev)) continue;
     best.set(pvNum, info);
   }
 

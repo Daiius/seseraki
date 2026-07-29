@@ -5,7 +5,7 @@ import {
   type AnalysisEngine,
   type MoveAnalysis,
 } from "./kifu-analysis.js";
-import type { UsiSearchResult } from "./usi/types.js";
+import type { UsiInfo, UsiSearchResult } from "./usi/types.js";
 
 /** 相掛かり序盤のサンプル（10 手 = 11 局面） */
 const MOVES = [
@@ -157,5 +157,114 @@ describe("analyzeKifu のチャンク submit", () => {
       [3, 4, 5],
     ]);
     expect(positions).toHaveLength(6);
+  });
+});
+
+/** 与えた info 行をそのまま返すエンジン（候補手の抽出だけを見るためのスタブ） */
+function createInfoEngine(infoLines: UsiInfo[]): AnalysisEngine {
+  return {
+    setOption: () => {},
+    analyze: async (): Promise<UsiSearchResult> => ({
+      bestmove: { move: infoLines.at(-1)?.pv?.[0] ?? "resign" },
+      infoLines,
+      lastInfo: infoLines.at(-1) ?? {},
+    }),
+  };
+}
+
+/** 初期局面 1 つだけを解析させ、その候補手を取り出す */
+async function candidatesOf(infoLines: UsiInfo[]) {
+  const chunks: MoveAnalysis[][] = [];
+  await analyzeKifu(createInfoEngine(infoLines), [], {
+    onChunk: async (analyses) => {
+      chunks.push(analyses);
+    },
+  });
+  return chunks.flat()[0].candidates;
+}
+
+describe("候補手の抽出", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("同じ PV 番号は後の（より深い）行で上書きする", async () => {
+    const candidates = await candidatesOf([
+      {
+        multipv: 1,
+        depth: 10,
+        score: { type: "cp", value: 30 },
+        pv: ["7g7f", "3c3d"],
+      },
+      {
+        multipv: 1,
+        depth: 13,
+        score: { type: "cp", value: 42 },
+        pv: ["7g7f", "3c3d", "2g2f", "8c8d"],
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].depth).toBe(13);
+    expect(candidates[0].pv).toEqual(["7g7f", "3c3d", "2g2f", "8c8d"]);
+  });
+
+  it("fail low/high の暫定行では確定した読み筋を上書きしない", async () => {
+    // byoyomi 打ち切り時に実際に出る並び。完全な pv の直後、時間切れの瞬間に
+    // fail high の暫定行（pv が 2 手しか埋まっていない）が最後に来る
+    const candidates = await candidatesOf([
+      {
+        multipv: 1,
+        depth: 13,
+        score: { type: "cp", value: 55 },
+        pv: ["P*4f", "P*6c", "6b6c", "4i5h"],
+      },
+      {
+        multipv: 1,
+        depth: 13,
+        score: { type: "cp", value: 75 },
+        bound: "lower",
+        pv: ["P*4f", "P*6c"],
+      },
+    ]);
+
+    // 下限値でしかない score 75 ではなく、確定した 55 と完全な読み筋が残る
+    expect(candidates[0].pv).toEqual(["P*4f", "P*6c", "6b6c", "4i5h"]);
+    expect(candidates[0].score).toEqual({ type: "cp", value: 55 });
+  });
+
+  it("読み筋を持たない行では上書きしない", async () => {
+    const candidates = await candidatesOf([
+      {
+        multipv: 1,
+        depth: 13,
+        score: { type: "cp", value: 55 },
+        pv: ["P*4f", "P*6c", "6b6c"],
+      },
+      // multipv も pv も持たない統計だけの info 行（PV 番号 1 として扱われる）
+      { depth: 13, nodes: 6_924_070, nps: 3_677_148, time: 1883 },
+    ]);
+
+    expect(candidates[0].pv).toEqual(["P*4f", "P*6c", "6b6c"]);
+  });
+
+  it("暫定行しか出ていなければそれを採る", async () => {
+    // 浅い段階で打ち切られ、確定した行が 1 つも無い局面。捨ててしまうと候補手が消える
+    const candidates = await candidatesOf([
+      {
+        multipv: 1,
+        depth: 5,
+        score: { type: "cp", value: -20 },
+        bound: "upper",
+        pv: ["7g7f", "3c3d"],
+      },
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].move).toBe("7g7f");
   });
 });

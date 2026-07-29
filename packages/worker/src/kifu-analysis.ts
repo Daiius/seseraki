@@ -119,7 +119,7 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
  * @param usiMoves - USI 形式の指し手列
  * @param options.depth - 解析深さ (default: 10)
  * @param options.multiPv - 候補手数 (default: 3)
- * @param options.byoyomi - 秒読み(ms)。設定時は depth より優先
+ * @param options.movetime - 1 局面あたりの思考時間(ms)。設定時は depth より優先
  * @param options.startMoveNumber - 解析を始める局面番号（既に server に入っている件数。default: 0）
  * @param options.chunkIntervalMs - チャンクを区切る経過時間 (default: {@link CHUNK_INTERVAL_MS})
  * @param options.onProgress - 1 局面解析するたびに呼ばれる (解析済み局面数, 全局面数)
@@ -132,7 +132,7 @@ export async function analyzeKifu(
   options: {
     depth?: number;
     multiPv?: number;
-    byoyomi?: number;
+    movetime?: number;
     startMoveNumber?: number;
     chunkIntervalMs?: number;
     onProgress?: (analyzed: number, total: number) => void;
@@ -142,14 +142,17 @@ export async function analyzeKifu(
   const {
     depth = 10,
     multiPv = 3,
-    byoyomi,
+    movetime,
     startMoveNumber = 0,
     chunkIntervalMs = CHUNK_INTERVAL_MS,
     onProgress,
     onChunk,
   } = options;
-  const goCommand = byoyomi
-    ? `go btime 0 wtime 0 byoyomi ${byoyomi}`
+  // 時間で区切るときは byoyomi ではなく movetime を使う。byoyomi は対局用の指定で、
+  // やねうら王が NetworkDelay2（既定 1120ms）を引くため指定値どおりの思考時間にならない。
+  // movetime は「時間固定モード」として扱われ、指定値がそのまま思考時間になる。
+  const goCommand = movetime
+    ? `go movetime ${movetime}`
     : `go depth ${depth}`;
 
   const total = usiMoves.length + 1;

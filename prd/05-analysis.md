@@ -150,14 +150,40 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | USI_Hash | `ENGINE_HASH` | 128 (MB) | 本番は 2048–4096 推奨 |
 | MultiPV | `ENGINE_MULTIPV` | 3 | 候補手数 |
 | — | `ENGINE_DEPTH` | 10 | 探索深さ |
-| — | `ENGINE_BYOYOMI` | 未設定 | 秒読み(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整） |
+| — | `ENGINE_MOVETIME` | 未設定 | 1 局面あたりの思考時間(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整） |
 | EvalDir | `ENGINE_EVAL_DIR` | — | 本番: 評価関数ディレクトリ |
 | BookDir | `ENGINE_BOOK_DIR` | — | 本番: 定跡ディレクトリ |
+| ConsiderationMode | — | true | 読み筋を置換表から延長して出力する（§1.3a） |
 
 - 定跡関連の細目（BookFile / IgnoreBookPly / FlippedBook / BookOnTheFly / BookMoves / BookEvalDiff /
   BookDepthLimit 等）は BookDir 設定時に本番向けの値へ自動設定される（メモリ節約・回転局面ヒット・末端採用など）。
-- **本番の解析モードは byoyomi（時間指定）を志向**する（局面の複雑さに応じて深さを自動調整）。ただし**適正値は
-  吟味中**で、具体値はリポジトリに固定せず env 運用にとどめる（[decisions](./_grilling/decisions.md)）。
+- **本番の解析モードは時間指定（`ENGINE_MOVETIME`）を志向**する（局面の複雑さに応じて深さを自動調整）。ただし
+  **適正値は吟味中**で、具体値はリポジトリに固定せず env 運用にとどめる（[decisions](./_grilling/decisions.md)）。
+
+#### 1.3a 時間で区切るときは `go movetime`（`go byoyomi` ではない）
+
+USI で思考時間を指定する方法は 2 つあるが、**解析には `go movetime` を使う**。`byoyomi` は対局用の指定で、
+やねうら王が「floodgate で切れ負けしないため」に `NetworkDelay2`（既定 1120ms）を差し引くため、
+**指定値どおりの思考時間にならない**。
+
+| 指定（いずれも 1000ms を要求） | 実際の思考時間 |
+|---|---|
+| `go btime 0 wtime 0 byoyomi 1000` | 102ms（1120ms 引かれ、下限に張り付く） |
+| `go movetime 1000` | 1001ms |
+
+`movetime` はやねうら王で「時間固定モード」として扱われ、`NetworkDelay` も `MinimumThinkingTime` も
+経由せず指定値がそのまま思考時間になる。設定値と実際の解析時間が一致するので、1 局の所要時間を見積もれる。
+
+> ⚠️ `ENGINE_BYOYOMI` は廃止した。残っていると解析時間が静かに変わるので、worker は起動時に警告を出す。
+
+#### 1.3b `ConsiderationMode` を有効にする
+
+時間で探索を打ち切ると、最後に出る info 行が探索途中の暫定値になり、読み筋が 1〜2 手しか埋まっていない
+ことがある（iteration の途中で最善手が入れ替わったまま時間切れになるケース）。やねうら王は検討モードの
+とき読み筋を置換表から辿って補完するため、打ち切られた局面でも読める長さの読み筋が出る。
+探索アルゴリズムには影響しない（読み筋を出力する瞬間に置換表を辿るだけ）。
+
+定跡にヒットした局面は別経路（採用手の確定行が depth 0・pv 2 手固定）でこの補完が効かない（#67）。
 
 ### 1.4 解析 depth の目安
 

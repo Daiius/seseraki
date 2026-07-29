@@ -160,6 +160,51 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 });
 
+describe("go コマンド", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 送られた go コマンドを記録するエンジン */
+  function createCommandRecorder() {
+    const commands: string[] = [];
+    const engine: AnalysisEngine = {
+      setOption: () => {},
+      analyze: async (_position, goCommand): Promise<UsiSearchResult> => {
+        commands.push(goCommand);
+        const info = {
+          multipv: 1,
+          depth: 5,
+          score: { type: "cp" as const, value: 0 },
+          pv: ["7g7f"],
+        };
+        return { bestmove: { move: "7g7f" }, infoLines: [info], lastInfo: info };
+      },
+    };
+    return { engine, commands };
+  }
+
+  it("思考時間の指定には movetime を使う（byoyomi は指定どおりの時間にならない）", async () => {
+    const { engine, commands } = createCommandRecorder();
+
+    await analyzeKifu(engine, [], { movetime: 1000, onChunk: async () => {} });
+
+    expect(commands).toEqual(["go movetime 1000"]);
+  });
+
+  it("思考時間の指定がなければ depth で区切る", async () => {
+    const { engine, commands } = createCommandRecorder();
+
+    await analyzeKifu(engine, [], { depth: 12, onChunk: async () => {} });
+
+    expect(commands).toEqual(["go depth 12"]);
+  });
+});
+
 /** 与えた info 行をそのまま返すエンジン（候補手の抽出だけを見るためのスタブ） */
 function createInfoEngine(infoLines: UsiInfo[]): AnalysisEngine {
   return {

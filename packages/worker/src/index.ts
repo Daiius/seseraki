@@ -135,7 +135,7 @@ async function main() {
           result = await analyzeKifu(engine, kifu.usiMoves, {
             depth: config.engineDepth,
             multiPv: config.engineMultiPv,
-            byoyomi: config.engineByoyomi,
+            movetime: config.engineMovetime,
             // 途中まで入っている棋譜は続きから解析する（prd/05 §1.1c）
             startMoveNumber: kifu.analyzedCount,
             // 進捗報告は待たずに投げっぱなしにし、失敗も握りつぶす。server が落ちている・

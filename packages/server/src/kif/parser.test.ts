@@ -282,6 +282,102 @@ describe("parseKif", () => {
       expect(header.goteDan).toBe(1); // 初段
     });
 
+    // 将棋ウォーズの KIF は CRLF。行末に `\r` が残るとヘッダ抽出だけが全滅し
+    // （`.` は `\r` にマッチせず `$` に届かない）、指し手は前方一致なので通るため
+    // 「解析は完走するのに対局者名・日時だけ空」になる。改行は 3 種すべて受ける。
+    it.each([
+      ["CRLF", "\r\n"],
+      ["CR", "\r"],
+      ["LF", "\n"],
+    ])("改行が %s でもヘッダと指し手を取り込む", (_name, eol) => {
+      const kif = [
+        "開始日時：2026/07/27 22:05:56",
+        "場所：将棋ウォーズ",
+        "手合割：平手",
+        "先手：coffee0418",
+        "先手段級：二段",
+        "後手：Daiius",
+        "後手段級：初段",
+        "手数----指手---------消費時間--",
+        "1 ７六歩(77)   ( 0:01/00:00:01)",
+        "2 投了",
+        "",
+      ].join(eol);
+      const { header, moves, errors } = parseKif(kif);
+      expect(header.sente).toBe("coffee0418");
+      expect(header.gote).toBe("Daiius");
+      expect(header.senteDan).toBe(2);
+      expect(header.goteDan).toBe(1);
+      expect(header.handicap).toBe("平手");
+      expect(header.playedAt).not.toBeNull();
+      expect(header.result).toBe("SENTE_WIN_RESIGN");
+      expect(moves.map((m) => m.usi)).toEqual(["7g7f"]);
+      expect(errors).toEqual([]);
+    });
+
+    // BOM は先頭行のヘッダ 1 つだけを静かに落とす（`^開始日時` に一致しなくなる）。
+    // アプリ間・OS 間の受け渡しで付くことがあるため、改行との組み合わせで確かめる。
+    it.each([
+      ["LF", "\n"],
+      ["CRLF", "\r\n"],
+    ])("先頭 BOM + %s でも先頭行のヘッダを落とさない", (_name, eol) => {
+      const kif =
+        "\uFEFF" +
+        [
+          "開始日時：2026/07/27 22:05:56",
+          "先手：coffee0418",
+          "後手：Daiius",
+          "手数----指手---------消費時間--",
+          "1 ７六歩(77)   ( 0:01/00:00:01)",
+          "",
+        ].join(eol);
+      const { header } = parseKif(kif);
+      // BOM が残ると先頭行だけ落ちて playedAt が null になる
+      expect(header.playedAt).not.toBeNull();
+      expect(header.sente).toBe("coffee0418");
+      expect(header.gote).toBe("Daiius");
+    });
+
+    // 見えないゆえに目視で原因へ辿り着けない類のゆれ。すべて正規化で吸収する。
+    describe("文字コード・空白のゆれを吸収する", () => {
+      it("行頭のインデントと区切り前後の空白を許す", () => {
+        // 指し手行（MOVE_RE）は行頭空白を受けるので、ヘッダだけ受けないと
+        // 「指し手は通るのにメタが空」という同じ壊れ方になる
+        const { header } = parseKif(
+          ["  先手 ： coffee0418", "\t後手：\tDaiius", "　手合割：平手"].join("\n"),
+        );
+        expect(header.sente).toBe("coffee0418");
+        expect(header.gote).toBe("Daiius");
+        expect(header.handicap).toBe("平手");
+      });
+
+      it("行中に紛れたゼロ幅文字でヘッダを落とさない", () => {
+        // ZWSP が項目名を割ると、その行だけが静かに落ちる
+        const { header } = parseKif(
+          `先\u200B手：coffee0418\n後手：Da\u200Biius\n`,
+        );
+        expect(header.sente).toBe("coffee0418");
+        expect(header.gote).toBe("Daiius");
+      });
+
+      it("NFD の濁点を NFC へ揃える（対局者名の同一性判定が外れないように）", () => {
+        // macOS / iOS 間の受け渡しで「が」が「か」+ 濁点に分解されることがある。
+        // 見た目は同じでも別の文字列なので、自分がどちらの側かの判定が静かに外れる
+        // 「がとう」の NFD 表記（か + 結合濁点 U+3099）。見た目は NFC と区別が付かない
+        const nfd = "\u304B\u3099\u3068\u3046";
+        const { header } = parseKif(`先手：${nfd}\n後手：Daiius\n`);
+        expect(header.sente).toBe("がとう");
+        expect(nfd).not.toBe("がとう"); // 正規化しなければ別物であることの確認
+      });
+
+      it("全角英数の指し手は潰さない（NFKC を使っていないことの確認）", () => {
+        // NFKC で正規化すると `２六歩` が `26歩` になり指し手が読めなくなる
+        expect(parseToUsi(`   1 ２六歩(27)   ( 0:00/00:00:00)\n`)).toEqual([
+          "2g2f",
+        ]);
+      });
+    });
+
     it("級位は負数にする（値の大小がそのまま棋力の順序になる）", () => {
       const { header } = parseKif(
         `先手：Daiius\n先手段級：初段\n後手：Nair41\n後手段級：1級\n`,

@@ -34,7 +34,7 @@
     "opentype.js": "^2.0.0",
     "server": "workspace:*",
     "tailwindcss": "4.2.2",
-    "vite": "^8.0.16",
+    "vite": "^8.2.0",
     "vitest": "^4.1.5"
   }
 }

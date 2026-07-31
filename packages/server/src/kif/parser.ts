@@ -57,6 +57,56 @@ const TERMINAL_MARKERS = [
   "切れ負け", "時間切れ",
 ] as const;
 
+/**
+ * 解析前に KIF テキストの表記ゆれを吸収する。**ここを解析の唯一の入口にする**
+ * （個々の正規表現を場当たりに緩めると、何をどこまで許容したのかが追えなくなる）。
+ *
+ * KIF 形式は文字コードも改行コードも規定していない。アプリ間・OS 間で棋譜を受け渡すと
+ * 次のゆれが混入し、いずれも**見えないのにマッチだけが外れる**という直りにくい壊れ方をする。
+ *
+ * 1. Unicode 正規化 (NFC)
+ *    macOS / iOS 間の受け渡しで濁点・半濁点が分解（NFD）されることがある。見た目は
+ *    同じでも別の文字列なので、対局者名の同一性判定（自分がどちらの側か）が静かに外れる。
+ *    ※ **NFKC は使わない。** 全角英数を半角へ潰すため `２六歩` が `26歩` になり、
+ *      指し手そのものが読めなくなる。
+ * 2. ゼロ幅文字（BOM・ZWSP・ZWNJ・ZWJ・word joiner）
+ *    先頭 BOM は**先頭行のヘッダ 1 つだけ**を落とす（`<BOM>開始日時：…` は `^開始日時`
+ *    に一致しない ＝ 対局日時が null になる）。行中に紛れた場合もその行だけが落ちる。
+ *
+ * 改行の統一は [splitLines]、行頭・区切りの空白は [HEADER_RE] が受け持つ。
+ * ※ 見えない文字はソースにリテラルで置かず、必ずエスケープで書く。
+ */
+function normalizeKifText(kifText: string): string {
+  return kifText.normalize("NFC").replace(/[\uFEFF\u200B-\u200D\u2060]/g, "");
+}
+
+/**
+ * ヘッダ行（対局メタ）の正規表現。グループ: (項目名)(値)
+ *
+ * **行頭と区切りの前後に空白を許す。** 指し手行の [MOVE_RE] は `^\s*` で行頭空白を
+ * 受けるのにヘッダだけが受けない、という非対称があると、インデントが入った KIF で
+ * 「指し手だけ通ってメタが空」という今回と同じ壊れ方をする。`\s` は全角スペース
+ * (U+3000) と NBSP (U+00A0) も含むので、それらの混入もここで吸収される。
+ *
+ * ※ 「先手段級」は「先手」より先に置く（交替は左優先。短い方が先だと取りこぼす）。
+ */
+const HEADER_RE =
+  /^\s*(先手段級|後手段級|先手|後手|開始日時|手合割)\s*[：:]\s*(.*)$/;
+
+/**
+ * KIF テキストを行へ分割する。**改行は CRLF / CR / LF のいずれも受ける。**
+ *
+ * `split("\n")` だと CRLF の行末に `\r` が残り、ヘッダ抽出が**全滅**する。
+ * JS の `.` は `\r` にマッチせず（`\r` は LineTerminator）、`$` も m フラグ無しでは
+ * 文字列末尾しか指さないため、`先手：sawsee\r` は `(.*)$` でマッチできない。
+ * 一方 [MOVE_RE] は `$` を使わない前方一致なので指し手だけは通ってしまい、
+ * 「解析は完走するのに対局者名・日時だけ空」という分かりにくい壊れ方になる
+ * （将棋ウォーズの KIF が CRLF。実際に対局者名が消えた）。
+ */
+function splitLines(kifText: string): string[] {
+  return normalizeKifText(kifText).split(/\r\n|\r|\n/);
+}
+
 export interface KifMove {
   /** 手数 (1-indexed) */
   moveNumber: number;
@@ -188,12 +238,18 @@ function parsePlayer(value: string): { name: string | null; dan: number | null }
  * その固有署名をここに足す（未知アプリは既定の JST ＝安全側）。
  */
 function isUtcSourceKif(kifText: string): boolean {
+  // 署名判定も必ず正規化後のテキストへ当てる。生のままだと BOM・ゼロ幅文字の混入で
+  // 判定だけが外れ、UTC の棋譜が既定の JST として 9 時間ずれて入る。
+  const normalized = normalizeKifText(kifText);
   const firstContent =
-    kifText.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+    splitLines(normalized).find((l) => l.trim() !== "")?.trim() ?? "";
   const startsWithKifComment = /^#\s*-+\s*KIF形式\s*-+/.test(firstContent);
-  const hasMochiJikan = /^持ち時間[：:]/m.test(kifText);
+  // `[^\S\r\n]` は「改行以外の空白」。m フラグ下で `\s*` と書くと改行を食って次の行の
+  // 項目名にまで一致してしまうため、行内の空白だけを許す
+  const hasMochiJikan = /^[^\S\r\n]*持ち時間[^\S\r\n]*[：:]/m.test(normalized);
   // JST 系アプリが出す終了日時／場所を持つものは App B ではない（誤検出防止）
-  const hasEndTimeOrPlace = /^(終了日時|場所)[：:]/m.test(kifText);
+  const hasEndTimeOrPlace =
+    /^[^\S\r\n]*(終了日時|場所)[^\S\r\n]*[：:]/m.test(normalized);
   return startsWithKifComment && hasMochiJikan && !hasEndTimeOrPlace;
 }
 
@@ -266,7 +322,7 @@ function deriveResult(moveNum: number, marker: string): string | null {
  *   （[detectKifTimezone]）。ユーザーが投入時に TZ を選んだ場合はその値を渡す。
  */
 export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
-  const lines = kifText.split("\n");
+  const lines = splitLines(kifText);
   const moves: KifMove[] = [];
   const errors: ParsedKif["errors"] = [];
   const sourceTz = tzOverride ?? detectKifTimezone(kifText);
@@ -299,9 +355,7 @@ export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
 
     // ヘッダ行（対局メタ）の抽出
     // ※ 「先手段級」は「先手」より先に置く（交替は左優先。短い方が先だと取りこぼす）
-    const headerMatch = line.match(
-      /^(先手段級|後手段級|先手|後手|開始日時|手合割)[：:]\s*(.*)$/,
-    );
+    const headerMatch = line.match(HEADER_RE);
     if (headerMatch) {
       const [, key, value] = headerMatch;
       if (key === "先手") {

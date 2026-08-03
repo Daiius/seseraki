@@ -17,9 +17,11 @@
 | `kifus` | 棋譜の原本・変換済み指し手・対局メタ・解析状態 |
 | `moveAnalyses` | 1 局面ごとの解析レコード（`kifus` に紐付く） |
 | `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く） |
+| `kifuTactics`（計画中） | 戦型ラベル（`kifus` に紐付く派生値。[01](./01-domain.md) §6） |
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
 
-- リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`。いずれも FK は **CASCADE 削除**。
+- リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
+  いずれも FK は **CASCADE 削除**。
 - **単一ユーザー前提**のため owner 分離は持たない（[07](./07-auth-and-privacy.md)）。
 - 投入・API 境界の **runtime 検証は zod で行い、検証スキーマは `shared` に置く**（型共有だけでは動作時に
   不正データを弾けないため。[02](./02-architecture.md) §3.2 / [04](./04-ingestion.md)）。
@@ -75,6 +77,31 @@ kifus
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み・KIF 貼り付けの両経路とも登録時に抽出**して埋める
   （KIF 経路は `result` を終局マーカー＋手番 parity から導出。[04](./04-ingestion.md) §3）。取れなければ null。
 - **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /api/kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
+
+### 2.1 `kifuTactics`（戦型ラベル・計画中）
+
+```
+kifuTactics
+├── kifuId: FK → kifus.id (CASCADE)
+├── side: enum('sente','gote')   -- どちらの手番のラベルか
+├── label: varchar(32)           -- 一次 / 二次ラベル名（例 "四間飛車" "角換わり" "対抗形"）
+├── PRIMARY KEY(kifuId, side, label)
+└── INDEX(label)
+```
+
+- **`usiMoves` から導く派生値**（[01](./01-domain.md) §6）。**正は指し手列**であって、この表は
+  絞り込みと集計を SQL で行うための索引にすぎない。
+- **手番ごとに複数行**。1 局・1 手番に複数のラベルが立つ（`四間飛車` と `振り飛車` と `対抗形` が同時に立つ）。
+- **内部ラベル（`_` 始まり）は保存しない。** ユーザーに出さないうえ、指し手列から常に再計算できる。
+- **成立手数は保存しない。** 一覧の絞り込み・勝率集計には要らず、必要になったら再計算できる。
+  持つと「派生値の再判定で意味が変わる列」が増える。
+- **判定バージョンの列は持たない。** 判定ロジックを更新したら**全件を一括再判定**する
+  （解析来歴を持たない立場と同じ。§7 決定済み）。再判定は棋譜単位で `DELETE` → `INSERT`。
+- **JSON 列（`kifus.tactics`）ではなく別テーブルにする。** 一覧の絞り込みは server 側の SQL で行い
+  件数・ページングも同じ条件で数える、という確定事項（[04](./04-ingestion.md) §6.1）に素直に乗るため。
+  `JSON_CONTAINS` でも書けるが索引が効かず、戦型別の勝率集計（横断集計）で JOIN 一本にならない。
+- `label` は**表示名そのもの**を入れる（enum やコード値にしない）。判定側の定義が増えるたびに
+  スキーマ変更を伴わせないため。表記ゆれは判定側（`shared`）の定義が単一の出所になることで防ぐ。
 
 ## 3. `moveAnalyses`（局面ごとの解析）
 
@@ -182,3 +209,6 @@ commentaries
   数値は一時的な確認用。異常な評価値は目視で気づけるため、エンジンの自己申告を仕込むのは過剰設計と判断。
   保持するのは `candidateMoves.depth`（候補手単位）のみ。
 - ✅ **局面単位の再解析は最新 1 世代に上書き**（depth 別の複数世代は持たない。単一エンジン前提。[05](./05-analysis.md) / [08](./08-roadmap.md)）。
+- ✅ **戦型ラベルは派生値・別テーブル・バージョン列なし**（2026-08-04）。`usiMoves` から常に再計算でき、
+  判定を更新したら全件を一括再判定する。JSON 列ではなく `kifuTactics` に正規化して SQL の絞り込み・
+  集計に乗せる（§2.1 / [01](./01-domain.md) §6）。

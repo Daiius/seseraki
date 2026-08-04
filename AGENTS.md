@@ -95,7 +95,7 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。
 > **ホストにポートを開けずに済む compose 網内からの実行を推奨する**:
 > ```bash
-> docker compose run --rm --no-deps -e REDETECT_APPLY=1 server >   pnpm --filter server exec tsx redetect-tactics.ts
+> docker compose run --rm --no-deps -e REDETECT_APPLY=1 server pnpm --filter server exec tsx redetect-tactics.ts
 > ```
 > 本番は同じスクリプトが**イメージに同梱**されている（`dist/redetect-tactics.js`）。
 > 使い捨てコンテナとして明示的に実行する（起動時の自動適用にはしない——失敗時の挙動と、

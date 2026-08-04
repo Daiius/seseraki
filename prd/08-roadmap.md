@@ -45,9 +45,11 @@
   定跡を外れた地点や、同じ形で毎回する失敗が自分の棋譜だけから見つかる。盤面追跡は既にあるので
   SFEN 出力を足せば土台は揃う（`shared` 抽出と同時にやるのが自然）。
 
-### `shared` 抽出・プロンプト生成のエンドポイント化（gap）
+### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）
 
-- board/usi/kifu-export を web から **`shared`** へ抽出（web/server で共有）。
+- ✅ **`packages/shared` を新設し、盤面追跡（`board.ts`）を web から抽出済み**（テスト 19 件ごと移設）。
+  戦型判定を server から回すのに必要だったため先行して消化した。
+- usi 変換・USI→日本語表記・悪手判定・kifu-export・zod 検証スキーマの抽出は**まだ gap**（web にある）。
 - プロンプト生成を **server エンドポイント化**し、web の「コピー」ボタンもそれを使う（書式の単一真実）。
 - 現状は web の `kifu-export` で自前生成しているため、これが理想との gap（[06](./06-llm-commentary.md) §2.3 / [02](./02-architecture.md) §3.2）。
 

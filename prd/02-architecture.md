@@ -29,7 +29,7 @@
 | `web` | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
 | `server` | API + DB + KIF パース + プロンプト生成（+ 無効化済み swars 一括取り込みの残置実装。04 §4） | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
 | `worker` | 棋譜解析 | USI プロトコル, やねうら王 |
-| `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3） | TypeScript（React/node 非依存の純 TS）, zod |
+| `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3）。**盤面追跡まで実装済み**、残りは gap | TypeScript（React/node 非依存の純 TS）, zod |
 | `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |
 
 - **DB は MySQL 8.4**（開発経験が多いため選択。named volume で永続。`docker compose down -v` で初期化）。
@@ -64,6 +64,12 @@
   生成エンドポイント）で共有**する必要が生じ、(2) **型共有だけでは動作時に不正データを弾けず、runtime 検証には
   zod の実体が要る**（型は compile 時まで。実行時に無茶なデータを受け入れてしまう）。
 - **消費者**: web（対話盤面）/ server（プロンプト生成・投入検証）/ 将来の commentator は server 経由で薄く保つ。
+- **実装状況**: 1 のうち**盤面追跡（`board.ts`）は移設済み**。USI 変換・USI→日本語表記・悪手判定と、
+  2・3 はまだ `packages/web` にある（[08](./08-roadmap.md) の gap）。
+- ⚠ **環境非依存を tsconfig で強制する**（`lib: ["esnext"]` / `types: []`）。web（ブラウザ）と
+  server / worker（node）の両方が消費するため、**どちらの前提も置かない**。
+  `structuredClone` のように型が `lib.dom` / `@types/node` にしか無い API も使えない
+  （実際 `board.test.ts` の 1 箇所を JSON 経由の複製へ置き換えた）。
 - KIF/CSA パーサーは消費者が server のみのため `shared` に移さない（第 2 の消費者が出たら再検討。[04](./04-ingestion.md)）。
 
 ## 4. データフローの原則
@@ -154,3 +160,5 @@
   必要になった時点で、UI テスト基盤の導入是非を改めて判断する。
 - **`shared` 抽出（§3.2）ではテストも一緒に移す。** 純ロジックは `shared` へ移る予定なので、
   テストは移動先に付いていく前提で書く（対象を import する以外の依存を持たせない）。
+  board 抽出では実際にこれが効き、テスト 19 件が無修正で移った（環境非依存の制約に触れた
+  `structuredClone` の 1 行だけ置き換えた）。`shared` も web と同じく **node 環境の最小構成**で回す。

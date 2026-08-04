@@ -18,7 +18,7 @@ import {
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
-import { TacticTags, TacticLegend } from '../components/TacticTags';
+import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
 
 // 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
 // server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
@@ -167,12 +167,11 @@ function KifuListPage() {
   const canFilterByOutcome = getSelfNames().length > 0;
 
   // 見出しの凡例は**このページで実際に使われている色分け**から組む。
-  // 戦型タグが出ない行（判定ゼロ）は数えない。
+  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
   const legendModes = kifus
-    .filter((k) => k.tactics.length > 0)
-    .map((k) => resolveUserSide(k.sente, k.gote).side)
+    .map((k) => legendModeOf(k.tactics, resolveUserSide(k.sente, k.gote).side))
     .reduce(
-      (acc, side) => (side === null ? { ...acc, unresolved: true } : { ...acc, self: true }),
+      (acc, mode) => (mode === null ? acc : { ...acc, [mode]: true }),
       { self: false, unresolved: false },
     );
 
@@ -311,8 +310,7 @@ function KifuListPage() {
                     <div>タイトル</div>
                     {/* ⚠ 凡例は**このページに実際に出ている分け方**から組む。名前候補の設定有無で
                         決めると、自分が参加していない対局・名前の表記が違う対局・双方が候補に
-                        一致する対局で ▲△ 表示になり、凡例が嘘になる（指摘 OCL-66ED0D3A）。
-                        タグが出ない（戦型ゼロの）行は数えない */}
+                        一致する対局で ▲△ 表示になり、凡例が嘘になる（指摘 OCL-66ED0D3A） */}
                     <TacticLegend
                       self={legendModes.self}
                       unresolved={legendModes.unresolved}

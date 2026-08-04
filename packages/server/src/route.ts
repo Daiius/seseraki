@@ -34,6 +34,7 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
+import { replaceTactics } from './tactics';
 import { parseKif, type KifTimezone } from './kif/parser.js';
 
 /** 投入時の TZ 指定。'auto' は KIF 署名から自動判定 */
@@ -264,22 +265,29 @@ const route = app
       const { title, kifText, sourceTz } = c.req.valid('json');
       const { usiMoves, meta } = convertKif(kifText, sourceTz ?? 'auto');
       const finalTitle = title?.trim() || autoTitle(meta);
-      const [result] = await db
-        .insert(kifus)
-        .values({
-          title: finalTitle,
-          kifText,
-          usiMoves,
-          sente: meta.sente,
-          gote: meta.gote,
-          senteDan: meta.senteDan,
-          goteDan: meta.goteDan,
-          result: meta.result,
-          playedAt: meta.playedAt,
-          sourceTz: meta.sourceTz,
-        })
-        .$returningId();
-      return c.json({ id: result.id }, 201);
+      // **usiMoves の書き込みと戦型の判定は同一トランザクション**（prd/01 §6.4）。
+      // 別にすると、戦型判定で落ちたときに「指し手はあるがラベルが無い」棋譜が残り、
+      // 一覧の絞り込みから黙って外れる
+      const id = await db.transaction(async (tx) => {
+        const [result] = await tx
+          .insert(kifus)
+          .values({
+            title: finalTitle,
+            kifText,
+            usiMoves,
+            sente: meta.sente,
+            gote: meta.gote,
+            senteDan: meta.senteDan,
+            goteDan: meta.goteDan,
+            result: meta.result,
+            playedAt: meta.playedAt,
+            sourceTz: meta.sourceTz,
+          })
+          .$returningId();
+        await replaceTactics(tx, result.id, usiMoves);
+        return result.id;
+      });
+      return c.json({ id }, 201);
     },
   )
   .post(
@@ -322,6 +330,9 @@ const route = app
           .where(eq(kifus.id, id));
         // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
         await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
+        // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
+        // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
+        await replaceTactics(tx, id, usiMoves);
       });
       // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
       clearProgress(id);
@@ -629,23 +640,27 @@ const route = app
             const { usiMoves } = convertKif(kifText);
             const title = formatTitle(gameData);
             const playedAt = parsePlayedAt(gameKey);
-            const [result] = await db
-              .insert(kifus)
-              .values({
-                title,
-                kifText,
-                usiMoves,
-                sente: gameData.sente,
-                gote: gameData.gote,
-                senteDan: gameData.sente_dan,
-                goteDan: gameData.gote_dan,
-                result: gameData.result,
-                swarsGameKey: gameKey,
-                playedAt,
-                sourceTz: 'JST',
-              })
-              .$returningId();
-            imported.push({ id: result.id, gameKey });
+            const newId = await db.transaction(async (tx) => {
+              const [result] = await tx
+                .insert(kifus)
+                .values({
+                  title,
+                  kifText,
+                  usiMoves,
+                  sente: gameData.sente,
+                  gote: gameData.gote,
+                  senteDan: gameData.sente_dan,
+                  goteDan: gameData.gote_dan,
+                  result: gameData.result,
+                  swarsGameKey: gameKey,
+                  playedAt,
+                  sourceTz: 'JST',
+                })
+                .$returningId();
+              await replaceTactics(tx, result.id, usiMoves);
+              return result.id;
+            });
+            imported.push({ id: newId, gameKey });
           } catch (e) {
             errors.push({ gameKey, error: String(e) });
           }

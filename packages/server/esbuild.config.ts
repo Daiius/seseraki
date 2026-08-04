@@ -1,8 +1,19 @@
 import { build } from "esbuild";
 
+// ⚠ **エントリは名前付きで渡す。** 配列で渡すと出力先が入力の共通ベースからの相対になり、
+// src/ と直下のスクリプトが別階層にあるため dist/src/index.js に落ちる。
+// 名前付き + outdir なら `server` → dist/server.js で、従来の outfile と同じパスになる
+// （Dockerfile.prod の COPY を変えずに済む）。
 await build({
-  entryPoints: ["./src/index.ts"],
-  outfile: "./dist/server.js",
+  entryPoints: {
+    server: "./src/index.ts",
+    // 一括再判定。**本番イメージへ同梱し、使い捨てコンテナとして明示的に実行する**
+    // （起動時の自動適用にはしない——失敗時の挙動とインスタンス増加時の競合が読めなくなる）。
+    //   docker compose run --rm <service>  # command: ["/app/redetect-tactics.js"]
+    // ⚠ 本番イメージは distroless（ENTRYPOINT=node）なので command はパスだけでよい。
+    "redetect-tactics": "./redetect-tactics.ts",
+  },
+  outdir: "./dist",
   bundle: true,
   platform: "node",
   target: "node22",

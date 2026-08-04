@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx migrate.ts",
     "db:baseline": "tsx baseline.ts",
-    "db:push": "drizzle-kit push --force"
+    "db:push": "drizzle-kit push --force",
+    "tactics:redetect": "tsx redetect-tactics.ts"
   },
   "exports": {
     ".": {
@@ -25,6 +26,7 @@
     "drizzle-orm": "1.0.0-beta.22",
     "hono": "^4.12.25",
     "mysql2": "^3.22.2",
+    "shared": "workspace:*",
     "zod": "^3.25.76"
   },
   "devDependencies": {

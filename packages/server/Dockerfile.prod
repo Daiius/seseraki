@@ -36,4 +36,13 @@ COPY --from=build /workspace/packages/server/dist/server.js ./server.js
 # distroless は ENTRYPOINT=node なので command はパスだけでよい。
 COPY --from=build /workspace/packages/server/dist/redetect-tactics.js ./redetect-tactics.js
 
+# マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
+# 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
+#   docker compose run --rm <service>   # command: ["/app/migrate.js"]
+COPY --from=build /workspace/packages/server/dist/migrate.js ./migrate.js
+
+# 生成済みの SQL。⚠ **バンドルには含まれない**（migrator が実行時に fs で読むため）。
+# ここを忘れると、本番でマイグレーションを流すまで気づけない。
+COPY --from=build /workspace/packages/server/drizzle ./drizzle
+
 CMD ["server.js"]

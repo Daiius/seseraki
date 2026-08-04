@@ -85,11 +85,31 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > **`db:migrate`/`db:baseline`/`db:generate` は接続先を呼び出し環境の `DB_HOST`/`DB_PORT`/`MYSQL_*` から取る**（本番は prod 資格情報を
 > export して実行）。dev DB に対して試すときは `.env.database` を読む **`db:migrate:dev` / `db:baseline:dev`** を使う。
 > 本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
+>
+> ⚠ **本番のマイグレーションはホストから流さず、イメージ同梱のエントリを使う**（下記）。
+> **生成は drizzle-kit（dev 専用）、適用は drizzle-orm の migrator**（本番の実行時依存）なので、
+> 本番イメージに drizzle-kit を入れずに適用でき、**dev と本番で適用経路が 1 本になる**。
 > **順序**: スキーマ変更（`sourceTz` 追加等）は `db:migrate` で列を足してから `db:backfill-tz` を流す（列が無いと backfill は
 > 失敗する）。backfill は `sourceTz` 未設定の既存行だけを対象に `kifText` から再導出する冪等処理。**既定は dry-run**（変更案の
 > 表示のみ）、`BACKFILL_APPLY=1` で実書込。dev DB に試すときは `db:backfill-tz:dev`。
 > ⚠️ **`:dev` は `DB_HOST=localhost` に繋ぐ。cloudflared tunnel を上げていると localhost が本番を指しうる**（127.0.0.1:3306 の
 > 取り合い）。`:dev` 実行前に `lsof -nP -iTCP:3306 -sTCP:LISTEN` で localhost の実体を確認し、tunnel は落としておく。
+
+> **本番のマイグレーションはイメージに同梱したエントリで流す**（`dist/migrate.js`）:
+> ```bash
+> docker compose run --rm --no-deps <server サービス> /app/migrate.js
+> ```
+> **同梱する理由はポートを開けずに済むことではなく、適用する SQL とコードのバージョンが
+> 構造的に一致すること。** ホストから `pnpm db:migrate` を流す方式は「手元にある SQL を、本番で
+> 動いているイメージへ流す」ことになり、**両者がずれても何も警告されない**。同じイメージの中身なら
+> ずれが原理的に起きない。副次的に、接続先の取り違え（`:dev` が tunnel 越しに本番を指す等）も
+> 起きなくなる。`pnpm db:migrate` は dev / 手元検証用として残す。
+> ⚠ **生成した SQL はバンドルに入らない**（migrator が実行時に fs で読む）。`Dockerfile.prod` が
+> `drizzle/` を別途 COPY している。`migrationsFolder` は **cwd 相対ではなくファイル相対**
+> （`import.meta.url`）で解くので、dev では `packages/server/drizzle`、イメージ内では `/app/drizzle`
+> を指す。**`migrate.ts` をパッケージルート直下から動かすとこの対応が壊れる。**
+> ⚠ `baseline` は同梱していない。既存 DB を初めて管理下へ載せる一度きりの操作で、**中身を確かめずに
+> 「適用済み」と記録してしまう**性質があるため、使い捨てコンテナから気軽に叩けるべきではない。
 
 > **戦型ラベルの一括再判定**（`prd/01` §6.4「判定ロジックを更新したら一括再判定する」）:
 > 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。

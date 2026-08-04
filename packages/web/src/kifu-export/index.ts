@@ -22,7 +22,7 @@ import {
   usiToJapaneseWithPiece,
   type BoardState,
   type PieceKind,
-} from '../lib/board';
+} from 'shared';
 
 export interface ExportCandidate {
   rank: number;

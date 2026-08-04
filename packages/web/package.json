@@ -19,6 +19,7 @@
     "hono": "^4.12.25",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "shared": "workspace:*",
     "swr": "^2.4.1"
   },
   "devDependencies": {

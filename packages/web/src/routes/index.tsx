@@ -164,9 +164,17 @@ function KifuListPage() {
   const filtered = isFiltered({ q, status, outcome, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
   const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
-  // 自分の名前候補が設定されていれば、勝敗の絞り込みと戦型タグの自分/相手の色分けが使える
-  const hasSelfNames = getSelfNames().length > 0;
-  const canFilterByOutcome = hasSelfNames;
+  const canFilterByOutcome = getSelfNames().length > 0;
+
+  // 見出しの凡例は**このページで実際に使われている色分け**から組む。
+  // 戦型タグが出ない行（判定ゼロ）は数えない。
+  const legendModes = kifus
+    .filter((k) => k.tactics.length > 0)
+    .map((k) => resolveUserSide(k.sente, k.gote).side)
+    .reduce(
+      (acc, side) => (side === null ? { ...acc, unresolved: true } : { ...acc, self: true }),
+      { self: false, unresolved: false },
+    );
 
   return (
     <div>
@@ -301,7 +309,15 @@ function KifuListPage() {
                       下の行にタグの色分けの凡例を置く（`TacticLegend`） */}
                   <th>
                     <div>タイトル</div>
-                    <TacticLegend known={hasSelfNames} className="mt-1" />
+                    {/* ⚠ 凡例は**このページに実際に出ている分け方**から組む。名前候補の設定有無で
+                        決めると、自分が参加していない対局・名前の表記が違う対局・双方が候補に
+                        一致する対局で ▲△ 表示になり、凡例が嘘になる（指摘 OCL-66ED0D3A）。
+                        タグが出ない（戦型ゼロの）行は数えない */}
+                    <TacticLegend
+                      self={legendModes.self}
+                      unresolved={legendModes.unresolved}
+                      className="mt-1"
+                    />
                   </th>
                   <th>状態</th>
                   <th>対局日時</th>

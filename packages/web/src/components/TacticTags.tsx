@@ -50,25 +50,39 @@ const TONE = {
  * 自分の側が判定できる対局では色で自分 / 相手を分けるので凡例も色、
  * 判定できないときはタグが ▲△ を出すので凡例も ▲△ にする。
  *
+ * ⚠ **どちらを出すかは「名前候補が設定されているか」では決まらない**（指摘 OCL-66ED0D3A）。
+ * 色分けは `resolveUserSide` が**棋譜ごとに**解決するので、設定済みでも自分が参加していない
+ * 対局・対局者名の表記が違う対局・双方が候補に一致する対局は ▲△ 表示になる。
+ * **ページに実際に出ている分け方だけを渡すこと。** 混在するなら両方出す（それが事実なので）。
+ *
  * 狭い画面では「の戦型」を落として 2 文字にする（列幅を食わないため）。
  */
 export function TacticLegend({
-  known,
+  self,
+  unresolved,
   className,
 }: {
-  /** 自分の側が判定できるか（`getSelfNames()` の設定有無で決まる） */
-  known: boolean;
+  /** 自分 / 相手の色で分けている行があるか */
+  self: boolean;
+  /** 自分を特定できず ▲△ で示している行があるか */
+  unresolved: boolean;
   className?: string;
 }) {
-  const items = known
-    ? [
-        { tone: TONE.self, full: '自分の戦型', short: '自分' },
-        { tone: TONE.opponent, full: '相手の戦型', short: '相手' },
-      ]
-    : [
-        { tone: TONE.neutral, full: '▲先手の戦型', short: '▲戦型' },
-        { tone: TONE.neutral, full: '△後手の戦型', short: '△戦型' },
-      ];
+  const items = [
+    ...(self
+      ? [
+          { tone: TONE.self, full: '自分の戦型', short: '自分' },
+          { tone: TONE.opponent, full: '相手の戦型', short: '相手' },
+        ]
+      : []),
+    ...(unresolved
+      ? [
+          { tone: TONE.neutral, full: '▲先手の戦型', short: '▲戦型' },
+          { tone: TONE.neutral, full: '△後手の戦型', short: '△戦型' },
+        ]
+      : []),
+  ];
+  if (items.length === 0) return null;
   return (
     <div className={`flex flex-wrap gap-1 font-normal ${className ?? ''}`}>
       {items.map((it) => (

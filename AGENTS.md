@@ -76,6 +76,7 @@ pnpm --filter server test   # server のユニットテスト（vitest）
 pnpm --filter worker test   # worker のユニットテスト（vitest）
 pnpm --filter web test      # web のユニットテスト（vitest・純ロジックのみ）
 pnpm --filter shared test   # shared のユニットテスト（vitest・将棋ドメインの純ロジック）
+pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run / REDETECT_APPLY=1 で実書込）
 ```
 
 > **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
@@ -89,6 +90,20 @@ pnpm --filter shared test   # shared のユニットテスト（vitest・将棋�
 > 表示のみ）、`BACKFILL_APPLY=1` で実書込。dev DB に試すときは `db:backfill-tz:dev`。
 > ⚠️ **`:dev` は `DB_HOST=localhost` に繋ぐ。cloudflared tunnel を上げていると localhost が本番を指しうる**（127.0.0.1:3306 の
 > 取り合い）。`:dev` 実行前に `lsof -nP -iTCP:3306 -sTCP:LISTEN` で localhost の実体を確認し、tunnel は落としておく。
+
+> **戦型ラベルの一括再判定**（`prd/01` §6.4「判定ロジックを更新したら一括再判定する」）:
+> 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。
+> **ホストにポートを開けずに済む compose 網内からの実行を推奨する**:
+> ```bash
+> docker compose run --rm --no-deps -e REDETECT_APPLY=1 server pnpm --filter server exec tsx redetect-tactics.ts
+> ```
+> 本番は同じスクリプトが**イメージに同梱**されている（`dist/redetect-tactics.js`）。
+> 使い捨てコンテナとして明示的に実行する（起動時の自動適用にはしない——失敗時の挙動と、
+> 将来インスタンスを増やしたときの競合が読めなくなるため）。distroless は ENTRYPOINT=node
+> なので command はパスだけでよい: `docker compose run --rm <service>` /
+> `command: ["/app/redetect-tactics.js"]`。
+> ⚠ ホストから叩く `pnpm tactics:redetect` も残してあるが、接続先は呼び出し環境の
+> `DB_HOST`/`DB_PORT`/`MYSQL_*` 次第なので、**取り違えの余地がある方**であることを承知して使う。
 
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

@@ -3,7 +3,9 @@ import {
   index,
   int,
   json,
+  mysqlEnum,
   mysqlTable,
+  primaryKey,
   serial,
   smallint,
   text,
@@ -65,6 +67,29 @@ export const moveAnalyses = mysqlTable(
 );
 
 // MultiPV の各候補手
+/**
+ * 戦型ラベル（prd/03 §2.1）。`usiMoves` から導く**派生値**で、正は指し手列。
+ * この表は絞り込みと集計を SQL で行うための索引にすぎない。
+ */
+export const kifuTactics = mysqlTable(
+  'kifu_tactics',
+  {
+    kifuId: bigint({ mode: 'number', unsigned: true })
+      .notNull()
+      .references(() => kifus.id, { onDelete: 'cascade' }),
+    /** ラベルの**帰属先**。「立った手番」ではない（prd/03 §2.1.1） */
+    side: mysqlEnum(['sente', 'gote', 'both']).notNull(),
+    /** 一次 / 二次ラベル名。**表示名そのもの**（enum やコード値にしない） */
+    label: varchar({ length: 32 }).notNull(),
+    /** 成立手数。表示の抑制に使う。**絞り込み条件には使わない**（prd/03 §2.1.2） */
+    turn: int().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kifuId, table.side, table.label] }),
+    index('kifu_tactics_label_idx').on(table.label),
+  ],
+);
+
 export const candidateMoves = mysqlTable(
   'candidate_moves',
   {
@@ -88,7 +113,7 @@ export const candidateMoves = mysqlTable(
 );
 
 export const relations = defineRelations(
-  { kifus, moveAnalyses, candidateMoves },
+  { kifus, moveAnalyses, candidateMoves, kifuTactics },
   (r) => ({
     kifus: {
       moveAnalyses: r.many.moveAnalyses(),

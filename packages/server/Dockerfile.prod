@@ -31,4 +31,9 @@ WORKDIR /app
 
 COPY --from=build /workspace/packages/server/dist/server.js ./server.js
 
+# 一括再判定のエントリ。**使い捨てコンテナとして明示的に実行する**（起動時の自動適用にはしない）。
+#   docker compose run --rm <service>   # command: ["/app/redetect-tactics.js"]
+# distroless は ENTRYPOINT=node なので command はパスだけでよい。
+COPY --from=build /workspace/packages/server/dist/redetect-tactics.js ./redetect-tactics.js
+
 CMD ["server.js"]

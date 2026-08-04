@@ -46,16 +46,18 @@
 | [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind） |
 | [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
+| [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
 
 | パッケージ | 役割 |
 |---|---|
-| `packages/shared` | 将棋ドメインの純ロジック（盤面追跡・USI 変換・悪手判定・kifu-export）+ zod 検証スキーマ（[prd/02](./prd/02-architecture.md) §3.2） |
 | `packages/commentator` | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
 
-> ※ `shared` へのドメインロジック抽出と server のプロンプト生成エンドポイントは gap（未実装）。現状は
-> board/usi/kifu-export が `packages/web` にあり、プロンプトは web が自前生成している。
+> ※ `shared` は**盤面追跡（`board.ts`）まで移した**。USI 変換・悪手判定・kifu-export・zod 検証スキーマは
+> まだ `packages/web` にあり gap。server のプロンプト生成エンドポイント化も未着手（web が自前生成）。
+> ⚠ **`shared` に環境依存を持ち込まない。** web（ブラウザ）と server / worker（node）の両方が使うため、
+> `structuredClone` のような DOM / node の lib にしか型が無い API も避ける。
 
 ## 開発コマンド
 
@@ -72,6 +74,7 @@ pnpm db:seed      # サンプルデータ投入（初回のみ）
 pnpm --filter server test   # server のユニットテスト（vitest）
 pnpm --filter worker test   # worker のユニットテスト（vitest）
 pnpm --filter web test      # web のユニットテスト（vitest・純ロジックのみ）
+pnpm --filter shared test   # shared のユニットテスト（vitest・将棋ドメインの純ロジック）
 ```
 
 > **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`

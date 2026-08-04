@@ -9,6 +9,7 @@ RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 
 # 依存定義だけ先にコピー（ソース変更でキャッシュが壊れにくい）
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
+COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
 COPY packages/web/package.json ./packages/web/
 COPY packages/worker/package.json ./packages/worker/
@@ -16,6 +17,7 @@ COPY packages/worker/package.json ./packages/worker/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
+COPY packages/shared/ ./packages/shared/
 COPY packages/server/ ./packages/server/
 
 RUN pnpm --filter server build

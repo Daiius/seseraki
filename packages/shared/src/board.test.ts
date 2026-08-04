@@ -128,7 +128,10 @@ describe('applyMove', () => {
 
   it('元の局面を破壊せず、変化のない行は共有する', () => {
     const state = createInitialState();
-    const snapshot = structuredClone(state);
+    // `structuredClone` は使わない。型が lib.dom / @types/node にしか無く、
+    // shared の tsconfig を環境非依存（lib: esnext / types: []）に保てなくなるため。
+    // BoardState は駒と数値だけなので JSON 経由の複製で等価になる
+    const snapshot = JSON.parse(JSON.stringify(state));
     const next = applyMove(state, '7g7f');
 
     expect(state).toEqual(snapshot); // 元の局面はそのまま

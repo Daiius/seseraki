@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
-import { buildPositions } from '../../lib/board';
+import { buildPositions } from 'shared';
 import { formatUpdatedAgo } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';

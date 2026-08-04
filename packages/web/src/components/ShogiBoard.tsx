@@ -5,7 +5,7 @@ import {
   usiToJapaneseWithPiece,
   type BoardState,
   type PieceKind,
-} from '../lib/board';
+} from 'shared';
 import { turnSymbol, formatScore, toSenteEval } from '../lib/usi';
 import {
   computeMoveLosses,

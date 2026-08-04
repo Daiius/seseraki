@@ -17,8 +17,9 @@ describe('detectTactics', () => {
   });
 
   it('振り先の戦法と上位の振り飛車が同時に立つ（経由形も含めて全部返す）', () => {
-    // ▲7六歩 △3四歩 ▲6八飛(四間) △8四歩 ▲8八飛(向かい) △8五歩
-    const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '6h8h', '8d8e']);
+    // ▲7六歩 △3四歩 ▲6八飛(四間) △8四歩 ▲7七角 △8五歩 ▲8八飛(向かい)
+    // ※ 8八には自分の角がいるので、振り直す前に角を上がる（合法手順にする）
+    const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '8h7g', '8d8e', '6h8h']);
     expect(names(ls)).toEqual([
       'gote:居飛車',
       'sente:向かい飛車',
@@ -27,7 +28,7 @@ describe('detectTactics', () => {
     ]);
     // 成立手数は振り直しの順序を保つ
     expect(turnOf(ls, '四間飛車')).toBe(3);
-    expect(turnOf(ls, '向かい飛車')).toBe(5);
+    expect(turnOf(ls, '向かい飛車')).toBe(7);
   });
 
   it('石田流は三間飛車・振り飛車を必ず通る（implies の前提）', () => {
@@ -94,6 +95,22 @@ describe('detectTactics', () => {
   });
 });
 
+describe('観測窓（prd/01 §6.2）', () => {
+  it('角交換なら窓は閉じない（角交換は開戦ではない）', () => {
+    // ▲7六歩 △3四歩 ▲2二角成 △同銀（角交換） ▲6八飛
+    const ls = detectTactics(['7g7f', '3c3d', '8h2b+', '3a2b', '2h6h']);
+    expect(names(ls)).toContain('sente:四間飛車');
+  });
+
+  it('⚠ 交換でない角取りでは窓が閉じる（角損・角切りは開戦）', () => {
+    // ▲2二角成 に △同銀 とせず、馬が逃げる。**後手は角を持ち駒にしていない**ので交換ではない。
+    // 窓が 2 手目で閉じ、7手目の ▲6八飛 は拾わない
+    const ls = detectTactics(['7g7f', '3c3d', '8h2b+', '6a5b', '2b3a', '8c8d', '2h6h']);
+    expect(names(ls)).not.toContain('sente:四間飛車');
+    expect(names(ls)).not.toContain('sente:振り飛車');
+  });
+});
+
 describe('suppressForDisplay（prd/03 §2.1.2 の A）', () => {
   it('implies で含意される一般ラベルを隠す', () => {
     const ls = detectTactics(['7g7f', '3c3d', '7f7e', '7a6b', '2h7h']);
@@ -103,7 +120,7 @@ describe('suppressForDisplay（prd/03 §2.1.2 の A）', () => {
   });
 
   it('振り直しは最初に振った先だけ残す', () => {
-    const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '6h8h', '8d8e']);
+    const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '8h7g', '8d8e', '6h8h']);
     expect(names(suppressForDisplay(ls))).toEqual(['gote:居飛車', 'sente:四間飛車']);
   });
 

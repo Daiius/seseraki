@@ -178,15 +178,35 @@ function captureKindsByTurn(positions: BoardState[]): Set<CaptureKind>[] {
   return out;
 }
 
+/**
+ * i 手目の角の捕獲が**角交換の一部**か。
+ *
+ * 角交換は「取る → 取り返す」の 2 手で完了するので、その手または次の手の時点で
+ * **双方が角を持ち駒にしている**なら交換とみなす。一方的な角損・角切りは交換ではないので、
+ * 通常どおり窓を閉じる。
+ */
+function isBishopExchange(positions: BoardState[], i: number): boolean {
+  for (const j of [i, i + 1]) {
+    const p = positions[j];
+    if (!p) continue;
+    if ((p.hand.sente.B ?? 0) > 0 && (p.hand.gote.B ?? 0) > 0) return true;
+  }
+  return false;
+}
+
 /** 除外集合を与えたときの窓の右端（この手数まで観測してよい） */
 function windowLimit(
   captures: Set<CaptureKind>[],
   ignores: CaptureKind[],
   total: number,
+  positions: BoardState[],
 ): number {
+  const close = (i: number) => Math.max(1, Math.min(i - 1, total));
   for (let i = 1; i < captures.length; i++) {
     for (const k of captures[i]) {
-      if (!ignores.includes(k)) return Math.max(1, Math.min(i - 1, total));
+      if (!ignores.includes(k)) return close(i);
+      // 角を除外していても、**交換でない角取り**（一方的な角損・角切り）は開戦なので窓を閉じる
+      if (k === 'B' && !isBishopExchange(positions, i)) return close(i);
     }
   }
   return Math.max(1, total);
@@ -201,6 +221,10 @@ function windowLimit(
  * 8〜10 手目になる。**角交換は序盤の駒組み手順であって開戦ではない**という将棋的な事実は
  * 述語の形とは独立に成り立つので、全ラベル共通の除外として足す。
  * 歩は別扱いのまま（歩がぶつかるのは急戦の仕掛けそのもの）。
+ *
+ * ⚠ **除外するのは「角交換」であって「角の捕獲」一般ではない。** 開戦後の角損・角切りまで
+ * 除外すると、その後の中盤の駒運びを戦型として拾う。交換かどうかは
+ * {@link isBishopExchange} が「双方が角を持ち駒にしたか」で判定する。
  */
 const ALWAYS_IGNORED: CaptureKind[] = ['B'];
 
@@ -237,7 +261,7 @@ export function detectTactics(usiMoves: string[]): TacticLabel[] {
     const key = [...ignores].sort().join('');
     let v = limitCache.get(key);
     if (v === undefined) {
-      v = windowLimit(captures, ignores, total);
+      v = windowLimit(captures, ignores, total, positions);
       limitCache.set(key, v);
     }
     return v;

@@ -12,6 +12,15 @@ await build({
     //   docker compose run --rm <service>  # command: ["/app/redetect-tactics.js"]
     // ⚠ 本番イメージは distroless（ENTRYPOINT=node）なので command はパスだけでよい。
     "redetect-tactics": "./redetect-tactics.ts",
+    // マイグレーションの適用。**同梱する理由はポートを開けずに済むことではなく、
+    // 適用する SQL とコードのバージョンが構造的に一致すること。**
+    // ホストから流す方式は「手元にある SQL を、本番で動いているイメージへ流す」ことになり、
+    // **両者がずれても何も警告されない**。同じイメージの中身ならずれが原理的に起きない。
+    // 副次的に、接続先の取り違え（`:dev` が tunnel 越しに本番を指す等）も起きなくなる。
+    //   docker compose run --rm <service>  # command: ["/app/migrate.js"]
+    // ⚠ **生成した SQL はバンドルに入らない**（migrator が実行時に fs で読む）。
+    //   `Dockerfile.prod` が `drizzle/` を別途 COPY する。
+    migrate: "./migrate.ts",
   },
   outdir: "./dist",
   bundle: true,

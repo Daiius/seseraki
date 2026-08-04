@@ -114,6 +114,30 @@ describe('suppressForDisplay（prd/03 §2.1.2 の A）', () => {
     expect(names(ls)).toEqual(before);
   });
 
+  it('片側の派生ラベルは相手側の一般ラベルを隠さない', () => {
+    // 先手が石田流、後手が（石田流でない）三間飛車。先手の `石田流` は自分の
+    // `三間飛車` `振り飛車` だけを隠し、後手のものには触れない
+    const ls: TacticLabel[] = [
+      { side: 'sente', label: '石田流', turn: 5 },
+      { side: 'sente', label: '三間飛車', turn: 5 },
+      { side: 'sente', label: '振り飛車', turn: 5 },
+      { side: 'gote', label: '三間飛車', turn: 6 },
+      { side: 'gote', label: '振り飛車', turn: 6 },
+    ];
+    // 後手の `三間飛車` は**自分の** `振り飛車` を隠す（それは正しい）。
+    // 見たいのは「先手の `石田流` が後手の `三間飛車` を消さない」こと
+    expect(names(suppressForDisplay(ls))).toEqual(['gote:三間飛車', 'sente:石田流']);
+  });
+
+  it('対局帰属のラベルは双方のタグを隠す（相掛かり ⟹ 双方が居飛車）', () => {
+    const ls = detectTactics([
+      '2g2f', '8c8d', '2f2e', '8d8e', '2e2d', '2c2d', '2h2d',
+      '8e8f', '8g8f', '8b8f',
+    ]);
+    expect(names(ls)).toEqual(['both:相掛かり', 'gote:居飛車', 'sente:居飛車']);
+    expect(names(suppressForDisplay(ls))).toEqual(['both:相掛かり']);
+  });
+
   it('手番が違えば振り先ラベルは互いに影響しない', () => {
     // 双方が振る（相振り飛車）。先手 6八飛、後手 3二飛
     const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8b3b']);

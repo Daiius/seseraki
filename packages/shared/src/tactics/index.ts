@@ -124,10 +124,21 @@ function impliedBy(label: string, seen = new Set<string>()): Set<string> {
  * 2. 残った振り先ラベルが複数あれば `turn` が最小のものだけ出す
  */
 export function suppressForDisplay(labels: TacticLabel[]): TacticLabel[] {
-  const hidden = new Set<string>();
-  for (const l of labels) for (const h of impliedBy(l.label)) hidden.add(h);
+  // ⚠ **抑制は側ごとに独立して掛ける。** 集合を 1 つで共有すると、先手の `石田流` が
+  // **後手の** `三間飛車` まで隠す（PRD は per-side の表示タグへ独立に適用すると定めている）。
+  // ただし `both` のラベル（対局帰属）は双方のタグを隠す
+  // ——`相掛かり` は「双方が居飛車」を意味するので、両側の `居飛車` が畳まれるのが正しい。
+  const hidden: Record<string, Set<string>> = {
+    sente: new Set(),
+    gote: new Set(),
+    both: new Set(),
+  };
+  for (const l of labels) {
+    const targets = l.side === 'both' ? ['sente', 'gote', 'both'] : [l.side];
+    for (const h of impliedBy(l.label)) for (const t of targets) hidden[t].add(h);
+  }
 
-  const kept = labels.filter((l) => !hidden.has(l.label));
+  const kept = labels.filter((l) => !hidden[l.side].has(l.label));
 
   // 振り直し: 振り先ラベルは最初に成立したものだけ残す。side ごとに独立して見る
   const firstRookPlace = new Map<string, TacticLabel>();

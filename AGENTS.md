@@ -54,8 +54,9 @@
 |---|---|
 | `packages/commentator` | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
 
-> ※ `shared` は**盤面追跡（`board.ts`）まで移した**。USI 変換・悪手判定・kifu-export・zod 検証スキーマは
-> まだ `packages/web` にあり gap。server のプロンプト生成エンドポイント化も未着手（web が自前生成）。
+> ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
+> `lib/usi.ts`（盤面を使わない USI 変換・評価値整形）・`lib/cpl.ts`（悪手判定）・kifu-export・
+> zod 検証スキーマはまだ `packages/web` にあり gap。server のプロンプト生成エンドポイント化も未着手。
 > ⚠ **`shared` に環境依存を持ち込まない。** web（ブラウザ）と server / worker（node）の両方が使うため、
 > `structuredClone` のような DOM / node の lib にしか型が無い API も避ける。
 

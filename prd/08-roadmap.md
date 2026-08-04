@@ -47,9 +47,11 @@
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）
 
-- ✅ **`packages/shared` を新設し、盤面追跡（`board.ts`）を web から抽出済み**（テスト 19 件ごと移設）。
+- ✅ **`packages/shared` を新設し、`board.ts` を web から抽出済み**（テスト 19 件ごと移設）。
+  盤面追跡に加え、盤面を必要とする USI→日本語表記（`usiToJapaneseWithPiece` / `getPieceName`）も含む。
   戦型判定を server から回すのに必要だったため先行して消化した。
-- usi 変換・USI→日本語表記・悪手判定・kifu-export・zod 検証スキーマの抽出は**まだ gap**（web にある）。
+- **まだ gap**: `lib/usi.ts`（盤面を使わない `usiToJapanese`・`toSenteEval`・`formatScore` 等）、
+  `lib/cpl.ts`（悪手判定）、kifu-export、zod 検証スキーマ。いずれも `packages/web` にある。
 - プロンプト生成を **server エンドポイント化**し、web の「コピー」ボタンもそれを使う（書式の単一真実）。
 - 現状は web の `kifu-export` で自前生成しているため、これが理想との gap（[06](./06-llm-commentary.md) §2.3 / [02](./02-architecture.md) §3.2）。
 

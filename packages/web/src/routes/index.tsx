@@ -18,6 +18,7 @@ import {
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
+import { TacticTags, TacticLegend } from '../components/TacticTags';
 
 // 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
 // server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
@@ -163,7 +164,9 @@ function KifuListPage() {
   const filtered = isFiltered({ q, status, outcome, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
   const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
-  const canFilterByOutcome = getSelfNames().length > 0;
+  // 自分の名前候補が設定されていれば、勝敗の絞り込みと戦型タグの自分/相手の色分けが使える
+  const hasSelfNames = getSelfNames().length > 0;
+  const canFilterByOutcome = hasSelfNames;
 
   return (
     <div>
@@ -294,7 +297,12 @@ function KifuListPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>タイトル</th>
+                  {/* データ側が「タイトル + 戦型タグ」の 2 行なので、見出しも 2 行にして
+                      下の行にタグの色分けの凡例を置く（`TacticLegend`） */}
+                  <th>
+                    <div>タイトル</div>
+                    <TacticLegend known={hasSelfNames} className="mt-1" />
+                  </th>
                   <th>状態</th>
                   <th>対局日時</th>
                 </tr>
@@ -320,6 +328,12 @@ function KifuListPage() {
                         >
                           {kifu.title}
                         </Link>
+                        {/* 戦型タグはタイトルの下に置く。列を足すとモバイルで幅が足りない */}
+                        <TacticTags
+                          tactics={kifu.tactics}
+                          userSide={userSide}
+                          className="mt-1"
+                        />
                       </td>
                       <td>
                         <div className="flex gap-1 items-center">

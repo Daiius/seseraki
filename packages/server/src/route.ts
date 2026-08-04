@@ -5,7 +5,7 @@ import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { db } from './db/index.js';
-import { kifus, moveAnalyses, candidateMoves } from './db/schema.js';
+import { kifus, moveAnalyses, candidateMoves, kifuTactics } from './db/schema.js';
 import {
   kifuListOrderBy,
   kifuListQuerySchema,
@@ -34,6 +34,7 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
+import type { TacticLabel } from 'shared';
 import { replaceTactics } from './tactics';
 import { parseKif, type KifTimezone } from './kif/parser.js';
 
@@ -188,12 +189,36 @@ const route = app
         .limit(limit)
         .offset(offset);
 
+      // 戦型ラベルはページ内の棋譜ぶんをまとめて引く（N+1 を避ける）。
+      // **保存値をそのまま返す**（経由形も含む）。表示の抑制と関係ラベルの導出は
+      // shared の純関数で web 側が行う（prd/03 §2.1.2）
+      const ids = rows.map((r) => r.id);
+      const tacticRows =
+        ids.length === 0
+          ? []
+          : await db
+              .select({
+                kifuId: kifuTactics.kifuId,
+                side: kifuTactics.side,
+                label: kifuTactics.label,
+                turn: kifuTactics.turn,
+              })
+              .from(kifuTactics)
+              .where(inArray(kifuTactics.kifuId, ids));
+      const tacticsByKifu = new Map<number, TacticLabel[]>();
+      for (const { kifuId, ...t } of tacticRows) {
+        const list = tacticsByKifu.get(kifuId);
+        if (list) list.push(t);
+        else tacticsByKifu.set(kifuId, [t]);
+      }
+
       return c.json({
         kifus: rows.map(({ analyzedAt, analysisError, hasMemo, ...r }) => ({
           ...r,
           analyzed: analyzedAt !== null,
           failed: analysisError !== null,
           hasMemo: Boolean(hasMemo),
+          tactics: tacticsByKifu.get(r.id) ?? [],
         })),
         pagination: {
           page,
@@ -246,7 +271,18 @@ const route = app
         candidates: candidatesByMoveAnalysisId.get(move.id) ?? [],
       }));
 
-      return c.json({ ...kifu, analyses: analysesWithCandidates });
+      // 戦型ラベルは**保存値をそのまま返す**（経由形も含む）。表示の抑制と関係ラベルの導出は
+      // shared の純関数で web 側が行う（prd/03 §2.1.2）
+      const tactics = await db
+        .select({
+          side: kifuTactics.side,
+          label: kifuTactics.label,
+          turn: kifuTactics.turn,
+        })
+        .from(kifuTactics)
+        .where(eq(kifuTactics.kifuId, id));
+
+      return c.json({ ...kifu, analyses: analysesWithCandidates, tactics });
     },
   )
   .post(

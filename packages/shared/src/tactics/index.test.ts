@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   attributionOf,
-  deriveRelationLabels,
   detectTactics,
+  RELATION_FILTERS,
   suppressForDisplay,
   type TacticLabel,
 } from './index';
@@ -69,6 +69,74 @@ describe('detectTactics', () => {
       const a = ls.filter((l) => l.label === '相掛かり');
       expect(a).toHaveLength(1);
       expect(a[0].side).toBe('both');
+    });
+  });
+
+  describe('右辺の飛車は居飛車（prd/01 §6.3）', () => {
+    it('飛車先を突かなくても 4八飛なら居飛車が立ち、表示では右四間飛車が隠す', () => {
+      // ▲7六歩 △3四歩 ▲4六歩 △8四歩 ▲4八飛。**2六歩を一度も突いていない**
+      const ls = detectTactics(['7g7f', '3c3d', '4g4f', '8c8d', '2h4h']);
+      expect(names(ls)).toContain('sente:右四間飛車');
+      expect(names(ls)).toContain('sente:居飛車');
+      // `IMPLIES` により表示では居飛車が畳まれる
+      expect(names(suppressForDisplay(ls))).toEqual(['gote:居飛車', 'sente:右四間飛車']);
+    });
+
+    it('先に振っていたら、そのあとの 4八飛は右四間飛車ではない', () => {
+      // ▲7六歩 △3四歩 ▲6八飛(四間) △8四歩 ▲4八飛 — 中盤の飛車の転回であって戦法ではない
+      const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '6h4h']);
+      expect(names(ls)).toContain('sente:四間飛車');
+      expect(names(ls)).not.toContain('sente:右四間飛車');
+    });
+
+    it('玉を左辺へ囲ってから 5筋へ回しても振り飛車ではない', () => {
+      // ▲7六歩 △3四歩 ▲6八玉 △8四歩 ▲5八飛。飛車と玉が同じ側 = 振り飛車の駒組みではない
+      const ls = detectTactics(['7g7f', '3c3d', '5i6h', '8c8d', '2h5h']);
+      expect(names(ls)).not.toContain('sente:中飛車');
+      expect(names(ls)).not.toContain('sente:振り飛車');
+    });
+
+    it('このガードは振り先ラベル全部に掛かる（`IMPLIES` の 振り先 ⟹ 振り飛車 を保つ）', () => {
+      // ▲7六歩 △3四歩 ▲6八玉 △8四歩 ▲7八飛。中飛車だけに掛けていた頃は、
+      // ここで `三間飛車` が立つのに `振り飛車` が立たず、宣言した含意が壊れていた
+      const ls = detectTactics(['7g7f', '3c3d', '5i6h', '8c8d', '2h7h']);
+      expect(names(ls)).not.toContain('sente:三間飛車');
+      expect(names(ls)).not.toContain('sente:振り飛車');
+    });
+
+    it('玉を囲う前に振る形（陽動振り飛車）では居飛車と振り飛車が両立する', () => {
+      // ▲2六歩 △3四歩 ▲6八飛 …。居飛車で出だして途中で振った**経過**であって誤りではない。
+      // bioshogi 自身も両方を付ける（`陽動振り飛車.kif` = 戦法[四間飛車, 陽動振り飛車] + 備考[居飛車]）
+      const ls = detectTactics(['2g2f', '3c3d', '2h6h', '8c8d', '6i7h']);
+      expect(names(ls)).toContain('sente:居飛車');
+      expect(names(ls)).toContain('sente:四間飛車');
+      expect(names(ls)).toContain('sente:振り飛車');
+    });
+  });
+
+  describe('相掛かりと囲いは別の軸（prd/01 §6.3）', () => {
+    it('相掛かりの出だしから雁木に組んでも相掛かりのまま', () => {
+      // `ショーダンオリジナル.kif` の出だし。13〜15手目に飛車先を交換してから
+      // 17▲6六歩 21▲6七銀 と雁木に組む。**雁木は囲いなので戦型は相掛かりのまま**
+      const ls = detectTactics([
+        '2g2f', '8c8d', '2f2e', '4a3b', '7g7f', '8d8e', '8h7g', '7a6b',
+        '7i6h', '1c1d', '6i7h', '5c5d', '2e2d', '2c2d', '2h2d', '6b5c',
+        '6g6f', 'P*2c', '2d2h', '5d5e', '6h6g',
+      ]);
+      expect(names(ls)).toContain('both:相掛かり');
+      // 雁木は一次ラベルから外した（囲い判定の系統で扱う）
+      expect(names(ls)).not.toContain('sente:雁木');
+    });
+
+    it('角道を止めてから飛車先を伸ばした将棋は相掛かりではない', () => {
+      // ▲7六歩 △8四歩 ▲**6六歩** △8五歩 ▲2六歩 △3二金 ▲2五歩 △8六歩 ▲同歩 △同飛
+      // 飛車先を伸ばし合って歩も交換されるが、**角道を止める方が先**なので相掛かりではない
+      // （`ツノ銀型右玉.kif` = 1▲7六歩 3▲6六歩 … 13▲2六歩 15▲2五歩 と同じ順序）
+      const ls = detectTactics([
+        '7g7f', '8c8d', '6g6f', '8d8e', '2g2f', '4a3b', '2f2e',
+        '8e8f', '8g8f', '8b8f',
+      ]);
+      expect(names(ls)).not.toContain('both:相掛かり');
     });
   });
 
@@ -164,22 +232,42 @@ describe('suppressForDisplay（prd/03 §2.1.2 の A）', () => {
   });
 });
 
-describe('deriveRelationLabels（prd/03 §2.1.2 の B）', () => {
-  it('対抗形は双方の一次ラベルから導く', () => {
+describe('対局レベルの関係は絞り込みの語彙として持つ（RELATION_FILTERS）', () => {
+  /** `RELATION_FILTERS` の言うとおり、双方に per-side ラベルが**保存されている**か */
+  const matches = (ls: TacticLabel[], relation: string) => {
+    const label = RELATION_FILTERS[relation];
+    return (['sente', 'gote'] as const).every((side) =>
+      ls.some((l) => l.side === side && l.label === label),
+    );
+  };
+
+  it('タグとしては出さない（双方の per-side タグを見れば読めるため）', () => {
+    // ▲7六歩 △3四歩 ▲6八飛(四間) △8四歩 = 振り飛車 対 居飛車
     const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d']);
-    expect(deriveRelationLabels(ls)).toEqual(['対抗形']);
+    expect(names(ls)).toContain('sente:四間飛車');
+    expect(names(ls)).toContain('gote:居飛車');
+    // `対抗形` `相居飛車` `相振り飛車` はどれもラベルとして返らない
+    expect(ls.map((l) => l.label)).not.toContain('対抗形');
+    expect(ls.map((l) => l.label)).not.toContain('相居飛車');
   });
 
-  it('相振り飛車', () => {
+  it('相居飛車は双方の `居飛車` が保存されていることで引ける', () => {
+    const ls = detectTactics(['2g2f', '8c8d']);
+    expect(matches(ls, '相居飛車')).toBe(true);
+    expect(matches(ls, '相振り飛車')).toBe(false);
+  });
+
+  it('相振り飛車は双方の `振り飛車` が保存されていることで引ける', () => {
     const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8b3b']);
-    expect(deriveRelationLabels(ls)).toEqual(['相振り飛車']);
+    expect(matches(ls, '相振り飛車')).toBe(true);
+    expect(matches(ls, '相居飛車')).toBe(false);
   });
 
-  it('⚠ 抑制後の集合から導出すると関係ラベルが落ちる（B を A の出力から作らない根拠）', () => {
-    // 石田流(先手) 対 居飛車(後手)。`石田流` が `振り飛車` を隠すため、
-    // 抑制後の集合では `対抗形` を導出できない
-    const ls = detectTactics(['7g7f', '3c3d', '7f7e', '8c8d', '2h7h']);
-    expect(deriveRelationLabels(ls)).toEqual(['対抗形']);
-    expect(deriveRelationLabels(suppressForDisplay(ls))).toEqual([]);
+  it('⚠ 引くのは保存値。表示用に抑制した集合では引けない', () => {
+    // 双方が石田流。`石田流` が `三間飛車` → `振り飛車` を隠すので、
+    // 表示用の集合を絞り込みに使うと相振り飛車が引けなくなる
+    const ls = detectTactics(['7g7f', '3c3d', '7f7e', '3d3e', '2h7h', '8b3b']);
+    expect(matches(ls, '相振り飛車')).toBe(true);
+    expect(matches(suppressForDisplay(ls), '相振り飛車')).toBe(false);
   });
 });

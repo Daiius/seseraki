@@ -18,6 +18,7 @@ import {
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
+import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
 
 // 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
 // server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
@@ -165,6 +166,15 @@ function KifuListPage() {
   const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
   const canFilterByOutcome = getSelfNames().length > 0;
 
+  // 見出しの凡例は**このページで実際に使われている色分け**から組む。
+  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
+  const legendModes = kifus
+    .map((k) => legendModeOf(k.tactics, resolveUserSide(k.sente, k.gote).side))
+    .reduce(
+      (acc, mode) => (mode === null ? acc : { ...acc, [mode]: true }),
+      { self: false, unresolved: false },
+    );
+
   return (
     <div>
       <div className="flex items-center gap-4 mb-4">
@@ -294,7 +304,19 @@ function KifuListPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>タイトル</th>
+                  {/* データ側が「タイトル + 戦型タグ」の 2 行なので、見出しも 2 行にして
+                      下の行にタグの色分けの凡例を置く（`TacticLegend`） */}
+                  <th>
+                    <div>タイトル</div>
+                    {/* ⚠ 凡例は**このページに実際に出ている分け方**から組む。名前候補の設定有無で
+                        決めると、自分が参加していない対局・名前の表記が違う対局・双方が候補に
+                        一致する対局で ▲△ 表示になり、凡例が嘘になる（指摘 OCL-66ED0D3A） */}
+                    <TacticLegend
+                      self={legendModes.self}
+                      unresolved={legendModes.unresolved}
+                      className="mt-1"
+                    />
+                  </th>
                   <th>状態</th>
                   <th>対局日時</th>
                 </tr>
@@ -320,6 +342,12 @@ function KifuListPage() {
                         >
                           {kifu.title}
                         </Link>
+                        {/* 戦型タグはタイトルの下に置く。列を足すとモバイルで幅が足りない */}
+                        <TacticTags
+                          tactics={kifu.tactics}
+                          userSide={userSide}
+                          className="mt-1"
+                        />
                       </td>
                       <td>
                         <div className="flex gap-1 items-center">

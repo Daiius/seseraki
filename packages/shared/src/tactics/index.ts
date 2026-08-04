@@ -20,7 +20,9 @@ import {
 } from './definitions';
 
 export type { CaptureKind, Feat } from './features';
-export { INTERNAL, PRIMARY, SECONDARY } from './definitions';
+export { ALL_KINDS, features, flipBoard } from './features';
+export { INTERNAL, PRIMARY, SECONDARY, Lens } from './definitions';
+export type { Internal, Primary, Secondary, Timeline } from './definitions';
 
 /** 保存するラベル 1 行。`kifuTactics` の 1 レコードに対応（prd/03 §2.1） */
 export interface TacticLabel {
@@ -51,21 +53,38 @@ export function attributionOf(label: string): Attribution {
 }
 
 /**
- * 双方の一次ラベルから導く**関係ラベル**。保存しない（prd/01 §6.3）。
+ * **対局レベルの関係（相居飛車 / 相振り飛車）は、per-side のラベルが双方に立っているか**で決まる。
  *
- * ⚠ **導出は表示の抑制より前に行う**（prd/03 §2.1.2）。`implies` の抑制後に導出すると、
- * `石田流` が `振り飛車` を隠している対局で `対抗形` が立たなくなる。
+ * ⚠ **タグとしては出さない**（2026-08-05 に `対抗形` ごと削除）。双方の per-side タグを見れば
+ * 読めるうえ、相振り飛車は**振り先の組み合わせ**（三間飛車 vs 向かい飛車）こそが本体なので、
+ * 1 タグに畳むと一番知りたい情報が消える。
+ *
+ * **残してあるのは絞り込みの語彙として。** 保存しているのは per-side のラベルだけなので
+ * （prd/01 §6.3）、「相振り飛車の対局」は `kifuTactics` への `EXISTS` 2 つになる:
+ *
+ * ```sql
+ * EXISTS (… side = 'sente' AND label = '振り飛車')
+ * AND EXISTS (… side = 'gote' AND label = '振り飛車')
+ * ```
+ *
+ * **表示を消しても検索は塞がらない。** 定義をここに 1 つ持っておけば、SQL を組む側と
+ * 選択肢を出す側が同じものを見る。
  */
-export const RELATION_LABELS = ['対抗形', '相居飛車', '相振り飛車'] as const;
+export const RELATION_FILTERS: Record<string, string> = {
+  /** 双方が居飛車 */
+  相居飛車: '居飛車',
+  /** 双方が振り飛車 */
+  相振り飛車: '振り飛車',
+};
 
+/** 保存しないラベル（役割ラベル） */
 /**
  * 角交換の役割。**ラベルとしては出さない**（prd/03 §2.1.1）。
  * `角換わり` の `side`（＝持ち込んだ側）を決めるためだけに使う。
  */
 const ROLE_LABELS = ['角交換を挑んだ', '角交換に応じた'] as const;
 
-/** 保存しないラベル（関係ラベル + 役割ラベル） */
-const NOT_STORED = new Set<string>([...RELATION_LABELS, ...ROLE_LABELS]);
+const NOT_STORED = new Set<string>(ROLE_LABELS);
 
 /**
  * 飛車の振り先で決まる戦法。飛車は 1 つの筋にしか居ないので**相互排他**で、
@@ -101,6 +120,14 @@ export const IMPLIES: Record<string, string[]> = {
   ひねり飛車: ['居飛車'],
   // 飛車が 2六に居る ⟹ 2 筋の歩は 2五以遠 ⟹ `_飛車先2六`
   縦歩取り: ['居飛車'],
+  // `右四間飛車` = `_飛車48` かつ成立時点で振っていない。`居飛車` は
+  // `_飛車先2六` / `_飛車48` / `_飛車38` のいずれか + 同じ「振っていない」条件なので、
+  // **右四間飛車が立てば居飛車の条件は必ず満たされる**（窓も同じ）。袖飛車（`_飛車38`）も同様。
+  // ⚠ これは「一般に右四間飛車は居飛車の一種」という分類ではなく**判定条件どうしの含意**。
+  // 実測でも 100%（それ以前は 65% / 68% で、差は `居飛車` が飛車先を突かない形を
+  // 取りこぼしていた分だった）
+  右四間飛車: ['居飛車'],
+  袖飛車: ['居飛車'],
   // `_双方飛車先2五` ⟹ `_飛車先2六`。かつ成立時点で振っていないことを定義が要求する
   相掛かり: ['居飛車'],
 };
@@ -246,7 +273,7 @@ for (const d of [...PRIMARY, ...SECONDARY]) {
 /**
  * 指し手列から戦型ラベルを判定する。**`kifuTactics` に保存する形**で返す。
  *
- * - 関係ラベル（`対抗形` 等）と役割ラベルは**含まない**（prd/01 §6.3・prd/03 §2.1.1）
+ * - 役割ラベル（`角交換を挑んだ` 等）は**含まない**（prd/01 §6.3・prd/03 §2.1.1）
  * - `角換わり` は `side` に**持ち込んだ側**を入れた 1 行、`相掛かり` は `both` の 1 行
  * - 立ったラベルは**経由形も含めて全部返す**。表示で絞るのは {@link suppressForDisplay}
  */
@@ -400,25 +427,4 @@ function triggerSideOf(
   }
   const own = (['sente', 'gote'] as Side[]).filter((side) => ownHit[side].has(label));
   return own.length === 1 ? own[0] : null;
-}
-
-/**
- * 関係ラベルを導出する（prd/03 §2.1.2 の B）。保存しないので表示時に呼ぶ。
- *
- * ⚠ **入力は抑制前の全判定結果**（{@link detectTactics} の戻り値）。
- * {@link suppressForDisplay} の出力を渡すと、`石田流` が `振り飛車` を隠している対局で
- * `対抗形` が立たなくなる。
- */
-export function deriveRelationLabels(labels: TacticLabel[]): string[] {
-  const has = (side: Side, label: string) =>
-    labels.some((l) => l.side === side && l.label === label);
-  const out: string[] = [];
-  const furiS = has('sente', '振り飛車');
-  const furiG = has('gote', '振り飛車');
-  const ibiS = has('sente', '居飛車');
-  const ibiG = has('gote', '居飛車');
-  if ((furiS && ibiG) || (ibiS && furiG)) out.push('対抗形');
-  if (ibiS && ibiG) out.push('相居飛車');
-  if (furiS && furiG) out.push('相振り飛車');
-  return out;
 }

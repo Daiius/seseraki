@@ -17,6 +17,8 @@ import { CopyButton } from '../../components/CopyButton';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
+import { TacticTags } from '../../components/TacticTags';
+import { resolveUserSide } from '../../lib/self';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -113,13 +115,20 @@ function KifuDetailPage() {
     }
   };
 
+  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
+
   return (
     <div>
       <div className="flex items-center gap-4 mb-4">
         <Link to="/" className="btn btn-ghost btn-sm">
           ← 一覧
         </Link>
-        <h2 className="text-2xl font-bold">{kifu.title}</h2>
+        {/* 戦型はタイトルの直下に置く。対局の性格を一目で掴む情報なので、
+            盤面やメニューより先に目に入る位置がよい */}
+        <div className="min-w-0">
+          <h2 className="text-2xl font-bold">{kifu.title}</h2>
+          <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
+        </div>
         <div className="dropdown dropdown-end ml-auto">
           <button
             tabIndex={0}

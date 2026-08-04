@@ -37,6 +37,8 @@ export type Feat = {
   goldSquares: string[];
   /** 盤上の自分の桂の位置（"77" など）。鬼殺し系の骨格 */
   knightSquares: string[];
+  /** 自分の玉の位置（"59" など）。囲う方向で戦法を分けるのに使う */
+  kingSquare: string | null;
   bishopInHand: boolean;
   /** 8八の角が動かず7七の歩が退いている */
   bishopDiagonalOpen: boolean;
@@ -82,6 +84,7 @@ export function features(state: BoardState, flipped: boolean, turn: number): Fea
   const silverSquares: string[] = [];
   const goldSquares: string[] = [];
   const knightSquares: string[] = [];
+  let kingSquare: string | null = null;
 
   for (let r = 0; r < 9; r++) {
     for (let c = 0; c < 9; c++) {
@@ -98,6 +101,7 @@ export function features(state: BoardState, flipped: boolean, turn: number): Fea
       if (sq.kind === 'S') silverSquares.push(`${file}${rank}`);
       if (sq.kind === 'G') goldSquares.push(`${file}${rank}`);
       if (sq.kind === 'N') knightSquares.push(`${file}${rank}`);
+      if (sq.kind === 'K') kingSquare = `${file}${rank}`;
     }
   }
 
@@ -128,6 +132,7 @@ export function features(state: BoardState, flipped: boolean, turn: number): Fea
     silverSquares,
     goldSquares,
     knightSquares,
+    kingSquare,
     bishopInHand: !!hand.B,
     bishopDiagonalOpen:
       !!b88 && b88.side === 'sente' && b88.kind === 'B' && !(p77 && p77.side === 'sente' && p77.kind === 'P'),

@@ -109,6 +109,10 @@ export const candidateMoves = mysqlTable(
       table.moveAnalysisId,
       table.rank,
     ),
+    // 取りこぼし（prd/09 §3.1）の判定は解析済み局面ぶんの候補手を見る。既存の一意索引は
+    // `scoreType` / `scoreValue` を含まないため、局面数ぶんの行読み出しになる。
+    // mate 行は全体のごく一部なので、この索引で**読む行が mate 行だけに落ちる**（prd/09 §6.2）
+    index('candidate_moves_score_idx').on(table.scoreType, table.scoreValue),
   ],
 );
 

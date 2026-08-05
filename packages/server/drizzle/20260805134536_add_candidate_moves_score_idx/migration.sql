@@ -1,0 +1,1 @@
+CREATE INDEX `candidate_moves_score_idx` ON `candidate_moves` (`scoreType`,`scoreValue`);

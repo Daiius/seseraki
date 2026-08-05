@@ -276,10 +276,18 @@ function KifuListPage() {
                 <option value="loss">負け</option>
               </select>
             )}
+            {/*
+              ⚠ **`join` の中の `select` には幅を明示する。** daisyUI の `.select` は
+              `width: 100%` なので、`join` に 2 つ入れると**どちらも join の幅**を取り、
+              2 つ目がパネルの右端からはみ出して切れる（`min-width` では直らない）。
+              幅は最長ラベルに合わせる: 戦型は `角頭歩戦法` / `ひねり飛車` / `右四間飛車` の
+              5 字 + プレースホルダ `戦型: すべて`、側は `問わない`。
+              判定にラベルが増えても 5 字までは同じ幅で収まる
+            */}
             <div className="join">
               {/* 選択肢は shared の語彙から出す（判定にラベルが増えたら自動で増える。prd/09 §6.1） */}
               <select
-                className="join-item select select-sm select-bordered"
+                className="join-item select select-sm select-bordered w-36"
                 value={tactic ?? ''}
                 onChange={(e) => {
                   const next = e.target.value || undefined;
@@ -301,7 +309,7 @@ function KifuListPage() {
               </select>
               {/* ⚠ 角換わり・相掛かりでは無効化する。`side` の意味が違うので側で絞れない */}
               <select
-                className="join-item select select-sm select-bordered"
+                className="join-item select select-sm select-bordered w-28"
                 // 効いていない指定を表示しない（絞れないラベルでは server も side を見ない）
                 value={canFilterByTacticSide ? tacticSide : DEFAULT_TACTIC_SIDE}
                 disabled={!canFilterByTacticSide}

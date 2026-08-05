@@ -40,6 +40,7 @@ describe('kifuListQuerySchema', () => {
       page: 1,
       status: 'all',
       outcome: 'all',
+      tacticSide: 'any',
       sort: 'playedAt',
       order: 'desc',
     });
@@ -58,6 +59,18 @@ describe('kifuListQuerySchema', () => {
   it('日付は YYYY-MM-DD だけ受ける', () => {
     expect(parse({ from: '2026-07-01' }).from).toBe('2026-07-01');
     expect(kifuListQuerySchema.safeParse({ from: '2026/07/01' }).success).toBe(false);
+  });
+
+  it('戦型は 32 字まで（kifuTactics.label と同じ上限）', () => {
+    expect(parse({ tactic: ' 四間飛車 ' }).tactic).toBe('四間飛車');
+    expect(kifuListQuerySchema.safeParse({ tactic: 'あ'.repeat(33) }).success).toBe(false);
+    expect(kifuListQuerySchema.safeParse({ tacticSide: 'both' }).success).toBe(false);
+  });
+
+  it('取りこぼしの手数は 1 以上の整数', () => {
+    expect(parse({ missedMate: '10' }).missedMate).toBe(10);
+    expect(kifuListQuerySchema.safeParse({ missedMate: '0' }).success).toBe(false);
+    expect(kifuListQuerySchema.safeParse({ missedMate: '1.5' }).success).toBe(false);
   });
 });
 
@@ -126,6 +139,59 @@ describe('kifuListWhere', () => {
     // 終了日を含めるため「翌日 0 時未満」で切る
     expect(sql).toContain('date_add(?, interval 1 day)');
     expect(params).toEqual(['2026-07-01', '2026-07-31']);
+  });
+
+  it('戦型は kifu_tactics への相関 EXISTS になる（JOIN しない）', () => {
+    const { sql, params } = render(kifuListWhere(parse({ tactic: '四間飛車' })));
+    expect(sql).toContain('exists (select 1 from `kifu_tactics`');
+    expect(sql).toContain('`kifu_tactics`.`kifuId` = `kifus`.`id`');
+    // JOIN すると count() と LIMIT/OFFSET が壊れる（prd/03 §2.1.1・prd/04 §6.1）
+    expect(sql).not.toContain('join');
+    expect(params).toEqual(['四間飛車']);
+    // 既定（tacticSide=any）では side を見ないので自分の名前候補も要らない
+    expect(sql).not.toContain('`kifu_tactics`.`side`');
+  });
+
+  it('自分 / 相手で絞ると side が自分の側・相手の側になる', () => {
+    const self = render(kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'self', self: 'me' })));
+    expect(self.sql).toContain('`kifu_tactics`.`side` =');
+    // 先手が自分なら side=sente、後手が自分なら side=gote を見る
+    expect(self.params).toEqual(['me', 'me', '四間飛車', 'sente', 'me', 'me', '四間飛車', 'gote']);
+
+    const opponent = render(
+      kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'opponent', self: 'me' })),
+    );
+    expect(opponent.sql).toBe(self.sql);
+    expect(opponent.params).toEqual(['me', 'me', '四間飛車', 'gote', 'me', 'me', '四間飛車', 'sente']);
+  });
+
+  it('帰属が side でないラベルは tacticSide を指定しても side を見ない', () => {
+    // 角換わり（きっかけ帰属）・相掛かり（対局帰属）は side の意味が違う（prd/09 §6.1）
+    for (const tactic of ['角換わり', '相掛かり']) {
+      const { sql, params } = render(
+        kifuListWhere(parse({ tactic, tacticSide: 'self', self: 'me' })),
+      );
+      expect(sql).not.toContain('`kifu_tactics`.`side`');
+      expect(params).toEqual([tactic]);
+    }
+  });
+
+  it('自分の名前候補が無ければ側を要する戦型の絞り込みは 0 件にする', () => {
+    expect(render(kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'self' }))).sql).toBe(
+      '1 = 0',
+    );
+    expect(render(kifuListWhere(parse({ missedMate: '10' }))).sql).toBe('1 = 0');
+  });
+
+  it('取りこぼしは「自分の手番の rank=1 の詰み」かつ「負け」で絞る', () => {
+    const { sql, params } = render(kifuListWhere(parse({ missedMate: '10', self: 'me' })));
+    expect(sql).toContain('exists (select 1 from `move_analyses`');
+    expect(sql).toContain('exists (select 1 from `candidate_moves`');
+    // 自分の手番は moveNumber の parity（先手なら偶数・後手なら奇数。prd/03 §2.3）
+    expect(sql).toContain('mod(`move_analyses`.`moveNumber`, 2) =');
+    expect(params.slice(0, 8)).toEqual(['me', 'me', '%GOTE_WIN%', 0, 1, 'mate', 1, 10]);
+    // ⚠ 負け条件を内包する（outcome=loss を別途付ける必要はない。prd/09 §3.1）
+    expect(params.slice(8)).toEqual(['me', 'me', '%SENTE_WIN%', 1, 1, 'mate', 1, 10]);
   });
 
   it('複数の条件は AND で結合される', () => {

@@ -53,6 +53,20 @@ export function attributionOf(label: string): Attribution {
 }
 
 /**
+ * **帰属が `side` でないラベルの一覧**（`角換わり` / `相掛かり`）。prd/09 §6.1。
+ *
+ * このラベルは `side` で絞ってはいけない。きっかけ帰属は `side` が「持ち込んだ側」で
+ * **双方がその戦型**であり、対局帰属は `both` の 1 行しか持たないので、
+ * `side = 自分` / `side = 相手` で絞ると意味が変わる（prd/03 §2.1.1）。
+ *
+ * ⚠ **参照する側（server の絞り込み・集計、web の UI）で配列を書き直さない。**
+ * {@link ATTRIBUTION} から導出しているので、判定にラベルが増えてもここだけで追随できる。
+ */
+export const NON_SIDE_ATTRIBUTED_LABELS: readonly string[] = Object.entries(ATTRIBUTION)
+  .filter(([, a]) => a !== 'side')
+  .map(([label]) => label);
+
+/**
  * **対局レベルの関係（相居飛車 / 相振り飛車）は、per-side のラベルが双方に立っているか**で決まる。
  *
  * ⚠ **タグとしては出さない**（2026-08-05 に `対抗形` ごと削除）。双方の per-side タグを見れば
@@ -85,6 +99,16 @@ export const RELATION_FILTERS: Record<string, string> = {
 const ROLE_LABELS = ['角交換を挑んだ', '角交換に応じた'] as const;
 
 const NOT_STORED = new Set<string>(ROLE_LABELS);
+
+/**
+ * **`kifuTactics` に保存されうるラベル名の一覧**（絞り込みの選択肢の語彙）。
+ *
+ * 役割ラベル（{@link ROLE_LABELS}）は保存しないので含めない。**選択肢を出す側で
+ * 配列を書かない**ために名前付きで出す（`NON_SIDE_ATTRIBUTED_LABELS` と同じ理由。prd/09 §6.1）。
+ */
+export const STORED_TACTIC_LABELS: readonly string[] = [...PRIMARY, ...SECONDARY]
+  .map((d) => d.name)
+  .filter((name) => !NOT_STORED.has(name));
 
 /**
  * 飛車の振り先で決まる戦法。飛車は 1 つの筋にしか居ないので**相互排他**で、

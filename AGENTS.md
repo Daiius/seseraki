@@ -22,6 +22,7 @@
 | [prd/06-llm-commentary.md](./prd/06-llm-commentary.md) | LLM 解説用エクスポートと自動生成（commentator） |
 | [prd/07-auth-and-privacy.md](./prd/07-auth-and-privacy.md) | 認証 / API_KEY / 公開配置 |
 | [prd/08-roadmap.md](./prd/08-roadmap.md) | フェーズ分け / 未実装・計画中 / 確定事項 |
+| [prd/09-analytics.md](./prd/09-analytics.md) | 分析ページ（戦型別成績 / 取りこぼし / 一覧へのドリルダウン） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 

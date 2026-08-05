@@ -150,13 +150,27 @@ GET /api/stats/tactics?self=…&mateMax=10&from=…&to=…
 
 - **階層は web 側で組む。** `IMPLIES` は `shared` にあるので web から参照でき、server は平坦な行を返す。
   木の形を API の応答に焼き付けない（判定を更新したら木が変わる）。
-- **結合条件は `t.side = <相手の側> OR t.label IN <帰属が side でないラベル>`**。後者のリストは
-  `shared` の `ATTRIBUTION` から生成する（判定側が単一の出所という [03](./03-data-model.md) §2.1.1 の方針）。
+- **結合条件は `t.side = <相手の側> OR t.label IN <帰属が side でないラベル>`**（§6.1）。
 - **自分の側は SQL 内で決める**。一覧の `outcomeCondition`（`packages/server/src/kifu-list-query.ts`）と
   同じ組み立てを使う。
 - 先手時 / 後手時は条件付き集計（`sum(case when … end)`）で 1 クエリに収める。
 
-### 6.1 `candidate_moves` に索引を 1 本足す
+### 6.1 「帰属が `side` でないラベル」は `shared` の公開 API から取る
+
+集計の結合条件（§6）と一覧の `tacticSide=any`（§7）はどちらも「角換わり・相掛かりのような、`side` で
+絞ってはいけないラベル」の一覧を要る。**この一覧は `shared` が公開 API として持つ**
+（判定側が単一の出所、という [03](./03-data-model.md) §2.1.1 の方針をラベル本体だけでなく帰属にも及ぼす）。
+
+⚠ **現状は足りていない（gap）。** `shared/src/tactics/index.ts` の `ATTRIBUTION` は**モジュール内の
+非 export 定数**で、公開されているのは `attributionOf(label)` だけ。server から一覧を組み立てられない。
+
+- **実装時に名前付きの export を足す**（例: `NON_SIDE_ATTRIBUTED_LABELS`）。一覧の絞り込みを実装する
+  段（[08](./08-roadmap.md) の段取り (1)）で先に要る。
+- `[...PRIMARY, ...SECONDARY]` の `name` を `attributionOf` で絞れば導出はできる（どちらも export 済み）が、
+  **語彙の組み立て方を server 側に持たせない**ために名前付きで出す。判定にラベルが増えたとき、
+  server を触らずに追随できる形にしておく。
+
+### 6.2 `candidate_moves` に索引を 1 本足す
 
 ```sql
 CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue);
@@ -169,7 +183,7 @@ CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue
 
 > 生成は `db:generate`、適用は本番イメージ同梱の `dist/migrate.js`（[AGENTS.md](../AGENTS.md)）。
 
-### 6.2 採らなかった集計方式
+### 6.3 採らなかった集計方式
 
 | 案 | 落とした理由 |
 |---|---|
@@ -186,13 +200,13 @@ CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue
 | パラメータ | 内容 |
 |---|---|
 | `tactic` | ラベル名 |
-| `tacticSide` | `self` / `opponent` / `any`。帰属が `side` でないラベル（角換わり・相掛かり）は `any` 相当 |
+| `tacticSide` | `self` / `opponent` / `any`。帰属が `side` でないラベル（角換わり・相掛かり）は `any` 相当（§6.1） |
 | `missedMate` | 詰み手数の上限。指定時は「その手数以下の詰みを逃して落とした局」に絞る |
 
 - ⚠ **相関 `EXISTS` で書き、JOIN しない**（[03](./03-data-model.md) §2.1.1）。JOIN は `count()` と
   LIMIT/OFFSET を壊す。**一覧の絞り込みは server の SQL でなければならない**ので（[04](./04-ingestion.md) §6.1）、
   TS 側で畳んで辻褄を合わせることはできない。この制約が「分析も生ラベルで数える」判断の決め手になった。
-- `missedMate` も `candidate_moves` への `EXISTS` になるため一覧クエリが重くなるが、§6.1 の索引で吸収する。
+- `missedMate` も `candidate_moves` への `EXISTS` になるため一覧クエリが重くなるが、§6.2 の索引で吸収する。
 
 ## 8. 未確定・将来の論点
 

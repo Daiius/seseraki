@@ -52,8 +52,9 @@
 - 溜め込んだ棋譜を戦型で横断して数える画面（`/stats`）。設計は [09](./09-analytics.md) に確定済み。
   `kifuTactics` を別テーブルにした狙い（横断集計を JOIN 一本にする。[03](./03-data-model.md) §2.1）を
   初めて使う場所。
-- 段取り: (1) 一覧の絞り込み拡張（`tactic` / `tacticSide` / `missedMate`）+ `candidate_moves` の索引追加 →
-  (2) 集計エンドポイント `GET /api/stats/tactics` → (3) `/stats` ページと導線。
+- 段取り: (1) `shared` に「帰属が `side` でないラベル一覧」を公開 API として追加（現状 `ATTRIBUTION` は
+  非 export。[09](./09-analytics.md) §6.1）+ 一覧の絞り込み拡張（`tactic` / `tacticSide` / `missedMate`）+
+  `candidate_moves` の索引追加 → (2) 集計エンドポイント `GET /api/stats/tactics` → (3) `/stats` ページと導線。
   (1) は分析ページが無くても単体で価値がある（戦型ラベルの段取り (3) がこれにあたる）。
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）

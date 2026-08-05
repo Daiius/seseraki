@@ -4,16 +4,21 @@ import { client } from '../lib/honoClient';
 import {
   DEFAULT_ORDER,
   DEFAULT_SORT,
+  DEFAULT_TACTIC_SIDE,
   describeFilters,
   isFiltered,
   ORDERS,
   OUTCOMES,
   SORTS,
   STATUSES,
+  TACTIC_OPTIONS,
+  TACTIC_SIDES,
+  tacticSideApplies,
   type Order,
   type Outcome,
   type Sort,
   type Status,
+  type TacticSide,
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { getSelfNames, resolveUserSide } from '../lib/self';
@@ -31,6 +36,10 @@ export interface KifuListSearch {
   q?: string;
   status?: Status;
   outcome?: Outcome;
+  tactic?: string;
+  tacticSide?: TacticSide;
+  /** 分析ページからの導線（prd/09 §7）。専用の入力 UI は持たず URL から受けるだけ */
+  missedMate?: number;
   from?: string;
   to?: string;
   sort?: Sort;
@@ -45,6 +54,17 @@ function option<T extends string>(
 ): T | undefined {
   const value = values.find((v) => v === raw);
   return value && value !== fallback ? value : undefined;
+}
+
+/** 判定が返しうるラベルだけを受ける（URL 直入力の未知の値は無視して全件に戻す） */
+function tacticParam(raw: unknown): string | undefined {
+  return typeof raw === 'string' && TACTIC_OPTIONS.includes(raw) ? raw : undefined;
+}
+
+/** 詰み手数の上限。1 以上の整数だけ受ける（server の zod と揃える） */
+function missedMateParam(raw: unknown): number | undefined {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
 }
 
 /** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
@@ -64,6 +84,9 @@ export const Route = createFileRoute('/')({
         : undefined,
     status: option(STATUSES, search.status, 'all'),
     outcome: option(OUTCOMES, search.outcome, 'all'),
+    tactic: tacticParam(search.tactic),
+    tacticSide: option(TACTIC_SIDES, search.tacticSide, DEFAULT_TACTIC_SIDE),
+    missedMate: missedMateParam(search.missedMate),
     from: dateParam(search.from),
     to: dateParam(search.to),
     sort: option(SORTS, search.sort, DEFAULT_SORT),
@@ -74,19 +97,27 @@ export const Route = createFileRoute('/')({
     q: search.q,
     status: search.status ?? 'all',
     outcome: search.outcome ?? 'all',
+    tactic: search.tactic,
+    tacticSide: search.tacticSide ?? DEFAULT_TACTIC_SIDE,
+    missedMate: search.missedMate,
     from: search.from,
     to: search.to,
     sort: search.sort ?? DEFAULT_SORT,
     order: search.order ?? DEFAULT_ORDER,
   }),
   loader: async ({ deps }) => {
+    // server は「自分」を知らないので、自分の側に依存する絞り込みでは名前候補を渡す
+    // （VITE_SELF_NAMES ∪ VITE_SWARS_USER_ID が単一の正）。
+    // 取りこぼしは**負け条件を内包する**ので、それだけでも自分の側が要る（prd/09 §3.1）
+    const needsSelf =
+      deps.outcome !== 'all' ||
+      deps.missedMate !== undefined ||
+      (deps.tactic !== undefined && deps.tacticSide !== 'any');
     try {
       const res = await client.api.kifus.$get({
         query: {
           ...deps,
-          // 勝敗で絞るときだけ自分の名前候補を渡す。server は「自分」を知らないため
-          // 判定材料をここから供給する（VITE_SELF_NAMES ∪ VITE_SWARS_USER_ID が単一の正）
-          self: deps.outcome === 'all' ? undefined : getSelfNames().join(','),
+          self: needsSelf ? getSelfNames().join(',') : undefined,
         },
       });
       if (!res.ok) return { kifus: [], pagination: null, error: `サーバーエラー (${res.status})` };
@@ -106,6 +137,9 @@ function KifuListPage() {
     q = '',
     status = 'all',
     outcome = 'all',
+    tactic,
+    tacticSide = DEFAULT_TACTIC_SIDE,
+    missedMate,
     from,
     to,
     sort = DEFAULT_SORT,
@@ -161,10 +195,24 @@ function KifuListPage() {
   // （絞り込み・件数・ページングを server 側の SQL に揃える方針を崩さない。prd/04 §6.1）
   const { progress } = useAnalysisProgress();
 
-  const filtered = isFiltered({ q, status, outcome, from, to });
+  const filtered = isFiltered({ q, status, outcome, tactic, missedMate, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
-  const filterSummary = describeFilters({ q, status, outcome, from, to, sort, order });
+  const filterSummary = describeFilters({
+    q,
+    status,
+    outcome,
+    tactic,
+    tacticSide,
+    missedMate,
+    from,
+    to,
+    sort,
+    order,
+  });
   const canFilterByOutcome = getSelfNames().length > 0;
+  // 側で絞れるのは手番固有のラベルだけ（角換わり・相掛かりは server も side を見ない）。
+  // 自分の名前候補が無いときも自分/相手は決まらない
+  const canFilterByTacticSide = tacticSideApplies(tactic) && canFilterByOutcome;
 
   // 見出しの凡例は**このページで実際に使われている色分け**から組む。
   // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
@@ -228,6 +276,48 @@ function KifuListPage() {
                 <option value="loss">負け</option>
               </select>
             )}
+            <div className="join">
+              {/* 選択肢は shared の語彙から出す（判定にラベルが増えたら自動で増える。prd/09 §6.1） */}
+              <select
+                className="join-item select select-sm select-bordered"
+                value={tactic ?? ''}
+                onChange={(e) => {
+                  const next = e.target.value || undefined;
+                  // 側で絞れないラベルへ切り替えたら側の指定も落とす
+                  // （効かない条件が URL に残り続けるのを防ぐ）
+                  updateFilter({
+                    tactic: next,
+                    tacticSide: tacticSideApplies(next) ? tacticSide : undefined,
+                  });
+                }}
+                aria-label="戦型で絞り込み"
+              >
+                <option value="">戦型: すべて</option>
+                {TACTIC_OPTIONS.map((label) => (
+                  <option key={label} value={label}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              {/* ⚠ 角換わり・相掛かりでは無効化する。`side` の意味が違うので側で絞れない */}
+              <select
+                className="join-item select select-sm select-bordered"
+                // 効いていない指定を表示しない（絞れないラベルでは server も side を見ない）
+                value={canFilterByTacticSide ? tacticSide : DEFAULT_TACTIC_SIDE}
+                disabled={!canFilterByTacticSide}
+                onChange={(e) => updateFilter({ tacticSide: e.target.value as TacticSide })}
+                aria-label="戦型をどちらの側で絞るか"
+                title={
+                  tactic && !tacticSideApplies(tactic)
+                    ? `${tactic}は双方の戦型なので側では絞れません`
+                    : undefined
+                }
+              >
+                <option value="any">問わない</option>
+                <option value="self">自分</option>
+                <option value="opponent">相手</option>
+              </select>
+            </div>
             <div className="flex items-center gap-1">
               <input
                 type="date"
@@ -275,6 +365,25 @@ function KifuListPage() {
           </div>
         </div>
       </details>
+      {/*
+        取りこぼしは分析ページからの導線でしか付かない（専用の入力 UI は持たない。prd/09 §7）。
+        URL でしか指定できないぶん「なぜ件数が少ないのか」が分からなくなりやすいので、
+        折り畳みの外にバッジと解除リンクを出す
+      */}
+      {missedMate !== undefined && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+          <span className="badge badge-warning badge-sm">取りこぼしのみ表示中</span>
+          <span className="text-base-content/70">
+            {missedMate}手詰以下を逃して負けた対局
+          </span>
+          <button
+            className="link link-primary"
+            onClick={() => updateFilter({ missedMate: undefined })}
+          >
+            解除
+          </button>
+        </div>
+      )}
       {/* 件数は折り畳みの外に出す（閉じている間も見えるように） */}
       {pagination && (
         <div className="mb-4 text-sm text-base-content/60">{pagination.total}件</div>

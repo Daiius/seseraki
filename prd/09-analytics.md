@@ -5,7 +5,9 @@
 [03](./03-data-model.md) §2.1 が `kifuTactics` を別テーブルにした理由（横断集計を JOIN 一本にする）を
 初めて使う場所でもある。
 
-> 設計は 2026-08-05 の grill で確定。**実装は未着手**（[08](./08-roadmap.md)）。
+> 設計は 2026-08-05 の grill で確定。**実装は一部済み**——`shared` の語彙（§6.1）・一覧の絞り込み（§7）・
+> `candidate_moves` の索引（§6.2）は入っており、**集計エンドポイント（§6）と `/stats` ページ本体が gap**
+> （[08](./08-roadmap.md)）。
 
 ## 1. このページが答える問い
 
@@ -156,22 +158,30 @@ GET /api/stats/tactics?self=…&mateMax=10&from=…&to=…
   同じ組み立てを使う。
 - 先手時 / 後手時は条件付き集計（`sum(case when … end)`）で 1 クエリに収める。
 
-### 6.1 「帰属が `side` でないラベル」は `shared` の公開 API から取る
+### 6.1 絞り込みの語彙は `shared` の公開 API から取る（実装済み）
 
 集計の結合条件（§6）と一覧の `tacticSide=any`（§7）はどちらも「角換わり・相掛かりのような、`side` で
-絞ってはいけないラベル」の一覧を要る。**この一覧は `shared` が公開 API として持つ**
-（判定側が単一の出所、という [03](./03-data-model.md) §2.1.1 の方針をラベル本体だけでなく帰属にも及ぼす）。
+絞ってはいけないラベル」の一覧を要る。選択肢を出す側は「保存されうるラベル名」の一覧を要る。
+**どちらも `shared` が名前付きの公開 API として持つ**（判定側が単一の出所、という
+[03](./03-data-model.md) §2.1.1 の方針をラベル本体だけでなく帰属・語彙にも及ぼす）。
 
-⚠ **現状は足りていない（gap）。** `shared/src/tactics/index.ts` の `ATTRIBUTION` は**モジュール内の
-非 export 定数**で、公開されているのは `attributionOf(label)` だけ。server から一覧を組み立てられない。
+| export | 中身 | 導出元 |
+|---|---|---|
+| `NON_SIDE_ATTRIBUTED_LABELS` | 帰属が `side` でないラベル（`角換わり` / `相掛かり`） | `ATTRIBUTION` |
+| `STORED_TACTIC_LABELS` | `kifuTactics` に保存されうるラベル名 | `PRIMARY` + `SECONDARY` − `NOT_STORED` |
 
-- **実装時に名前付きの export を足す**（例: `NON_SIDE_ATTRIBUTED_LABELS`）。一覧の絞り込みを実装する
-  段（[08](./08-roadmap.md) の段取り (1)）で先に要る。
-- `[...PRIMARY, ...SECONDARY]` の `name` を `attributionOf` で絞れば導出はできる（どちらも export 済み）が、
-  **語彙の組み立て方を server 側に持たせない**ために名前付きで出す。判定にラベルが増えたとき、
-  server を触らずに追随できる形にしておく。
+- ⚠ **参照側（server の絞り込み・集計、web の選択肢）で配列を書き直さない。** どちらも判定側の定義から
+  導出しているので、**判定にラベルが増えても `shared` だけで追随できる**。
+- **名前付きで出す理由**: `NON_SIDE_ATTRIBUTED_LABELS` は `[...PRIMARY, ...SECONDARY]` の `name` を
+  `attributionOf` で絞れば導出できるが、それでは**語彙の組み立て方を参照側に持たせる**ことになる。
+  `STORED_TACTIC_LABELS` も、`NOT_STORED`（役割ラベル `角交換を挑んだ` / `角交換に応じた`）が
+  非 export なので、これが無いと web が役割ラベルをハードコードすることになる。
+- 由来: 当初この節は「`ATTRIBUTION` から生成する」と書いていたが、`ATTRIBUTION` は**モジュール内の
+  非 export 定数**で参照できず、仕様どおりに実装できなかった（レビュー指摘 `OCL-79B974CD`）。
+  **公開 API の不足は仕様の側で明示する**（「shared の定数から生成」で済ませると、参照できるかどうかが
+  実装まで分からない）。
 
-### 6.2 `candidate_moves` に索引を 1 本足す
+### 6.2 `candidate_moves` に索引を 1 本足す（マイグレーション生成済み）
 
 ```sql
 CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue);
@@ -196,13 +206,21 @@ CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue
 ## 7. 一覧へのドリルダウン
 
 行をクリックするとその戦型で絞った棋譜一覧へ、取りこぼしのセルからはその局だけの一覧へ飛ぶ。
-**これに合わせて一覧の絞り込みを拡張する**（[04](./04-ingestion.md) §6.1 の枠内）。
+**一覧側の絞り込みは実装済み**（[04](./04-ingestion.md) §6.1 の枠内）で、`/stats` からの導線が gap。
 
 | パラメータ | 内容 |
 |---|---|
-| `tactic` | ラベル名 |
+| `tactic` | ラベル名。`STORED_TACTIC_LABELS`（§6.1）の語彙で検証する |
 | `tacticSide` | `self` / `opponent` / `any`。帰属が `side` でないラベル（角換わり・相掛かり）は `any` 相当（§6.1） |
 | `missedMate` | 詰み手数の上限。指定時は「その手数以下の詰みを逃して落とした局」に絞る |
+
+- **`missedMate` は負け条件を内包する**（§3.1 の定義そのもの）。`outcome=loss` を別途付ける必要はなく、
+  単独で意味が閉じたパラメータにしてある。
+- **`missedMate` に専用の入力 UI は持たない。** `/stats` からの導線でしか付かないので、指定時に
+  一覧上部へバッジと解除リンクを出す（URL でしか指定できないぶん「なぜ件数が少ないのか」が
+  分からなくなるのを防ぐ）。
+- **側で絞れないラベルへ切り替えたら `tacticSide` を URL から落とす。** 効いていない条件が
+  URL に残り続けると、後で開いたときに何で絞ったのか読めない。
 
 - ⚠ **相関 `EXISTS` で書き、JOIN しない**（[03](./03-data-model.md) §2.1.1）。JOIN は `count()` と
   LIMIT/OFFSET を壊す。**一覧の絞り込みは server の SQL でなければならない**ので（[04](./04-ingestion.md) §6.1）、

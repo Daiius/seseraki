@@ -178,6 +178,13 @@ GET /api/stats/tactics?self=…&mateMax=10&from=…&to=…
   `totalGames + ambiguousSelf + draw + unknownResult = 期間内の全局数`が成り立つ。
   ⚠ **`ambiguousSelf` を「自分未確定のうち勝敗がついた局」にしない。** 自分が決まらなければ
   引き分けかどうかも読む意味がなく、内訳が足し合わせられなくなる。
+  ⚠ **この等式は `result` が `*_WIN_*` / `DRAW_*` / null のいずれかであることに依存する。**
+  どれにも当てはまらない結果コードが入ると**どのバケツにも入らず、合計が静かに合わなくなる**
+  （エラーにはならない）。結果コードの網羅性は未確認事項として残っている
+  （[01](./01-domain.md) §7）ので、**コードを追加するときはこの内訳も見直す**。
+  構造的に閉じる（「勝敗が読めない残り全部」を `unknownResult` にする）ことは SQL の三値論理を
+  踏むため採らなかった——`result` が null のとき `result NOT IN (…)` も `NOT (result LIKE …)` も
+  NULL になり、`coalesce` を挟まないと**現在正しく数えられている null の局が落ちる**。
 - **`games` は `count(*)`**。`kifu_tactics` の主キーが `(kifuId, side, label)` なので、§6 の結合条件で
   拾える行は 1 局 1 ラベルにつき高々 1 行になり、`count(distinct)` を要さない
   （手番固有ラベルは `side = 相手` の 1 行、帰属が `side` でないラベルは 1 局 1 行。§2.2）。

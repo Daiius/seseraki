@@ -11,6 +11,15 @@ import {
   kifuListQuerySchema,
   kifuListWhere,
 } from './kifu-list-query.js';
+import {
+  statsTacticsJoinOn,
+  statsTacticsOrderBy,
+  statsTacticsPeriodWhere,
+  statsTacticsQuerySchema,
+  statsTacticsRowsSelect,
+  statsTacticsSummarySelect,
+  statsTacticsWhere,
+} from './stats-tactics-query.js';
 import { apiKeyRequired } from './middlewares.js';
 import {
   hasValidSession,
@@ -34,7 +43,7 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
-import type { TacticLabel } from 'shared';
+import { attributionOf, type TacticLabel } from 'shared';
 import { replaceTactics } from './tactics';
 import { parseKif, type KifTimezone } from './kif/parser.js';
 
@@ -283,6 +292,39 @@ const route = app
         .where(eq(kifuTactics.kifuId, id));
 
       return c.json({ ...kifu, analyses: analysesWithCandidates, tactics });
+    },
+  )
+  // 戦型別成績（prd/09）。**生ラベルで数える平坦な行**を返し、階層（`IMPLIES`）は web で組む。
+  // 局数の合計は総局数を超える（各行は独立した問いへの答えで分割ではない。prd/09 §2.1）
+  .get(
+    '/stats/tactics',
+    sessionRequired,
+    zv('query', statsTacticsQuerySchema),
+    async (c) => {
+      const query = c.req.valid('query');
+
+      // 総局数と除外の内訳は期間内の全局が母集団（ラベルとは無関係）。
+      // 集計対象が空でも 1 行返るので `[summary]` で受けられる
+      const [summary] = await db
+        .select(statsTacticsSummarySelect(query))
+        .from(kifus)
+        .where(statsTacticsPeriodWhere(query));
+
+      const rows = await db
+        .select(statsTacticsRowsSelect(query))
+        .from(kifus)
+        .innerJoin(kifuTactics, statsTacticsJoinOn(query))
+        .where(statsTacticsWhere(query))
+        .groupBy(kifuTactics.label)
+        .orderBy(...statsTacticsOrderBy());
+
+      const { totalGames, ...excluded } = summary;
+      return c.json({
+        totalGames,
+        excluded,
+        // 帰属は判定側（shared）が単一の出所。web が帰属バッジ・分母の説明に使う（prd/09 §2.2）
+        rows: rows.map((r) => ({ ...r, attribution: attributionOf(r.label) })),
+      });
     },
   )
   .post(

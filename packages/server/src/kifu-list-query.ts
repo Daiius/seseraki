@@ -59,7 +59,7 @@ export const kifuListQuerySchema = z.object({
 export type KifuListQuery = z.infer<typeof kifuListQuerySchema>;
 
 /** カンマ区切りの名前候補を正規化する（空要素・重複を除く） */
-function parseSelfNames(self: string | undefined): string[] {
+export function parseSelfNames(self: string | undefined): string[] {
   return [
     ...new Set(
       (self ?? '')
@@ -77,7 +77,7 @@ function parseSelfNames(self: string | undefined): string[] {
  * 両対局者とも自分の名前候補に一致する対局は側を確定できないため除外する
  * （web の `resolveUserSide` が ambiguous として勝敗バッジを出さないのと同じ扱い）。
  */
-interface SelfSide {
+export interface SelfSide {
   side: 'sente' | 'gote';
   opponent: 'sente' | 'gote';
   /** その側が自分であること（相手が候補に一致する ambiguous な対局は含まない） */
@@ -87,7 +87,7 @@ interface SelfSide {
   lost: SQL;
 }
 
-function selfSides(names: string[]): SelfSide[] {
+export function selfSides(names: string[]): SelfSide[] {
   if (names.length === 0) return [];
   // 結果コードは `SENTE_WIN_RESIGN` 等（prd/01 §3）。一覧のバッジと同じ部分一致で判定する
   const senteWin = like(kifus.result, '%SENTE_WIN%');
@@ -119,11 +119,43 @@ function selfSides(names: string[]): SelfSide[] {
 /**
  * 自分の側ごとの条件を OR で束ねる。**自分を特定できなければ 0 件**にする
  * （全件返すと絞り込みの意味が変わるため）。
+ *
+ * `only` を渡すとその側だけに限定する（分析の「先手時 / 後手時」の条件付き集計。prd/09 §3）。
  */
-function bySelfSide(names: string[], build: (s: SelfSide) => SQL): SQL {
-  const sides = selfSides(names);
+export function bySelfSide(
+  names: string[],
+  build: (s: SelfSide) => SQL,
+  only?: 'sente' | 'gote',
+): SQL {
+  const sides = selfSides(names).filter((s) => only === undefined || s.side === only);
   if (sides.length === 0) return sql`1 = 0`;
   return or(...sides.map((s) => and(s.isSelf, build(s))))!;
+}
+
+/** 常に真。`bySelfSide` で「自分がその側だったこと」だけを条件にするときに渡す */
+export const alwaysTrue: SQL = sql`1 = 1`;
+
+/**
+ * 解析済み（成功）。**失敗した棋譜は「済」にも「未」にも数えない**ので、
+ * 一覧の `status=analyzed` と分析の分母（prd/09 §3.1）で同じ述語を使う。
+ */
+export function analyzedCondition(): SQL {
+  return and(isNull(kifus.analysisError), isNotNull(kifus.analysisCompletedAt))!;
+}
+
+/**
+ * 期間の絞り込み（基準は `playedOrCreatedAt`）。一覧と分析で同じ境界を使う。
+ *
+ * 日付の境界は DB セッションのタイムゾーンで解釈される（playedAt の保存と同じ基準）。
+ * `to` は指定日を含めたいので「翌日 0 時未満」とする。
+ */
+export function periodConditions(from?: string, to?: string): SQL[] {
+  const conditions: SQL[] = [];
+  if (from) conditions.push(sql`${playedOrCreatedAt} >= ${from}`);
+  if (to) {
+    conditions.push(sql`${playedOrCreatedAt} < date_add(${to}, interval 1 day)`);
+  }
+  return conditions;
 }
 
 /** 勝敗の絞り込み条件 */
@@ -165,7 +197,7 @@ function tacticCondition(query: KifuListQuery, label: string): SQL {
  * `scoreValue` は**エンジンが返した手番視点のまま**保存されている（prd/03 §4）ので、
  * 自分の手番の局面では正の `mate` が「自分が詰ませる」を意味する。
  */
-function selfMateExists(limit: number, side: 'sente' | 'gote'): SQL {
+export function selfMateExists(limit: number, side: 'sente' | 'gote'): SQL {
   const parity = side === 'sente' ? 0 : 1;
   return sql`exists (select 1 from ${moveAnalyses} where ${and(
     eq(moveAnalyses.kifuId, kifus.id),
@@ -186,7 +218,7 @@ function selfMateExists(limit: number, side: 'sente' | 'gote'): SQL {
  * ⚠ **「詰みを逃した」ではなく「詰みを逃して落とした」**。負け条件を内包するのが定義そのもので
  * （詰みを実行していれば負けていない）、そのぶん「実手が詰みでないこと」を確かめずに済む。
  */
-function missedMateCondition(limit: number, names: string[]): SQL {
+export function missedMateCondition(limit: number, names: string[]): SQL {
   return bySelfSide(names, (s) => and(s.lost, selfMateExists(limit, s.side))!);
 }
 
@@ -208,9 +240,7 @@ export function kifuListWhere(query: KifuListQuery): SQL | undefined {
   if (query.status === 'failed') {
     conditions.push(isNotNull(kifus.analysisError));
   } else if (query.status === 'analyzed') {
-    conditions.push(
-      and(isNull(kifus.analysisError), isNotNull(kifus.analysisCompletedAt))!,
-    );
+    conditions.push(analyzedCondition());
   } else if (query.status === 'unanalyzed') {
     conditions.push(
       and(isNull(kifus.analysisError), isNull(kifus.analysisCompletedAt))!,
@@ -227,14 +257,7 @@ export function kifuListWhere(query: KifuListQuery): SQL | undefined {
     conditions.push(missedMateCondition(query.missedMate, parseSelfNames(query.self)));
   }
 
-  // 日付の境界は DB セッションのタイムゾーンで解釈される（playedAt の保存と同じ基準）。
-  // `to` は指定日を含めたいので「翌日 0 時未満」とする
-  if (query.from) conditions.push(sql`${playedOrCreatedAt} >= ${query.from}`);
-  if (query.to) {
-    conditions.push(
-      sql`${playedOrCreatedAt} < date_add(${query.to}, interval 1 day)`,
-    );
-  }
+  conditions.push(...periodConditions(query.from, query.to));
 
   return conditions.length > 0 ? and(...conditions) : undefined;
 }

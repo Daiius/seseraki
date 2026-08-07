@@ -39,23 +39,24 @@
   スキーマも確定（`kifuTactics`。[03](./03-data-model.md) §2.1）。
 - 段取りと現状: ✅ (1) 判定ロジックを `shared` へ純関数として置く（`packages/shared/src/tactics`）→
   ✅ (2) 投入時に判定して `kifuTactics` へ保存 + 一括再判定の口（`tactics:redetect`）→
-  ✅ (2b) 一覧・詳細でのタグ表示（`TacticTags`）→ **gap** (3) 一覧のフィルタ軸・
-  「同じ戦型の過去局へ」の導線（[09](./09-analytics.md) §7）→ **gap** (4) LLM プロンプトへ添える
-  （[06](./06-llm-commentary.md) §3.2）。
+  ✅ (2b) 一覧・詳細でのタグ表示（`TacticTags`）→ ✅ (3) 一覧のフィルタ軸
+  （`tactic` / `tacticSide`。[09](./09-analytics.md) §7）→ **gap** (3b)「同じ戦型の過去局へ」の
+  棋譜詳細からの導線 → **gap** (4) LLM プロンプトへ添える（[06](./06-llm-commentary.md) §3.2）。
 - **`shared` 抽出を実利のある形で消化する機会**でもある（下記 gap と同時に進めるのが自然）。
 - 発展: 局面ハッシュ（SFEN）による**局面横断検索**。「この局面が出た過去の自分の対局」を引ければ、
   定跡を外れた地点や、同じ形で毎回する失敗が自分の棋譜だけから見つかる。盤面追跡は既にあるので
   SFEN 出力を足せば土台は揃う（`shared` 抽出と同時にやるのが自然）。
 
-### 分析ページ（戦型別成績。優先度: 高・設計確定済み / 実装は未着手）
+### 分析ページ（戦型別成績。優先度: 高・一部実装済み）
 
 - 溜め込んだ棋譜を戦型で横断して数える画面（`/stats`）。設計は [09](./09-analytics.md) に確定済み。
   `kifuTactics` を別テーブルにした狙い（横断集計を JOIN 一本にする。[03](./03-data-model.md) §2.1）を
   初めて使う場所。
-- 段取り: (1) `shared` に「帰属が `side` でないラベル一覧」を公開 API として追加（現状 `ATTRIBUTION` は
-  非 export。[09](./09-analytics.md) §6.1）+ 一覧の絞り込み拡張（`tactic` / `tacticSide` / `missedMate`）+
-  `candidate_moves` の索引追加 → (2) 集計エンドポイント `GET /api/stats/tactics` → (3) `/stats` ページと導線。
-  (1) は分析ページが無くても単体で価値がある（戦型ラベルの段取り (3) がこれにあたる）。
+- 段取りと現状: ✅ (1) `shared` に絞り込みの語彙を公開（`NON_SIDE_ATTRIBUTED_LABELS` /
+  `STORED_TACTIC_LABELS`。[09](./09-analytics.md) §6.1）+ 一覧の絞り込み拡張
+  （`tactic` / `tacticSide` / `missedMate`）+ `candidate_moves` の索引（マイグレーション生成済み・
+  本番未適用）→ **gap** (2) 集計エンドポイント `GET /api/stats/tactics` → **gap** (3) `/stats` ページと導線。
+- (1) を先に出したのは、分析ページが無くても単体で価値があるため（戦型ラベルの段取り (3) がこれにあたる）。
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）
 

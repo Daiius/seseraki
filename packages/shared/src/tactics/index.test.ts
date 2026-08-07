@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   attributionOf,
   detectTactics,
+  NON_SIDE_ATTRIBUTED_LABELS,
   RELATION_FILTERS,
+  STORED_TACTIC_LABELS,
   suppressForDisplay,
   type TacticLabel,
 } from './index';
@@ -293,5 +295,39 @@ describe('対局レベルの関係は絞り込みの語彙として持つ（RELA
     const ls = detectTactics(['7g7f', '3c3d', '7f7e', '3d3e', '2h7h', '8b3b']);
     expect(matches(ls, '相振り飛車')).toBe(true);
     expect(matches(suppressForDisplay(ls), '相振り飛車')).toBe(false);
+  });
+});
+
+describe('絞り込みの語彙（prd/09 §6.1）', () => {
+  it('NON_SIDE_ATTRIBUTED_LABELS は帰属が side でないラベルだけを挙げる', () => {
+    // 中身は `ATTRIBUTION` から導出しているので、判定側が単一の出所であることを検算する
+    for (const label of NON_SIDE_ATTRIBUTED_LABELS) {
+      expect(attributionOf(label)).not.toBe('side');
+    }
+    expect([...NON_SIDE_ATTRIBUTED_LABELS].sort()).toEqual(['角換わり', '相掛かり'].sort());
+  });
+
+  it('一覧に無いラベルは手番固有（side で絞ってよい）', () => {
+    for (const label of ['四間飛車', '振り飛車', '居飛車', '矢倉', '横歩取り', '石田流']) {
+      expect(NON_SIDE_ATTRIBUTED_LABELS).not.toContain(label);
+      expect(attributionOf(label)).toBe('side');
+    }
+  });
+
+  it('STORED_TACTIC_LABELS は保存されるラベルだけ（役割ラベルを含まない）', () => {
+    expect(STORED_TACTIC_LABELS).toContain('四間飛車');
+    expect(STORED_TACTIC_LABELS).toContain('角換わり');
+    expect(STORED_TACTIC_LABELS).toContain('相掛かり');
+    // 役割ラベルは `kifuTactics` に入らないので、絞り込みの選択肢にも出さない
+    expect(STORED_TACTIC_LABELS).not.toContain('角交換を挑んだ');
+    expect(STORED_TACTIC_LABELS).not.toContain('角交換に応じた');
+    // 内部ラベル（`_` 始まり）も語彙ではない
+    expect(STORED_TACTIC_LABELS.filter((l) => l.startsWith('_'))).toEqual([]);
+  });
+
+  it('判定が返すラベルは必ず語彙に含まれる', () => {
+    const ls = detectTactics(['7g7f', '3c3d', '7f7e', '7a6b', '2h7h']);
+    expect(ls.length).toBeGreaterThan(0);
+    for (const l of ls) expect(STORED_TACTIC_LABELS).toContain(l.label);
   });
 });

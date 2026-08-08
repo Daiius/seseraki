@@ -34,8 +34,8 @@ export const kifuListQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
   /** 解析状態。一覧のバッジ（失敗 / 済 / 未）と同じ区分 */
   status: z.enum(['all', 'analyzed', 'unanalyzed', 'failed']).default('all'),
-  /** 自分から見た勝敗 */
-  outcome: z.enum(['all', 'win', 'loss']).default('all'),
+  /** 自分から見た勝敗。`decided` は「勝敗がついた」（分析ページの対象局と同じ。prd/09 §4） */
+  outcome: z.enum(['all', 'win', 'loss', 'decided']).default('all'),
   // 自分の名前候補（カンマ区切り）。「自分」の定義は web の
   // `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` が単一の正なので、server は設定を持たず
   // 勝敗条件を組み立てるためだけに受け取る（prd/01 §3 対局のメタ情報）
@@ -158,12 +158,21 @@ export function periodConditions(from?: string, to?: string): SQL[] {
   return conditions;
 }
 
-/** 勝敗の絞り込み条件 */
+/**
+ * 勝敗の絞り込み条件。
+ *
+ * `decided` は**勝敗がついた対局**（分析ページの対象局と同じ。prd/09 §4）。`bySelfSide` を
+ * 通すので「自分の側が確定していること」を含み、引き分け・結果不明もここで落ちる。
+ * ⚠ **分析の表から一覧へ飛ぶ導線がこれを使う**（指摘 `OCL-35520A6B`）。同じ母集団を指す条件が
+ * 一覧側に無いと、表の局数よりクリック先の件数が多くなる（prd/09 §2.1 の約束が崩れる）。
+ */
 function outcomeCondition(
   outcome: Exclude<KifuListQuery['outcome'], 'all'>,
   names: string[],
 ): SQL {
-  return bySelfSide(names, (s) => (outcome === 'win' ? s.won : s.lost));
+  return bySelfSide(names, (s) =>
+    outcome === 'win' ? s.won : outcome === 'loss' ? s.lost : or(s.won, s.lost)!,
+  );
 }
 
 /**

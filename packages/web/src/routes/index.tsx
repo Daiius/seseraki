@@ -274,6 +274,9 @@ function KifuListPage() {
                 <option value="all">勝敗: すべて</option>
                 <option value="win">勝ち</option>
                 <option value="loss">負け</option>
+                {/* 分析ページからの導線が使う母集団（引き分け・結果不明・自分未確定を外す）。
+                    URL に載るので選択肢としても出す（出さないとセレクトが空欄になる） */}
+                <option value="decided">勝敗あり</option>
               </select>
             )}
             {/*

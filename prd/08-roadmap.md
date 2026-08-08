@@ -47,7 +47,7 @@
   定跡を外れた地点や、同じ形で毎回する失敗が自分の棋譜だけから見つかる。盤面追跡は既にあるので
   SFEN 出力を足せば土台は揃う（`shared` 抽出と同時にやるのが自然）。
 
-### 分析ページ（戦型別成績。優先度: 高・一部実装済み）
+### 分析ページ（戦型別成績。**実装済み**）
 
 - 溜め込んだ棋譜を戦型で横断して数える画面（`/stats`）。設計は [09](./09-analytics.md) に確定済み。
   `kifuTactics` を別テーブルにした狙い（横断集計を JOIN 一本にする。[03](./03-data-model.md) §2.1）を
@@ -57,7 +57,9 @@
   （`tactic` / `tacticSide` / `missedMate`）+ `candidate_moves` の索引（マイグレーション生成済み・
   本番未適用）→ ✅ (2) 集計エンドポイント `GET /api/stats/tactics`
   （`packages/server/src/stats-tactics-query.ts`。[09](./09-analytics.md) §6）→
-  **gap** (3) `/stats` ページと導線。
+  ✅ (3) `/stats` ページと一覧への導線（`packages/web/src/routes/stats.tsx` +
+  `lib/statsTactics.ts`。[09](./09-analytics.md) §2.3・§2.4・§3・§5・§7）。
+  **段取りは完了**で、残るのは [09](./09-analytics.md) §8 の将来の軸だけ。
 - (1) を先に出したのは、分析ページが無くても単体で価値があるため（戦型ラベルの段取り (3) がこれにあたる）。
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）

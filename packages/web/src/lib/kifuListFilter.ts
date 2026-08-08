@@ -9,7 +9,9 @@ import { NON_SIDE_ATTRIBUTED_LABELS, STORED_TACTIC_LABELS } from 'shared';
 
 // 値は server 側の zod スキーマ（`GET /api/kifus`）と揃える
 export const STATUSES = ['all', 'analyzed', 'unanalyzed', 'failed'] as const;
-export const OUTCOMES = ['all', 'win', 'loss'] as const;
+// `decided` は「勝敗がついた」。分析ページの対象局（prd/09 §4）と同じ母集団を指し、
+// 表からのドリルダウンで件数が一致するようにするために要る（指摘 OCL-35520A6B）
+export const OUTCOMES = ['all', 'win', 'loss', 'decided'] as const;
 export const TACTIC_SIDES = ['self', 'opponent', 'any'] as const;
 export const SORTS = ['playedAt', 'createdAt', 'title'] as const;
 export const ORDERS = ['asc', 'desc'] as const;
@@ -51,6 +53,7 @@ const STATUS_LABELS: Record<Exclude<Status, 'all'>, string> = {
 const OUTCOME_LABELS: Record<Exclude<Outcome, 'all'>, string> = {
   win: '勝ち',
   loss: '負け',
+  decided: '勝敗あり',
 };
 
 const TACTIC_SIDE_LABELS: Record<Exclude<TacticSide, 'any'>, string> = {

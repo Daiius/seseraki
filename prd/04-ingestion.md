@@ -126,7 +126,7 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | `page` | 1〜 | `1` | 50件ページネーション |
 | `q` | 文字列（100字まで） | なし | `title` / `sente` / `gote` の部分一致。LIKE のワイルドカードはエスケープして素の部分一致にする。上限超過は 400（web も同じ上限を持つ。[05](./05-analysis.md) §2.5） |
 | `status` | `all` \| `analyzed` \| `unanalyzed` \| `failed` | `all` | 一覧のバッジと同じ区分（`failed` は `analysisError`、他は `analysisError IS NULL` かつ `analysisCompletedAt` の有無） |
-| `outcome` | `all` \| `win` \| `loss` | `all` | 自分から見た勝敗。`self` と組で使う |
+| `outcome` | `all` \| `win` \| `loss` \| `decided` | `all` | 自分から見た勝敗。`self` と組で使う。`decided` は「勝敗がついた」（引き分け・結果不明・自分未確定を外す＝分析ページの対象局と同じ母集団。[09](./09-analytics.md) §4・§7） |
 | `self` | 自分の名前候補（カンマ区切り） | なし | 「自分」は web の `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` が単一の正なので、server は設定を持たず**判定材料を web から受け取る**。両対局者とも候補に一致する対局は側を確定できないため除外する（web の `resolveUserSide` が ambiguous とするのと同じ扱い）。候補が空なら勝敗の絞り込みは 0 件 |
 | `from` / `to` | `YYYY-MM-DD` | なし | `coalesce(playedAt, createdAt)` に対する期間。**両端を含む**（`to` は翌日 0 時未満）。境界は DB セッションのタイムゾーンで解釈 |
 | `sort` | `playedAt` \| `createdAt` \| `title` | `playedAt` | `playedAt` は `coalesce(playedAt, createdAt)`（一覧の日時列と同じ基準値。[05](./05-analysis.md) §2.5） |

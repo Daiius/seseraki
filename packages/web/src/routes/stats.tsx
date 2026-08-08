@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 import { getSelfNames } from '../lib/self';
@@ -142,26 +142,47 @@ function StatsPage() {
     updateSearch({ from: range.from, to: range.to });
   };
 
-  const changeMateMax = (raw: string) => {
-    const value = Number(raw);
-    if (!isValidMateMax(value)) return;
-    // このページの条件（URL）と次に開いたときの既定値（localStorage）の両方を動かす
-    setMateMax(value);
-    updateSearch({ mateMax: value });
-  };
+  // 詰み手数は**打鍵ごとに反映しない**。1 打鍵ごとに server の集計をやり直すことになり、
+  // 取りこぼしは `candidate_moves` への `EXISTS` を含む重いクエリ（prd/09 §6.2）。
+  // 空欄や途中の値を弾いて入力を止めないよう、入力欄はドラフトを持つ（一覧の検索欄と同じ形）
+  const [mateMaxDraft, setMateMaxDraft] = useState(String(mateMax));
+
+  // 戻る/進む・`/settings` での変更など、こちら以外の理由で値が変わったら入力欄を追従させる
+  useEffect(() => {
+    setMateMaxDraft(String(mateMax));
+  }, [mateMax]);
+
+  useEffect(() => {
+    const value = Number(mateMaxDraft);
+    if (!isValidMateMax(value) || value === mateMax) return;
+    const timer = setTimeout(() => {
+      // このページの条件（URL）と次に開いたときの既定値（localStorage）の両方を動かす
+      setMateMax(value);
+      updateSearch({ mateMax: value });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [mateMaxDraft, mateMax]);
 
   const preset = presetOf({ from, to }, new Date());
   const rows = stats ? buildTacticTree(stats.rows, sort, order) : [];
   const excludedTotal = stats ? totalExcluded(stats.excluded) : 0;
 
   // 一覧への導線（prd/09 §7）。期間はそのまま引き継ぎ、側は帰属で決める
-  // （角換わり・相掛かりは側で絞れないので付けない）
+  // （角換わり・相掛かりは側で絞れないので付けない）。
+  //
+  // ⚠ **母集団も渡す。** 集計の対象局は「自分の側が確定し、勝敗がついた対局」（prd/09 §4）で、
+  // 戦型・側・期間だけでは引き分け・結果不明・自分未確定が一覧に混ざり、表の局数より
+  // 件数が多くなる（指摘 `OCL-35520A6B`。§2.1 が約束した一致が崩れる）。
+  // 取りこぼしのセルは分子が「解析済み」に限られるので `status` も揃える
+  // （途中まで解析された棋譜に部分的な `candidateMoves` が残りうる。指摘 `OCL-2D4D27E5`）。
   const listSearch = (
     row: StatsTreeRow,
     missedMate?: number,
   ): KifuListSearch => ({
     tactic: row.label,
     tacticSide: row.attribution === 'side' ? 'opponent' : undefined,
+    outcome: 'decided',
+    status: missedMate === undefined ? undefined : 'analyzed',
     missedMate,
     from,
     to,
@@ -238,11 +259,11 @@ function StatsPage() {
                 <input
                   type="number"
                   className="input input-sm input-bordered w-16"
-                  value={mateMax}
+                  value={mateMaxDraft}
                   min={MIN_MATE_MAX}
                   max={MAX_MATE_MAX}
                   step={1}
-                  onChange={(e) => changeMateMax(e.target.value)}
+                  onChange={(e) => setMateMaxDraft(e.target.value)}
                   aria-label="取りこぼしと見なす詰み手数の上限"
                 />
                 手詰以下

@@ -126,6 +126,17 @@ describe('kifuListWhere', () => {
     expect(loss.params.slice().sort()).toEqual(win.params.slice().sort());
   });
 
+  it('decided は勝ちと負けの両方を含む（分析ページの対象局と同じ母集団）', () => {
+    const decided = render(kifuListWhere(parse({ outcome: 'decided', self: 'me' })));
+    const win = render(kifuListWhere(parse({ outcome: 'win', self: 'me' })));
+    // 勝者コードは先手側・後手側それぞれに 2 つずつ現れる（勝ち条件の 2 倍）
+    expect(decided.params.filter((p) => p === '%SENTE_WIN%')).toHaveLength(2);
+    expect(decided.params.filter((p) => p === '%GOTE_WIN%')).toHaveLength(2);
+    expect(win.params.filter((p) => p === '%SENTE_WIN%')).toHaveLength(1);
+    // 側を確定できない対局を外す条件は勝ち負けと同じものを通る
+    expect(decided.sql).toContain('not in');
+  });
+
   it('自分の名前候補が無ければ勝敗では 0 件にする', () => {
     expect(render(kifuListWhere(parse({ outcome: 'win' }))).sql).toBe('1 = 0');
     expect(render(kifuListWhere(parse({ outcome: 'win', self: ' , ' }))).sql).toBe('1 = 0');

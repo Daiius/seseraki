@@ -313,3 +313,55 @@ describe("候補手の抽出", () => {
     expect(candidates[0].move).toBe("7g7f");
   });
 });
+
+describe("hashfull（置換表の使用率）", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 局面ごとに指定の hashfull を返すエンジン（統計だけの info 行として返す） */
+  function createHashfullEngine(hashfulls: (number | undefined)[]): AnalysisEngine {
+    let n = 0;
+    return {
+      setOption: () => {},
+      analyze: async (): Promise<UsiSearchResult> => {
+        const pvLine: UsiInfo = {
+          multipv: 1,
+          depth: 5,
+          score: { type: "cp", value: 0 },
+          pv: ["7g7f"],
+        };
+        const stats: UsiInfo = { depth: 5, hashfull: hashfulls[n++] };
+        return {
+          bestmove: { move: "7g7f" },
+          infoLines: [pvLine, stats],
+          lastInfo: stats,
+        };
+      },
+    };
+  }
+
+  it("局面をまたいだ最大値を返す（置換表は 1 局を通して積み上がる）", async () => {
+    const engine = createHashfullEngine([120, 480, 310]);
+
+    const summary = await analyzeKifu(engine, ["7g7f", "3c3d"], {
+      onChunk: async () => {},
+    });
+
+    expect(summary.maxHashfull).toBe(480);
+  });
+
+  it("エンジンが報告しなければ undefined のままにする", async () => {
+    const engine = createHashfullEngine([undefined, undefined, undefined]);
+
+    const summary = await analyzeKifu(engine, ["7g7f", "3c3d"], {
+      onChunk: async () => {},
+    });
+
+    expect(summary.maxHashfull).toBeUndefined();
+  });
+});

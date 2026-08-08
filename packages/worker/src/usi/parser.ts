@@ -30,6 +30,9 @@ export function parseInfoLine(line: string): UsiInfo {
       case "nps":
         info.nps = Number(tokens[++i]);
         break;
+      case "hashfull":
+        info.hashfull = Number(tokens[++i]);
+        break;
       case "time":
         info.time = Number(tokens[++i]);
         break;

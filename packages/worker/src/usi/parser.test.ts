@@ -12,7 +12,16 @@ describe("parseInfoLine", () => {
     expect(info.multipv).toBe(1);
     expect(info.score).toEqual({ type: "cp", value: 55 });
     expect(info.pv).toEqual(["P*4f", "P*6c", "6b6c"]);
+    expect(info.hashfull).toBe(17);
     expect(info.bound).toBeUndefined();
+  });
+
+  it("hashfull を持たない行では undefined のままにする", () => {
+    const info = parseInfoLine(
+      "info depth 51 seldepth 14 multipv 1 score mate 13 nodes 100 nps 100 time 10 pv N*2e 2d2e",
+    );
+
+    expect(info.hashfull).toBeUndefined();
   });
 
   it("lowerbound を読む（fail high の暫定行を見分けるため）", () => {

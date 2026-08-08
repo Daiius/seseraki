@@ -33,6 +33,11 @@ export interface KifuAnalysisSummary {
   totalMoves: number;
   /** この実行で解析した局面数（再開時は残りの分だけ） */
   analyzed: number;
+  /**
+   * この実行で観測した `hashfull`（置換表の使用率・パーミル）の最大値。
+   * エンジンが報告しなかった場合は `undefined`。
+   */
+  maxHashfull?: number;
 }
 
 /**
@@ -110,6 +115,20 @@ function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
 }
 
 /**
+ * info 行群から `hashfull`（置換表の使用率・パーミル）の最大値を取る
+ *
+ * 最終行に必ず載るとは限らないので、全 info 行の最大値を採る。
+ */
+function extractHashfull(infoLines: UsiInfo[]): number | undefined {
+  let max: number | undefined;
+  for (const info of infoLines) {
+    if (info.hashfull === undefined || Number.isNaN(info.hashfull)) continue;
+    if (max === undefined || info.hashfull > max) max = info.hashfull;
+  }
+  return max;
+}
+
+/**
  * 棋譜を一手ずつ解析し、結果を**チャンクに分けて `onChunk` へ渡す**
  *
  * 全局面を貯めて最後に 1 回送ると、そこで落ちたときに数十分の計算が丸ごと消える。
@@ -166,6 +185,9 @@ export async function analyzeKifu(
   let pending: MoveAnalysis[] = [];
   let lastChunkAt = Date.now();
   let analyzed = 0;
+  // 置換表は局面をまたいで残る（usinewgame も Clear Hash も送らない）ため、hashfull は
+  // 1 局を通して積み上がる。1 局面ぶんではなく**この実行の最大値**が USI_Hash の判断材料になる
+  let maxHashfull: number | undefined;
 
   // MultiPV 設定
   engine.setOption("MultiPV", String(multiPv));
@@ -191,9 +213,13 @@ export async function analyzeKifu(
     const elapsed = Date.now() - t0;
     const candidates = extractMultiPvResults(result.infoLines);
     const isBook = candidates.length > 0 && candidates[0].depth === 0;
+    const hashfull = extractHashfull(result.infoLines);
+    if (hashfull !== undefined && (maxHashfull === undefined || hashfull > maxHashfull)) {
+      maxHashfull = hashfull;
+    }
 
     console.log(
-      `[Analysis] ${i}/${usiMoves.length} ${elapsed}ms ${isBook ? "BOOK" : `d${candidates[0]?.depth ?? 0}`} ${candidates.length}candidates`,
+      `[Analysis] ${i}/${usiMoves.length} ${elapsed}ms ${isBook ? "BOOK" : `d${candidates[0]?.depth ?? 0}`} ${candidates.length}candidates${hashfull !== undefined ? ` hashfull ${hashfull}‰` : ""}`,
     );
 
     pending.push({
@@ -224,5 +250,6 @@ export async function analyzeKifu(
   return {
     totalMoves: usiMoves.length,
     analyzed,
+    maxHashfull,
   };
 }

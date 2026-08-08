@@ -55,7 +55,9 @@
 - 段取りと現状: ✅ (1) `shared` に絞り込みの語彙を公開（`NON_SIDE_ATTRIBUTED_LABELS` /
   `STORED_TACTIC_LABELS`。[09](./09-analytics.md) §6.1）+ 一覧の絞り込み拡張
   （`tactic` / `tacticSide` / `missedMate`）+ `candidate_moves` の索引（マイグレーション生成済み・
-  本番未適用）→ **gap** (2) 集計エンドポイント `GET /api/stats/tactics` → **gap** (3) `/stats` ページと導線。
+  本番未適用）→ ✅ (2) 集計エンドポイント `GET /api/stats/tactics`
+  （`packages/server/src/stats-tactics-query.ts`。[09](./09-analytics.md) §6）→
+  **gap** (3) `/stats` ページと導線。
 - (1) を先に出したのは、分析ページが無くても単体で価値があるため（戦型ラベルの段取り (3) がこれにあたる）。
 
 ### `shared` 抽出・プロンプト生成のエンドポイント化（一部実装済み / 残りは gap）

@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
@@ -16,6 +17,11 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as KifusNewRouteImport } from './routes/kifus/new'
 import { Route as KifusIdRouteImport } from './routes/kifus/$id'
 
+const StatsRoute = StatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -52,6 +58,7 @@ export interface FileRoutesByFullPath {
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/stats': typeof StatsRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -60,6 +67,7 @@ export interface FileRoutesByTo {
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/stats': typeof StatsRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -69,6 +77,7 @@ export interface FileRoutesById {
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
   '/settings': typeof SettingsRoute
+  '/stats': typeof StatsRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -79,6 +88,7 @@ export interface FileRouteTypes {
     | '/dev-gallery'
     | '/login'
     | '/settings'
+    | '/stats'
     | '/kifus/$id'
     | '/kifus/new'
   fileRoutesByTo: FileRoutesByTo
@@ -87,6 +97,7 @@ export interface FileRouteTypes {
     | '/dev-gallery'
     | '/login'
     | '/settings'
+    | '/stats'
     | '/kifus/$id'
     | '/kifus/new'
   id:
@@ -95,6 +106,7 @@ export interface FileRouteTypes {
     | '/dev-gallery'
     | '/login'
     | '/settings'
+    | '/stats'
     | '/kifus/$id'
     | '/kifus/new'
   fileRoutesById: FileRoutesById
@@ -104,12 +116,20 @@ export interface RootRouteChildren {
   DevGalleryRoute: typeof DevGalleryRoute
   LoginRoute: typeof LoginRoute
   SettingsRoute: typeof SettingsRoute
+  StatsRoute: typeof StatsRoute
   KifusIdRoute: typeof KifusIdRoute
   KifusNewRoute: typeof KifusNewRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/stats': {
+      id: '/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof StatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -160,6 +180,7 @@ const rootRouteChildren: RootRouteChildren = {
   DevGalleryRoute: DevGalleryRoute,
   LoginRoute: LoginRoute,
   SettingsRoute: SettingsRoute,
+  StatsRoute: StatsRoute,
   KifusIdRoute: KifusIdRoute,
   KifusNewRoute: KifusNewRoute,
 }

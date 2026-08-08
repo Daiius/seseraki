@@ -147,7 +147,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | オプション | 環境変数 | 既定 | 説明 |
 |---|---|---|---|
 | Threads | `ENGINE_THREADS` | 1 | |
-| USI_Hash | `ENGINE_HASH` | 128 (MB) | 本番は 2048–4096 推奨 |
+| USI_Hash | `ENGINE_HASH` | 128 (MB) | 本番は 1024。過不足は `hashfull` で判断する（§1.3c） |
 | MultiPV | `ENGINE_MULTIPV` | 3 | 候補手数 |
 | — | `ENGINE_DEPTH` | 10 | 探索深さ |
 | — | `ENGINE_MOVETIME` | 未設定 | 1 局面あたりの思考時間(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整） |
@@ -184,6 +184,24 @@ USI で思考時間を指定する方法は 2 つあるが、**解析には `go 
 探索アルゴリズムには影響しない（読み筋を出力する瞬間に置換表を辿るだけ）。
 
 定跡にヒットした局面は別経路（採用手の確定行が depth 0・pv 2 手固定）でこの補完が効かない（#67）。
+
+#### 1.3c `USI_Hash` の過不足は `hashfull` で判断する（決定・2026-08-08）
+
+**置換表のサイズを「多めに取っておく」で決めない。** 判断材料は info 行の `hashfull`（使用率・パーミル）で、
+worker は 1 局面ごとのログに出し、1 局の完了ログに**この実行の最大値**を出す。
+
+```
+[Analysis] 42/113 1502ms d21 3candidates hashfull 284‰
+[Worker] Completed kifu 57 (113 moves, 113 positions analyzed, peak hashfull 284‰ / USI_Hash 1024MB)
+```
+
+目安は Stockfish の実測（15.1 / 60+0.6・[Useful data](https://official-stockfish.github.io/docs/stockfish-wiki/Useful-data.html)）:
+**300‰ までは実質無害、500‰ で約 −10 Elo、700‰ で約 −20 Elo、900‰ で約 −50 Elo 相当**（探索速度 2 倍 ≒ +50 Elo
+換算で、それぞれ 15% / 30% / 2 倍の速度低下に相当する）。**peak が 300‰ を大きく下回るならサイズは余っている。**
+
+⚠ **置換表は局面をまたいで残る**（`usinewgame` も `Clear Hash` も送らない）。1 局面ぶんではなく
+**棋譜 1 局ぶんの蓄積**で埋まるので、対局エンジン向けの目安より積み上がる。一方、1 手ずつ進める解析では
+直前の局面で読んだ木がそのまま次の局面の部分木になるため、**この蓄積自体が速度に効いている**（消さない理由）。
 
 ### 1.4 解析 depth の目安
 

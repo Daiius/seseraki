@@ -39,6 +39,10 @@ async function main() {
   console.log("[Worker] Starting with config:", {
     enginePath: config.enginePath,
     engineDepth: config.engineDepth,
+    engineMovetime: config.engineMovetime,
+    engineThreads: config.engineThreads,
+    // hashfull のログ（1 局ごとに出る peak）と突き合わせられるよう、設定値も残す
+    engineHash: config.engineHash,
     pollIntervalMs: config.pollIntervalMs,
     useMock: config.useMock,
   });
@@ -189,7 +193,11 @@ async function main() {
 
         // 完了（analysisCompletedAt）は server が件数で確定する（prd/05 §1.1c）
         console.log(
-          `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves, ${result.analyzed} positions analyzed)`,
+          `[Worker] Completed kifu ${kifu.id} (${result.totalMoves} moves, ${result.analyzed} positions analyzed${
+            result.maxHashfull !== undefined
+              ? `, peak hashfull ${result.maxHashfull}‰ / USI_Hash ${config.engineHash}MB`
+              : ""
+          })`,
         );
       } catch (err) {
         console.error("[Worker] Error:", err);

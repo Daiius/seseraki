@@ -13,7 +13,7 @@
 //
 //   pnpm --filter kifu-vision exec tsx extract-simple.ts <動画パス> [開始秒] [終了秒] [間隔秒]
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, basename } from 'node:path';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop, type GrayImage } from './src/frame.ts';
 import { occupancyDistance, INITIAL_OCCUPANCY, occupancy } from './src/occupancy.ts';
@@ -32,6 +32,7 @@ const toSec = Number(process.argv[4] ?? 300);
 const stepSec = Number(process.argv[5] ?? 0.5);
 const geo = SHOGI_WARS_VERTICAL;
 const LEARN_DIR = process.env.KIFU_VISION_LEARN_DIR ?? 'data/learned';
+const OUT_DIR = process.env.KIFU_VISION_OUT_DIR ?? 'data/kifu';
 const VERBOSE = process.env.KIFU_VISION_VERBOSE === '1';
 
 const NAMES: Record<PieceKind, string> = {
@@ -292,3 +293,30 @@ for (const r of runs) {
 }
 console.log(`\n# 手番が交互になった箇所: ${alternations} / ${pairs}`);
 console.log('  （断片の中では交互になっているはず。低いなら手を飛ばしている）');
+
+// 断片を書き出す。まだ 1 局を通せていないので、つながった単位で残しておく。
+if (runs.length > 0) {
+  const outPath = `${OUT_DIR}/${basename(video).replace(/\.[^.]+$/, '')}-${Math.round(fromSec)}-${Math.round(toSec)}.json`;
+  mkdirSync(dirname(outPath), { recursive: true });
+  const payload = {
+    source: basename(video),
+    range: { fromSec, toSec, stepSec },
+    runs: runs
+      .filter((r) => r.steps.length > 0)
+      .map((r) => {
+        let alt = 0;
+        for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
+        return {
+          startedAt: r.startedAt,
+          endedAt: r.steps.at(-1)!.time,
+          moveCount: r.steps.length,
+          // 手番が交互になっているか。1 でなければどこかで手を取りこぼしている。
+          alternationRatio: r.steps.length > 1 ? alt / (r.steps.length - 1) : null,
+          usi: r.steps.map((x) => x.usi),
+          moves: r.steps.map((x) => ({ time: x.time, usi: x.usi, side: x.side, inferredKind: x.solved })),
+        };
+      }),
+  };
+  writeFileSync(outPath, JSON.stringify(payload, null, 2));
+  console.log(`\n# 書き出した: ${outPath}`);
+}

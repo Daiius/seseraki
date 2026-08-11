@@ -22,6 +22,7 @@ import { extractTemplates, cellImage, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
+import { bridgeGap } from './src/bridge.ts';
 import { checkBoard, pieceCount } from './src/sanity.ts';
 import type { PieceKind, Square } from 'shared';
 
@@ -78,7 +79,27 @@ interface Step {
   side: string;
   solved: boolean;
 }
-const steps: Step[] = [];
+/**
+ * 追跡が切れたと見なすまでの連続失敗回数。
+ *
+ * 一度読み損ねると `current` が古いまま取り残され、以後すべての差分が
+ * 「変わりすぎ」になって二度と戻れない。実測では 4:20 で切れたあと
+ * 14 分間ずっと too-many-changes が続いた。
+ *
+ * 切れたら**その時点の読みを新しい起点にして仕切り直す**。棋譜は分断されるが、
+ * 分断された各断片はそれぞれ有効なので、後でつなぐか長いものを採る。
+ */
+const RESET_AFTER = Number(process.env.KIFU_VISION_RESET_AFTER ?? 8);
+
+/** 追跡が続いている間の一続きの手列 */
+interface Run {
+  steps: Step[];
+  startedAt: number;
+}
+const runs: Run[] = [];
+let steps: Step[] = [];
+let consecutiveFailures = 0;
+let resets = 0;
 const failures = new Map<string, number>();
 let current: Square[][] | null = null;
 let samples = 0;
@@ -87,6 +108,10 @@ let vanished = 0;
 let insane = 0;
 let detailShown = 0;
 let carriedUsed = 0;
+let bridgedMoves = 0;
+let bridgeTried = 0;
+/** 直前に手が繋がった時刻。二分探索の起点になる。 */
+let lastGoodTime: number | null = null;
 const started = Date.now();
 
 for (let t = fromSec; t <= toSec; t += stepSec) {
@@ -176,9 +201,39 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
+    if (steps.length === 0) runs.push({ steps, startedAt: t });
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
     current = board;
+    lastGoodTime = t;
+    consecutiveFailures = 0;
     continue;
+  }
+
+  // 差分が大きいのは、間に手が入っていて 1 手として説明が付かないから。
+  // 諦めて仕切り直すと間の手を丸ごと失うので、二分して中間の局面を探しに行く。
+  if (result.failure === 'too-many-changes' && lastGoodTime !== null && current) {
+    bridgeTried++;
+    const base = current;
+    const readAtTime = (tt: number): Square[][] | null => {
+      const im = grabBoard(tt);
+      const r = recognizeBoard(im, templates);
+      const c = r.lowConfidence.length > 0 ? carryUnknowns(r.board, r.lowConfidence, base) : r.board;
+      return checkBoard(c).ok ? c : null;
+    };
+    const bridged = bridgeGap(lastGoodTime, t, current, board, t, readAtTime, {
+      minGapSec: Math.max(0.1, stepSec / 4),
+    });
+    if (bridged && bridged.length > 0) {
+      if (steps.length === 0) runs.push({ steps, startedAt: bridged[0].time });
+      for (const b of bridged) {
+        steps.push({ time: b.time, usi: b.move.usi, side: b.move.side, solved: false });
+      }
+      bridgedMoves += bridged.length;
+      current = bridged.at(-1)!.board;
+      lastGoodTime = t;
+      consecutiveFailures = 0;
+      continue;
+    }
   }
 
   const why = result.move ? 'verify-failed' : result.failure!;
@@ -193,32 +248,47 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     }
   }
   // 読めなかった絵は捨てる。current は据え置き、次の絵と比べ直す。
+  // ただし何度も続くなら追跡が切れている。その時点の読みで仕切り直す。
+  consecutiveFailures++;
+  if (consecutiveFailures >= RESET_AFTER) {
+    current = board;
+    lastGoodTime = t;
+    consecutiveFailures = 0;
+    resets++;
+    steps = [];
+  }
 }
 
 console.log(`\n# ${samples} 点を ${((Date.now() - started) / 1000).toFixed(1)} 秒で読んだ`);
 console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
+console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
-console.log(`  読めた手: ${steps.length}`);
+const allSteps = runs.flatMap((r) => r.steps);
+console.log(`  読めた手: ${allSteps.length}（${runs.length} 本の断片に分かれた・仕切り直し ${resets} 回）`);
 if (failures.size > 0) {
   console.log('  読めなかった変化:');
   for (const [f, n] of [...failures].sort((a, b) => b[1] - a[1])) console.log(`    ${f}: ${n}`);
 }
 
-console.log(`\n# 復元した手順（${steps.length} 手）`);
-let line = '';
-for (const [i, s] of steps.entries()) {
-  line += `${s.usi}${s.solved ? '*' : ''} `;
-  if ((i + 1) % 10 === 0) { console.log(`  ${line}`); line = ''; }
+const sorted = [...runs].sort((a, b) => b.steps.length - a.steps.length);
+console.log(`\n# 復元した断片（長い順に上位 5 本）`);
+for (const r of sorted.slice(0, 5)) {
+  let alt = 0;
+  for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
+  const ratio = r.steps.length > 1 ? (alt / (r.steps.length - 1)).toFixed(2) : '-';
+  console.log(`\n  ${fmt(r.startedAt)}〜${fmt(r.steps.at(-1)!.time)}  ${r.steps.length} 手  手番の交互率 ${ratio}`);
+  console.log(`    ${r.steps.map((s) => `${s.usi}${s.solved ? '*' : ''}`).join(' ')}`);
 }
-if (line) console.log(`  ${line}`);
 
-// 手番が交互になっているか。崩れていたらどこかで手を取りこぼしている。
 let alternations = 0;
-for (let i = 1; i < steps.length; i++) if (steps[i].side !== steps[i - 1].side) alternations++;
-console.log(`\n# 手番が交互になった箇所: ${alternations} / ${Math.max(0, steps.length - 1)}`);
-console.log('  （1.0 に近いほど取りこぼしが少ない。低いなら手を飛ばしている）');
-
-console.log('\n# 時刻つき');
-for (const s of steps) console.log(`  ${fmt(s.time).padStart(7)}  ${s.side === 'sente' ? '▲' : '▽'} ${s.usi}${s.solved ? '  (駒種を逆算)' : ''}`);
+let pairs = 0;
+for (const r of runs) {
+  for (let i = 1; i < r.steps.length; i++) {
+    pairs++;
+    if (r.steps[i].side !== r.steps[i - 1].side) alternations++;
+  }
+}
+console.log(`\n# 手番が交互になった箇所: ${alternations} / ${pairs}`);
+console.log('  （断片の中では交互になっているはず。低いなら手を飛ばしている）');

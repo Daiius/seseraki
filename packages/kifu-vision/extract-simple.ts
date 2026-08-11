@@ -92,6 +92,9 @@ interface Step {
  */
 const RESET_AFTER = Number(process.env.KIFU_VISION_RESET_AFTER ?? 8);
 
+/** 二分探索で間を埋めにいく上限の時間差（秒）。これより離れていたら諦める。 */
+const BRIDGE_MAX_GAP_SEC = Number(process.env.KIFU_VISION_BRIDGE_MAX_GAP ?? 15);
+
 /** 追跡が続いている間の一続きの手列 */
 interface Run {
   steps: Step[];
@@ -183,7 +186,15 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 
   if (!result.move && recognized.lowConfidence.length > 0 && recognized.lowConfidence.length <= 2) {
     const unknowns: UnknownCell[] = recognized.lowConfidence.map((c) => ({ row: c.row, col: c.col, inAfter: true }));
-    const s = solveUnknowns(current, recognized.board, unknowns, missingKinds());
+    // まだ覚えていない駒種で試す（成駒の学習はこちら）。
+    // 駄目なら全駒種で試す。**駒を動かす瞬間、マウスは必ず盤上にある**ので、
+    // 移動先がポインタに覆われて読めないことがよくある。その駒は成駒とは限らず
+    // 普通の生駒なので、候補を未学習の駒種に絞ったままでは見つからない。
+    // 全駒種にすると成りと成らずが両方成立して曖昧になる場合があるが、
+    // そのときは solveUnknowns が null を返すので誤って覚えることはない。
+    const s =
+      solveUnknowns(current, recognized.board, unknowns, missingKinds()) ??
+      solveUnknowns(current, recognized.board, unknowns);
     if (s) {
       board = recognized.board.map((r) => r.slice());
       for (const r of s.resolved) {
@@ -212,7 +223,15 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 
   // 差分が大きいのは、間に手が入っていて 1 手として説明が付かないから。
   // 諦めて仕切り直すと間の手を丸ごと失うので、二分して中間の局面を探しに行く。
-  if (result.failure === 'too-many-changes' && lastGoodTime !== null && current) {
+  // ⚠ 二分探索は**近い時刻に限る**。実測では、繋がらない区間の大半は「間に 2〜3 手
+  // 入っていた」のではなく**数分間まるごと追跡が切れていた**もので、そこには
+  // 何十手もあるため二分では届かない（25 回試して 1 手も拾えなかった）。
+  if (
+    result.failure === 'too-many-changes' &&
+    lastGoodTime !== null &&
+    t - lastGoodTime <= BRIDGE_MAX_GAP_SEC &&
+    current
+  ) {
     bridgeTried++;
     const base = current;
     const readAtTime = (tt: number): Square[][] | null => {

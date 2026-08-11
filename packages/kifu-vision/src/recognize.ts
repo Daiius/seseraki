@@ -9,7 +9,7 @@
 
 import type { Square } from 'shared';
 import type { GrayImage } from './frame.ts';
-import { occupancy, OCCUPANCY_THRESHOLD } from './occupancy.ts';
+import { occupancy, OCCUPANCY_THRESHOLD, hasPointer } from './occupancy.ts';
 import { cellImage, classify, type Template } from './template.ts';
 
 /**
@@ -35,6 +35,8 @@ export interface LowConfidenceCell {
   margin: number;
   /** 一応の第一候補（未知の駒なら当てにならない） */
   guess: Square;
+  /** マウスポインタが乗っていたか。乗っていれば読めなくて当然。 */
+  pointer?: boolean;
 }
 
 export interface RecognizedBoard {
@@ -66,12 +68,26 @@ export function recognizeBoard(
     squares.push([]);
     cells.push([]);
     for (let col = 0; col < 9; col++) {
-      if (!occ[row][col]) {
+      const cut = cellImage(board, row, col);
+
+      // マウスポインタが乗っているマスは、そこに何があっても正しく読めない。
+      // 空マスなら「駒あり」と誤判定され、駒があれば別の駒に化ける。
+      // 読めなかったものとして扱い、呼び出し側で前の配置を引き継がせる。
+      const pointer = hasPointer(cut);
+
+      if (!occ[row][col] && !pointer) {
         squares[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         continue;
       }
-      const match = classify(cellImage(board, row, col), templates);
+      if (!occ[row][col] && pointer) {
+        // ポインタしか無いように見えるが、隠れているだけかもしれない
+        squares[row].push(null);
+        cells[row].push({ piece: null, score: NaN, margin: NaN });
+        lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, pointer: true });
+        continue;
+      }
+      const match = classify(cut, templates);
       if (!match) {
         squares[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
@@ -81,8 +97,8 @@ export function recognizeBoard(
       squares[row].push(piece);
       cells[row].push({ piece, score: match.score, margin: match.margin });
 
-      if (match.score < unknownThreshold) {
-        lowConfidence.push({ row, col, score: match.score, margin: match.margin, guess: piece });
+      if (match.score < unknownThreshold || pointer) {
+        lowConfidence.push({ row, col, score: match.score, margin: match.margin, guess: piece, pointer });
       }
     }
   }

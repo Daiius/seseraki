@@ -97,6 +97,30 @@ export function occupancyDistance(a: boolean[][], b: boolean[][]): number {
   return n;
 }
 
+/**
+ * マウスポインタが乗っているマスか
+ *
+ * ポインタは**白い矢印**で、盤の木目（実測 130〜210）よりはっきり明るい。
+ * マス内に極端に明るい画素がまとまってあれば、そこにポインタがいるとみてよい。
+ *
+ * ポインタが乗ると輝度の散らばりが増えて空マスが「駒あり」と誤判定され、
+ * テンプレート照合が適当な駒を当ててしまう。**駒を動かす瞬間ポインタは必ず
+ * 盤上にいる**ので、いちばん読みたい場面でいちばん邪魔になる。
+ *
+ * 集めた「読めなかったマス」23 枚を並べて見たところ、**大半がポインタだった**
+ * （成駒は数枚）。誤認識の主因はテンプレート不足ではなくこれだった。
+ */
+export function hasPointer(cell: GrayImage, threshold = POINTER_BRIGHTNESS, ratio = POINTER_AREA): boolean {
+  let bright = 0;
+  for (const v of cell.data) if (v > threshold) bright++;
+  return bright / cell.data.length > ratio;
+}
+
+/** これより明るい画素はポインタの白とみなす */
+export const POINTER_BRIGHTNESS = 235;
+/** マスのこの割合を超えて白ければポインタがいる */
+export const POINTER_AREA = 0.04;
+
 /** 目視用に occupancy を 9 行の文字列にする */
 export function formatOccupancy(occ: boolean[][]): string {
   return occ.map((r) => r.map((v) => (v ? '#' : '.')).join('')).join('\n');

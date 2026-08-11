@@ -90,6 +90,33 @@ export function recognizeBoard(
   return { board: squares, cells, lowConfidence };
 }
 
+/**
+ * 読めなかったマスを、直前の配置で埋める。
+ *
+ * マウスポインタや演出に覆われたマスは、テンプレートのどれにも似ないので
+ * 適当な駒が当たってしまう。**覆われただけなら駒はそこにあり続けている**ので、
+ * 「変わっていない」と仮定して前の配置を引き継ぐ方が正しい。
+ * 誤った駒として読むと差分が壊れるが、引き継げば壊れない。
+ *
+ * 駒が取られて消えた場合は駒の有無の方が変わるので、引き継いでも 1 手差分に
+ * ならず、呼び出し側で別の経路に落ちる。覆われている間に相手の駒へ置き換わった
+ * 場合だけは見逃しうるが、次に読める時点で辻褄が合わなくなるので気付ける。
+ *
+ * ⚠ 成った駒もテンプレートが無いうちは「読めなかったマス」に入る。引き継ぐと
+ * 成りが消えてしまうので、**引き継いだ版で説明が付かないときは素の読みでも
+ * 試す**こと。
+ */
+export function carryUnknowns(
+  board: Square[][],
+  lowConfidence: { row: number; col: number }[],
+  previous: Square[][],
+): Square[][] {
+  if (lowConfidence.length === 0) return board;
+  const out = board.map((r) => r.slice());
+  for (const c of lowConfidence) out[c.row][c.col] = previous[c.row][c.col];
+  return out;
+}
+
 /** 2 つの配置が同じか */
 export function boardsEqual(a: Square[][], b: Square[][]): boolean {
   for (let row = 0; row < 9; row++) {

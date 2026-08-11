@@ -19,7 +19,7 @@ import { grabFrame, crop, type GrayImage } from './src/frame.ts';
 import { occupancyDistance, INITIAL_OCCUPANCY, occupancy } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, type Template } from './src/template.ts';
-import { recognizeBoard, boardsEqual, boardDiff } from './src/recognize.ts';
+import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { checkBoard, pieceCount } from './src/sanity.ts';
@@ -86,6 +86,7 @@ let unchanged = 0;
 let vanished = 0;
 let insane = 0;
 let detailShown = 0;
+let carriedUsed = 0;
 const started = Date.now();
 
 for (let t = fromSec; t <= toSec; t += stepSec) {
@@ -100,28 +101,59 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   // 本物の方を削ってしまい、差分が壊れる。読めた手は 7 手で変わらなかった。
   // 中途半端に直すより、成立しない絵はまるごと捨てて次を見る方がよい。
 
-  // 将棋の盤面として成立していなければ読まない（感想戦の別レイアウト、演出、認識崩れ）
-  const sane = checkBoard(recognized.board);
+  if (!current) {
+    // 起点だけは素の読みで判断する（引き継ぐ相手がまだ無い）
+    const sane = checkBoard(recognized.board);
+    if (!sane.ok) {
+      insane++;
+      if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
+      continue;
+    }
+    current = recognized.board;
+    console.log(`  起点: ${fmt(t)}（盤上の駒 ${pieceCount(current)} 枚）`);
+    continue;
+  }
+
+  // 読めなかったマス（マウスポインタや演出に覆われた）は、**変わっていないと
+  // 仮定して直前の配置を引き継ぐ**。覆われただけなら駒はそこにあり続けている。
+  // 誤った駒として読むと差分が壊れるが、引き継げば壊れない。
+  //
+  // 駒が取られて消えた場合は駒の有無が変わるので、引き継いでも 1 手差分に
+  // ならず、下の経路に落ちる。覆われている間に相手の駒に置き換わった場合だけは
+  // 見逃しうるが、次に読める時点で辻褄が合わなくなるので取りこぼしに気付ける。
+  const carried: Square[][] | null =
+    recognized.lowConfidence.length > 0
+      ? carryUnknowns(recognized.board, recognized.lowConfidence, current)
+      : null;
+
+  // 成立するかは引き継いだ版で見る。素の読みは偽の駒で崩れていることがあり、
+  // それを理由に絵ごと捨てると、実際には読めるはずの手まで落としてしまう。
+  const primary: Square[][] = carried ?? recognized.board;
+  const sane = checkBoard(primary);
   if (!sane.ok) {
     insane++;
     if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
     continue;
   }
 
-  if (!current) {
-    current = recognized.board;
-    console.log(`  起点: ${fmt(t)}（盤上の駒 ${pieceCount(current)} 枚）`);
-    continue;
-  }
-
-  if (boardsEqual(recognized.board, current)) {
+  if (boardsEqual(primary, current)) {
     unchanged++;
     continue;
   }
 
-  let result = inferMove(current, recognized.board);
-  let board = recognized.board;
+  // まず引き継いだ版で読む。通らなければ素の読みで試す（成りはこちらでしか出ない）。
+  let result = inferMove(current, primary);
+  let board: Square[][] = primary;
   let solved = false;
+  if (result.move && carried) carriedUsed++;
+
+  if (!result.move && carried && !boardsEqual(recognized.board, current)) {
+    const alt = inferMove(current, recognized.board);
+    if (alt.move) {
+      result = alt;
+      board = recognized.board;
+    }
+  }
 
   if (!result.move && recognized.lowConfidence.length > 0 && recognized.lowConfidence.length <= 2) {
     const unknowns: UnknownCell[] = recognized.lowConfidence.map((c) => ({ row: c.row, col: c.col, inAfter: true }));
@@ -166,6 +198,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 console.log(`\n# ${samples} 点を ${((Date.now() - started) / 1000).toFixed(1)} 秒で読んだ`);
 console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
+console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
 console.log(`  読めた手: ${steps.length}`);
 if (failures.size > 0) {

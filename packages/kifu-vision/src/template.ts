@@ -16,7 +16,6 @@
 import type { PieceKind, Side } from 'shared';
 import { createInitialState } from 'shared';
 import type { GrayImage } from './frame.ts';
-import { CELL_INSET } from './occupancy.ts';
 
 export interface Template {
   kind: PieceKind;
@@ -26,8 +25,21 @@ export interface Template {
   img: GrayImage;
 }
 
-/** テンプレートの照合に使う、駒が確実に収まるマス内側の割合 */
-export const MATCH_INSET = CELL_INSET;
+/**
+ * テンプレートの照合に使う、マス内側の割合。
+ *
+ * 駒の有無を見るとき（`CELL_INSET`）と同じ値で始めたが、**照合の方は
+ * もっと内側に寄せた方がよい場合がある**。直前に指した手のマスには
+ * オレンジのハイライトが付き、それは駒の周囲に強く出る。中心の字だけを
+ * 見れば、ハイライトが乗った絵からでもテンプレートを起こせる。
+ *
+ * 実測（ある局面の 39 マス）で決めた。0.18 → 0.24 で**最低の一致度が 0.490 から
+ * 0.662 に上がり**（ポインタに覆われたマスが読みやすくなった）、正解数と中央値は
+ * 変わらなかった。0.30 まで寄せると 0.640 に下がるので、駒の形の情報が減りすぎる。
+ *
+ * `KIFU_VISION_MATCH_INSET` で変えられる。
+ */
+export const MATCH_INSET = Number(process.env.KIFU_VISION_MATCH_INSET ?? 0.24);
 
 /**
  * 盤画像から [row][col] のマスを、テンプレートと同じ切り取り方で取り出す。

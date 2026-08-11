@@ -37,8 +37,13 @@ interface Seed {
 }
 
 const SEEDS: Seed[] = [
-  { seconds: 272, square: '8g', kind: '+R', side: 'gote', note: '「ス」の字・尖りが下・直前の手のハイライト付き' },
   { seconds: 336, square: '2b', kind: '+P', side: 'sente', note: '「と」の字・尖りが上' },
+
+  // ⚠ 4:32 の 8g にある ▽龍（「ス」の字）も同じ手順で起こせるが、**入れると悪化した**
+  // （61 手 → 52 手）。切り出した絵はきれいでハイライトの汚染も無かったのに、
+  // 実際に流すと読める手が減る。理由は未解明。**絵が良さそうに見えても、
+  // 抽出できた手で確かめてからでないと採用してはいけない。**
+  // { seconds: 272, square: '8g', kind: '+R', side: 'gote', note: '「ス」の字・尖りが下' },
 ];
 
 function at(usi: string): { row: number; col: number } {

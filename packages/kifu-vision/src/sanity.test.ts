@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type Square } from 'shared';
-import { checkBoard, pieceCount } from './sanity.ts';
+import { checkBoard, pieceCount, overflowCells } from './sanity.ts';
 
 function emptyBoard(): Square[][] {
   return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
@@ -99,6 +99,59 @@ describe('checkBoard', () => {
     const b = withKings();
     put(b, '9i', { kind: 'P', side: 'gote' });
     expect(checkBoard(b).ok).toBe(false);
+  });
+});
+
+describe('overflowCells', () => {
+  /** 全マス NaN の一致度表（駒があるマスだけ後から入れる） */
+  function noScores(): number[][] {
+    return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => NaN));
+  }
+
+  function setScore(scores: number[][], usi: string, v: number): void {
+    scores[usi.charCodeAt(1) - 97][9 - Number(usi[0])] = v;
+  }
+
+  it('規定どおりなら何も挙げない', () => {
+    const scores = noScores();
+    expect(overflowCells(createInitialState().board, scores)).toEqual([]);
+  });
+
+  it('はみ出した枚数だけ、一致度の低い方から挙げる', () => {
+    // 桂を 5 枚置く（上限 4）。テンプレートの無い成桂が「桂」と読まれた状況。
+    const b = withKings();
+    const scores = noScores();
+    const cells = ['9a', '1a', '9i', '1i', '5e'];
+    for (const [i, usi] of cells.entries()) {
+      put(b, usi, { kind: 'N', side: i < 2 ? 'gote' : 'sente' });
+      setScore(scores, usi, i === 4 ? 0.2 : 0.98); // 5e だけ一致度が低い
+    }
+
+    const over = overflowCells(b, scores);
+    expect(over).toHaveLength(1);
+    expect(over[0]).toEqual({ row: 4, col: 4 }); // 5e
+  });
+
+  it('2 枚はみ出していれば 2 マス挙げる', () => {
+    const b = withKings();
+    const scores = noScores();
+    const cells = ['9a', '1a', '9i', '1i', '5e', '4e'];
+    for (const [i, usi] of cells.entries()) {
+      put(b, usi, { kind: 'N', side: i < 2 ? 'gote' : 'sente' });
+      setScore(scores, usi, i >= 4 ? 0.2 : 0.98);
+    }
+    expect(overflowCells(b, scores)).toHaveLength(2);
+  });
+
+  it('成駒は元の駒として数える', () => {
+    const b = withKings();
+    const scores = noScores();
+    // 飛 2 枚 + 龍 1 枚 = 3 枚で上限 2 を超える
+    for (const [i, usi] of ['2h', '8b', '5e'].entries()) {
+      put(b, usi, { kind: i === 2 ? '+R' : 'R', side: 'sente' });
+      setScore(scores, usi, i === 2 ? 0.3 : 0.99);
+    }
+    expect(overflowCells(b, scores)).toEqual([{ row: 4, col: 4 }]);
   });
 });
 

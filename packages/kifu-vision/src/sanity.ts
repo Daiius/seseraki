@@ -84,6 +84,46 @@ export function checkBoard(board: Square[][]): SanityResult {
 }
 
 /**
+ * 規定より多く現れた駒種のうち、一致度の低いマスを「読めなかった」ものとして挙げる。
+ *
+ * 実測では 5:00〜7:00 の 2 分間、全フレームが「桂が 5 枚（上限 4）」で捨てられ、
+ * 1 手も読めなかった。盤上の桂は 4 枚しかないので 5 枚目は誤認識で、
+ * **テンプレートの無い成桂（圭）が「桂」と読まれている**とみられる。
+ * ポインタのような一時的な揺れと違い、こういう誤認識は**居座り続ける**。
+ *
+ * 空にしてしまう（`pruneOverflow`）と本物の駒まで消して差分を壊すので、
+ * ここでは**位置を挙げるだけ**にする。呼び出し側で `carryUnknowns` に渡せば、
+ * 前の配置を引き継いで盤面が成立するようになる。
+ *
+ * @param scores board と同じ形の NCC。駒が無いマスは NaN。
+ */
+export function overflowCells(
+  board: Square[][],
+  scores: number[][],
+): { row: number; col: number }[] {
+  const byKind = new Map<string, { row: number; col: number; score: number }[]>();
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      const p = board[row][col];
+      if (!p) continue;
+      const base = baseKind(p.kind);
+      if (!byKind.has(base)) byKind.set(base, []);
+      byKind.get(base)!.push({ row, col, score: scores[row][col] });
+    }
+  }
+
+  const out: { row: number; col: number }[] = [];
+  for (const [kind, list] of byKind) {
+    const max = TOTAL_COUNT[kind];
+    if (max === undefined || list.length <= max) continue;
+    // 一致度の低い方から、はみ出した枚数だけ
+    const sorted = [...list].sort((a, b) => a.score - b.score);
+    for (const c of sorted.slice(0, list.length - max)) out.push({ row: c.row, col: c.col });
+  }
+  return out;
+}
+
+/**
  * 規定より多く現れた駒種について、いちばん一致度の低いマスを空にする。
  *
  * マウスポインタが空マスに重なると輝度の散らばりが増えて「駒あり」と判定され、

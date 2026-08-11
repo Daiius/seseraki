@@ -23,7 +23,7 @@ import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/rec
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { bridgeGap } from './src/bridge.ts';
-import { checkBoard, pieceCount } from './src/sanity.ts';
+import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
 import type { PieceKind, Square } from 'shared';
 
 const video = process.argv[2];
@@ -145,6 +145,7 @@ interface PendingPromotion {
 }
 let pendingPromotion: PendingPromotion | null = null;
 let promotionsFixed = 0;
+let overflowSeen = 0;
 let bridgedMoves = 0;
 let bridgeTried = 0;
 /** 直前に手が繋がった時刻。二分探索の起点になる。 */
@@ -208,10 +209,16 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   // 駒が取られて消えた場合は駒の有無が変わるので、引き継いでも 1 手差分に
   // ならず、下の経路に落ちる。覆われている間に相手の駒に置き換わった場合だけは
   // 見逃しうるが、次に読める時点で辻褄が合わなくなるので取りこぼしに気付ける。
+  // 規定より多い駒種は、テンプレートの無い駒（成駒など）が別の駒として
+  // 読まれている印。一時的なポインタと違って居座り続けるので、
+  // 「読めなかったマス」に加えて引き継ぎの対象にする。
+  const scores = recognized.cells.map((r) => r.map((c) => c.score));
+  const overflow = overflowCells(recognized.board, scores);
+  if (overflow.length > 0) overflowSeen++;
+  const unreadable = [...recognized.lowConfidence.map((c) => ({ row: c.row, col: c.col })), ...overflow];
+
   const carried: Square[][] | null =
-    recognized.lowConfidence.length > 0
-      ? carryUnknowns(recognized.board, recognized.lowConfidence, current)
-      : null;
+    unreadable.length > 0 ? carryUnknowns(recognized.board, unreadable, current) : null;
 
   // 成立するかは引き継いだ版で見る。素の読みは偽の駒で崩れていることがあり、
   // それを理由に絵ごと捨てると、実際には読めるはずの手まで落としてしまう。
@@ -363,6 +370,7 @@ console.log(`  スライド途中で捨てた: ${vanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
 console.log(`  成りを後から読み直して直した手: ${promotionsFixed}`);
+console.log(`  駒数が規定を超えていた絵: ${overflowSeen}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
 const allSteps = runs.flatMap((r) => r.steps);
 console.log(`  読めた手: ${allSteps.length}（${runs.length} 本の断片に分かれた・仕切り直し ${resets} 回）`);

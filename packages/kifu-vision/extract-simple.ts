@@ -95,6 +95,14 @@ const RESET_AFTER = Number(process.env.KIFU_VISION_RESET_AFTER ?? 8);
 /** 二分探索で間を埋めにいく上限の時間差（秒）。これより離れていたら諦める。 */
 const BRIDGE_MAX_GAP_SEC = Number(process.env.KIFU_VISION_BRIDGE_MAX_GAP ?? 15);
 
+/** 成りを読み直すときに要求する一致度。正しく読めたマスは実測で 0.98 前後。 */
+const PROMOTION_RECHECK_NCC = 0.85;
+
+/** 生駒 → 成駒 */
+const PROMOTE_OF: Partial<Record<PieceKind, PieceKind>> = {
+  P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
+};
+
 /** 追跡が続いている間の一続きの手列 */
 interface Run {
   steps: Step[];
@@ -112,6 +120,31 @@ let vanished = 0;
 let insane = 0;
 let detailShown = 0;
 let carriedUsed = 0;
+/**
+ * 「移動先が読めなかったので、成ったかどうかを決めきれなかった手」の控え。
+ *
+ * 移動先の駒は**移動元の駒か、その成駒か**の 2 択しかない。そして盤面の論理では
+ * どちらも 1 手として成立してしまうので決められない（`solveUnknowns` が曖昧として
+ * 諦めるのはここ）。
+ *
+ * ただし**駒を動かした瞬間だけポインタがそのマスに乗っている**のであって、
+ * 次に読むときには退いていることが多い。人間が「後から見ればポインタは
+ * いなくなっているし、この駒は動いていないのだから見直せばよい」と考えるのと
+ * 同じことを、次の時点で 1 度だけやる。
+ *
+ * 次の手が同じマスに来た場合（取り合いなど）は見直せないので諦める。
+ */
+interface PendingPromotion {
+  row: number;
+  col: number;
+  /** 直したい手が入っている配列とその位置 */
+  steps: Step[];
+  index: number;
+  /** 移動元の駒。成るとどれになるかが決まる。 */
+  fromKind: PieceKind;
+}
+let pendingPromotion: PendingPromotion | null = null;
+let promotionsFixed = 0;
 let bridgedMoves = 0;
 let bridgeTried = 0;
 /** 直前に手が繋がった時刻。二分探索の起点になる。 */
@@ -141,6 +174,31 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     current = recognized.board;
     console.log(`  起点: ${fmt(t)}（盤上の駒 ${pieceCount(current)} 枚）`);
     continue;
+  }
+
+  // 前回「移動先が読めず、成ったかどうか決めきれなかった」手があれば、いま読み直す。
+  // ポインタは動いた瞬間だけそこに乗っていて、次に読むときには退いていることが多い。
+  if (pendingPromotion) {
+    const p = pendingPromotion;
+    pendingPromotion = null;
+    const cell = recognized.cells[p.row][p.col];
+    const now = cell.piece;
+    if (now && !Number.isNaN(cell.score) && cell.score >= PROMOTION_RECHECK_NCC) {
+      const promoted = PROMOTE_OF[p.fromKind];
+      const shouldPromote = promoted !== undefined && now.kind === promoted;
+      const step = p.steps[p.index];
+      if (step) {
+        const wantsPlus = shouldPromote;
+        const hasPlus = step.usi.endsWith('+');
+        if (wantsPlus !== hasPlus) {
+          step.usi = wantsPlus ? `${step.usi}+` : step.usi.slice(0, -1);
+          promotionsFixed++;
+          if (VERBOSE) console.log(`  ↺ ${fmt(step.time)} 成りを読み直した: ${step.usi}`);
+        }
+        // 追跡している盤面の駒種も、読めた方に合わせる
+        if (current) current[p.row][p.col] = now;
+      }
+    }
   }
 
   // 読めなかったマス（マウスポインタや演出に覆われた）は、**変わっていないと
@@ -218,6 +276,26 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     current = board;
     lastGoodTime = t;
     consecutiveFailures = 0;
+
+    // 移動先が読めていなかったなら、成ったかどうかを次の時点で見直す
+    const to = result.move.to;
+    const from = result.move.from;
+    if (
+      result.move.type === 'move' &&
+      from &&
+      recognized.lowConfidence.some((c) => c.row === to.row && c.col === to.col)
+    ) {
+      const moved = current[to.row][to.col];
+      if (moved) {
+        pendingPromotion = {
+          row: to.row,
+          col: to.col,
+          steps,
+          index: steps.length - 1,
+          fromKind: moved.kind.startsWith('+') ? (moved.kind.slice(1) as PieceKind) : moved.kind,
+        };
+      }
+    }
     continue;
   }
 
@@ -284,6 +362,7 @@ console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
+console.log(`  成りを後から読み直して直した手: ${promotionsFixed}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
 const allSteps = runs.flatMap((r) => r.steps);
 console.log(`  読めた手: ${allSteps.length}（${runs.length} 本の断片に分かれた・仕切り直し ${resets} 回）`);

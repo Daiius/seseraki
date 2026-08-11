@@ -9,3 +9,6 @@ docs/
 .claude/
 .playwright-mcp/
 
+
+# kifu-vision: 動画素材・中間生成物（サイズが大きく、著作物を含むため追跡しない）
+packages/kifu-vision/data/

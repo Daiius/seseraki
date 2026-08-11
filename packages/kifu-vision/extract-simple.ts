@@ -22,6 +22,7 @@ import { extractTemplates, cellImage, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
+import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { bridgeGap } from './src/bridge.ts';
 import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
 import type { PieceKind, Square } from 'shared';
@@ -33,6 +34,7 @@ const stepSec = Number(process.argv[5] ?? 0.5);
 const geo = SHOGI_WARS_VERTICAL;
 const LEARN_DIR = process.env.KIFU_VISION_LEARN_DIR ?? 'data/learned';
 const OUT_DIR = process.env.KIFU_VISION_OUT_DIR ?? 'data/kifu';
+const TEMPLATE_STORE = process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars-vertical.json';
 const VERBOSE = process.env.KIFU_VISION_VERBOSE === '1';
 
 const NAMES: Record<PieceKind, string> = {
@@ -53,8 +55,20 @@ if (initials.length === 0) {
   process.exit(1);
 }
 const templateSeg = initials.reduce((a, b) => (b.length > a.length ? b : a));
-const templates: Template[] = extractTemplates(grabBoard(templateSeg.representativeTime));
-console.log(`  ${fmt(templateSeg.representativeTime)} から ${templates.length} 種を抽出（生駒のみ）`);
+const fromInitial = extractTemplates(grabBoard(templateSeg.representativeTime));
+console.log(`  ${fmt(templateSeg.representativeTime)} から ${fromInitial.length} 種を抽出（生駒のみ）`);
+
+// 以前に作った成駒のテンプレートがあれば足す。成駒は初期局面に無いので
+// ここで補わないと、別の駒として読まれたまま盤上に居座り続ける。
+const cellSize = { width: fromInitial[0].img.width, height: fromInitial[0].img.height };
+const stored = loadTemplates(TEMPLATE_STORE, cellSize);
+const templates: Template[] = stored ? mergeTemplates(fromInitial, stored) : fromInitial;
+if (stored) {
+  const added = templates.length - fromInitial.length;
+  console.log(`  保存済みのテンプレートから ${added} 種を追加: ${templates.slice(fromInitial.length).map((t) => `${t.side === 'sente' ? '▲' : '▽'}${t.kind}`).join(' ')}`);
+} else {
+  console.log(`  保存済みのテンプレートは無し（${TEMPLATE_STORE}）`);
+}
 
 const missingKinds = () => ALL_KINDS.filter((k) => !templates.some((t) => t.kind === k));
 
@@ -401,6 +415,21 @@ console.log(`\n# 手番が交互になった箇所: ${alternations} / ${pairs}`)
 console.log('  （断片の中では交互になっているはず。低いなら手を飛ばしている）');
 
 // 断片を書き出す。まだ 1 局を通せていないので、つながった単位で残しておく。
+// 走査中に覚えた駒があれば残す。次回以降は最初から使える。
+try {
+  const learned = templates.filter((t) => t.samples === 1 && t.kind.startsWith('+'));
+  if (learned.length > 0) {
+    const before = loadTemplates(TEMPLATE_STORE, { width: templates[0].img.width, height: templates[0].img.height }) ?? [];
+    const merged = mergeTemplates(before, learned);
+    if (merged.length > before.length) {
+      saveTemplates(merged, TEMPLATE_STORE);
+      console.log(`\n# 覚えた駒を保存: ${merged.length - before.length} 種 → ${TEMPLATE_STORE}`);
+    }
+  }
+} catch (e) {
+  console.log(`\n# テンプレートの保存に失敗: ${(e as Error).message}`);
+}
+
 if (runs.length > 0) {
   const outPath = `${OUT_DIR}/${basename(video).replace(/\.[^.]+$/, '')}-${Math.round(fromSec)}-${Math.round(toSec)}.json`;
   mkdirSync(dirname(outPath), { recursive: true });

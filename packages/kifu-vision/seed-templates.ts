@@ -17,10 +17,24 @@ import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop } from './src/frame.ts';
 import { cellImage, ncc, type Template } from './src/template.ts';
 import { saveTemplates, loadTemplates, mergeTemplates } from './src/template-store.ts';
+import { collectPointerSamples, similarityToPointers } from './src/pointer-samples.ts';
 
 const video = process.argv[2];
 const outPath = process.argv[3] ?? 'data/templates/shogi-wars-vertical.json';
 const geo = SHOGI_WARS_VERTICAL;
+
+/**
+ * ポインタとの相関がこれを超えたら採用しない。
+ *
+ * 生駒どうしの相関は実測で最大 0.415、中央 0.103。駒でないものとの相関が
+ * それに近いなら、駒として使い物にならない。
+ */
+const POINTER_SIMILARITY_LIMIT = Number(process.env.KIFU_VISION_POINTER_LIMIT ?? 0.3);
+
+const NAMES: Record<PieceKind, string> = {
+  P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
+  '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
+};
 
 /**
  * 目で確かめた対応。
@@ -61,6 +75,30 @@ for (const seed of SEEDS) {
     `  ${Math.floor(seed.seconds / 60)}:${String(seed.seconds % 60).padStart(2, '0')} ${seed.square}` +
       ` → ${seed.side === 'sente' ? '▲' : '▽'}${seed.kind}  ${img.width}x${img.height}  （${seed.note}）`,
   );
+}
+
+// ⚠ **駒でないものと似ていないかを必ず見る。** 龍のテンプレートを足したとき、
+// 駒どうしでは十分に区別できていたのに、マウスポインタを引き寄せて読める手が
+// 減った（61 → 52）。白い矢印の濃淡が「ス」の字と相関していた。
+console.log('\n# マウスポインタの絵と照合する');
+const pointers = collectPointerSamples(video, geo, { fromSec: 60, toSec: 900, stepSec: 15, max: 24 });
+console.log(`  ポインタだけが乗った空マスを ${pointers.length} 枚集めた`);
+let rejected = 0;
+const safe = made.filter((t) => {
+  const sim = similarityToPointers(t.img, pointers);
+  const verdict = sim > POINTER_SIMILARITY_LIMIT ? '⚠ 却下' : 'OK';
+  console.log(`  ${t.side === 'sente' ? '▲' : '▽'}${NAMES[t.kind]}  ポインタとの最大相関 ${sim.toFixed(3)}  ${verdict}`);
+  if (sim > POINTER_SIMILARITY_LIMIT) rejected++;
+  return sim <= POINTER_SIMILARITY_LIMIT;
+});
+if (rejected > 0) {
+  console.log(`  → ${rejected} 種を却下した（ポインタと紛らわしい）`);
+}
+made.length = 0;
+made.push(...safe);
+if (made.length === 0) {
+  console.error('\n採用できるテンプレートがありません');
+  process.exit(1);
 }
 
 // 取り違えていないかの目安: 作ったもの同士が似すぎていたら、同じ駒を 2 回

@@ -6,6 +6,7 @@ import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop } from './src/frame.ts';
 import { occupancy } from './src/occupancy.ts';
 import { extractTemplates, cellImage, classify } from './src/template.ts';
+import { loadTemplates, mergeTemplates } from './src/template-store.ts';
 
 const video = process.argv[2];
 const initialAt = Number(process.argv[3] ?? 2.5);
@@ -20,8 +21,14 @@ const NAMES: Record<PieceKind, string> = {
 const grabBoard = (seconds: number) =>
   crop(grabFrame(video, seconds, geo.frameW, geo.frameH), boardRect(geo));
 
-const templates = extractTemplates(grabBoard(initialAt));
-console.log(`# ${initialAt} 秒の初期局面から ${templates.length} 種のテンプレートを抽出`);
+const base = extractTemplates(grabBoard(initialAt));
+// 保存済みのテンプレート（成駒など）があれば足す。第 4 引数でパスを渡す。
+const storePath = process.argv[5];
+const extra = storePath
+  ? loadTemplates(storePath, { width: base[0].img.width, height: base[0].img.height }) ?? []
+  : [];
+const templates = extra.length > 0 ? mergeTemplates(base, extra) : base;
+console.log(`# ${initialAt} 秒の初期局面から ${base.length} 種 + 保存済み ${templates.length - base.length} 種`);
 for (const t of templates) {
   console.log(`  ${t.side === 'sente' ? '▲' : '▽'}${NAMES[t.kind]}  ${t.samples} マスを平均  ${t.img.width}x${t.img.height}`);
 }

@@ -116,10 +116,23 @@ export function hasPointer(cell: GrayImage, threshold = POINTER_BRIGHTNESS, rati
   return bright / cell.data.length > ratio;
 }
 
-/** これより明るい画素はポインタの白とみなす */
+/**
+ * これより明るい画素はポインタの白とみなす。
+ *
+ * 実測（4941 マス）で決めた。この基準を超える画素を 1% 以上含むマスは 41 個で、
+ * フレーム 61 枚に対し 1 枚あたり 0.67 マス。**ポインタは常に 1 個**なので妥当な数。
+ * 基準を 225 に下げると 546 マス（1 枚あたり 8.9 マス）に急増し、駒や盤の
+ * 明るい部分を拾い始める。マス内の最大輝度は中央 214 なので、235 で分離が成立する。
+ */
 export const POINTER_BRIGHTNESS = 235;
-/** マスのこの割合を超えて白ければポインタがいる */
-export const POINTER_AREA = 0.04;
+
+/**
+ * マスのこの割合を超えて白ければポインタがいる。
+ *
+ * 4% にしていたが実測すると厳しすぎた（41 マス → 27 マスに減る）。
+ * ポインタがマスに部分的にしか掛かっていない場合を取りこぼす。
+ */
+export const POINTER_AREA = 0.01;
 
 /** 目視用に occupancy を 9 行の文字列にする */
 export function formatOccupancy(occ: boolean[][]): string {

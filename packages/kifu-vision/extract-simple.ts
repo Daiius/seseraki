@@ -20,8 +20,10 @@ import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './s
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
-import { settle, resolveWith, fillGuesses, unknownCells, isUnknown, type VisionSquare } from './src/uncertain.ts';
-import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
+import { settle, resolveWith, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
+import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
+import { pickCandidate } from './src/candidate.ts';
+import { startState, startFromBoard, handsAreGuessed } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { bridgeGap } from './src/bridge.ts';
@@ -29,7 +31,7 @@ import { calibrateFromFrames } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
-import type { PieceKind, Square } from 'shared';
+import { applyMove, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
 const fromSec = Number(process.argv[3] ?? 0);
@@ -196,6 +198,45 @@ let consecutiveFailures = 0;
 let resets = 0;
 const failures = new Map<string, number>();
 let current: Square[][] | null = null;
+/**
+ * 盤面だけでなく持ち駒と手番も追う。
+ *
+ * 盤の 81 マスだけを見ていると、**「持っていない駒を打つ」偽の手を弾けない**。
+ * マウスポインタや演出で駒が湧いて見えると差分は「空 → 駒」になり、
+ * これはちょうど打ちの形なので、そのまま通ってしまう。
+ *
+ * ⚠ `state.board` は常に `current` と同じものを指す。片方だけ更新しないこと。
+ */
+let state: BoardState | null = null;
+/** 候補手の second opinion で拾い直せた手 */
+let byCandidate = 0;
+/** 候補手を当てにいったが決められなかった回数 */
+const candidateFailures = new Map<string, number>();
+
+/**
+ * 追跡している状態を進める。
+ *
+ * 手が `applyMove` に通れば持ち駒まで正確に進む。通らなければ盤だけを
+ * 引き継ぎ、持ち駒は盤から測り直す（**分からないときは広い方へ倒す**ので、
+ * 正しい手が候補から消えることはない）。
+ */
+function retrack(board: Square[][], move: { usi: string; side: Side } | null): Square[][] {
+  if (state && move) {
+    try {
+      const next = applyMove(state, move.usi);
+      state = { board, hand: next.hand, sideToMove: next.sideToMove };
+      return board;
+    } catch {
+      // 持ち駒が足りない等で適用できない。測り直しに落とす。
+    }
+  }
+  const fresh = move ? startFromBoard(board, opposite(move.side)) : startState(board, 'sente');
+  // ⚠ `startState` / `startFromBoard` は盤を複製する。**同じ配列を指させ直す**こと。
+  // 別物のままだと、後から成りを読み直して `current` を書き換えたときに
+  // `state.board` だけ古いまま残り、候補手が過去の盤面から作られる。
+  state = { ...fresh, board };
+  return board;
+}
 let samples = 0;
 let unchanged = 0;
 let vanished = 0;
@@ -276,8 +317,11 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
       continue;
     }
-    current = start;
-    console.log(`  起点: ${fmt(t)}（盤上の駒 ${pieceCount(current)} 枚）`);
+    current = retrack(start, null);
+    console.log(
+      `  起点: ${fmt(t)}（盤上の駒 ${pieceCount(start)} 枚` +
+        `${handsAreGuessed(state!) ? '・持ち駒は不明なので両者に持たせる' : '・持ち駒も手番も確定'}）`,
+    );
     continue;
   }
 
@@ -392,6 +436,54 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     }
   }
 
+  // --- 読みで決まらなければ、ルールの側から当てにいく ---
+  //
+  // ここまでは「81 マス読む → 差分を 1 手として説明できるか」という向きで、
+  // **開いた集合に問いを投げている**。マスごとに「20 種のどれか」を当てるので、
+  // 読めないマスが 1 つあると手が決まらない。
+  //
+  // 合法手はルールで閉じた集合なので、向きを逆にすると詰まりが消える。
+  // **未確定のマスは「情報が無い」として飛ばせばよい。**
+  //
+  // ⭐ 実際にこれで解ける形（16:32 で踏んだ）: 相手が金を打ったのに、
+  // `▽全`（成銀）のテンプレートの方が一致してしまった——両者は本当に似ていて、
+  // 実測でも 0.73 相関する。だが**打つ手に成駒はあり得ない**ので、候補には
+  // `G*8f` しか無い。絵で割り切れないものが、ルールでは 1 つに決まる。
+  //
+  // ⚠ **`piece-vanished` はここへ回さない。** 駒が消えただけに見える絵は
+  // `rescueVanished` の方が専門で、実測でもよく効いている（30 件）。
+  // 一般の当てずっぽうを先に走らせて、そちらの領分を奪わないこと。
+  if (!result.move && result.failure !== 'piece-vanished' && state) {
+    // 引き継ぎに使ったマス（未確定・駒数超過）は「読めていない」として扱う。
+    const read = markUnknown(recognized.board, overflow);
+    const picked = pickCandidate(state, read, {
+      maxConflicts: 1,
+      // 仕切り直した直後は手番が分からない。狭めるより広く取る。
+      anySide: handsAreGuessed(state),
+    });
+    if (picked.best) {
+      const m = picked.best.move;
+      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+      current = retrack(picked.best.board, { usi: m.usi, side: m.side });
+      lastSyncTime = t;
+      consecutiveFailures = 0;
+      byCandidate++;
+      history.reset(m.to.row, m.to.col);
+      if (m.from) history.reset(m.from.row, m.from.col);
+      if (VERBOSE) {
+        console.log(
+          `  ⚖ ${fmt(t)} 合法手から決めた: ${m.usi}` +
+            `（食い違い ${picked.best.conflicts}・読みは ${result.failure}）`,
+        );
+      }
+      continue;
+    }
+    if (picked.failure) {
+      candidateFailures.set(picked.failure, (candidateFailures.get(picked.failure) ?? 0) + 1);
+    }
+  }
+
   // 駒が消えただけに見える絵。ふつうはスライドの途中なので捨てるが、
   // **移動先が読めていないせいでそう見えている**ことがある。行き先が
   // 未確定のマスの中に一意に決まるなら、それは本当の手。
@@ -400,7 +492,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     if (rescue) {
       if (steps.length === 0) runs.push({ steps, startedAt: t });
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
-      current = rescue.board;
+      current = retrack(rescue.board, { usi: rescue.usi, side: rescue.side as Side });
       lastSyncTime = t;
       consecutiveFailures = 0;
       rescuedVanished++;
@@ -429,7 +521,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
     if (steps.length === 0) runs.push({ steps, startedAt: t });
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
-    current = board;
+    current = retrack(board, { usi: result.move.usi, side: result.move.side as Side });
     lastSyncTime = t;
     consecutiveFailures = 0;
 
@@ -489,7 +581,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
         steps.push({ time: b.time, usi: b.move.usi, side: b.move.side, solved: false });
       }
       bridgedMoves += bridged.length;
-      current = bridged.at(-1)!.board;
+      const last = bridged.at(-1)!;
+      current = retrack(last.board, { usi: last.move.usi, side: last.move.side as Side });
       lastSyncTime = t;
       consecutiveFailures = 0;
       continue;
@@ -512,7 +605,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   // ただし何度も続くなら追跡が切れている。その時点の読みで仕切り直す。
   consecutiveFailures++;
   if (consecutiveFailures >= RESET_AFTER) {
-    current = board;
+    // 仕切り直し。**持ち駒は分からなくなる**（誰が何を取ったかは追跡の中にしかない）。
+    current = retrack(board, null);
     lastSyncTime = t;
     consecutiveFailures = 0;
     resets++;
@@ -526,6 +620,13 @@ console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
+console.log(`  合法手の候補から決めた手: ${byCandidate}`);
+if (candidateFailures.size > 0) {
+  console.log(
+    `    候補でも決められなかった内訳: ` +
+      [...candidateFailures].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' / '),
+  );
+}
 console.log(`  成りを後から読み直して直した手: ${promotionsFixed}`);
 console.log(`  駒数が規定を超えていた絵: ${overflowSeen}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
@@ -565,7 +666,9 @@ console.log('  （断片の中では交互になっているはず。低いな�
 try {
   const learned = templates.filter((t) => t.samples === 1 && t.kind.startsWith('+'));
   if (learned.length > 0) {
-    const before = loadTemplates(TEMPLATE_STORE, { width: templates[0].img.width, height: templates[0].img.height }) ?? [];
+    // 保存し直すときは**保存されたままの寸法で読む**。照合用に引き伸ばした絵を
+    // 書き戻すと、走査のたびに補間が積み重なって元の絵が甘くなっていく。
+    const before = loadTemplates(TEMPLATE_STORE) ?? [];
     const merged = mergeTemplates(before, learned);
     if (merged.length > before.length) {
       saveTemplates(merged, TEMPLATE_STORE);

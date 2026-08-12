@@ -37,14 +37,31 @@ describe('saveTemplates / loadTemplates', () => {
     }
   });
 
-  it('マスの寸法が食い違えば読み込まない', () => {
+  it('マスの寸法が食い違えば引き伸ばして合わせる', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kv-'));
     try {
       const path = join(dir, 'templates.json');
       saveTemplates([fakeTemplate('+P', 'sente')], path);
-      expect(loadTemplates(path, { width: 8, height: 9 })).not.toBeNull();
-      // 解像度やレイアウトが変わった場合。照合できないので使わせない。
-      expect(loadTemplates(path, { width: 75, height: 82 })).toBeNull();
+      expect(loadTemplates(path, { width: 8, height: 9 })![0].img.width).toBe(8);
+      // 解像度やレイアウトが違う相手。捨てずに合わせる（かつては null にしていた）。
+      const scaled = loadTemplates(path, { width: 75, height: 82 })!;
+      expect(scaled[0].img.width).toBe(75);
+      expect(scaled[0].img.height).toBe(82);
+      expect(scaled[0].kind).toBe('+P');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('寸法を指定せずに読むと、保存されたままの寸法で返る', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kv-'));
+    try {
+      // 保存し直すときに使う経路。引き伸ばした絵を書き戻さないため。
+      const path = join(dir, 'templates.json');
+      saveTemplates([fakeTemplate('+P', 'sente')], path);
+      const raw = loadTemplates(path)!;
+      expect(raw[0].img.width).toBe(8);
+      expect(raw[0].img.height).toBe(9);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -54,13 +71,19 @@ describe('saveTemplates / loadTemplates', () => {
     expect(loadTemplates('/nonexistent/templates.json')).toBeNull();
   });
 
-  it('寸法が揃っていないテンプレートは保存させない', () => {
+  it('寸法の違うテンプレートを混ぜて保存できる', () => {
     const dir = mkdtempSync(join(tmpdir(), 'kv-'));
     try {
+      // 出所が違えば切り出し寸法も違う（動画のマスと、外から受け取った絵）。
+      // 揃えるために保存時へ引き伸ばすと補間が積み重なるので、そのまま置く。
+      const path = join(dir, 't.json');
       const a = fakeTemplate('+P', 'sente');
       const b = fakeTemplate('+R', 'gote');
-      b.img = { width: 4, height: 4, data: new Uint8Array(16) };
-      expect(() => saveTemplates([a, b], join(dir, 't.json'))).toThrow(/寸法/);
+      b.img = { width: 4, height: 4, data: new Uint8Array(16).fill(120) };
+      saveTemplates([a, b], path);
+      const loaded = loadTemplates(path)!;
+      expect(loaded[0].img.width).toBe(8);
+      expect(loaded[1].img.width).toBe(4);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

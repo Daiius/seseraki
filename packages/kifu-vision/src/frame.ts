@@ -71,6 +71,57 @@ export function grabFrame(
   return { width, height, data: new Uint8Array(res.stdout) };
 }
 
+/**
+ * 静止画ファイル（PNG など）をグレースケールで読む。
+ *
+ * 動画と同じ ffmpeg 経路に乗せるので、画像ライブラリへの依存は増えない。
+ * 寸法はファイルに書いてあるので `ffprobe` に聞く（動画と違い、こちらは
+ * 呼び出し側が正解を知らないのが普通）。
+ *
+ * 用途は**外から受け取った盤面の絵からテンプレートを起こすこと**。
+ * 成駒は初期局面に無いので動画からは「成った瞬間」を捉えるしかなく、
+ * そこがいちばん読みにくい。並べて見せてもらった絵から採る方が確実に安い。
+ */
+export function loadImage(path: string): GrayImage {
+  const probe = spawnSync('ffprobe', [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height',
+    '-of', 'csv=p=0:s=x',
+    path,
+  ]);
+  if (probe.status !== 0) {
+    throw new Error(`ffprobe が失敗しました (${path}): ${probe.stderr.toString()}`);
+  }
+  const [width, height] = probe.stdout.toString().trim().split('x').map(Number);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    throw new Error(`画像の寸法を読めませんでした (${path}): ${probe.stdout.toString().trim()}`);
+  }
+
+  const res = spawnSync(
+    'ffmpeg',
+    [
+      '-loglevel', 'error',
+      '-threads', String(FFMPEG_THREADS),
+      '-i', path,
+      '-frames:v', '1',
+      '-f', 'rawvideo',
+      '-pix_fmt', 'gray',
+      '-',
+    ],
+    { maxBuffer: width * height * 4 },
+  );
+  if (res.status !== 0) {
+    throw new Error(`ffmpeg が失敗しました (${path}): ${res.stderr.toString()}`);
+  }
+  if (res.stdout.length !== width * height) {
+    throw new Error(
+      `画像のサイズが想定と違います: ${res.stdout.length} バイト（期待 ${width * height}）`,
+    );
+  }
+  return { width, height, data: new Uint8Array(res.stdout) };
+}
+
 /** カラー画像。data は RGB が 1 画素 3 バイトで並ぶ。 */
 export interface RgbImage {
   width: number;

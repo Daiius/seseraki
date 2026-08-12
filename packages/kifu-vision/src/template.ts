@@ -143,6 +143,164 @@ export function extractTemplates(initialBoard: GrayImage): Template[] {
   }));
 }
 
+/**
+ * 画像を別の寸法へ引き伸ばす（双一次補間）。
+ *
+ * NCC は**同じ寸法どうしでしか測れない**ので、切り出した寸法が違うテンプレートは
+ * そのままでは使えない。これまでは寸法が合わなければ丸ごと捨てていたが、
+ * それでは
+ *
+ *   - 外から受け取った盤面の絵（解析画面のスクショなど）からテンプレートを起こす
+ *   - 解像度の違う動画に、一度作ったテンプレートを使い回す
+ *
+ * のどちらもできない。**駒の絵は拡大縮小しても字の形は保たれる**ので、
+ * 補間して寸法を合わせれば照合できる。
+ *
+ * ⚠ 情報が増えるわけではない。小さい絵を引き伸ばすとぼやけるぶん、
+ * 同寸法どうしの照合より値は下がりうる。**下がっても正解が 1 位なら足りる。**
+ *
+ * 画素の中心どうしを対応させる（`+0.5` のずらし）。端を端に合わせると
+ * 半画素ずれて、小さい絵ほど効いてくる。
+ */
+export function resample(img: GrayImage, width: number, height: number): GrayImage {
+  if (img.width === width && img.height === height) return img;
+  const data = new Uint8Array(width * height);
+  const sx = img.width / width;
+  const sy = img.height / height;
+  for (let y = 0; y < height; y++) {
+    const fy = Math.min(img.height - 1, Math.max(0, (y + 0.5) * sy - 0.5));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(img.height - 1, y0 + 1);
+    const wy = fy - y0;
+    for (let x = 0; x < width; x++) {
+      const fx = Math.min(img.width - 1, Math.max(0, (x + 0.5) * sx - 0.5));
+      const x0 = Math.floor(fx);
+      const x1 = Math.min(img.width - 1, x0 + 1);
+      const wx = fx - x0;
+      const a = img.data[y0 * img.width + x0];
+      const b = img.data[y0 * img.width + x1];
+      const c = img.data[y1 * img.width + x0];
+      const d = img.data[y1 * img.width + x1];
+      const top = a + (b - a) * wx;
+      const bottom = c + (d - c) * wx;
+      data[y * width + x] = Math.round(top + (bottom - top) * wy);
+    }
+  }
+  return { width, height, data };
+}
+
+/**
+ * 180 度回す。
+ *
+ * ⭐ **後手の駒は先手の駒を 180 度回したもの**（実測: 生駒 8 種で NCC 0.97〜0.99）。
+ * ただし**数画素ずれる**（動画では中央値 (6, -4)）。駒の絵が正方形でないうえ、
+ * アプリが駒を描く位置がマスの中心とは限らないため。
+ *
+ * これで**片側 6 種を集めれば 12 種そろう**。採取の費用が半分になるだけでなく、
+ * **ラベルの裏取りにも使える**——`▲X` を回して `▽X` と 0.9 以上出なければ、
+ * どちらかのラベルが違う。実際に `▲杏` の誤りはこれで見つかった。
+ */
+export function rotate180(img: GrayImage): GrayImage {
+  const n = img.data.length;
+  const data = new Uint8Array(n);
+  for (let i = 0; i < n; i++) data[i] = img.data[n - 1 - i];
+  return { width: img.width, height: img.height, data };
+}
+
+/**
+ * 平行移動する。はみ出した所は端の画素で埋める。
+ *
+ * 回転した相手と重ねるときの**ずれの補正**に使う。ずれたまま NCC を測ると
+ * 本物どうしでも値が落ちるので、ラベルの裏取りに使えなくなる。
+ *
+ * ⭐ **小数のずれを受け付ける**（線形補間）。整数に丸めてはいけない場面がある:
+ * 動画のマス（61x66）で測ったずれを、別の寸法の絵（48x53）へ持ち込むときは
+ * 比率を掛けるので必ず小数になる。丸めると最大 0.5 画素の誤差が乗り、
+ * それだけで似た字どうし（金と全）の判別が怪しくなる。
+ */
+export function shiftImage(img: GrayImage, dx: number, dy: number): GrayImage {
+  if (Number.isInteger(dx) && Number.isInteger(dy)) {
+    const data = new Uint8Array(img.data.length);
+    for (let y = 0; y < img.height; y++) {
+      const sy = Math.min(img.height - 1, Math.max(0, y - dy));
+      for (let x = 0; x < img.width; x++) {
+        const sx = Math.min(img.width - 1, Math.max(0, x - dx));
+        data[y * img.width + x] = img.data[sy * img.width + sx];
+      }
+    }
+    return { width: img.width, height: img.height, data };
+  }
+
+  const data = new Uint8Array(img.data.length);
+  const clampX = (v: number) => Math.min(img.width - 1, Math.max(0, v));
+  const clampY = (v: number) => Math.min(img.height - 1, Math.max(0, v));
+  for (let y = 0; y < img.height; y++) {
+    const fy = y - dy;
+    const y0 = Math.floor(fy);
+    const wy = fy - y0;
+    for (let x = 0; x < img.width; x++) {
+      const fx = x - dx;
+      const x0 = Math.floor(fx);
+      const wx = fx - x0;
+      const a = img.data[clampY(y0) * img.width + clampX(x0)];
+      const b = img.data[clampY(y0) * img.width + clampX(x0 + 1)];
+      const c = img.data[clampY(y0 + 1) * img.width + clampX(x0)];
+      const d = img.data[clampY(y0 + 1) * img.width + clampX(x0 + 1)];
+      const top = a + (b - a) * wx;
+      const bottom = c + (d - c) * wx;
+      data[y * img.width + x] = Math.round(top + (bottom - top) * wy);
+    }
+  }
+  return { width: img.width, height: img.height, data };
+}
+
+/**
+ * ±`range` 画素ずらして、いちばん合う位置での NCC を返す。
+ *
+ * 位置ずれは**いちばん読みにくい絵ほど強く効く**。実測では切り出しを ±3 画素
+ * 探し直すだけで、下位 5% の一致度が 0.679 → 0.972 まで上がった。
+ * 照合のたびに使うには高く付く（±3 で 49 倍）ので、**格子の測り直しや
+ * ラベルの裏取りなど、1 度きりの場面で使う**。
+ */
+export function bestShiftNcc(
+  a: GrayImage,
+  b: GrayImage,
+  range = 5,
+): { score: number; dx: number; dy: number } {
+  let best = { score: -Infinity, dx: 0, dy: 0 };
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      const score = ncc(a, shiftImage(b, dx, dy));
+      if (score > best.score) best = { score, dx, dy };
+    }
+  }
+  return best;
+}
+
+/**
+ * `bestShiftNcc` を整数で当ててから、その周りを小数で詰める。
+ *
+ * ずれは本来 1 画素より細かい。**整数のままだと、寸法の違う絵どうしを
+ * 突き合わせるときに比率の掛け算で誤差が積もる**。1 度きりの採取や
+ * 裏取りでしか使わないので、多少高く付いても細かく測る方がよい。
+ */
+export function bestSubpixelShiftNcc(
+  a: GrayImage,
+  b: GrayImage,
+  range = 5,
+  step = 0.1,
+): { score: number; dx: number; dy: number } {
+  const coarse = bestShiftNcc(a, b, range);
+  let best = coarse;
+  for (let dy = coarse.dy - 1; dy <= coarse.dy + 1 + 1e-9; dy += step) {
+    for (let dx = coarse.dx - 1; dx <= coarse.dx + 1 + 1e-9; dx += step) {
+      const score = ncc(a, shiftImage(b, dx, dy));
+      if (score > best.score) best = { score, dx, dy };
+    }
+  }
+  return best;
+}
+
 export interface MatchResult {
   template: Template;
   score: number;

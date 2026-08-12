@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { GrayImage } from './frame.ts';
 import type { BoardGeometry } from './geometry.ts';
-import { calibrateGeometry, calibrateFromFrames, isCalibrationTrustworthy } from './calibrate.ts';
+import { calibrateGeometry, calibrateFromFrames, isCalibrationTrustworthy, refineByTemplates } from './calibrate.ts';
+import { crop } from './frame.ts';
+import { boardRect } from './geometry.ts';
+import { cellImage } from './template.ts';
 
 const SEED: BoardGeometry = {
   originX: 10,
@@ -98,5 +101,86 @@ describe('格子の測り直し', () => {
     expect(r!.used).toBe(2);
     expect(r!.tried).toBe(3);
     expect(r!.geo.originX).toBeCloseTo(16, 0);
+  });
+});
+
+describe('テンプレートとの一致で格子を詰め直す', () => {
+  /**
+   * 格子線に加えて、各マスの中に**駒に見立てた塊**を描いた絵を作る。
+   *
+   * ⚠ 市松のような**周期のある模様では試せない**。ずらすと別の周期に噛み合って
+   * 相関が戻ってしまい、「詰め直せた」ことの確かめにならない（実際そう書いて
+   * 嵌った）。塊のように**局所的な模様**なら、ずれるほど素直に相関が落ちる。
+   */
+  function drawWithPieces(geo: BoardGeometry): GrayImage {
+    const img = drawBoard(geo);
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        const x0 = geo.originX + geo.cellW * col;
+        const y0 = geo.originY + geo.cellH * row;
+        // マスごとに大きさと位置を変える（同じ絵が並ぶと、どの列に合わせても
+        // 同じ相関が出てしまい、傾きが測れない）
+        const rx = geo.cellW * 0.3 + (row % 3);
+        const ry = geo.cellH * 0.28 + (col % 3);
+        const cx = x0 + geo.cellW / 2 + ((col % 2) - 0.5) * 2;
+        const cy = y0 + geo.cellH / 2 + ((row % 2) - 0.5) * 2;
+        for (let y = Math.floor(y0); y < y0 + geo.cellH; y++) {
+          for (let x = Math.floor(x0); x < x0 + geo.cellW; x++) {
+            if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
+            const d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2;
+            if (d < 1) img.data[y * img.width + x] = 50;
+          }
+        }
+      }
+    }
+    return img;
+  }
+
+  /** 正しい格子で切り出した「正解の駒の絵」を手掛かりとして用意する */
+  function knownFrom(img: GrayImage, geo: BoardGeometry, cells: [number, number][]) {
+    const board = crop(img, boardRect(geo));
+    return cells.map(([row, col]) => ({ row, col, template: cellImage(board, row, col) }));
+  }
+
+  const SPREAD: [number, number][] = [
+    [0, 0], [0, 4], [0, 8], [2, 2], [4, 4], [4, 1], [4, 7], [6, 6], [8, 0], [8, 3], [8, 8],
+  ];
+
+  it('⭐ 格子線は合っているのに切り出しがずれている絵を、駒の位置で直す', () => {
+    // 実際に踏んだ形: 受け取った絵は格子線から測れば正しいのに、駒の描かれる
+    // 位置が動画と違って、そのままでは 20 マス中 12 マスしか読めなかった。
+    const truth: BoardGeometry = { ...SEED, originX: 13.5, originY: 22.5 };
+    const img = drawWithPieces(truth);
+    const known = knownFrom(img, truth, SPREAD);
+
+    // 2 画素ずれた座標から出発する
+    const off: BoardGeometry = { ...truth, originX: truth.originX - 2, originY: truth.originY + 2 };
+    const r = refineByTemplates(img, off, known);
+
+    expect(r.after).toBeGreaterThan(r.before);
+    expect(r.after).toBeGreaterThan(0.9);
+    expect(Math.abs(r.geo.originX - truth.originX)).toBeLessThan(1);
+    expect(Math.abs(r.geo.originY - truth.originY)).toBeLessThan(1);
+  });
+
+  it('⭐ ずれが列に比例していれば、マス寸法の誤りとして直す', () => {
+    // 原点だけを動かしても直らない形。切片と傾きを分けて取り出せているか。
+    // 実測もこの大きさだった（1 列あたり 0.4 画素）。
+    const truth: BoardGeometry = { ...SEED, cellW: 30.4 };
+    const img = drawWithPieces(truth);
+    const known = knownFrom(img, truth, SPREAD);
+
+    const r = refineByTemplates(img, SEED, known);
+    expect(r.after).toBeGreaterThan(r.before);
+    expect(Math.abs(r.geo.cellW - truth.cellW)).toBeLessThan(0.3);
+  });
+
+  it('既に合っている絵なら、動かさない', () => {
+    const truth: BoardGeometry = { ...SEED };
+    const img = drawWithPieces(truth);
+    const known = knownFrom(img, truth, SPREAD);
+    const r = refineByTemplates(img, truth, known);
+    expect(Math.abs(r.geo.originX - truth.originX)).toBeLessThan(0.5);
+    expect(Math.abs(r.geo.cellW - truth.cellW)).toBeLessThan(0.2);
   });
 });

@@ -138,3 +138,44 @@ describe('scoreCandidates', () => {
     for (const s of holed) expect(s.agrees + s.conflicts).toBe(79);
   });
 });
+
+describe('駒の有無を先に、駒種は後で見る', () => {
+  it('⭐⭐ 似た字に読み違えても、駒の有無が合っていれば手が決まる', () => {
+    // 実際に踏んだ形（16:32）: 相手が 8f へ金を打ったのに `▽全`（成銀）と読まれた。
+    // 両者は本当に似ていて 0.8 相関する。だが**打つ手に成駒はあり得ない**ので、
+    // 8f への打ちの候補は金だけ。
+    //
+    // ⚠ 有無と駒種を同列に数えると決められない。**8f を空のままにする候補も
+    // 食い違いは同じ 1** なので、何十手もが同点に並ぶ。
+    let s = createInitialState();
+    for (const usi of ['7g7f', '3c3d', '8h2b+', '3a2b']) s = after(s, usi);
+    // 後手の手番。後手は角を持っている……ので金打ちの例に直す
+    s = { ...s, hand: { ...s.hand, gote: { G: 1 } }, sideToMove: 'gote' };
+
+    const truth = after(s, 'G*8f');
+    const misread = asRead(truth.board);
+    // 8f を「成銀」と読み違えた状態にする
+    misread[at('8f').row][at('8f').col] = { kind: '+S', side: 'gote' };
+
+    const picked = pickCandidate(s, misread);
+    expect(picked.failure).toBeNull();
+    expect(picked.best!.move.usi).toBe('G*8f');
+    expect(picked.best!.occupancyConflicts).toBe(0);
+    expect(picked.best!.identityConflicts).toBe(1);
+  });
+
+  it('駒の有無が食い違う候補は、駒種だけ違う候補に負ける', () => {
+    let s = createInitialState();
+    s = { ...s, hand: { ...s.hand, gote: { G: 1 } }, sideToMove: 'gote' };
+    const truth = after(s, 'G*5e');
+    const misread = asRead(truth.board);
+    misread[at('5e').row][at('5e').col] = { kind: '+S', side: 'gote' };
+
+    const scores = scoreCandidates(s, misread, generateMoves(s));
+    const right = scores.find((x) => x.move.usi === 'G*5e')!;
+    const elsewhere = scores.find((x) => x.move.usi === '3c3d')!;
+    // どちらも食い違いの合計は同じでも、中身が違う
+    expect(right.occupancyConflicts).toBe(0);
+    expect(elsewhere.occupancyConflicts).toBeGreaterThan(0);
+  });
+});

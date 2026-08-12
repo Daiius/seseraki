@@ -23,7 +23,7 @@ import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/rec
 import { settle, resolveWith, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
 import { pickCandidate } from './src/candidate.ts';
-import { startState, startFromBoard, handsAreGuessed } from './src/tracking.ts';
+import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { bridgeGap } from './src/bridge.ts';
@@ -31,7 +31,7 @@ import { calibrateFromFrames } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
-import { applyMove, type BoardState, type PieceKind, type Side, type Square } from 'shared';
+import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
 const fromSec = Number(process.argv[3] ?? 0);
@@ -230,10 +230,20 @@ function retrack(board: Square[][], move: { usi: string; side: Side } | null): S
       // 持ち駒が足りない等で適用できない。測り直しに落とす。
     }
   }
-  const fresh = move ? startFromBoard(board, opposite(move.side)) : startState(board, 'sente');
-  // ⚠ `startState` / `startFromBoard` は盤を複製する。**同じ配列を指させ直す**こと。
+  if (!move) {
+    // ⭐ 起点なら、読めなかった穴を初期配置で埋められることがある。
+    // 起点で 1 マス読めなかっただけで持ち駒が「不明」になり、偽の打ちが
+    // 通っていた（1 局目の 1 手目が `P*1c` になっていた）。
+    const completed = completeIfInitial(board);
+    if (completed) {
+      state = { ...createInitialState(), board: completed };
+      return completed;
+    }
+  }
+  // ⚠ `startFromBoard` は盤を複製する。**同じ配列を指させ直す**こと。
   // 別物のままだと、後から成りを読み直して `current` を書き換えたときに
   // `state.board` だけ古いまま残り、候補手が過去の盤面から作られる。
+  const fresh = startFromBoard(board, move ? opposite(move.side) : 'sente');
   state = { ...fresh, board };
   return board;
 }
@@ -516,6 +526,21 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     }
     vanished++;
     continue;
+  }
+
+  // 🔒 **持っていない駒の打ちを通さない。** `shared` の `applyMove` は既知の棋譜を
+  // 再生する道具なので検証しない（持ち駒が負になって消えるだけ）。復元の側で
+  // 通してしまうと偽の打ちが棋譜に残る。実際に 1 手目が `P*1c` になっていた。
+  //
+  // ⚠ 持ち駒が「不明」（仕切り直し後は両者に全部持たせている）のときは断らない。
+  // そこで断ると、本当に指された打ちまで落ちる。
+  if (result.move && state && !handsAreGuessed(state) && !canPlay(state, result.move.usi, result.move.side as Side)) {
+    failures.set('unheld-drop', (failures.get('unheld-drop') ?? 0) + 1);
+    if (VERBOSE && detailShown < MAX_DETAIL) {
+      detailShown++;
+      console.log(`  ⚠ ${fmt(t)} 持っていない駒を打つ手なので断った: ${result.move.usi}`);
+    }
+    result = { move: null, failure: 'unheld-drop', changedCells: result.changedCells };
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {

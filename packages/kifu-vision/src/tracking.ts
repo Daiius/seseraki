@@ -87,14 +87,60 @@ export function isInitialBoard(board: Square[][]): boolean {
 }
 
 /**
+ * 読めなかった穴を除けば初期配置と言えるか。言えるなら**穴を埋めた盤**を返す。
+ *
+ * ⭐ 起点の絵で 1 マス読めないことは珍しくない（ポインタは常に盤上のどこかにいる）。
+ * そのせいで初期局面と見なされないと、**持ち駒が「不明」になって偽の打ちが
+ * 通ってしまう**。実際、1 局目の 1 手目が `P*1c` になっていた——起点で 1c が
+ * 読めず、次の時点で歩が現れたので「打った」ことにされていた。
+ *
+ * ⚠ **判定は「足りない」だけを許し、「余分」「別物」は許さない。** 実戦の途中の
+ * 局面は必ず初期配置に無いマスへ駒が出るので、取り違える余地は小さい。
+ *
+ * @param maxHoles 許す穴の数。ここを大きくすると、序盤の局面まで初期局面と
+ *   見なしてしまう。数マスに留める。
+ */
+export function completeIfInitial(board: Square[][], maxHoles = 3): Square[][] | null {
+  const initial = createInitialState().board;
+  let holes = 0;
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      const seen = board[row][col];
+      const want = initial[row][col];
+      if (!seen && !want) continue;
+      if (seen && !want) return null; // 初期配置に無いマスに駒がある＝途中の局面
+      if (!seen && want) { holes++; continue; }
+      if (seen!.kind !== want!.kind || seen!.side !== want!.side) return null;
+    }
+  }
+  return holes <= maxHoles ? initial.map((r) => r.slice()) : null;
+}
+
+/**
  * 起点の状態を決める。
  *
  * 初期局面から始められるなら**持ち駒も手番も分かっている**ので、そちらを使う。
  * 追跡が続く限り正確なままなので、偽の打ちを完全に弾ける。
  */
 export function startState(board: Square[][], sideToMove: Side): BoardState {
-  if (isInitialBoard(board)) return createInitialState();
+  const completed = completeIfInitial(board);
+  if (completed) return { ...createInitialState(), board: completed };
   return startFromBoard(board, sideToMove);
+}
+
+/**
+ * その手を本当に指せるか。
+ *
+ * ⚠ **`shared` の `applyMove` は検証しない。** 既知の棋譜を再生するための道具なので、
+ * 持っていない駒の打ちも黙って通す（持ち駒の数が負になって消えるだけ）。
+ * 復元の側では、そこを通してしまうと**偽の打ちが棋譜に残る**。
+ *
+ * 見るのは打ちだけでよい。盤上の移動は `legality.ts` と差分の側で既に絞られている。
+ */
+export function canPlay(state: BoardState, usi: string, side: Side): boolean {
+  const drop = usi.match(/^([PLNSGBR])\*/);
+  if (!drop) return true;
+  return (state.hand[side][drop[1] as PieceKind] ?? 0) > 0;
 }
 
 /** 持ち駒が「分からないので両者に持たせた」状態か */

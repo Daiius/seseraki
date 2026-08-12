@@ -59,7 +59,17 @@ export type InferFailure =
    * 読んだ」ことを意味する。呼び出し側はこの区間を**無かったことにして**、
    * 次の区間と比べ直せばよい。
    */
-  | 'piece-vanished';
+  | 'piece-vanished'
+  /**
+   * 持っていない駒を打つ手だった。
+   *
+   * ⚠ `inferMove` 自身はここを判定できない（持ち駒を知らない）。追跡している
+   * `BoardState` を持つ側が、導いた手を拒むときに使う名前として置いてある。
+   *
+   * マウスポインタや演出で駒が湧いて見えると、差分は「空 → 駒」になる。
+   * これはちょうど打ちの形なので、持ち駒を見ないと弾けない。
+   */
+  | 'unheld-drop';
 
 export interface InferredMove {
   usi: string;

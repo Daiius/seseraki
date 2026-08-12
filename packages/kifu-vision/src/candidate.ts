@@ -20,7 +20,21 @@ import { isUnknown, type VisionSquare } from './uncertain.ts';
 
 export interface CandidateScore {
   move: CandidateMove;
-  /** 読めたマスのうち、この手の結果と食い違った数 */
+  /**
+   * **駒があるかどうか**が食い違った数。
+   *
+   * ⭐ こちらは信用してよい。駒の有無はマス内側の輝度の散らばりで見ており、
+   * 空マス 2〜9 / 駒あり 51〜71 と完全に 2 山へ割れる（間に 40 以上の隙間）。
+   */
+  occupancyConflicts: number;
+  /**
+   * 駒はあるが**駒種か向きが違った**数。
+   *
+   * ⚠ こちらは当てにならない。似た字（金と全）は 0.8 相関し、ポインタや
+   * ハイライトが乗れば簡単に順位が入れ替わる。**ここを直すのがルールの仕事。**
+   */
+  identityConflicts: number;
+  /** 上の 2 つの合計 */
   conflicts: number;
   /** 読めたマスのうち、この手の結果と一致した数 */
   agrees: number;
@@ -57,17 +71,27 @@ export function scoreCandidates(
 ): CandidateScore[] {
   return moves.map((move) => {
     const board = applyToBoard(before.board, move);
-    let conflicts = 0;
+    let occupancyConflicts = 0;
+    let identityConflicts = 0;
     let agrees = 0;
     for (let row = 0; row < 9; row++) {
       for (let col = 0; col < 9; col++) {
         const seen = read[row][col];
         if (isUnknown(seen)) continue;
-        if (sameSquare(seen, board[row][col])) agrees++;
-        else conflicts++;
+        const expected = board[row][col];
+        if (sameSquare(seen, expected)) agrees++;
+        else if (!seen !== !expected) occupancyConflicts++;
+        else identityConflicts++;
       }
     }
-    return { move, conflicts, agrees, board };
+    return {
+      move,
+      occupancyConflicts,
+      identityConflicts,
+      conflicts: occupancyConflicts + identityConflicts,
+      agrees,
+      board,
+    };
   });
 }
 
@@ -132,11 +156,22 @@ export function pickCandidate(
     : generateMoves(before);
   if (moves.length === 0) return { best: null, failure: 'no-candidates', tied: [] };
 
-  const scored = scoreCandidates(before, read, moves).sort((a, b) => a.conflicts - b.conflicts);
-  const least = scored[0].conflicts;
-  if (least > maxConflicts) return { best: null, failure: 'too-many-conflicts', tied: [] };
+  // ⭐ **駒の有無を先に見て、駒種は後で見る。** 同列に数えると決められない。
+  //
+  // 実際に踏んだ形（16:32）: 相手が金を打ったのに `▽全` と読まれた。
+  // 正解の `G*8f` は「8f に駒があること」は合っていて、駒種だけが違う。
+  // ところが**8f を空のままにする候補も食い違いは同じ 1** なので、合計で数えると
+  // 何十手もが同点に並び、決められない。
+  //
+  // 有無と駒種では信用度がまるで違う。有無は完全に 2 山へ割れるが、駒種は
+  // 似た字なら 0.8 相関する。**信用できる方を先に見る。**
+  const rank = (a: CandidateScore, b: CandidateScore) =>
+    a.occupancyConflicts - b.occupancyConflicts || a.identityConflicts - b.identityConflicts;
+  const scored = scoreCandidates(before, read, moves).sort(rank);
+  const head = scored[0];
+  if (head.conflicts > maxConflicts) return { best: null, failure: 'too-many-conflicts', tied: [] };
 
-  let tied = scored.filter((s) => s.conflicts === least);
+  let tied = scored.filter((s) => rank(s, head) === 0);
   if (tied.length > 1 && options.tieBreak) {
     tied = [...tied].sort(options.tieBreak);
     // 決め手が本当に差を付けられたときだけ 1 つに絞る

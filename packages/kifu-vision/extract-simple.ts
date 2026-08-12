@@ -22,7 +22,7 @@ import { extractTemplates, cellImage, ncc, type Template } from './src/template.
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { settle, resolveWith, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
-import { pickCandidate } from './src/candidate.ts';
+import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
@@ -212,6 +212,8 @@ let state: BoardState | null = null;
 let byCandidate = 0;
 /** 候補手を当てにいったが決められなかった回数 */
 const candidateFailures = new Map<string, number>();
+/** 盤面の論理で 2 手に分解して拾えた手 */
+let pairedMoves = 0;
 
 /**
  * 追跡している状態を進める。
@@ -220,32 +222,39 @@ const candidateFailures = new Map<string, number>();
  * 引き継ぎ、持ち駒は盤から測り直す（**分からないときは広い方へ倒す**ので、
  * 正しい手が候補から消えることはない）。
  */
-function retrack(board: Square[][], move: { usi: string; side: Side } | null): Square[][] {
-  if (state && move) {
-    try {
-      const next = applyMove(state, move.usi);
-      state = { board, hand: next.hand, sideToMove: next.sideToMove };
-      return board;
-    } catch {
-      // 持ち駒が足りない等で適用できない。測り直しに落とす。
-    }
+/**
+ * 追跡している状態を、新しい盤面へ進める。
+ *
+ * 手が `applyMove` に通れば持ち駒まで正確に進む。通らなければ盤だけを
+ * 引き継ぎ、持ち駒は盤から測り直す（**分からないときは広い方へ倒す**ので、
+ * 正しい手が候補から消えることはない）。
+ *
+ * ⚠ **副作用を持たせない。** かつてこの関数の中で `state` を書き換えていたが、
+ * そうすると**モジュール側に直接の代入が 1 つも無くなり**、TypeScript は
+ * 初期値の `null` のままと見なして以後の `state` を `never` に絞ってしまう。
+ * 返り値を呼び出し側で代入する。
+ */
+function nextState(
+  prev: BoardState | null,
+  board: Square[][],
+  move: { usi: string; side: Side } | null,
+): BoardState {
+  if (prev && move) {
+    const next = applyMove(prev, move.usi);
+    // ⚠ `applyMove` は検証しないので、持ち駒が壊れていないかは呼び出し側が見る。
+    return { board, hand: next.hand, sideToMove: next.sideToMove };
   }
   if (!move) {
     // ⭐ 起点なら、読めなかった穴を初期配置で埋められることがある。
     // 起点で 1 マス読めなかっただけで持ち駒が「不明」になり、偽の打ちが
     // 通っていた（1 局目の 1 手目が `P*1c` になっていた）。
     const completed = completeIfInitial(board);
-    if (completed) {
-      state = { ...createInitialState(), board: completed };
-      return completed;
-    }
+    if (completed) return { ...createInitialState(), board: completed };
   }
   // ⚠ `startFromBoard` は盤を複製する。**同じ配列を指させ直す**こと。
   // 別物のままだと、後から成りを読み直して `current` を書き換えたときに
   // `state.board` だけ古いまま残り、候補手が過去の盤面から作られる。
-  const fresh = startFromBoard(board, move ? opposite(move.side) : 'sente');
-  state = { ...fresh, board };
-  return board;
+  return { ...startFromBoard(board, move ? opposite(move.side) : 'sente'), board };
 }
 let samples = 0;
 let unchanged = 0;
@@ -327,10 +336,11 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
       continue;
     }
-    current = retrack(start, null);
+    state = nextState(state, start, null);
+    current = state.board;
     console.log(
       `  起点: ${fmt(t)}（盤上の駒 ${pieceCount(start)} 枚` +
-        `${handsAreGuessed(state!) ? '・持ち駒は不明なので両者に持たせる' : '・持ち駒も手番も確定'}）`,
+        `${handsAreGuessed(state) ? '・持ち駒は不明なので両者に持たせる' : '・持ち駒も手番も確定'}）`,
     );
     continue;
   }
@@ -475,7 +485,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       const m = picked.best.move;
       if (steps.length === 0) runs.push({ steps, startedAt: t });
       steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
-      current = retrack(picked.best.board, { usi: m.usi, side: m.side });
+      state = nextState(state, picked.best.board, { usi: m.usi, side: m.side });
+      current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
       byCandidate++;
@@ -502,7 +513,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     if (rescue) {
       if (steps.length === 0) runs.push({ steps, startedAt: t });
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
-      current = retrack(rescue.board, { usi: rescue.usi, side: rescue.side as Side });
+      state = nextState(state, rescue.board, { usi: rescue.usi, side: rescue.side as Side });
+      current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
       rescuedVanished++;
@@ -546,7 +558,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
     if (steps.length === 0) runs.push({ steps, startedAt: t });
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
-    current = retrack(board, { usi: result.move.usi, side: result.move.side as Side });
+    state = nextState(state, board, { usi: result.move.usi, side: result.move.side as Side });
+    current = state.board;
     lastSyncTime = t;
     consecutiveFailures = 0;
 
@@ -607,9 +620,53 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       }
       bridgedMoves += bridged.length;
       const last = bridged.at(-1)!;
-      current = retrack(last.board, { usi: last.move.usi, side: last.move.side as Side });
+      state = nextState(state, last.board, { usi: last.move.usi, side: last.move.side as Side });
+      current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
+      continue;
+    }
+  }
+
+  // --- 二分探索でも届かないなら、盤面の論理で 2 手に分解する ---
+  //
+  // 🔴 **映像を細かく探しても届かない場合がある。** 実測（13:06〜14:08）: 香が角を
+  // 取り、数秒後に銀が取り返した。0.1 秒刻みで読み直しても「香が取ったが銀が
+  // まだ取り返していない」中間の局面は**どのフレームにも読める形で現れない**。
+  // その間ずっと移動先が未確定だったからで、フレームをいくら細かくしても無い。
+  //
+  // ⭐ **中間の絵は要らない。** 差分は 2 手で一意に説明できる。
+  if (!result.move && result.failure !== 'piece-vanished' && state) {
+    const read = markUnknown(recognized.board, overflow);
+    const pair = pickCandidatePair(state, read, {
+      maxConflicts: 1,
+      anySide: handsAreGuessed(state),
+    });
+    if (pair.moves && pair.board) {
+      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      for (const m of pair.moves) {
+        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+        history.reset(m.to.row, m.to.col);
+        if (m.from) history.reset(m.from.row, m.from.col);
+      }
+      // 2 手目まで進んだ盤面へ移る。
+      // ⚠ `nextState` は 1 手ぶんしか持ち駒を進められないので、2 手ぶんは
+      // 盤から測り直しになる。**手番だけは分かっている**ので明示して合わせる。
+      const second = pair.moves[1];
+      state = {
+        ...nextState(state, pair.board, { usi: second.usi, side: second.side }),
+        sideToMove: second.side === 'sente' ? 'gote' : 'sente',
+      };
+      current = state.board;
+      lastSyncTime = t;
+      consecutiveFailures = 0;
+      pairedMoves += 2;
+      if (VERBOSE) {
+        console.log(
+          `  ⚖⚖ ${fmt(t)} 2 手に分解した: ${pair.moves.map((m) => m.usi).join(' ')}` +
+            `${pair.promotionUncertain ? '（成りは原理的に決められない）' : ''}`,
+        );
+      }
       continue;
     }
   }
@@ -631,7 +688,8 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   consecutiveFailures++;
   if (consecutiveFailures >= RESET_AFTER) {
     // 仕切り直し。**持ち駒は分からなくなる**（誰が何を取ったかは追跡の中にしかない）。
-    current = retrack(board, null);
+    state = nextState(state, board, null);
+    current = state.board;
     lastSyncTime = t;
     consecutiveFailures = 0;
     resets++;
@@ -646,6 +704,7 @@ if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定の�
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
+console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
 if (candidateFailures.size > 0) {
   console.log(
     `    候補でも決められなかった内訳: ` +

@@ -14,7 +14,7 @@
  * second opinion として使う。
  */
 
-import type { BoardState, Square } from 'shared';
+import type { BoardState, PieceKind, Square } from 'shared';
 import { generateMoves, type CandidateMove } from './movegen.ts';
 import { isUnknown, type VisionSquare } from './uncertain.ts';
 
@@ -180,3 +180,142 @@ export function pickCandidate(
   if (tied.length > 1) return { best: null, failure: 'ambiguous', tied };
   return { best: tied[0], failure: null, tied };
 }
+
+export interface PairPickResult {
+  /** 見つかった 2 手（指した順） */
+  moves: [CandidateMove, CandidateMove] | null;
+  /** 2 手目まで指した後の盤面 */
+  board: Square[][] | null;
+  failure: PickFailure | null;
+  /** 同点で並んだ組み合わせの数 */
+  tiedCount: number;
+  /**
+   * 成ったかどうかを決められなかった。
+   *
+   * ⭐ **成った駒がその場で取られると、成/不成は原理的に区別できない。**
+   * 盤も持ち駒も完全に同じになるからで（成駒は取られると生駒として持ち駒に入る）、
+   * どれだけ映像を細かく見ても決まらない。**手そのものは正しいので、
+   * 曖昧として捨てず、成りが未確定であることを添えて返す。**
+   */
+  promotionUncertain: boolean;
+}
+
+/**
+ * 1 手で説明が付かないとき、**2 手の組み合わせ**で説明できるかを探す。
+ *
+ * 🔴 **映像を細かく探しても届かない場合がある。** 実測（13:06〜14:08）: 香が角を
+ * 取り、数秒後に銀が取り返した。0.1 秒刻みで読み直しても、「香が取ったが銀が
+ * まだ取り返していない」中間の局面は**どのフレームにも読める形で現れない**——
+ * その間ずっと移動先が未確定だったため。
+ *
+ * ⭐ **中間の絵は要らない。** 差分は「香 7f→7g（角を取る）」→「銀 6h→7g（取り返す）」の
+ * 2 手で一意に説明できる。**必要なのは映像の探索ではなく、盤面の論理での分解。**
+ *
+ * ⚠ 手番は必ず交互になる。同じ側が 2 手続けて指すことはないので、
+ * 2 手目は自動的に相手の手になる（`applyMove` が手番を進める）。
+ *
+ * 計算量は 100 × 100 程度。**1 手で決まらなかったときにだけ呼ぶ**なら十分速い。
+ */
+export function pickCandidatePair(
+  before: BoardState,
+  read: VisionSquare[][],
+  options: PickOptions = {},
+): PairPickResult {
+  const maxConflicts = options.maxConflicts ?? 1;
+  const firstSides: BoardState[] = options.anySide
+    ? [{ ...before, sideToMove: 'sente' }, { ...before, sideToMove: 'gote' }]
+    : [before];
+
+  interface Pair { first: CandidateMove; second: CandidateMove; board: Square[][]; occ: number; id: number }
+  let best: Pair | null = null;
+  let tied: Pair[] = [];
+  let any = false;
+
+  for (const start of firstSides) {
+    for (const first of generateMoves(start)) {
+      const mid: BoardState = {
+        board: applyToBoard(start.board, first),
+        hand: handAfter(start, first),
+        sideToMove: first.side === 'sente' ? 'gote' : 'sente',
+      };
+      for (const second of generateMoves(mid)) {
+        any = true;
+        const board = applyToBoard(mid.board, second);
+        let occ = 0;
+        let id = 0;
+        for (let row = 0; row < 9; row++) {
+          for (let col = 0; col < 9; col++) {
+            const seen = read[row][col];
+            if (isUnknown(seen)) continue;
+            const expected = board[row][col];
+            if (sameSquare(seen, expected)) continue;
+            if (!seen !== !expected) occ++;
+            else id++;
+          }
+        }
+        const cand: Pair = { first, second, board, occ, id };
+        if (!best || occ < best.occ || (occ === best.occ && id < best.id)) {
+          best = cand;
+          tied = [cand];
+        } else if (occ === best.occ && id === best.id) {
+          tied.push(cand);
+        }
+      }
+    }
+  }
+
+  const none = { moves: null, board: null, tiedCount: 0, promotionUncertain: false } as const;
+  if (!any || !best) return { ...none, failure: 'no-candidates' };
+  if (best.occ + best.id > maxConflicts) return { ...none, failure: 'too-many-conflicts' };
+
+  if (tied.length > 1) {
+    // ⭐ 同点でも、**行き先が全部同じで違いが成/不成だけ**なら手そのものは決まっている。
+    // 成った駒がその場で取られると盤も持ち駒も同じになるので、これは原理的に
+    // 区別できない。曖昧として捨てるより、成りが未確定であることを添えて返す方がよい。
+    const sameRoute = tied.every(
+      (p) =>
+        p.first.usi.replace(/\+$/, '') === best!.first.usi.replace(/\+$/, '') &&
+        p.second.usi.replace(/\+$/, '') === best!.second.usi.replace(/\+$/, ''),
+    );
+    if (!sameRoute) {
+      return { moves: null, board: null, failure: 'ambiguous', tiedCount: tied.length, promotionUncertain: false };
+    }
+    // 成らずの方を採る。**当てずっぽうで `+` を付けない**（付けた方が当たりやすい
+    // 局面は多いが、外したときに棋譜が静かに嘘になる）。
+    const plain = tied.find((p) => !p.first.promotes && !p.second.promotes) ?? best;
+    return {
+      moves: [plain.first, plain.second],
+      board: plain.board,
+      failure: null,
+      tiedCount: tied.length,
+      promotionUncertain: true,
+    };
+  }
+  return {
+    moves: [best.first, best.second],
+    board: best.board,
+    failure: null,
+    tiedCount: 1,
+    promotionUncertain: false,
+  };
+}
+
+/** 手を指した後の持ち駒。取った駒が増え、打った駒が減る。 */
+function handAfter(state: BoardState, move: CandidateMove): BoardState['hand'] {
+  const side = move.side;
+  const mine = { ...state.hand[side] };
+  if (move.from === null) {
+    const left = (mine[move.kind] ?? 0) - 1;
+    if (left > 0) mine[move.kind] = left;
+    else delete mine[move.kind];
+  } else if (move.captures) {
+    // 成駒を取ったら生駒として持ち駒に入る
+    const base = (UNPROMOTE[move.captures] ?? move.captures) as PieceKind;
+    mine[base] = (mine[base] ?? 0) + 1;
+  }
+  return { ...state.hand, [side]: mine };
+}
+
+const UNPROMOTE: Partial<Record<PieceKind, PieceKind>> = {
+  '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',
+};

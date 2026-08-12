@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyMove, createInitialState, type BoardState, type Square } from 'shared';
-import { pickCandidate, scoreCandidates } from './candidate.ts';
+import { pickCandidate, pickCandidatePair, scoreCandidates } from './candidate.ts';
 import { generateMoves } from './movegen.ts';
 import { UNKNOWN, type VisionSquare } from './uncertain.ts';
 
@@ -177,5 +177,63 @@ describe('駒の有無を先に、駒種は後で見る', () => {
     // どちらも食い違いの合計は同じでも、中身が違う
     expect(right.occupancyConflicts).toBe(0);
     expect(elsewhere.occupancyConflicts).toBeGreaterThan(0);
+  });
+});
+
+describe('pickCandidatePair（1 手で説明が付かないとき）', () => {
+  it('⭐⭐⭐ 中間の絵が無くても、2 手の組み合わせで説明できる', () => {
+    // 🔴 実測（13:06〜14:08）: 香が角を取り、数秒後に銀が取り返した。
+    // 0.1 秒刻みで読み直しても、「香が取ったが銀がまだ取り返していない」中間の
+    // 局面は**どのフレームにも読める形で現れなかった**（その間ずっと移動先が
+    // 未確定だったため）。**必要なのは映像の探索ではなく、盤面の論理での分解。**
+    let s = createInitialState();
+    for (const usi of ['7g7f', '3c3d']) s = after(s, usi);
+    const two = after(after(s, '8h2b+'), '3a2b');
+
+    // 1 手では説明が付かない
+    expect(pickCandidate(s, asRead(two.board)).failure).toBe('too-many-conflicts');
+
+    const pair = pickCandidatePair(s, asRead(two.board));
+    expect(pair.failure).toBeNull();
+    // ⚠ 角は 2b で取られるので、成ったかどうかは盤に残らない（下のテスト）。
+    expect(pair.moves!.map((m) => m.usi.replace(/\+$/, ''))).toEqual(['8h2b', '3a2b']);
+  });
+
+  it('手番は必ず交互になる（同じ側が 2 手続けては指せない）', () => {
+    let s = createInitialState();
+    const two = after(after(s, '7g7f'), '3c3d');
+    const pair = pickCandidatePair(s, asRead(two.board));
+    expect(pair.moves![0].side).toBe('sente');
+    expect(pair.moves![1].side).toBe('gote');
+  });
+
+  it('⭐ 成った駒がその場で取られると、成/不成は原理的に決まらない', () => {
+    // 盤も持ち駒も完全に同じになる（成駒は取られると生駒として持ち駒に入る）。
+    // どれだけ映像を細かく見ても決まらない。**手そのものは正しいので捨てない。**
+    let s = createInitialState();
+    for (const usi of ['7g7f', '3c3d']) s = after(s, usi);
+    const two = after(after(s, '8h2b+'), '3a2b');
+    const pair = pickCandidatePair(s, asRead(two.board));
+    expect(pair.failure).toBeNull();
+    expect(pair.promotionUncertain).toBe(true);
+    // 当てずっぽうで `+` は付けない。棋譜が静かに嘘になるより、印を残す方がよい。
+    expect(pair.moves!.map((m) => m.usi)).toEqual(['8h2b', '3a2b']);
+  });
+
+  it('取った駒は持ち駒に入るので、2 手目でそれを打てる', () => {
+    let s = createInitialState();
+    for (const usi of ['7g7f', '3c3d', '8h2b+', '3a2b']) s = after(s, usi);
+    // 先手は角を持っている。「角を打つ → 後手が歩を突く」の 2 手。
+    const two = after(after(s, 'B*4e'), '8c8d');
+    const pair = pickCandidatePair(s, asRead(two.board));
+    expect(pair.failure).toBeNull();
+    expect(pair.moves!.map((m) => m.usi)).toEqual(['B*4e', '8c8d']);
+  });
+
+  it('3 手ぶん進んでいれば断る', () => {
+    let s = createInitialState();
+    let three = s;
+    for (const usi of ['7g7f', '3c3d', '2g2f']) three = after(three, usi);
+    expect(pickCandidatePair(s, asRead(three.board)).failure).toBe('too-many-conflicts');
   });
 });

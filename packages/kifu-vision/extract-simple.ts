@@ -214,6 +214,19 @@ let byCandidate = 0;
 const candidateFailures = new Map<string, number>();
 /** 盤面の論理で 2 手に分解して拾えた手 */
 let pairedMoves = 0;
+/**
+ * 追跡している持ち駒を信じてよいか。
+ *
+ * 🔴 **「正確な持ち駒」は簡単に幻になる。** `shared` の `applyMove` は検証しないので、
+ * 一度でも誤った手を通すと持ち駒は静かにずれ、以後も「正確」を騙り続ける。
+ * 実測では、持ち駒を根拠に打ちを断る仕組みを入れたら **38 回**発火し、
+ * 断片が 4 本から 7 本に増えて最長も 73 手から 39 手へ落ちた——
+ * 本当に指された打ちまで落としていた。
+ *
+ * ⭐ **信じてよいのは、初期局面から一度も仕切り直さずに来た区間だけ。**
+ * 仕切り直し・2 手分解・盤からの測り直しが挟まったら、そこで信用を捨てる。
+ */
+let handsTrusted = false;
 
 /**
  * 追跡している状態を進める。
@@ -244,12 +257,17 @@ function nextState(
     // ⚠ `applyMove` は検証しないので、持ち駒が壊れていないかは呼び出し側が見る。
     return { board, hand: next.hand, sideToMove: next.sideToMove };
   }
+  handsTrusted = false;
   if (!move) {
     // ⭐ 起点なら、読めなかった穴を初期配置で埋められることがある。
     // 起点で 1 マス読めなかっただけで持ち駒が「不明」になり、偽の打ちが
     // 通っていた（1 局目の 1 手目が `P*1c` になっていた）。
     const completed = completeIfInitial(board);
-    if (completed) return { ...createInitialState(), board: completed };
+    if (completed) {
+      // ⭐ ここだけが持ち駒を**本当に**知っている場所。初期局面なら両者とも空。
+      handsTrusted = true;
+      return { ...createInitialState(), board: completed };
+    }
   }
   // ⚠ `startFromBoard` は盤を複製する。**同じ配列を指させ直す**こと。
   // 別物のままだと、後から成りを読み直して `current` を書き換えたときに
@@ -546,7 +564,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   //
   // ⚠ 持ち駒が「不明」（仕切り直し後は両者に全部持たせている）のときは断らない。
   // そこで断ると、本当に指された打ちまで落ちる。
-  if (result.move && state && !handsAreGuessed(state) && !canPlay(state, result.move.usi, result.move.side as Side)) {
+  if (result.move && state && handsTrusted && !canPlay(state, result.move.usi, result.move.side as Side)) {
     failures.set('unheld-drop', (failures.get('unheld-drop') ?? 0) + 1);
     if (VERBOSE && detailShown < MAX_DETAIL) {
       detailShown++;
@@ -653,6 +671,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       // ⚠ `nextState` は 1 手ぶんしか持ち駒を進められないので、2 手ぶんは
       // 盤から測り直しになる。**手番だけは分かっている**ので明示して合わせる。
       const second = pair.moves[1];
+      handsTrusted = false;
       state = {
         ...nextState(state, pair.board, { usi: second.usi, side: second.side }),
         sideToMove: second.side === 'sente' ? 'gote' : 'sente',
@@ -705,6 +724,7 @@ console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
+console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);
 if (candidateFailures.size > 0) {
   console.log(
     `    候補でも決められなかった内訳: ` +

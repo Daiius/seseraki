@@ -21,6 +21,24 @@ describe('bridgeGap', () => {
     expect(steps!.map((s) => s.move.usi)).toEqual(moves);
   });
 
+  it('⭐ 2 手が区間の終わり近くに固まっていても拾える（割った位置が外れても諦めない）', () => {
+    // 手と手の間隔は 1 秒足らずのことがある。1 サンプルの中に 2 手が収まると、
+    // 二分した中間はたいてい「まだ動いていない」側に寄る。
+    const late = (t: number): Square[][] =>
+      t < 3.6 ? positions[0] : t < 3.8 ? positions[1] : positions[2];
+    const steps = bridgeGap(0, 4, positions[0], positions[2], 4, late);
+    expect(steps).not.toBeNull();
+    expect(steps!.map((s) => s.move.usi)).toEqual(['7g7f', '3c3d']);
+  });
+
+  it('⭐ 2 手が区間の始まり近くに固まっていても拾える', () => {
+    const early = (t: number): Square[][] =>
+      t < 0.2 ? positions[0] : t < 0.4 ? positions[1] : positions[2];
+    const steps = bridgeGap(0, 4, positions[0], positions[2], 4, early);
+    expect(steps).not.toBeNull();
+    expect(steps!.map((s) => s.move.usi)).toEqual(['7g7f', '3c3d']);
+  });
+
   it('配置が同じなら手は無い', () => {
     expect(bridgeGap(0, 4, positions[2], positions[2], 4, readAt)).toEqual([]);
   });

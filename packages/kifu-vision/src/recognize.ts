@@ -11,6 +11,7 @@ import type { Square } from 'shared';
 import type { GrayImage } from './frame.ts';
 import { occupancy, OCCUPANCY_THRESHOLD, hasPointer } from './occupancy.ts';
 import { cellImage, classify, type Template } from './template.ts';
+import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from './uncertain.ts';
 
 /**
  * これを下回る NCC は「テンプレートに無い駒」を疑う。
@@ -40,10 +41,19 @@ export interface LowConfidenceCell {
 }
 
 export interface RecognizedBoard {
-  board: Square[][];
+  /**
+   * 読めた駒 / 空 / 未確定 の 3 値。
+   *
+   * ⚠ **確信が持てないマスに当てずっぽうの駒を置かない。** 置くと盤上の枚数制限を
+   * 壊し、`checkBoard` が 81 マスぶんの情報をまとめて捨てる。判断は
+   * `resolveWith`（引き継ぐ）か `solveUnknowns`（手から逆算）へ先送りする。
+   */
+  board: VisionSquare[][];
   cells: RecognizedCell[][];
   /** NCC が低く、テンプレートに無い駒の可能性があるマス */
   lowConfidence: LowConfidenceCell[];
+  /** 未確定のマスに入れた第一候補。成りの検出など、当てずっぽうでも要るとき用。 */
+  guesses: Square[][];
 }
 
 export interface RecognizeOptions {
@@ -60,29 +70,34 @@ export function recognizeBoard(
   const unknownThreshold = options.unknownThreshold ?? UNKNOWN_NCC_THRESHOLD;
 
   const occ = occupancy(board, occThreshold);
-  const squares: Square[][] = [];
+  const squares: VisionSquare[][] = [];
+  const guesses: Square[][] = [];
   const cells: RecognizedCell[][] = [];
   const lowConfidence: LowConfidenceCell[] = [];
 
   for (let row = 0; row < 9; row++) {
     squares.push([]);
+    guesses.push([]);
     cells.push([]);
     for (let col = 0; col < 9; col++) {
       const cut = cellImage(board, row, col);
 
       // マウスポインタが乗っているマスは、そこに何があっても正しく読めない。
       // 空マスなら「駒あり」と誤判定され、駒があれば別の駒に化ける。
-      // 読めなかったものとして扱い、呼び出し側で前の配置を引き継がせる。
+      // 読めなかったものとして扱い、判断を後の場面へ先送りする。
       const pointer = hasPointer(cut);
 
       if (!occ[row][col] && !pointer) {
         squares[row].push(null);
+        guesses[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         continue;
       }
       if (!occ[row][col] && pointer) {
-        // ポインタしか無いように見えるが、隠れているだけかもしれない
-        squares[row].push(null);
+        // ポインタしか無いように見えないが、その下に駒が隠れているかもしれない。
+        // 「空」と断定できないので未確定にする。
+        squares[row].push(UNKNOWN);
+        guesses[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, pointer: true });
         continue;
@@ -90,58 +105,57 @@ export function recognizeBoard(
       const match = classify(cut, templates);
       if (!match) {
         squares[row].push(null);
+        guesses[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         continue;
       }
       const piece: Square = { kind: match.template.kind, side: match.template.side };
-      squares[row].push(piece);
+      guesses[row].push(piece);
       cells[row].push({ piece, score: match.score, margin: match.margin });
 
-      if (match.score < unknownThreshold || pointer) {
+      // ⚠ 一致度が閾値を下回るなら、**第一候補であっても盤に置かない**。
+      // 実測では 0.208 の当てずっぽうが 1 位を取ることがあり、それを置くと
+      // 駒数が上限を超えて盤面ごと捨てられる。
+      const confident = match.score >= unknownThreshold && !pointer;
+      squares[row].push(confident ? piece : UNKNOWN);
+      if (!confident) {
         lowConfidence.push({ row, col, score: match.score, margin: match.margin, guess: piece, pointer });
       }
     }
   }
 
-  return { board: squares, cells, lowConfidence };
+  return { board: squares, cells, lowConfidence, guesses };
 }
 
 /**
- * 読めなかったマスを、直前の配置で埋める。
+ * 未確定のマスを、直前の配置で埋める。
  *
- * マウスポインタや演出に覆われたマスは、テンプレートのどれにも似ないので
- * 適当な駒が当たってしまう。**覆われただけなら駒はそこにあり続けている**ので、
- * 「変わっていない」と仮定して前の配置を引き継ぐ方が正しい。
- * 誤った駒として読むと差分が壊れるが、引き継げば壊れない。
+ * `extra` には、照合の外から疑わしいと分かったマスを渡す（駒数が規定を
+ * 超えている、など）。渡したマスも未確定として扱われる。
  *
- * 駒が取られて消えた場合は駒の有無の方が変わるので、引き継いでも 1 手差分に
- * ならず、呼び出し側で別の経路に落ちる。覆われている間に相手の駒へ置き換わった
- * 場合だけは見逃しうるが、次に読める時点で辻褄が合わなくなるので気付ける。
- *
- * ⚠ 成った駒もテンプレートが無いうちは「読めなかったマス」に入る。引き継ぐと
- * 成りが消えてしまうので、**引き継いだ版で説明が付かないときは素の読みでも
- * 試す**こと。
+ * 中身は `markUnknown` + `resolveWith`。判断の先送りと解決を 1 か所にまとめた
+ * 呼び名として残してある。
  */
 export function carryUnknowns(
-  board: Square[][],
-  lowConfidence: { row: number; col: number }[],
+  board: VisionSquare[][],
+  extra: { row: number; col: number }[],
   previous: Square[][],
 ): Square[][] {
-  if (lowConfidence.length === 0) return board;
-  const out = board.map((r) => r.slice());
-  for (const c of lowConfidence) out[c.row][c.col] = previous[c.row][c.col];
-  return out;
+  return resolveWith(markUnknown(board, extra), previous);
 }
 
-/** 2 つの配置が同じか */
-export function boardsEqual(a: Square[][], b: Square[][]): boolean {
+function same(a: VisionSquare, b: VisionSquare): boolean {
+  if (isUnknown(a) || isUnknown(b)) return isUnknown(a) && isUnknown(b);
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.kind === b.kind && a.side === b.side;
+}
+
+/** 2 つの配置が同じか。未確定どうしは同じ、未確定と駒は違うものとして扱う。 */
+export function boardsEqual(a: VisionSquare[][], b: VisionSquare[][]): boolean {
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
-      const pa = a[row][col];
-      const pb = b[row][col];
-      if (!pa && !pb) continue;
-      if (!pa || !pb) return false;
-      if (pa.kind !== pb.kind || pa.side !== pb.side) return false;
+      if (!same(a[row][col], b[row][col])) return false;
     }
   }
   return true;
@@ -149,17 +163,14 @@ export function boardsEqual(a: Square[][], b: Square[][]): boolean {
 
 /** 食い違うマスを列挙する（デバッグ用） */
 export function boardDiff(
-  a: Square[][],
-  b: Square[][],
-): { row: number; col: number; before: Square; after: Square }[] {
-  const out: { row: number; col: number; before: Square; after: Square }[] = [];
+  a: VisionSquare[][],
+  b: VisionSquare[][],
+): { row: number; col: number; before: VisionSquare; after: VisionSquare }[] {
+  const out: { row: number; col: number; before: VisionSquare; after: VisionSquare }[] = [];
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
-      const pa = a[row][col];
-      const pb = b[row][col];
-      if (!pa && !pb) continue;
-      if (!pa || !pb || pa.kind !== pb.kind || pa.side !== pb.side) {
-        out.push({ row, col, before: pa, after: pb });
+      if (!same(a[row][col], b[row][col])) {
+        out.push({ row, col, before: a[row][col], after: b[row][col] });
       }
     }
   }

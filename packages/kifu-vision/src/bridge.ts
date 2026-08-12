@@ -63,8 +63,19 @@ export function bridgeGap(
   const midBoard = readBoard(mid);
   if (!midBoard) return null;
 
-  // 中間が端のどちらかと同じなら、二分しても進まない
-  if (boardsEqual(midBoard, fromBoard) || boardsEqual(midBoard, toBoard)) return null;
+  // 🔴 中間が端のどちらかと同じでも、**諦めてはいけない**。
+  // それは「二分しても進まない」のではなく「割った位置が外れていて、変化が
+  // 片側に寄っている」だけ。変化のある側だけを詰め直せば、そこに手が見つかる。
+  //
+  // ⚠ ここで null を返していたせいで、二分探索は**実質的に働いていなかった**
+  // （28 回試して拾えた手 4 件）。手と手の間隔は 1 秒足らずのことがあり、
+  // 2 手ぶんの変化が 1 サンプルに収まると、中間はたいてい端のどちらかに寄る。
+  if (boardsEqual(midBoard, fromBoard)) {
+    return bridgeGap(mid, toTime, fromBoard, toBoard, toTimeOfBoard, readBoard, options, depth + 1);
+  }
+  if (boardsEqual(midBoard, toBoard)) {
+    return bridgeGap(fromTime, mid, fromBoard, toBoard, toTimeOfBoard, readBoard, options, depth + 1);
+  }
 
   const left = bridgeGap(fromTime, mid, fromBoard, midBoard, mid, readBoard, options, depth + 1);
   if (!left) return null;

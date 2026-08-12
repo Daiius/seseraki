@@ -29,9 +29,9 @@ describe('carryUnknowns', () => {
     expect(carried[pos('5e').row][pos('5e').col]).toEqual({ kind: 'S', side: 'sente' });
   });
 
-  it('読めなかったマスが無ければ元の配置をそのまま返す', () => {
+  it('読めなかったマスが無ければ元の配置と同じものを返す', () => {
     const board = createInitialState().board;
-    expect(carryUnknowns(board, [], emptyBoard())).toBe(board);
+    expect(carryUnknowns(board, [], emptyBoard())).toEqual(board);
   });
 
   it('元の配置を書き換えない', () => {

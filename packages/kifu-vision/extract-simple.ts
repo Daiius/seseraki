@@ -16,14 +16,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop, type GrayImage } from './src/frame.ts';
-import { occupancyDistance, INITIAL_OCCUPANCY, occupancy } from './src/occupancy.ts';
+import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
-import { extractTemplates, cellImage, type Template } from './src/template.ts';
+import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
+import { settle, resolveWith, fillGuesses, unknownCells, isUnknown, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { bridgeGap } from './src/bridge.ts';
+import { calibrateFromFrames } from './src/calibrate.ts';
+import { ReadingHistory } from './src/confirm.ts';
+import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
 import type { PieceKind, Square } from 'shared';
 
@@ -31,11 +35,36 @@ const video = process.argv[2];
 const fromSec = Number(process.argv[3] ?? 0);
 const toSec = Number(process.argv[4] ?? 300);
 const stepSec = Number(process.argv[5] ?? 0.5);
-const geo = SHOGI_WARS_VERTICAL;
 const LEARN_DIR = process.env.KIFU_VISION_LEARN_DIR ?? 'data/learned';
 const OUT_DIR = process.env.KIFU_VISION_OUT_DIR ?? 'data/kifu';
 const TEMPLATE_STORE = process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars-vertical.json';
 const VERBOSE = process.env.KIFU_VISION_VERBOSE === '1';
+
+// --- 盤の格子をこの動画に合わせて測り直す ---
+// 定数は 1 本の動画から測ったもので、別の動画では数ピクセルずれうる。ずれると
+// 全マスの切り出しが一様にずれ、いちばん読みにくいマスから順に読めなくなる。
+// 何枚か測って中央値を採る（盤が写っていない絵は「はっきりしない」ので落ちる）。
+console.log('# 盤の格子をこの動画に合わせて測る');
+const calSeconds = [fromSec + 1, fromSec + 60, (fromSec + toSec) / 2, toSec - 60, toSec - 1]
+  .filter((s) => s > 0)
+  .map((s) => Math.round(s));
+const calibration = process.env.KIFU_VISION_NO_CALIBRATE === '1'
+  ? null
+  : calibrateFromFrames(
+      calSeconds.map((s) => grabFrame(video, s, SHOGI_WARS_VERTICAL.frameW, SHOGI_WARS_VERTICAL.frameH)),
+      SHOGI_WARS_VERTICAL,
+    );
+const geo = calibration?.geo ?? SHOGI_WARS_VERTICAL;
+if (calibration) {
+  const { shift, resize, used, tried } = calibration;
+  console.log(
+    `  ${used}/${tried} 枚から決めた: ずれ (${shift.x.toFixed(2)}, ${shift.y.toFixed(2)})` +
+      `  マス寸法 (${resize.w >= 0 ? '+' : ''}${resize.w.toFixed(2)}, ${resize.h >= 0 ? '+' : ''}${resize.h.toFixed(2)})`,
+  );
+  if (Math.abs(shift.x) < 0.5 && Math.abs(shift.y) < 0.5) console.log('  → 定数のままでよい動画だった');
+} else {
+  console.log(`  ⚠ 格子がはっきり出ているフレームが無かった。定数をそのまま使う`);
+}
 
 const NAMES: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
@@ -78,9 +107,48 @@ function dumpPgm(img: GrayImage, path: string) {
   writeFileSync(path, Buffer.concat([header, Buffer.from(img.data)]));
 }
 
+/**
+ * 覚えようとしている絵が、既にあるテンプレートと同じ絵ならこれを超える。
+ *
+ * 実測: 本物の成駒テンプレートが生駒と持つ相関は `▲と`⇔`▲金` 0.306、
+ * `▽と`⇔`▽金` 0.306。一方、誤って `▽全` として覚えた絵は `▽銀` と **0.837** だった
+ * （演出で白っぽくなった普通の銀を「成銀」と逆算していた）。**間が広く空いている。**
+ *
+ * ⚠ **誤ったテンプレートは以降の認識を壊し続ける。** `▽と` を `▽龍` のラベルで
+ * 保存していたときは、盤上の本物の `▽と` が龍と読まれて枚数超過になり、
+ * `sanity` の却下が 10 → 507 に跳ね上がった。1 枚の間違いが全体を止める。
+ */
+const LEARN_DUPLICATE_NCC = Number(process.env.KIFU_VISION_LEARN_DUP_NCC ?? 0.6);
+
 function learn(img: GrayImage, row: number, col: number, kind: PieceKind, side: 'sente' | 'gote', at: number) {
   if (templates.some((t) => t.kind === kind && t.side === side)) return;
   const cell = cellImage(img, row, col);
+
+  // 🔴 **ポインタが乗ったマスからテンプレートを起こしてはいけない。**
+  // そこに何の駒があるかを絵から決めるのは、ほぼ不可能に近い。逆算が
+  // 「1 手として説明が付く」と言っても、それは盤面の論理が通るというだけで、
+  // 絵がその駒である保証は無い。実測でも、ポインタが乗った 4d（NCC 0.623）を
+  // 「成銀」と逆算して覚えかけ、実際は成らずの銀だった。
+  if (hasPointer(cell)) {
+    console.log(
+      `  ⚠ ${fmt(at)} ${side === 'sente' ? '▲' : '▽'}${NAMES[kind]} として覚えかけたが、` +
+        `ポインタが乗ったマスなので見送った`,
+    );
+    return;
+  }
+
+  // 既にある駒と同じ絵なら、それは新しい駒種ではなく読み違え。覚えない。
+  const dup = templates
+    .map((t) => ({ t, s: ncc(t.img, cell) }))
+    .sort((a, b) => b.s - a.s)[0];
+  if (dup && dup.s > LEARN_DUPLICATE_NCC) {
+    console.log(
+      `  ⚠ ${fmt(at)} ${side === 'sente' ? '▲' : '▽'}${NAMES[kind]} として覚えかけたが、` +
+        `${dup.t.side === 'sente' ? '▲' : '▽'}${NAMES[dup.t.kind]} と同じ絵（NCC=${dup.s.toFixed(3)}）なので見送った`,
+    );
+    return;
+  }
+
   templates.push({ kind, side, samples: 1, img: cell });
   dumpPgm(cell, `${LEARN_DIR}/${side}-${kind.replace('+', 'p')}-at${Math.round(at)}s.pgm`);
   console.log(`  ★ ${fmt(at)} 新しい駒を覚えた: ${side === 'sente' ? '▲' : '▽'}${NAMES[kind]}`);
@@ -106,16 +174,16 @@ interface Step {
  */
 const RESET_AFTER = Number(process.env.KIFU_VISION_RESET_AFTER ?? 8);
 
+/** 失敗の中身を何件まで表示するか。既定では冒頭の演出で埋まってしまう。 */
+const MAX_DETAIL = Number(process.env.KIFU_VISION_MAX_DETAIL ?? 10);
+
 /** 二分探索で間を埋めにいく上限の時間差（秒）。これより離れていたら諦める。 */
 const BRIDGE_MAX_GAP_SEC = Number(process.env.KIFU_VISION_BRIDGE_MAX_GAP ?? 15);
 
-/** 成りを読み直すときに要求する一致度。正しく読めたマスは実測で 0.98 前後。 */
-const PROMOTION_RECHECK_NCC = 0.85;
-
-/** 生駒 → 成駒 */
-const PROMOTE_OF: Partial<Record<PieceKind, PieceKind>> = {
-  P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
-};
+// ⚠ かつては「次の 1 サンプルで NCC 0.85 以上なら成りを読み直す」という
+// 一発勝負だった。**一度も発火しなかった。** 実測（6:22 の 4d）では 10 秒以上
+// ずっと 0.58〜0.68 で同じ駒に読めていたのに、どの 1 枚も 0.85 に届かない。
+// いまは `ReadingHistory` が「同じ読みが続いたこと」を根拠にする。
 
 /** 追跡が続いている間の一続きの手列 */
 interface Run {
@@ -148,22 +216,38 @@ let carriedUsed = 0;
  *
  * 次の手が同じマスに来た場合（取り合いなど）は見直せないので諦める。
  */
-interface PendingPromotion {
+interface Provisional {
   row: number;
   col: number;
   /** 直したい手が入っている配列とその位置 */
   steps: Step[];
   index: number;
-  /** 移動元の駒。成るとどれになるかが決まる。 */
-  fromKind: PieceKind;
 }
-let pendingPromotion: PendingPromotion | null = null;
+/** 確定待ちのマス。読めるようになるまで**何度でも**試みる。 */
+const provisional = new Map<string, Provisional>();
+const history = new ReadingHistory();
 let promotionsFixed = 0;
 let overflowSeen = 0;
+/** 「駒が消えただけ」に見えたが、行き先が未確定のマスに見つかった手 */
+let rescuedVanished = 0;
+/** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
+let unreadableStart = 0;
 let bridgedMoves = 0;
 let bridgeTried = 0;
-/** 直前に手が繋がった時刻。二分探索の起点になる。 */
-let lastGoodTime: number | null = null;
+/**
+ * 直前に**追跡が合っていた**時刻。二分探索の起点になる。
+ *
+ * 🔴 かつては「直前に手が繋がった時刻」を使っていた。**これが間違いだった。**
+ * 手と手の間隔は 1 秒足らずから 5 分以上までばらつくので、手が指されない時間が
+ * 長いだけで起点が古くなり、`BRIDGE_MAX_GAP_SEC` を超えて**二分探索そのものが
+ * 呼ばれなくなる**。
+ *
+ * 実測（13:06〜14:38 の空白）: 最後の手は 13:06、繋がらなくなったのは 14:08。
+ * その差 62 秒は上限 15 秒を大きく超えるので探索を諦めていたが、
+ * **13:07〜14:07 はずっと「配置が変わらない」＝追跡は合っていた**。
+ * 本当に探すべき区間は 14:07〜14:08 のわずか 1 秒だった。
+ */
+let lastSyncTime: number | null = null;
 const started = Date.now();
 
 for (let t = fromSec; t <= toSec; t += stepSec) {
@@ -179,40 +263,56 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   // 中途半端に直すより、成立しない絵はまるごと捨てて次を見る方がよい。
 
   if (!current) {
-    // 起点だけは素の読みで判断する（引き継ぐ相手がまだ無い）
-    const sane = checkBoard(recognized.board);
+    // 起点は**全マスが読めている絵だけ**から採る。引き継ぐ相手がまだ無いので、
+    // 未確定を当てずっぽうで埋めるしかなく、間違えるとその後がすべてずれる。
+    const start = settle(recognized.board);
+    if (!start) {
+      unreadableStart++;
+      continue;
+    }
+    const sane = checkBoard(start);
     if (!sane.ok) {
       insane++;
       if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
       continue;
     }
-    current = recognized.board;
+    current = start;
     console.log(`  起点: ${fmt(t)}（盤上の駒 ${pieceCount(current)} 枚）`);
     continue;
   }
 
-  // 前回「移動先が読めず、成ったかどうか決めきれなかった」手があれば、いま読み直す。
-  // ポインタは動いた瞬間だけそこに乗っていて、次に読むときには退いていることが多い。
-  if (pendingPromotion) {
-    const p = pendingPromotion;
-    pendingPromotion = null;
-    const cell = recognized.cells[p.row][p.col];
-    const now = cell.piece;
-    if (now && !Number.isNaN(cell.score) && cell.score >= PROMOTION_RECHECK_NCC) {
-      const promoted = PROMOTE_OF[p.fromKind];
-      const shouldPromote = promoted !== undefined && now.kind === promoted;
-      const step = p.steps[p.index];
-      if (step) {
-        const wantsPlus = shouldPromote;
-        const hasPlus = step.usi.endsWith('+');
-        if (wantsPlus !== hasPlus) {
-          step.usi = wantsPlus ? `${step.usi}+` : step.usi.slice(0, -1);
-          promotionsFixed++;
-          if (VERBOSE) console.log(`  ↺ ${fmt(step.time)} 成りを読み直した: ${step.usi}`);
-        }
-        // 追跡している盤面の駒種も、読めた方に合わせる
-        if (current) current[p.row][p.col] = now;
+  // 読みを履歴に積む。**同じマスが何度も続けて同じ駒に読めたら確定**とみなす。
+  history.observe(recognized.board);
+
+  // 覆われていて決めきれなかったマスを、読めるようになった時点で確定させる。
+  // ⚠ 一発勝負ではなく**毎回試みる**。ポインタは動けば退くが、いつ退くかは
+  // 分からないし、退いた 1 枚がたまたまきれいとも限らない。
+  for (const [key, watch] of [...provisional]) {
+    const c = history.confirmed(watch.row, watch.col);
+    if (!c) continue;
+    provisional.delete(key);
+    const now = c.value;
+    if (!now) continue; // 空に読めた＝取られた等。手の側では扱えないので触らない
+    if (now.kind === current[watch.row][watch.col]?.kind) continue; // 逆算が当たっていた
+
+    const step = watch.steps[watch.index];
+    if (step) {
+      const wantsPlus = now.kind.startsWith('+');
+      const hasPlus = step.usi.endsWith('+');
+      if (wantsPlus !== hasPlus) {
+        step.usi = wantsPlus ? `${step.usi}+` : step.usi.slice(0, -1);
+        promotionsFixed++;
       }
+    }
+    // 追跡している盤面も読めた方に合わせる。ここを直さないと、以後ずっと
+    // 同じ 1 マスで食い違い続けて仕切り直しになる（実測でこれが最大の断片切れだった）。
+    current[watch.row][watch.col] = now;
+    if (VERBOSE) {
+      console.log(
+        `  ↺ ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} を確定: ` +
+          `${now.side === 'sente' ? '▲' : '▽'}${NAMES[now.kind]}（${c.streak} 回連続で同じ読み）` +
+          `${step ? ` → ${fmt(step.time)} の手を ${step.usi} に直した` : ''}`,
+      );
     }
   }
 
@@ -229,14 +329,15 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   const scores = recognized.cells.map((r) => r.map((c) => c.score));
   const overflow = overflowCells(recognized.board, scores);
   if (overflow.length > 0) overflowSeen++;
-  const unreadable = [...recognized.lowConfidence.map((c) => ({ row: c.row, col: c.col })), ...overflow];
+  const pending = [...unknownCells(recognized.board), ...overflow];
 
+  // 未確定のマスを直前の配置で埋める。**覆われただけなら駒はそこにあり続ける。**
   const carried: Square[][] | null =
-    unreadable.length > 0 ? carryUnknowns(recognized.board, unreadable, current) : null;
+    pending.length > 0 ? carryUnknowns(recognized.board, overflow, current) : null;
 
-  // 成立するかは引き継いだ版で見る。素の読みは偽の駒で崩れていることがあり、
+  // 成立するかは引き継いだ版で見る。当てずっぽうの版は偽の駒で崩れていることがあり、
   // それを理由に絵ごと捨てると、実際には読めるはずの手まで落としてしまう。
-  const primary: Square[][] = carried ?? recognized.board;
+  const primary: Square[][] = carried ?? settle(recognized.board)!;
   const sane = checkBoard(primary);
   if (!sane.ok) {
     insane++;
@@ -246,6 +347,9 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 
   if (boardsEqual(primary, current)) {
     unchanged++;
+    // ⭐ **ここが「追跡できていた最後の時刻」。** 手が指されていなくても、
+    // 読みが追跡中の盤面と一致しているなら、その時点までは追えている。
+    lastSyncTime = t;
     continue;
   }
 
@@ -255,11 +359,14 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   let solved = false;
   if (result.move && carried) carriedUsed++;
 
-  if (!result.move && carried && !boardsEqual(recognized.board, current)) {
-    const alt = inferMove(current, recognized.board);
+  // 引き継いだ版で説明が付かないなら、当てずっぽうの版でも試す。
+  // 成りは引き継ぐと消えてしまうので、こちらでしか出ない。
+  const guessed = fillGuesses(recognized.board, recognized.guesses);
+  if (!result.move && carried && !boardsEqual(guessed, current)) {
+    const alt = inferMove(current, guessed);
     if (alt.move) {
       result = alt;
-      board = recognized.board;
+      board = guessed;
     }
   }
 
@@ -272,10 +379,10 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     // 全駒種にすると成りと成らずが両方成立して曖昧になる場合があるが、
     // そのときは solveUnknowns が null を返すので誤って覚えることはない。
     const s =
-      solveUnknowns(current, recognized.board, unknowns, missingKinds()) ??
-      solveUnknowns(current, recognized.board, unknowns);
+      solveUnknowns(current, guessed, unknowns, missingKinds()) ??
+      solveUnknowns(current, guessed, unknowns);
     if (s) {
-      board = recognized.board.map((r) => r.slice());
+      board = guessed.map((r) => r.slice());
       for (const r of s.resolved) {
         board[r.row][r.col] = r.piece;
         learn(img, r.row, r.col, r.piece.kind, r.piece.side, t);
@@ -285,8 +392,36 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     }
   }
 
-  // 駒がスライドしている途中。局面として採らず、current も更新しない。
+  // 駒が消えただけに見える絵。ふつうはスライドの途中なので捨てるが、
+  // **移動先が読めていないせいでそう見えている**ことがある。行き先が
+  // 未確定のマスの中に一意に決まるなら、それは本当の手。
   if (result.failure === 'piece-vanished') {
+    const rescue = rescueVanished(current, primary, recognized.board);
+    if (rescue) {
+      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
+      current = rescue.board;
+      lastSyncTime = t;
+      consecutiveFailures = 0;
+      rescuedVanished++;
+      history.reset(rescue.to.row, rescue.to.col);
+      history.reset(rescue.from.row, rescue.from.col);
+      // 移動先は読めていないので、駒種（成ったかどうか）は決まっていない。
+      // 読めるようになった時点で確定させる。
+      provisional.set(`${rescue.to.row},${rescue.to.col}`, {
+        row: rescue.to.row,
+        col: rescue.to.col,
+        steps,
+        index: steps.length - 1,
+      });
+      if (VERBOSE) {
+        console.log(
+          `  ✚ ${fmt(t)} 消えた駒の行き先を未確定のマスに見つけた: ${rescue.usi}` +
+            `${rescue.promotionUncertain ? '（成りは未確定）' : ''}`,
+        );
+      }
+      continue;
+    }
     vanished++;
     continue;
   }
@@ -295,40 +430,46 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     if (steps.length === 0) runs.push({ steps, startedAt: t });
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
     current = board;
-    lastGoodTime = t;
+    lastSyncTime = t;
     consecutiveFailures = 0;
 
-    // 移動先が読めていなかったなら、成ったかどうかを次の時点で見直す
+    // 手が指されたマスは中身が変わったので、古い読みの連続は捨てる。
+    // 残すと「変わる前の駒」で確定してしまう。
     const to = result.move.to;
     const from = result.move.from;
+    history.reset(to.row, to.col);
+    if (from) history.reset(from.row, from.col);
+
+    // 移動先が読めていなかったなら、**その手はまだ確かめられていない**。
+    // 読めるようになるまで持ち越して、後の場面で確定させる。
     if (
       result.move.type === 'move' &&
       from &&
-      recognized.lowConfidence.some((c) => c.row === to.row && c.col === to.col)
+      pending.some((c) => c.row === to.row && c.col === to.col)
     ) {
-      const moved = current[to.row][to.col];
-      if (moved) {
-        pendingPromotion = {
-          row: to.row,
-          col: to.col,
-          steps,
-          index: steps.length - 1,
-          fromKind: moved.kind.startsWith('+') ? (moved.kind.slice(1) as PieceKind) : moved.kind,
-        };
-      }
+      provisional.set(`${to.row},${to.col}`, { row: to.row, col: to.col, steps, index: steps.length - 1 });
     }
     continue;
   }
 
-  // 差分が大きいのは、間に手が入っていて 1 手として説明が付かないから。
-  // 諦めて仕切り直すと間の手を丸ごと失うので、二分して中間の局面を探しに行く。
-  // ⚠ 二分探索は**近い時刻に限る**。実測では、繋がらない区間の大半は「間に 2〜3 手
-  // 入っていた」のではなく**数分間まるごと追跡が切れていた**もので、そこには
-  // 何十手もあるため二分では届かない（25 回試して 1 手も拾えなかった）。
+  // 1 手として説明が付かないのは、間に手が入っているから。諦めて仕切り直すと
+  // 間の手を丸ごと失うので、二分して中間の局面を探しに行く。
+  //
+  // ⚠ 二分探索は**追跡が合っていた時刻から近いときに限る**（手が指された時刻ではない。
+  // `lastSyncTime` の説明を見ること）。離れているときは数分ぶん追跡が切れており、
+  // 間に何十手もあるので二分では届かない。
+  //
+  // 対象にする失敗は 1 つではない。**2 手を 1 手として読もうとした結果**は、
+  // 形によって出方が変わる:
+  //   - 3 マス以上動いた   → too-many-changes（例: 香が角を取り、銀が取り返す）
+  //   - 2 マスだが動きが変 → illegal-shape（例: 金打ちと銀の移動が重なる）
+  //   - 2 マスだが動けない → illegal-move
   if (
-    result.failure === 'too-many-changes' &&
-    lastGoodTime !== null &&
-    t - lastGoodTime <= BRIDGE_MAX_GAP_SEC &&
+    (result.failure === 'too-many-changes' ||
+      result.failure === 'illegal-shape' ||
+      result.failure === 'illegal-move') &&
+    lastSyncTime !== null &&
+    t - lastSyncTime <= BRIDGE_MAX_GAP_SEC &&
     current
   ) {
     bridgeTried++;
@@ -336,10 +477,10 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     const readAtTime = (tt: number): Square[][] | null => {
       const im = grabBoard(tt);
       const r = recognizeBoard(im, templates);
-      const c = r.lowConfidence.length > 0 ? carryUnknowns(r.board, r.lowConfidence, base) : r.board;
+      const c = resolveWith(r.board, base);
       return checkBoard(c).ok ? c : null;
     };
-    const bridged = bridgeGap(lastGoodTime, t, current, board, t, readAtTime, {
+    const bridged = bridgeGap(lastSyncTime, t, current, board, t, readAtTime, {
       minGapSec: Math.max(0.1, stepSec / 4),
     });
     if (bridged && bridged.length > 0) {
@@ -349,7 +490,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
       }
       bridgedMoves += bridged.length;
       current = bridged.at(-1)!.board;
-      lastGoodTime = t;
+      lastSyncTime = t;
       consecutiveFailures = 0;
       continue;
     }
@@ -357,12 +498,13 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 
   const why = result.move ? 'verify-failed' : result.failure!;
   failures.set(why, (failures.get(why) ?? 0) + 1);
-  if (VERBOSE && detailShown < 10) {
+  if (VERBOSE && detailShown < MAX_DETAIL) {
     detailShown++;
     const diff = boardDiff(current, board);
     console.log(`  ⚠ ${fmt(t)} ${why}（${diff.length} マス）`);
     for (const d of diff.slice(0, 6)) {
-      const show = (p: Square) => (p ? `${p.side === 'sente' ? '▲' : '▽'}${NAMES[p.kind]}` : '空');
+      const show = (p: VisionSquare) =>
+        isUnknown(p) ? '未確定' : p ? `${p.side === 'sente' ? '▲' : '▽'}${NAMES[p.kind]}` : '空';
       console.log(`      ${9 - d.col}${String.fromCharCode(97 + d.row)}: ${show(d.before)} → ${show(d.after)}`);
     }
   }
@@ -371,7 +513,7 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   consecutiveFailures++;
   if (consecutiveFailures >= RESET_AFTER) {
     current = board;
-    lastGoodTime = t;
+    lastSyncTime = t;
     consecutiveFailures = 0;
     resets++;
     steps = [];
@@ -381,11 +523,15 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
 console.log(`\n# ${samples} 点を ${((Date.now() - started) / 1000).toFixed(1)} 秒で読んだ`);
 console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
+if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
 console.log(`  成りを後から読み直して直した手: ${promotionsFixed}`);
 console.log(`  駒数が規定を超えていた絵: ${overflowSeen}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
+// ⚠ これが多いと「追跡を始められない」。起点は全マスが読めている絵しか採れないが、
+// ポインタは常に盤上のどこかにいるので、思ったより候補が少ない。
+if (unreadableStart > 0) console.log(`  起点にできなかった絵（未確定のマスが残る）: ${unreadableStart}`);
 const allSteps = runs.flatMap((r) => r.steps);
 console.log(`  読めた手: ${allSteps.length}（${runs.length} 本の断片に分かれた・仕切り直し ${resets} 回）`);
 if (failures.size > 0) {

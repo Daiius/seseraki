@@ -14,6 +14,7 @@
  */
 
 import type { PieceKind, Square } from 'shared';
+import { isUnknown, type VisionSquare } from './uncertain.ts';
 
 /** 各駒種の総数（成駒は元の駒に数え戻す） */
 const TOTAL_COUNT: Record<string, number> = {
@@ -98,14 +99,15 @@ export function checkBoard(board: Square[][]): SanityResult {
  * @param scores board と同じ形の NCC。駒が無いマスは NaN。
  */
 export function overflowCells(
-  board: Square[][],
+  board: VisionSquare[][],
   scores: number[][],
 ): { row: number; col: number }[] {
   const byKind = new Map<string, { row: number; col: number; score: number }[]>();
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
       const p = board[row][col];
-      if (!p) continue;
+      // 未確定のマスはまだ駒種が決まっていないので、枚数には数えない
+      if (!p || isUnknown(p)) continue;
       const base = baseKind(p.kind);
       if (!byKind.has(base)) byKind.set(base, []);
       byKind.get(base)!.push({ row, col, score: scores[row][col] });

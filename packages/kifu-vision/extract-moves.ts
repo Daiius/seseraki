@@ -18,6 +18,7 @@ import { findSegments } from './src/segments.ts';
 import { findStableMoments } from './src/events.ts';
 import { extractTemplates, cellImage, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff } from './src/recognize.ts';
+import { fillGuesses, isUnknown, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, type InferFailure } from './src/moves.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -134,22 +135,26 @@ const started = Date.now();
 for (const seg of segments) {
   const img = grabBoard(seg.representativeTime);
   const recognized = recognizeBoard(img, templates);
+  // ⚠ この古い経路は「読めなかったマスにも第一候補を置く」前提で書かれている。
+  // 新しい extract-simple.ts では未確定のまま持ち越すようにしたが、こちらは
+  // 当時の挙動のまま残す（比較のため）。
+  const read = fillGuesses(recognized.board, recognized.guesses);
 
   // 起点。ここから差分を追い始める。
   if (!current) {
-    current = recognized.board;
-    console.log(`  起点: ${fmt(seg.representativeTime)}（盤上の駒 ${recognized.board.flat().filter(Boolean).length} 枚）`);
+    current = read;
+    console.log(`  起点: ${fmt(seg.representativeTime)}（盤上の駒 ${read.flat().filter(Boolean).length} 枚）`);
     continue;
   }
 
   // エフェクトで有無がちらついただけの区間は読み飛ばす
-  if (boardsEqual(recognized.board, current)) {
+  if (boardsEqual(read, current)) {
     skippedSame++;
     continue;
   }
 
-  let result = inferMove(current, recognized.board);
-  let board = recognized.board;
+  let result = inferMove(current, read);
+  let board = read;
   let solved = false;
 
   // 素直に読めなければ、読めなかったマスの駒種を手の整合性から逆算する
@@ -159,9 +164,9 @@ for (const seg of segments) {
       col: c.col,
       inAfter: true,
     }));
-    const s = solveUnknowns(current, recognized.board, unknowns, missingKinds());
+    const s = solveUnknowns(current, read, unknowns, missingKinds());
     if (s) {
-      board = recognized.board.map((r) => r.slice());
+      board = read.map((r) => r.slice());
       for (const r of s.resolved) {
         board[r.row][r.col] = r.piece;
         learn(img, r.row, r.col, r.piece.kind, r.piece.side, seg.representativeTime);
@@ -190,7 +195,8 @@ for (const seg of segments) {
       const diff = boardDiff(current, board);
       console.log(`\n  --- ${fmt(seg.representativeTime)} ${step.failure}（${diff.length} マス食い違い）---`);
       for (const d of diff.slice(0, 8)) {
-        const show = (p: Square) => (p ? `${p.side === 'sente' ? '▲' : '▽'}${NAMES[p.kind]}` : '空');
+        const show = (p: VisionSquare) =>
+          isUnknown(p) ? '未確定' : p ? `${p.side === 'sente' ? '▲' : '▽'}${NAMES[p.kind]}` : '空';
         const lc = recognized.lowConfidence.find((c) => c.row === d.row && c.col === d.col);
         console.log(
           `    ${9 - d.col}${String.fromCharCode(97 + d.row)}: ${show(d.before)} → ${show(d.after)}` +

@@ -83,7 +83,8 @@ for (let t = fromSec; t <= toSec && samples.length < MAX_SAMPLES; t += stepSec) 
 
   // 規定より多い駒種のマス＝テンプレートの無い駒が別の駒として読まれている疑い
   for (const cell of overflowCells(recognized.board, scores)) {
-    const piece = recognized.board[cell.row][cell.col];
+    // 何と誤読されたかを記録したいので、未確定のマスも第一候補で見る
+    const piece = recognized.guesses[cell.row][cell.col];
     if (!piece) continue;
     const cut = cellImage(img, cell.row, cell.col);
 

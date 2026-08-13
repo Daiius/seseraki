@@ -20,13 +20,12 @@ import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './s
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
-import { settle, resolveWith, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
+import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
 import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
-import { bridgeGap } from './src/bridge.ts';
 import { calibrateFromFrames } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
@@ -176,11 +175,49 @@ interface Step {
  */
 const RESET_AFTER = Number(process.env.KIFU_VISION_RESET_AFTER ?? 8);
 
+/**
+ * 🔴 **数えるのは粗い刻みの失敗だけ。挿し込んだ絵の失敗は数えない。**
+ *
+ * 繋がらない区間を細かく読み直すようにしたら、同じ 1 秒間に読む絵が 5 倍に増え、
+ * **失敗の回数だけが水増しされて**仕切り直しが早まった。実測: 16:32 の
+ * `undroppable`（`▽全` と金の紛れ・追記 64）で、細かく読む前は候補手が間に合って
+ * いたのに、読み直しを入れると 8 回に達して 16:09 で断片が切れた。
+ *
+ * ⚠ **時間で測る形（「合わないまま 4 秒経ったら仕切り直す」）は試して悪化した。**
+ * 仕切り直しが遅れる分だけ追跡がずれたまま留まり、**その間ずっと毎サンプルが
+ * 読み直しを起こして空回りする**（追加で読んだ絵 135 → 1236、2 局目の最長断片
+ * 51 → 35 手）。**早く諦めて起点を取り直す方が結果が良い。**
+ */
+const fineTimes = new Set<number>();
+
 /** 失敗の中身を何件まで表示するか。既定では冒頭の演出で埋まってしまう。 */
 const MAX_DETAIL = Number(process.env.KIFU_VISION_MAX_DETAIL ?? 10);
 
-/** 二分探索で間を埋めにいく上限の時間差（秒）。これより離れていたら諦める。 */
-const BRIDGE_MAX_GAP_SEC = Number(process.env.KIFU_VISION_BRIDGE_MAX_GAP ?? 15);
+/**
+ * これだけのマスが**一斉に空になったら**、演出が盤を覆っている絵とみなす。
+ *
+ * 将棋の手は必ず移動先を埋めるので、2 マス以上が「空になっただけ」は手ではない。
+ * 3 にしているのは、スライド途中で移動元と移動先の両方が一瞬読めなくなる形が
+ * 2 マスまでありうるため（そちらは `piece-vanished` と候補手の側で拾う）。
+ */
+const COVERED_CELLS = Number(process.env.KIFU_VISION_COVERED_CELLS ?? 3);
+
+/**
+ * 繋がらなかった区間を読み直すときの細かい刻み（秒）。
+ *
+ * ⭐ 実測（追記 73）: 0:02〜0:40 を 0.5 秒で読むと 22 手、**0.1 秒なら 29 手**。
+ * 序盤は 1 秒に 1 手以上進むので、0.5 秒では 1 サンプルに 2〜3 手が入る。
+ * 拾えた 6 手（`4h4g` `4g5f` `5c5d` `2h4h` `4f4e` `5d5e`）は全部この区間にある。
+ */
+const FINE_STEP = Number(process.env.KIFU_VISION_FINE_STEP ?? 0.1);
+
+/**
+ * 細かく読み直しにいく上限の時間差（秒）。これより離れていたら諦める。
+ *
+ * 離れているときは数分ぶん追跡が切れていて間に何十手もあるので、刻みを細かく
+ * しても届かない。上限まで詰めても挿入は `REFINE_MAX_GAP / FINE_STEP` 枚に収まる。
+ */
+const REFINE_MAX_GAP = Number(process.env.KIFU_VISION_REFINE_MAX_GAP ?? 3);
 
 // ⚠ かつては「次の 1 サンプルで NCC 0.85 以上なら成りを読み直す」という
 // 一発勝負だった。**一度も発火しなかった。** 実測（6:22 の 4d）では 10 秒以上
@@ -310,25 +347,47 @@ let overflowSeen = 0;
 let rescuedVanished = 0;
 /** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
 let unreadableStart = 0;
-let bridgedMoves = 0;
-let bridgeTried = 0;
+/** 演出に覆われたとみて読まずに捨てた絵 */
+let covered = 0;
+/** 細かく読み直しにいった区間の数 */
+let refinedWindows = 0;
+/** そのために追加で読んだ絵 */
+let refinedSamples = 0;
 /**
- * 直前に**追跡が合っていた**時刻。二分探索の起点になる。
+ * 直前に**追跡が合っていた**時刻。細かく読み直すときの起点になる。
  *
  * 🔴 かつては「直前に手が繋がった時刻」を使っていた。**これが間違いだった。**
  * 手と手の間隔は 1 秒足らずから 5 分以上までばらつくので、手が指されない時間が
- * 長いだけで起点が古くなり、`BRIDGE_MAX_GAP_SEC` を超えて**二分探索そのものが
+ * 長いだけで起点が古くなり、`REFINE_MAX_GAP` を超えて**読み直しそのものが
  * 呼ばれなくなる**。
  *
  * 実測（13:06〜14:38 の空白）: 最後の手は 13:06、繋がらなくなったのは 14:08。
- * その差 62 秒は上限 15 秒を大きく超えるので探索を諦めていたが、
+ * その差 62 秒は上限を大きく超えるので諦めていたが、
  * **13:07〜14:07 はずっと「配置が変わらない」＝追跡は合っていた**。
  * 本当に探すべき区間は 14:07〜14:08 のわずか 1 秒だった。
  */
 let lastSyncTime: number | null = null;
 const started = Date.now();
 
-for (let t = fromSec; t <= toSec; t += stepSec) {
+/**
+ * 読む時刻の待ち行列。
+ *
+ * ⭐ **固定刻みの `for` ではなく待ち行列にしてあるのは、繋がらなかった区間に
+ * 細かい時刻を挿し込めるようにするため。** 挿し込んだ時刻は同じループ本体で
+ * 処理されるので、**本線が持つ救済（`carryUnknowns` / `rescueVanished` /
+ * 候補手）がそのまま効く**。かつての二分探索（`bridgeGap`）はこれを持たず、
+ * 「両端が完全に読めて `inferMove` で説明が付く」ことを求めていたので、
+ * 2 局で 70 回試して 1 手も拾えなかった（追記 74）。
+ */
+const queue: number[] = [];
+for (let t = fromSec; t <= toSec; t += stepSec) queue.push(Number(t.toFixed(3)));
+/** 一度細かく読み直した時刻。同じ区間を何度も掘らない。 */
+const refined = new Set<number>();
+/** 待ち行列に入れたことのある時刻。同じ絵を二度読まないための控え。 */
+const queued = new Set<number>(queue);
+
+for (let qi = 0; qi < queue.length; qi++) {
+  const t = queue[qi];
   samples++;
   const img = grabBoard(t);
   const recognized = recognizeBoard(img, templates);
@@ -432,6 +491,32 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     // ⭐ **ここが「追跡できていた最後の時刻」。** 手が指されていなくても、
     // 読みが追跡中の盤面と一致しているなら、その時点までは追えている。
     lastSyncTime = t;
+    continue;
+  }
+
+  // --- 演出が盤を覆っている絵は、読まずに捨てる ---
+  //
+  // 🔴 実測（2 局・追記 75）: `too-many-changes` 60 件のうち 15 件は、
+  // **半透明の大きな絵が盤の一角を覆っただけ**だった。0:21 に 14 マス、
+  // 29:53〜29:56 に 14 マスずつ。フレームを目で見て確認している。
+  //
+  // ⭐ **符号で見分けられる。駒が一斉に消えて、どこにも現れない。**
+  // 将棋の手は必ず移動先を埋めるので、「空になっただけのマスが 3 つ以上」は
+  // 手ではありえない。半透明なので下地の盤の目が透けて「空」に読めてしまい、
+  // 「未確定」としては拾えない——だから駒の有無の側から見る。
+  //
+  // ⚠ **失敗に数えない。** 数えると `RESET_AFTER` に達して仕切り直しになり、
+  // 断片が切れる。これは「読めなかった」のではなく「読むべきでない絵」。
+  // 1 マスだけ消えた絵はスライド途中（`piece-vanished`）の領分なので触らない。
+  const emptied = boardDiff(current, primary);
+  if (
+    emptied.length >= COVERED_CELLS &&
+    emptied.every((d) => d.after === null && d.before !== null && !isUnknown(d.before))
+  ) {
+    covered++;
+    if (VERBOSE && covered <= MAX_DETAIL) {
+      console.log(`  ▨ ${fmt(t)} 演出に覆われた絵として捨てた（${emptied.length} マスが一斉に空）`);
+    }
     continue;
   }
 
@@ -600,53 +685,61 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
     continue;
   }
 
-  // 1 手として説明が付かないのは、間に手が入っているから。諦めて仕切り直すと
-  // 間の手を丸ごと失うので、二分して中間の局面を探しに行く。
+  // --- 1 手として説明が付かないなら、その区間だけ細かく読み直す ---
   //
-  // ⚠ 二分探索は**追跡が合っていた時刻から近いときに限る**（手が指された時刻ではない。
+  // 1 手で説明が付かないのは、間に手が入っているから。諦めて仕切り直すと間の手を
+  // 丸ごと失うので、**追跡が合っていた時刻から今までを `FINE_STEP` 刻みで
+  // 読み直す**。挿し込んだ時刻は待ち行列に入るだけなので、このループ本体が
+  // そのまま処理する——`carryUnknowns` も `rescueVanished` も候補手も効く。
+  //
+  // 🔴 **かつての二分探索（`bridgeGap`）はここを別の手続きでやっていて、
+  // 2 局で 70 回試して 1 手も拾えなかった。** 中間の絵を「`inferMove` が通るか」で
+  // 判定していたが、手が指された直後の絵はまさに移動先が未確定なので、その条件は
+  // 原理的にほぼ通らない。0.1 秒刻みで実際に拾えた 6 手も全部 `rescueVanished`
+  // 経由だった。**「読めるか」を「`inferMove` が通るか」で代用していた**（追記 74）。
+  //
+  // ⚠ **追跡が合っていた時刻から近いときに限る**（手が指された時刻ではない。
   // `lastSyncTime` の説明を見ること）。離れているときは数分ぶん追跡が切れており、
-  // 間に何十手もあるので二分では届かない。
-  //
-  // 対象にする失敗は 1 つではない。**2 手を 1 手として読もうとした結果**は、
-  // 形によって出方が変わる:
-  //   - 3 マス以上動いた   → too-many-changes（例: 香が角を取り、銀が取り返す）
-  //   - 2 マスだが動きが変 → illegal-shape（例: 金打ちと銀の移動が重なる）
-  //   - 2 マスだが動けない → illegal-move
+  // 間に何十手もあるので刻みを細かくしても届かない。
   if (
-    (result.failure === 'too-many-changes' ||
-      result.failure === 'illegal-shape' ||
-      result.failure === 'illegal-move') &&
     lastSyncTime !== null &&
-    t - lastSyncTime <= BRIDGE_MAX_GAP_SEC &&
-    current
+    !refined.has(t) &&
+    t - lastSyncTime > FINE_STEP * 1.5 &&
+    t - lastSyncTime <= REFINE_MAX_GAP
   ) {
-    bridgeTried++;
-    const base = current;
-    const readAtTime = (tt: number): Square[][] | null => {
-      const im = grabBoard(tt);
-      const r = recognizeBoard(im, templates);
-      const c = resolveWith(r.board, base);
-      return checkBoard(c).ok ? c : null;
-    };
-    const bridged = bridgeGap(lastSyncTime, t, current, board, t, readAtTime, {
-      minGapSec: Math.max(0.1, stepSec / 4),
-    });
-    if (bridged && bridged.length > 0) {
-      if (steps.length === 0) runs.push({ steps, startedAt: bridged[0].time });
-      for (const b of bridged) {
-        steps.push({ time: b.time, usi: b.move.usi, side: b.move.side, solved: false });
+    // 🔴 **一度読んだ時刻を二度読まない。** これが無かったときは、追跡がずれたまま
+    // 次々に来る粗い時刻がそれぞれ同じ窓を挿し直し、**同じ絵を何度も読んでいた**
+    // （0:21 付近で 6 → 7 → 8 → 9 枚と挿し直しが続き、追加で読んだ絵が 1018 枚に
+    // 膨らんだ）。読み直して駄目だった絵は、もう一度読んでも駄目である。
+    const inserted: number[] = [];
+    for (let s = lastSyncTime + FINE_STEP; s < t - FINE_STEP / 2; s += FINE_STEP) {
+      const at = Number(s.toFixed(3));
+      if (!queued.has(at)) inserted.push(at);
+    }
+    if (inserted.length > 0) {
+      refined.add(t);
+      refinedWindows++;
+      refinedSamples += inserted.length;
+      // 挿し込んだ時刻を先に処理し、**この時刻もそのあとで読み直す**
+      // （間の手が通っていれば、今度は 1 手として説明が付く）。
+      queue.splice(qi, 0, ...inserted);
+      for (const s of inserted) {
+        fineTimes.add(s);
+        queued.add(s);
       }
-      bridgedMoves += bridged.length;
-      const last = bridged.at(-1)!;
-      state = nextState(state, last.board, { usi: last.move.usi, side: last.move.side as Side });
-      current = state.board;
-      lastSyncTime = t;
-      consecutiveFailures = 0;
+      qi--; // 直後の qi++ で挿し込んだ先頭に進む
+      samples--; // この絵はまだ数えない。読み直したときに数える
+      if (VERBOSE) {
+        console.log(
+          `  🔍 ${fmt(t)} 繋がらないので ${fmt(lastSyncTime)}〜${fmt(t)} を ` +
+            `${FINE_STEP} 秒刻みで読み直す（${inserted.length} 枚）`,
+        );
+      }
       continue;
     }
   }
 
-  // --- 二分探索でも届かないなら、盤面の論理で 2 手に分解する ---
+  // --- 細かく読み直しても届かないなら、盤面の論理で 2 手に分解する ---
   //
   // 🔴 **映像を細かく探しても届かない場合がある。** 実測（13:06〜14:08）: 香が角を
   // 取り、数秒後に銀が取り返した。0.1 秒刻みで読み直しても「香が取ったが銀が
@@ -704,7 +797,10 @@ for (let t = fromSec; t <= toSec; t += stepSec) {
   }
   // 読めなかった絵は捨てる。current は据え置き、次の絵と比べ直す。
   // ただし何度も続くなら追跡が切れている。その時点の読みで仕切り直す。
-  consecutiveFailures++;
+  //
+  // ⚠ **挿し込んだ絵の失敗は数えない**（`fineTimes` の説明を見ること）。
+  // 数えると読み直すほど仕切り直しが早まり、読み直した意味が消える。
+  if (!fineTimes.has(t)) consecutiveFailures++;
   if (consecutiveFailures >= RESET_AFTER) {
     // 仕切り直し。**持ち駒は分からなくなる**（誰が何を取ったかは追跡の中にしかない）。
     state = nextState(state, board, null);
@@ -721,7 +817,8 @@ console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
-console.log(`  二分探索を試した回数: ${bridgeTried}（拾い直せた手: ${bridgedMoves}）`);
+console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
+console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
 console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);

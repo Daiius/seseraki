@@ -421,6 +421,8 @@ let gameIndex = 0;
 const MIN_MOVES_BEFORE_NEW_GAME = Number(process.env.KIFU_VISION_MIN_MOVES_NEW_GAME ?? 4);
 /** 対局中の盤が写っていないので読まなかった絵 */
 let offBoard = 0;
+/** 1 手目が後手の手だったので断った回数 */
+let wrongFirstMover = 0;
 let undroppableReread = 0;
 /** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
 let stuckKinds = 0;
@@ -496,6 +498,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 対局が始まった直後（1〜2 手）は「穴のせいで初期局面に見える」ことがありうる。
   // 実際の対局が 2 手で初期局面へ戻ることは無いので、そこで切る。
   const movesInGame = runs.reduce((n, r) => (r.game === gameIndex ? n + r.steps.length : n), 0);
+  const firstMoveOfGame = movesInGame === 0;
   if (movesInGame >= MIN_MOVES_BEFORE_NEW_GAME && completeIfInitial(asHoles(recognized.board))) {
     gameIndex++;
     current = null;
@@ -779,7 +782,18 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 未確定のマスの中に一意に決まるなら、それは本当の手。
   if (result.failure === 'piece-vanished') {
     const rescue = rescueVanished(current, primary, recognized.board);
-    if (rescue) {
+    // 🔒 **対局の 1 手目は必ず先手。** これは追跡の状態に依らない絶対の事実。
+    //
+    // 🔴 実測（1 局目 0:04）: 先手の `7g7f` は 7g も 7f も未確定のまま引き継がれて
+    // **差分に現れず**、後手の `3c3d` だけが「駒が消えた」形で見えていた。そのまま
+    // 受け取ると 1 手目と 2 手目が入れ替わる（`3c3d 7g7f`）。
+    // **手番の交互率は 1.00 のままなので、この指標では検出できない。**
+    //
+    // 断ると、次に両方が読めた時点で差分が 4 マスになり、2 手分解が正しい順で拾う。
+    if (rescue && firstMoveOfGame && rescue.side === 'gote') {
+      wrongFirstMover++;
+      if (VERBOSE) console.log(`  ⚠ ${fmt(t)} 1 手目が後手の手なので断った: ${rescue.usi}`);
+    } else if (rescue) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
       state = nextState(state, rescue.board, { usi: rescue.usi, side: rescue.side as Side });
@@ -843,6 +857,16 @@ for (let qi = 0; qi < queue.length; qi++) {
       }
       result = { move: null, failure: 'unheld-drop', changedCells: result.changedCells };
     }
+  }
+
+  // 🔒 **対局の 1 手目は必ず先手**（`rescueVanished` の側と同じ規則）。
+  // ⚠ 片方の経路にだけ掛けても効かない。実測: 0:04 の `✚` は断れたのに、
+  // 0:04.5 に**通常の差分経路**で同じ `3c3d` が通って順序が入れ替わったままだった。
+  // （候補手・2 手分解の経路は手番が既知なら先手の手しか作らないので、そちらは要らない）
+  if (result.move && firstMoveOfGame && result.move.side === 'gote') {
+    wrongFirstMover++;
+    if (VERBOSE) console.log(`  ⚠ ${fmt(t)} 1 手目が後手の手なので断った: ${result.move.usi}`);
+    result = { move: null, failure: 'ambiguous', changedCells: result.changedCells };
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
@@ -1011,6 +1035,7 @@ console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);
 console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);
 if (undroppableReread > 0) console.log(`  打てる駒に限って読み直して通った: ${undroppableReread}`);
+if (wrongFirstMover > 0) console.log(`  1 手目が後手の手なので断った: ${wrongFirstMover}`);
 if (stuckKinds > 0) console.log(`  同じ側の別の駒に化けて見えた絵（引き継いだ）: ${stuckKinds}`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);

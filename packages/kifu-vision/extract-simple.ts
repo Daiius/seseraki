@@ -25,11 +25,12 @@ import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.
 import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatchBoard } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
+import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
-import { checkBoard, pieceCount, overflowCells } from './src/sanity.ts';
+import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
 import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
@@ -397,6 +398,15 @@ let unreadableStart = 0;
 /** 演出に覆われたとみて読まずに捨てた絵 */
 let covered = 0;
 /** 細かく読み直しにいった区間の数 */
+/**
+ * 打てない駒として読めたのを、打てる駒に限って読み直せた回数。
+ *
+ * 実測（1 局目 16:32）: `▽全`（成銀）と読まれた 8f を `▽金` に読み直して
+ * `G*8f` が通るようになった。ここが 27 秒ぶんの断片切れの原因だった。
+ */
+let undroppableReread = 0;
+/** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
+let stuckKinds = 0;
 let refinedWindows = 0;
 /** そのために追加で読んだ絵 */
 let refinedSamples = 0;
@@ -523,11 +533,22 @@ for (let qi = 0; qi < queue.length; qi++) {
   const scores = recognized.cells.map((r) => r.map((c) => c.score));
   const overflow = overflowCells(recognized.board, scores);
   if (overflow.length > 0) overflowSeen++;
-  const pending = [...unknownCells(recognized.board), ...overflow];
+
+  // 🔒 **自分の駒が、同じ側の別の駒に化けることは起こりえない。** そのマスを
+  // 変えるには誰かがそこへ動く必要があるが、自分の駒は取れない。つまりこれは
+  // 必ず読み違いなので、駒数超過と同じく「読めなかったマス」として引き継ぐ。
+  //
+  // 🔴 実測（1 局目 16:33〜17:00）: 8f の `▽金` を毎フレーム `▽全` と読み、
+  // `ambiguous` が出続けて 8 回で仕切り直しになり 27 秒ぶんが落ちていた。
+  const stuck = sameSideKindCells(current, recognized.board);
+  if (stuck.length > 0) stuckKinds++;
+
+  const suspicious = [...overflow, ...stuck];
+  const pending = [...unknownCells(recognized.board), ...suspicious];
 
   // 未確定のマスを直前の配置で埋める。**覆われただけなら駒はそこにあり続ける。**
   const carried: Square[][] | null =
-    pending.length > 0 ? carryUnknowns(recognized.board, overflow, current) : null;
+    pending.length > 0 ? carryUnknowns(recognized.board, suspicious, current) : null;
 
   // 成立するかは引き継いだ版で見る。当てずっぽうの版は偽の駒で崩れていることがあり、
   // それを理由に絵ごと捨てると、実際には読めるはずの手まで落としてしまう。
@@ -612,6 +633,37 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // --- 「打てない駒が打たれた」と読めたら、打てる駒に限って読み直す ---
+  //
+  // 🔴 実測（1 局目 16:32〜17:00・27 秒ぶん約 10 手）: 後手が 8f に**金を打った**のに
+  // `▽全`（成銀）の方が一致し、成駒は打てないので手が丸ごと落ちていた。
+  //
+  // ⚠ **同点を絵で割るのとは別物**（追記 69 でそれをやって失敗している）。
+  // ここは「読みが規則上あり得ない答えを出した」ので、**あり得ない答えを取り除いて
+  // もう一度読む**。問いが変わっている。実測でも取り除いた後は 0.692 対 0.383 で
+  // 決まっており、差が付かなければ `readAsDroppable` が諦める。
+  if (!result.move && result.failure === 'undroppable') {
+    const spot = findUndroppableDrop(current, board);
+    const reread = spot && readAsDroppable(img, spot.row, spot.col, spot.side, templates);
+    if (spot && reread) {
+      const fixed = board.map((r) => r.slice());
+      fixed[spot.row][spot.col] = { kind: reread.kind, side: spot.side };
+      const retry = inferMove(current, fixed);
+      if (retry.move) {
+        result = retry;
+        board = fixed;
+        undroppableReread++;
+        if (VERBOSE) {
+          console.log(
+            `  ⚗ ${fmt(t)} 打てない駒だったので打てる駒に限って読み直した: ` +
+              `${NAMES[spot.kind]} → ${NAMES[reread.kind]}（NCC ${reread.score.toFixed(3)}・` +
+              `2 位と ${reread.margin.toFixed(3)} 差） → ${retry.move.usi}`,
+          );
+        }
+      }
+    }
+  }
+
   // --- 読みで決まらなければ、ルールの側から当てにいく ---
   //
   // ここまでは「81 マス読む → 差分を 1 手として説明できるか」という向きで、
@@ -631,7 +683,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 一般の当てずっぽうを先に走らせて、そちらの領分を奪わないこと。
   if (!result.move && result.failure !== 'piece-vanished' && state) {
     // 引き継ぎに使ったマス（未確定・駒数超過）は「読めていない」として扱う。
-    const read = markUnknown(recognized.board, overflow);
+    const read = markUnknown(recognized.board, suspicious);
     const picked = pickCandidate(state, read, {
       maxConflicts: 1,
       // 仕切り直した直後は手番が分からない。狭めるより広く取る。
@@ -824,7 +876,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   //
   // ⭐ **中間の絵は要らない。** 差分は 2 手で一意に説明できる。
   if (!result.move && result.failure !== 'piece-vanished' && state) {
-    const read = markUnknown(recognized.board, overflow);
+    const read = markUnknown(recognized.board, suspicious);
     const pair = pickCandidatePair(state, read, {
       maxConflicts: 1,
       anySide: handsAreGuessed(state),
@@ -897,6 +949,8 @@ if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定の�
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);
+if (undroppableReread > 0) console.log(`  打てる駒に限って読み直して通った: ${undroppableReread}`);
+if (stuckKinds > 0) console.log(`  同じ側の別の駒に化けて見えた絵（引き継いだ）: ${stuckKinds}`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
 console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);

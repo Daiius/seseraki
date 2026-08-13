@@ -182,3 +182,33 @@ export function pieceCount(board: Square[][]): number {
   for (const row of board) for (const sq of row) if (sq) n++;
   return n;
 }
+
+/**
+ * 追跡中の盤面と読みが「同じ側の別の駒」で食い違っているマスを挙げる。
+ *
+ * 🔒 **これは必ず読み違いである。** そのマスの中身を変えるには、誰かがそこへ
+ * 動く必要がある。だが自分の駒は取れないので、**同じ側の別の駒に変わることは
+ * 起こりえない**（相手が取れば側が変わるので、この形にはならない）。
+ *
+ * 🔴 実測（1 局目 16:33〜17:00）: 8f の `▽金` を毎フレーム `▽全`（成銀）と読み、
+ * 差分が「1 マスだけ駒種が違う」になって `ambiguous` が出続けた。8 回で
+ * 仕切り直しになり、**27 秒ぶんが丸ごと落ちていた**。金と成銀は実測 0.69 相関する。
+ *
+ * ⚠ `overflowCells` と同じく**位置を挙げるだけ**にする。呼び出し側で
+ * `carryUnknowns` に渡せば前の配置を引き継げる。空にすると差分が壊れる。
+ *
+ * ⚠ 追跡中の盤面が間違っていれば誤りを固定してしまうが、それは引き継ぎ全般の
+ * 性質で、ここだけの弱点ではない（`resolveWith` の説明を見ること）。
+ */
+export function sameSideKindCells(tracked: Square[][], read: VisionSquare[][]): { row: number; col: number }[] {
+  const out: { row: number; col: number }[] = [];
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      const a = tracked[row][col];
+      const b = read[row][col];
+      if (!a || !b || isUnknown(b)) continue;
+      if (a.side === b.side && a.kind !== b.kind) out.push({ row, col });
+    }
+  }
+  return out;
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type Square } from 'shared';
-import { checkBoard, pieceCount, overflowCells } from './sanity.ts';
+import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './sanity.ts';
+import { UNKNOWN, type VisionSquare } from './uncertain.ts';
 
 function emptyBoard(): Square[][] {
   return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
@@ -158,5 +159,50 @@ describe('overflowCells', () => {
 describe('pieceCount', () => {
   it('初期配置は 40 枚', () => {
     expect(pieceCount(createInitialState().board)).toBe(40);
+  });
+});
+
+describe('sameSideKindCells', () => {
+  const board = (): Square[][] => Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
+
+  it('同じ側の別の駒に化けたマスを挙げる（起こりえない変化）', () => {
+    // 8f の ▽金 を ▽全（成銀）と読んだ。実測で踏んだ形。
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: '+S', side: 'gote' };
+
+    expect(sameSideKindCells(tracked, read)).toEqual([{ row: 5, col: 1 }]);
+  });
+
+  it('相手の駒に変わったマスは挙げない（取られた形なのでありうる）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: 'S', side: 'sente' };
+
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+
+  it('空になったマスは挙げない（動いた形なのでありうる）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    expect(sameSideKindCells(tracked, board())).toEqual([]);
+  });
+
+  it('未確定のマスは挙げない（読めていないだけ）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = UNKNOWN;
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+
+  it('同じ駒なら挙げない', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: 'G', side: 'gote' };
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
   });
 });

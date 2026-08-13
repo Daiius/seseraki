@@ -109,6 +109,18 @@ export function fillGuesses(board: VisionSquare[][], guesses: Square[][]): Squar
   return out;
 }
 
+/**
+ * 未確定のマスを「読めなかった穴」として空にする。
+ *
+ * ⚠ **これは「空だ」と言っているのではない。** 穴として扱ってよい相手
+ * （`completeIfInitial` のように、埋めるべき中身を別の根拠で知っている側）に
+ * 渡すためだけの形。差分や `checkBoard` にそのまま渡すと、覆われたマスが
+ * 「駒が消えた」ことになって追跡が壊れる。
+ */
+export function asHoles(board: VisionSquare[][]): Square[][] {
+  return board.map((r) => r.map((s) => (isUnknown(s) ? null : s)));
+}
+
 /** 未確定が 1 つも残っていなければ普通の盤面として返す。残っていれば null。 */
 export function settle(board: VisionSquare[][]): Square[][] | null {
   const out: Square[][] = [];

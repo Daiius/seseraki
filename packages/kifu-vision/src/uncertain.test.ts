@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Square } from 'shared';
-import { UNKNOWN, unknownCells, markUnknown, resolveWith, fillGuesses, settle, type VisionSquare } from './uncertain.ts';
+import { UNKNOWN, unknownCells, markUnknown, resolveWith, fillGuesses, settle, asHoles, type VisionSquare } from './uncertain.ts';
 import { inferMove } from './moves.ts';
 import { checkBoard } from './sanity.ts';
+import { completeIfInitial } from './tracking.ts';
+import { createInitialState } from 'shared';
 
 function emptyBoard<T = Square>(fill: T): T[][] {
   return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => fill));
@@ -109,5 +111,35 @@ describe('当てずっぽうの駒を置かないことで救われる場面', (
     const carried = resolveWith(read, before);
     expect(get(carried, '8h')).toEqual({ kind: 'B', side: 'sente' });
     expect(inferMove(before, carried).move?.usi).toBe('7g7f');
+  });
+});
+
+describe('asHoles（起点を初期局面で埋めるため）', () => {
+  it('未確定を穴にすると、初期局面として埋め直せる', () => {
+    // 1c の歩が読めなかった起点の絵（実測: sd 26.2 で「空」とされていたマス）
+    const read: VisionSquare[][] = createInitialState().board.map((r) => r.slice());
+    put(read, '1c', UNKNOWN);
+
+    // 未確定が残るので、そのままでは起点にできない
+    expect(settle(read)).toBeNull();
+
+    const completed = completeIfInitial(asHoles(read));
+    expect(completed).not.toBeNull();
+    expect(get(completed!, '1c')).toEqual({ kind: 'P', side: 'gote' });
+  });
+
+  it('途中の局面は埋め直さない（初期配置に無いマスに駒がある）', () => {
+    const read: VisionSquare[][] = createInitialState().board.map((r) => r.slice());
+    put(read, '7g', null);
+    put(read, '7f', { kind: 'P', side: 'sente' });
+    put(read, '1c', UNKNOWN);
+
+    expect(completeIfInitial(asHoles(read))).toBeNull();
+  });
+
+  it('穴が多すぎるものは埋め直さない', () => {
+    const read: VisionSquare[][] = createInitialState().board.map((r) => r.slice());
+    for (const sq of ['1c', '2c', '3c', '4c']) put(read, sq, UNKNOWN);
+    expect(completeIfInitial(asHoles(read))).toBeNull();
   });
 });

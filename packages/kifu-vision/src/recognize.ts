@@ -9,7 +9,7 @@
 
 import type { Square } from 'shared';
 import type { GrayImage } from './frame.ts';
-import { occupancy, OCCUPANCY_THRESHOLD, hasPointer } from './occupancy.ts';
+import { presence, OCCUPANCY_THRESHOLD, EMPTY_MAX_SD, hasPointer } from './occupancy.ts';
 import { cellImage, classify, type Template } from './template.ts';
 import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from './uncertain.ts';
 
@@ -38,6 +38,8 @@ export interface LowConfidenceCell {
   guess: Square;
   /** マウスポインタが乗っていたか。乗っていれば読めなくて当然。 */
   pointer?: boolean;
+  /** 駒があるかどうかすら決まらなかったか（演出に覆われて平らになった等） */
+  covered?: boolean;
 }
 
 export interface RecognizedBoard {
@@ -59,6 +61,8 @@ export interface RecognizedBoard {
 export interface RecognizeOptions {
   occupancyThreshold?: number;
   unknownThreshold?: number;
+  /** これ以下の sd なら「空」と断定する。間の帯は未確定になる。 */
+  emptyMaxSd?: number;
 }
 
 export function recognizeBoard(
@@ -68,8 +72,9 @@ export function recognizeBoard(
 ): RecognizedBoard {
   const occThreshold = options.occupancyThreshold ?? OCCUPANCY_THRESHOLD;
   const unknownThreshold = options.unknownThreshold ?? UNKNOWN_NCC_THRESHOLD;
+  const emptyMaxSd = options.emptyMaxSd ?? EMPTY_MAX_SD;
 
-  const occ = occupancy(board, occThreshold);
+  const pres = presence(board, emptyMaxSd, occThreshold);
   const squares: VisionSquare[][] = [];
   const guesses: Square[][] = [];
   const cells: RecognizedCell[][] = [];
@@ -86,20 +91,33 @@ export function recognizeBoard(
       // 空マスなら「駒あり」と誤判定され、駒があれば別の駒に化ける。
       // 読めなかったものとして扱い、判断を後の場面へ先送りする。
       const pointer = hasPointer(cut);
+      const p = pres[row][col];
 
-      if (!occ[row][col] && !pointer) {
+      if (p === 'empty' && !pointer) {
         squares[row].push(null);
         guesses[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         continue;
       }
-      if (!occ[row][col] && pointer) {
+      if (p === 'empty' && pointer) {
         // ポインタしか無いように見えないが、その下に駒が隠れているかもしれない。
         // 「空」と断定できないので未確定にする。
         squares[row].push(UNKNOWN);
         guesses[row].push(null);
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, pointer: true });
+        continue;
+      }
+      if (p === 'unclear') {
+        // ⭐ **ポインタと同じ扱いを、覆われて平らになったマスにも広げる。**
+        // 散らばりが中途半端なマスは、演出に覆われた駒か、単に読み落とした駒。
+        // どちらにせよ「空」と断定してはいけない。照合にはかけない——
+        // 覆われた絵から起こした第一候補は当てにならず、`fillGuesses` の側で
+        // 偽の駒として盤に乗ってしまう。
+        squares[row].push(UNKNOWN);
+        guesses[row].push(null);
+        cells[row].push({ piece: null, score: NaN, margin: NaN });
+        lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, covered: true });
         continue;
       }
       const match = classify(cut, templates);

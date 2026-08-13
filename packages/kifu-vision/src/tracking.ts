@@ -143,6 +143,37 @@ export function canPlay(state: BoardState, usi: string, side: Side): boolean {
   return (state.hand[side][drop[1] as PieceKind] ?? 0) > 0;
 }
 
+/**
+ * 追跡している持ち駒が、盤と辻褄が合っているか。
+ *
+ * 🔴 **「初期局面から仕切り直していない」だけでは足りなかった。** 手を 1 つ
+ * 取りこぼしても仕切り直しは起きない——取りこぼした手が覆われたマスの中で
+ * 起きていれば、引き継ぎのおかげで読みは通り続ける。そのあいだ持ち駒だけが
+ * 静かにずれ、**「正確」を騙り続ける**（追記 67 で見た形が別の入口から再発した）。
+ *
+ * ⭐ **判定したいのは「一度も仕切り直していないか」ではなく「持ち駒の追跡が
+ * 盤と食い違っていないか」。** そちらは直接測れる:
+ * 盤に載っていない駒の数（`offBoardPieces`）と、両者の持ち駒の合計は
+ * **常に一致していなければならない**。取りこぼした手が駒を取っていれば、
+ * 盤からは駒が消えるのに持ち駒は増えないので、ここで食い違う。
+ *
+ * ⚠ `shared` の `applyMove` は検証しないので、この不変条件は自動では保たれない。
+ * だから明示的に見る。
+ */
+export function handsMatchBoard(state: BoardState): boolean {
+  const off = offBoardPieces(state.board);
+  const held = new Map<PieceKind, number>();
+  for (const side of ['sente', 'gote'] as const) {
+    for (const [kind, n] of Object.entries(state.hand[side]) as [PieceKind, number][]) {
+      if (n > 0) held.set(kind, (held.get(kind) ?? 0) + n);
+    }
+  }
+  for (const kind of Object.keys(TOTAL_PIECES) as PieceKind[]) {
+    if ((off[kind] ?? 0) !== (held.get(kind) ?? 0)) return false;
+  }
+  return true;
+}
+
 /** 持ち駒が「分からないので両者に持たせた」状態か */
 export function handsAreGuessed(state: BoardState): boolean {
   const off = offBoardPieces(state.board);

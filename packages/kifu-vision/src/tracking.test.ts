@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyMove, createInitialState, type PieceKind, type Square } from 'shared';
 import { generateMoves } from './movegen.ts';
-import { canPlay, completeIfInitial, handsAreGuessed, isInitialBoard, offBoardPieces, startFromBoard, startState } from './tracking.ts';
+import { canPlay, completeIfInitial, handsAreGuessed, handsMatchBoard, isInitialBoard, offBoardPieces, startFromBoard, startState } from './tracking.ts';
 
 const at = (usi: string) => ({ row: usi.charCodeAt(1) - 97, col: 9 - Number(usi[0]) });
 
@@ -132,5 +132,33 @@ describe('canPlay', () => {
 
   it('盤上の移動は素通しする（絞るのは差分と legality の仕事）', () => {
     expect(canPlay(createInitialState(), '7g7f', 'sente')).toBe(true);
+  });
+});
+
+describe('handsMatchBoard', () => {
+  it('初期局面は辻褄が合っている', () => {
+    expect(handsMatchBoard(createInitialState())).toBe(true);
+  });
+
+  it('盤から駒が消えたのに持ち駒が増えていなければ食い違う', () => {
+    const state = createInitialState();
+    // 2b の角が盤から消えた（＝誰かが取ったはず）が、持ち駒には入っていない
+    const board = state.board.map((r) => r.slice());
+    board[1][7] = null;
+    expect(handsMatchBoard({ ...state, board })).toBe(false);
+  });
+
+  it('取った駒が持ち駒に入っていれば辻褄が合う', () => {
+    const state = createInitialState();
+    const board = state.board.map((r) => r.slice());
+    board[1][7] = null;
+    expect(handsMatchBoard({ ...state, board, hand: { sente: { B: 1 }, gote: {} } })).toBe(true);
+  });
+
+  it('成って盤に載っている駒は持ち駒ではない（生駒として数える）', () => {
+    const state = createInitialState();
+    const board = state.board.map((r) => r.slice());
+    board[6][0] = { kind: '+P', side: 'sente' }; // 9g の歩が成った形
+    expect(handsMatchBoard({ ...state, board })).toBe(true);
   });
 });

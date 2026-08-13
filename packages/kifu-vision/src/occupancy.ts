@@ -73,6 +73,57 @@ export function occupancy(
   return cellStats(board).map((r) => r.map((s) => s.sd > threshold));
 }
 
+/**
+ * これ以下の sd なら「空」と断定してよい。
+ *
+ * 🔴 **2 値では「覆われていて分からない」が書けなかった。** 半透明の演出が
+ * 盤を覆うと駒字が薄れて散らばりが減り、`sd > 30` に届かないマスが「空」と
+ * 断定される。差分の側から見ると「駒が消えた」ことになり、そこで追跡が切れる。
+ *
+ * ⭐ **帯は分かれている**（1 局目 283 枚・13327 マスの実測・追記 84）:
+ *
+ * | sd | 割合 |
+ * |---|---|
+ * | 0〜10 | 98.1% |
+ * | 10〜12 | 0.22%（**谷**） |
+ * | 12 以上 | 221 マス＝1 枚あたり 0.8 マス |
+ *
+ * 戦法エフェクトのピーク（0:20.4）で誤って「空」になった 6 マスの sd は
+ * 13 / 15 / 19 / 25 / 28 / 30 で、通常の空マス（2〜12）とは重ならない。
+ *
+ * ⚠ **12 以上が全部「覆われている」わけではない。** 初期局面（正解が分かっている）
+ * の 1c が sd 26.2 で「空」判定だった——そこには歩がある。つまりこの帯は
+ * **駒の見落とし**でもある。どちらにせよ「空と断定してはいけない」点は同じ。
+ */
+export const EMPTY_MAX_SD = 12;
+
+/** 空 / 覆われていて分からない / 駒あり */
+export type Presence = 'empty' | 'unclear' | 'piece';
+
+export function presenceOf(
+  sd: number,
+  emptyMax = EMPTY_MAX_SD,
+  pieceMin = OCCUPANCY_THRESHOLD,
+): Presence {
+  if (sd > pieceMin) return 'piece';
+  return sd <= emptyMax ? 'empty' : 'unclear';
+}
+
+/**
+ * 各マスの駒の有無を 3 値で返す。
+ *
+ * ⚠ **2 値の `occupancy` は残してある。** 初期局面探し（`findSegments` /
+ * `INITIAL_OCCUPANCY` / `occupancyDistance`）は「盤の配置が変わったか」を
+ * 見るだけなので 2 値でよく、そちらに未確定を持ち込むと距離が定義できなくなる。
+ */
+export function presence(
+  board: GrayImage,
+  emptyMax = EMPTY_MAX_SD,
+  pieceMin = OCCUPANCY_THRESHOLD,
+): Presence[][] {
+  return cellStats(board).map((r) => r.map((s) => presenceOf(s.sd, emptyMax, pieceMin)));
+}
+
 /** 平手の初期配置で駒が置かれているマス */
 export const INITIAL_OCCUPANCY: boolean[][] = [
   [true, true, true, true, true, true, true, true, true],

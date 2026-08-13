@@ -20,10 +20,10 @@ import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './s
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
-import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, type VisionSquare } from './src/uncertain.ts';
+import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, asHoles, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
 import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
-import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay } from './src/tracking.ts';
+import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatchBoard } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames } from './src/calibrate.ts';
@@ -76,8 +76,17 @@ const fmt = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).p
 const grabBoard = (sec: number) => crop(grabFrame(video, sec, geo.frameW, geo.frameH), boardRect(geo));
 
 // --- 初期局面からテンプレートを作る ---
-console.log('# 全編を 1fps で走査して初期局面を探す');
-const coarse = await findSegments(video, geo, 1);
+//
+// ⚠ 既定は**全編**を走査する（較正込みで約 42 秒。ここは支配的ではない）。
+// `KIFU_VISION_SCAN_SEC` で頭から何秒だけ見るかを絞れる（調査用）。
+// **絞ると初期局面を取り逃すことがある**ので、数値を測るときは既定のまま使う。
+const scanSec = Number(process.env.KIFU_VISION_SCAN_SEC ?? 0);
+console.log(
+  scanSec > 0
+    ? `# 先頭 ${scanSec} 秒を 1fps で走査して初期局面を探す（調査用に短縮）`
+    : '# 全編を 1fps で走査して初期局面を探す',
+);
+const coarse = await findSegments(video, geo, 1, 4, scanSec > 0 ? { durationSec: scanSec } : undefined);
 const initials = coarse.filter((s) => occupancyDistance(s.occupancy, INITIAL_OCCUPANCY) === 0);
 console.log(`  初期局面: ${initials.map((s) => `${fmt(s.representativeTime)}(${s.length}f)`).join(', ') || 'なし'}`);
 if (initials.length === 0) {
@@ -264,6 +273,23 @@ let pairedMoves = 0;
  * 仕切り直し・2 手分解・盤からの測り直しが挟まったら、そこで信用を捨てる。
  */
 let handsTrusted = false;
+/**
+ * 同じ打ちを何回断ったら、持ち駒の側を疑うか。
+ *
+ * 0.5 秒刻みなので 3 回 ≒ 1.5 秒。ポインタや演出が作る偽の駒が、同じマスに
+ * **同じ駒種で** 1.5 秒居座ることは考えにくい（ポインタは動くし、`verifyMove`
+ * も通らないといけない）。逆に本当に指された打ちは、そこにあり続ける。
+ */
+const UNHELD_DROP_PATIENCE = Number(process.env.KIFU_VISION_UNHELD_PATIENCE ?? 3);
+/**
+ * 直前に断った打ちと、それを断った回数。
+ *
+ * ⚠ **`let ... | null` で持たない。** 代入が `null` ばかりだと TypeScript は
+ * 型を `null` に絞り、`refusedDrop?.usi` が `never` へのアクセスになって
+ * 通らなくなる（このファイルは `state` で同じ形を一度踏んでいる）。
+ * 中身を書き換える `const` の器にしておけば絞り込みが起きない。
+ */
+const refusedDrop = { usi: '', count: 0 };
 
 /**
  * 追跡している状態を進める。
@@ -290,9 +316,30 @@ function nextState(
   move: { usi: string; side: Side } | null,
 ): BoardState {
   if (prev && move) {
-    const next = applyMove(prev, move.usi);
+    // 🔴 **`applyMove` は `state.sideToMove` を見て持ち駒を増やす**（動いた駒の色ではない）。
+    // 追跡している手番は手を 1 つ取りこぼすだけで裏返るので、そのまま渡すと
+    // **取った駒が逆の持ち主の手に入り続ける**。合計は合ったままなので
+    // `handsMatchBoard` にも映らない。
+    //
+    // 実測（1 局目）: 断片の 1 手目が `3c3d`（後手）なのに手番は先手のまま始まり、
+    // 以降ずっと持ち主が入れ替わっていた。10:38 の `B*4a` は**本当に指された手**
+    // なのに「先手は角を持っていない」として断られ、そこで断片が切れていた。
+    //
+    // ⭐ **指した側は駒の色から分かっている。** 数え上げでずれる手番より、
+    // そちらの方がはるかに信用できる。
+    const next = applyMove({ ...prev, sideToMove: move.side }, move.usi);
     // ⚠ `applyMove` は検証しないので、持ち駒が壊れていないかは呼び出し側が見る。
-    return { board, hand: next.hand, sideToMove: next.sideToMove };
+    const advanced: BoardState = { board, hand: next.hand, sideToMove: next.sideToMove };
+    // 🔴 **盤と持ち駒が食い違ったら、そこで信用を捨てる。** 覆われたマスの中で
+    // 手を取りこぼしても仕切り直しは起きないので、「初期局面から仕切り直して
+    // いない」だけでは持ち駒の正しさを保証できない。実測（1 局目 10:38 /
+    // 2 局目 23:47）では、どちらも**本当に指された角打ち**を
+    // 「持っていない駒」として断り、そこで断片が切れていた。
+    if (handsTrusted && !handsMatchBoard(advanced)) {
+      handsTrusted = false;
+      if (VERBOSE) console.log(`  ⚠ 持ち駒の追跡が盤と食い違った。以後は持ち駒を信じない`);
+    }
+    return advanced;
   }
   handsTrusted = false;
   if (!move) {
@@ -402,7 +449,13 @@ for (let qi = 0; qi < queue.length; qi++) {
   if (!current) {
     // 起点は**全マスが読めている絵だけ**から採る。引き継ぐ相手がまだ無いので、
     // 未確定を当てずっぽうで埋めるしかなく、間違えるとその後がすべてずれる。
-    const start = settle(recognized.board);
+    //
+    // ⭐ **ただし初期局面だけは例外。** 穴を除いた残りが平手の初期配置と
+    // 一致するなら、穴の中身はルールが知っている。ここを通さないと、
+    // 「駒の有無」に未確定を入れたぶんだけ**起点が見つかりにくくなって
+    // 逆に悪化する**（ポインタは常に盤上のどこかにいるうえ、覆われて平らに
+    // なったマスも未確定になった）。
+    const start = settle(recognized.board) ?? completeIfInitial(asHoles(recognized.board));
     if (!start) {
       unreadableStart++;
       continue;
@@ -592,6 +645,7 @@ for (let qi = 0; qi < queue.length; qi++) {
       current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
+      refusedDrop.count = 0;
       byCandidate++;
       history.reset(m.to.row, m.to.col);
       if (m.from) history.reset(m.from.row, m.from.col);
@@ -620,6 +674,7 @@ for (let qi = 0; qi < queue.length; qi++) {
       current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
+      refusedDrop.count = 0;
       rescuedVanished++;
       history.reset(rescue.to.row, rescue.to.col);
       history.reset(rescue.from.row, rescue.from.col);
@@ -649,13 +704,33 @@ for (let qi = 0; qi < queue.length; qi++) {
   //
   // ⚠ 持ち駒が「不明」（仕切り直し後は両者に全部持たせている）のときは断らない。
   // そこで断ると、本当に指された打ちまで落ちる。
+  //
+  // ⭐ **ただし、断り続けたら疑うのは持ち駒の方。** 映像は「そのマスに駒が現れた」
+  // ことについて嘘をつかない。同じ打ちが何度読んでも現れるなら、間違っているのは
+  // 追跡している持ち駒である。実測（3 回の走査）で、`unheld-drop` がまとまって
+  // 出た 3 か所（1 局目 10:38 `B*4a`、2 局目 23:47 `B*7g` / 21:32 `P*4b`）は
+  // **すべて本当に指された手**で、断ったせいで断片が切れていた。
   if (result.move && state && handsTrusted && !canPlay(state, result.move.usi, result.move.side as Side)) {
-    failures.set('unheld-drop', (failures.get('unheld-drop') ?? 0) + 1);
-    if (VERBOSE && detailShown < MAX_DETAIL) {
-      detailShown++;
-      console.log(`  ⚠ ${fmt(t)} 持っていない駒を打つ手なので断った: ${result.move.usi}`);
+    refusedDrop.count = refusedDrop.usi === result.move.usi ? refusedDrop.count + 1 : 1;
+    refusedDrop.usi = result.move.usi;
+    if (refusedDrop.count >= UNHELD_DROP_PATIENCE) {
+      // 何度読んでも同じ打ちが見えている。持ち駒の追跡がどこかでずれている。
+      handsTrusted = false;
+      refusedDrop.count = 0;
+      if (VERBOSE) {
+        console.log(
+          `  ⚠ ${fmt(t)} ${result.move.usi} を ${UNHELD_DROP_PATIENCE} 回断ってもまだ見えている。` +
+            `持ち駒の追跡の方を疑い、以後は信じない`,
+        );
+      }
+    } else {
+      failures.set('unheld-drop', (failures.get('unheld-drop') ?? 0) + 1);
+      if (VERBOSE && detailShown < MAX_DETAIL) {
+        detailShown++;
+        console.log(`  ⚠ ${fmt(t)} 持っていない駒を打つ手なので断った: ${result.move.usi}`);
+      }
+      result = { move: null, failure: 'unheld-drop', changedCells: result.changedCells };
     }
-    result = { move: null, failure: 'unheld-drop', changedCells: result.changedCells };
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
@@ -665,6 +740,7 @@ for (let qi = 0; qi < queue.length; qi++) {
     current = state.board;
     lastSyncTime = t;
     consecutiveFailures = 0;
+    refusedDrop.count = 0;
 
     // 手が指されたマスは中身が変わったので、古い読みの連続は捨てる。
     // 残すと「変わる前の駒」で確定してしまう。
@@ -772,6 +848,7 @@ for (let qi = 0; qi < queue.length; qi++) {
       current = state.board;
       lastSyncTime = t;
       consecutiveFailures = 0;
+      refusedDrop.count = 0;
       pairedMoves += 2;
       if (VERBOSE) {
         console.log(
@@ -807,6 +884,7 @@ for (let qi = 0; qi < queue.length; qi++) {
     current = state.board;
     lastSyncTime = t;
     consecutiveFailures = 0;
+    refusedDrop.count = 0;
     resets++;
     steps = [];
   }

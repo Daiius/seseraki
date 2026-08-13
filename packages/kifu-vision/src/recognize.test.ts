@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type Square } from 'shared';
-import { carryUnknowns, boardsEqual, boardDiff } from './recognize.ts';
+import { carryUnknowns, boardsEqual, boardDiff, recognizeBoard } from './recognize.ts';
 import { inferMove } from './moves.ts';
+import { cellImage, type Template } from './template.ts';
+import { isUnknown } from './uncertain.ts';
+import type { GrayImage } from './frame.ts';
 
 function emptyBoard(): Square[][] {
   return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
@@ -75,6 +78,51 @@ describe('carryUnknowns', () => {
 
     // 素の読みなら（駒種は誤っていても）移動として形は取れる
     expect(inferMove(before, read).changedCells).toBe(2);
+  });
+});
+
+/** 各マスの標準偏差を指定して合成した盤画像（`occupancy.test.ts` と同じ作り） */
+function boardWithSd(sds: number[][]): GrayImage {
+  const cell = 10;
+  const size = cell * 9;
+  const data = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const sd = sds[Math.floor(y / cell)][Math.floor(x / cell)];
+      data[y * size + x] = y % cell < cell / 2 ? 128 - sd : 128 + sd;
+    }
+  }
+  return { width: size, height: size, data };
+}
+
+describe('recognizeBoard の駒の有無（3 値）', () => {
+  const sds = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 5));
+  sds[3][4] = 20; // 覆われて平らになった帯（12 < sd <= 30）
+  sds[8][0] = 60; // 駒がはっきり見えている
+  const img = boardWithSd(sds);
+  const templates: Template[] = [{ kind: 'P', side: 'sente', samples: 1, img: cellImage(img, 8, 0) }];
+  const r = recognizeBoard(img, templates);
+
+  it('帯の中のマスは未確定になる（「空」と断定しない）', () => {
+    expect(isUnknown(r.board[3][4])).toBe(true);
+  });
+
+  it('未確定にした理由が「覆われていた」として残る', () => {
+    const covered = r.lowConfidence.filter((c) => c.covered);
+    expect(covered).toHaveLength(1);
+    expect(covered[0]).toMatchObject({ row: 3, col: 4, guess: null });
+  });
+
+  it('覆われたマスに当てずっぽうの駒を置かない（fillGuesses で偽の駒にしない）', () => {
+    expect(r.guesses[3][4]).toBeNull();
+  });
+
+  it('通常の空マスは空のまま', () => {
+    expect(r.board[0][0]).toBeNull();
+  });
+
+  it('はっきり見えている駒はそのまま読める', () => {
+    expect(r.board[8][0]).toEqual({ kind: 'P', side: 'sente' });
   });
 });
 

@@ -27,7 +27,7 @@ import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatch
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
-import { calibrateFromFrames } from './src/calibrate.ts';
+import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
@@ -47,7 +47,16 @@ const VERBOSE = process.env.KIFU_VISION_VERBOSE === '1';
 // 全マスの切り出しが一様にずれ、いちばん読みにくいマスから順に読めなくなる。
 // 何枚か測って中央値を採る（盤が写っていない絵は「はっきりしない」ので落ちる）。
 console.log('# 盤の格子をこの動画に合わせて測る');
-const calSeconds = [fromSec + 1, fromSec + 60, (fromSec + toSec) / 2, toSec - 60, toSec - 1]
+// ⚠ **盤が写っていない絵は落ちるので、少なめに撒くと標本が足りなくなる。**
+// 実測: 全編（0〜30:33）を 1 回で走査したとき、5 点のうち 2 点が感想戦に当たって
+// 3 点しか使えず、ずれの中央値が (0.38, 0.88) から (0.50, 1.00) にぶれた。
+// マスの切り出しが一様にずれると、いちばん読みにくいマスから順に読めなくなる
+// （2 局目の手番の交互率 0.99 → 0.96）。**等間隔に広く撒く。**
+const CAL_POINTS = Number(process.env.KIFU_VISION_CAL_POINTS ?? 9);
+const calSeconds = Array.from(
+  { length: CAL_POINTS },
+  (_, i) => fromSec + 1 + ((toSec - fromSec - 2) * i) / (CAL_POINTS - 1),
+)
   .filter((s) => s > 0)
   .map((s) => Math.round(s));
 const calibration = process.env.KIFU_VISION_NO_CALIBRATE === '1'
@@ -238,6 +247,8 @@ const REFINE_MAX_GAP = Number(process.env.KIFU_VISION_REFINE_MAX_GAP ?? 3);
 interface Run {
   steps: Step[];
   startedAt: number;
+  /** 何局目か（0 始まり） */
+  game: number;
 }
 const runs: Run[] = [];
 let steps: Step[] = [];
@@ -404,6 +415,12 @@ let covered = 0;
  * 実測（1 局目 16:32）: `▽全`（成銀）と読まれた 8f を `▽金` に読み直して
  * `G*8f` が通るようになった。ここが 27 秒ぶんの断片切れの原因だった。
  */
+/** 何局目を読んでいるか（0 始まり）。盤が初期局面に戻ったら次の局へ移る。 */
+let gameIndex = 0;
+/** これだけ手が読めた後でなければ、初期局面に戻っても「新しい対局」と見なさない。 */
+const MIN_MOVES_BEFORE_NEW_GAME = Number(process.env.KIFU_VISION_MIN_MOVES_NEW_GAME ?? 4);
+/** 対局中の盤が写っていないので読まなかった絵 */
+let offBoard = 0;
 let undroppableReread = 0;
 /** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
 let stuckKinds = 0;
@@ -446,8 +463,51 @@ const queued = new Set<number>(queue);
 for (let qi = 0; qi < queue.length; qi++) {
   const t = queue[qi];
   samples++;
-  const img = grabBoard(t);
+
+  // --- 対局中の盤が写っていない絵は、そもそも読まない ---
+  //
+  // 終局後の感想戦（棋譜解析）画面・対局者紹介・広告は、**盤のレイアウトが違う**。
+  // 固定座標のまま読むと「壊れた盤面から手が読めた」ことになりかねない。
+  //
+  // ⭐ 格子のくっきりさで分かれる（`isCalibrationTrustworthy` の実測を再確認した）:
+  //
+  // | 場面 | 縦, 横 |
+  // |---|---|
+  // | 対局中（5:00 / 15:00 / 29:40） | (29〜33, 36〜39) |
+  // | 感想戦（29:55 以降） | **(3.6〜7.1, 5.4〜15.4)** |
+  // | 終局ダイアログ（19:15） | **(15.7, 8.0)** |
+  //
+  // ⚠ **失敗に数えない。** これは「読めなかった」のではなく「読むべきでない絵」。
+  const frame = grabFrame(video, t, geo.frameW, geo.frameH);
+  if (!isCalibrationTrustworthy(calibrateGeometry(frame, geo))) {
+    offBoard++;
+    if (VERBOSE && offBoard <= MAX_DETAIL) console.log(`  ▢ ${fmt(t)} 対局中の盤が写っていないので読まない`);
+    continue;
+  }
+  const img = crop(frame, boardRect(geo));
   const recognized = recognizeBoard(img, templates);
+
+  // --- 盤が初期局面に戻ったら、そこからは別の対局 ---
+  //
+  // ⭐ 1 本の動画に 2 局入っている。混ぜて 1 つの棋譜にすると、局をまたいだ
+  // 「手」が生まれてしまう。**盤が初期局面に戻ることが、対局の切れ目そのもの。**
+  //
+  // ⚠ **手数を条件に入れる。** `completeIfInitial` は 3 マスまでの穴を許すので、
+  // 対局が始まった直後（1〜2 手）は「穴のせいで初期局面に見える」ことがありうる。
+  // 実際の対局が 2 手で初期局面へ戻ることは無いので、そこで切る。
+  const movesInGame = runs.reduce((n, r) => (r.game === gameIndex ? n + r.steps.length : n), 0);
+  if (movesInGame >= MIN_MOVES_BEFORE_NEW_GAME && completeIfInitial(asHoles(recognized.board))) {
+    gameIndex++;
+    current = null;
+    state = null;
+    steps = [];
+    handsTrusted = false;
+    consecutiveFailures = 0;
+    lastSyncTime = null;
+    history.clear();
+    provisional.clear();
+    console.log(`\n# ${fmt(t)} 盤が初期局面に戻った → ${gameIndex + 1} 局目として読み直す`);
+  }
 
   // ⚠ ここで `pruneOverflow` を使って偽の駒を削る手も試したが、**逆効果だった**。
   // 「盤面が成立せず捨てた」は 163 → 16 に減るものの、代わりに
@@ -691,7 +751,7 @@ for (let qi = 0; qi < queue.length; qi++) {
     });
     if (picked.best) {
       const m = picked.best.move;
-      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
       state = nextState(state, picked.best.board, { usi: m.usi, side: m.side });
       current = state.board;
@@ -720,7 +780,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   if (result.failure === 'piece-vanished') {
     const rescue = rescueVanished(current, primary, recognized.board);
     if (rescue) {
-      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
       state = nextState(state, rescue.board, { usi: rescue.usi, side: rescue.side as Side });
       current = state.board;
@@ -786,7 +846,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
-    if (steps.length === 0) runs.push({ steps, startedAt: t });
+    if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
     state = nextState(state, board, { usi: result.move.usi, side: result.move.side as Side });
     current = state.board;
@@ -882,7 +942,7 @@ for (let qi = 0; qi < queue.length; qi++) {
       anySide: handsAreGuessed(state),
     });
     if (pair.moves && pair.board) {
-      if (steps.length === 0) runs.push({ steps, startedAt: t });
+      if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       for (const m of pair.moves) {
         steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
         history.reset(m.to.row, m.to.col);
@@ -948,6 +1008,7 @@ console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
+if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);
 console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);
 if (undroppableReread > 0) console.log(`  打てる駒に限って読み直して通った: ${undroppableReread}`);
 if (stuckKinds > 0) console.log(`  同じ側の別の駒に化けて見えた絵（引き継いだ）: ${stuckKinds}`);
@@ -973,14 +1034,19 @@ if (failures.size > 0) {
   for (const [f, n] of [...failures].sort((a, b) => b[1] - a[1])) console.log(`    ${f}: ${n}`);
 }
 
-const sorted = [...runs].sort((a, b) => b.steps.length - a.steps.length);
-console.log(`\n# 復元した断片（長い順に上位 5 本）`);
-for (const r of sorted.slice(0, 5)) {
-  let alt = 0;
-  for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
-  const ratio = r.steps.length > 1 ? (alt / (r.steps.length - 1)).toFixed(2) : '-';
-  console.log(`\n  ${fmt(r.startedAt)}〜${fmt(r.steps.at(-1)!.time)}  ${r.steps.length} 手  手番の交互率 ${ratio}`);
-  console.log(`    ${r.steps.map((s) => `${s.usi}${s.solved ? '*' : ''}`).join(' ')}`);
+const gameCount = gameIndex + 1;
+for (let g = 0; g < gameCount; g++) {
+  const mine = runs.filter((r) => r.game === g && r.steps.length > 0).sort((a, b) => b.steps.length - a.steps.length);
+  if (mine.length === 0) continue;
+  const moves = mine.reduce((n, r) => n + r.steps.length, 0);
+  console.log(`\n# ${g + 1} 局目: ${moves} 手 / ${mine.length} 本の断片`);
+  for (const r of mine.slice(0, 5)) {
+    let alt = 0;
+    for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
+    const ratio = r.steps.length > 1 ? (alt / (r.steps.length - 1)).toFixed(2) : '-';
+    console.log(`\n  ${fmt(r.startedAt)}〜${fmt(r.steps.at(-1)!.time)}  ${r.steps.length} 手  手番の交互率 ${ratio}`);
+    console.log(`    ${r.steps.map((s) => `${s.usi}${s.solved ? '*' : ''}`).join(' ')}`);
+  }
 }
 
 let alternations = 0;
@@ -1012,14 +1078,19 @@ try {
   console.log(`\n# テンプレートの保存に失敗: ${(e as Error).message}`);
 }
 
-if (runs.length > 0) {
-  const outPath = `${OUT_DIR}/${basename(video).replace(/\.[^.]+$/, '')}-${Math.round(fromSec)}-${Math.round(toSec)}.json`;
+// ⭐ **対局ごとに別のファイルへ書き出す。** 1 本の動画に 2 局入っているので、
+// 混ぜると局をまたいだ「手」が生まれる。盤が初期局面に戻った時点で分けてある。
+for (let g = 0; g <= gameIndex; g++) {
+  const mine = runs.filter((r) => r.game === g && r.steps.length > 0);
+  if (mine.length === 0) continue;
+  const suffix = gameIndex > 0 ? `-game${g + 1}` : '';
+  const outPath = `${OUT_DIR}/${basename(video).replace(/\.[^.]+$/, '')}-${Math.round(fromSec)}-${Math.round(toSec)}${suffix}.json`;
   mkdirSync(dirname(outPath), { recursive: true });
   const payload = {
     source: basename(video),
     range: { fromSec, toSec, stepSec },
-    runs: runs
-      .filter((r) => r.steps.length > 0)
+    game: g + 1,
+    runs: mine
       .map((r) => {
         let alt = 0;
         for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;

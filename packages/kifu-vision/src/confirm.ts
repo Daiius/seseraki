@@ -108,6 +108,11 @@ export class ReadingHistory {
   reset(row: number, col: number): void {
     this.slots[row][col] = null;
   }
+
+  /** 盤ごと捨てる。別の対局に移ったときのように、過去の読みが一切参考にならない場合に使う。 */
+  clear(): void {
+    this.slots = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null));
+  }
 }
 
 function same(a: Square, b: Square): boolean {

@@ -94,6 +94,12 @@ function boardWithSd(
   vertical: boolean[][] = [],
   /** マスの明るさの中心。ポインタ（白）を作るときだけ上げる */
   bases: number[][] = [],
+  /**
+   * 左上の一角だけ暗い。**どのテンプレートとも中途半端にしか似ず、しかも
+   * 1 位と 2 位が並ぶ**マスを作るため（NCC 0.459・差 0.000）。
+   * 実測のポインタが掛かった空マス（▽角 0.467 対 ▽銀 0.454）とほぼ同じ形。
+   */
+  mixed: boolean[][] = [],
 ): GrayImage {
   const cell = 10;
   const size = cell * 9;
@@ -104,7 +110,11 @@ function boardWithSd(
       const col = Math.floor(x / cell);
       const sd = sds[row][col];
       const base = bases[row]?.[col] ?? 128;
-      const dark = vertical[row]?.[col] ? x % cell < cell / 2 : y % cell < cell / 2;
+      const dark = mixed[row]?.[col]
+        ? x % cell < cell * 0.4 && y % cell < cell / 2
+        : vertical[row]?.[col]
+          ? x % cell < cell / 2
+          : y % cell < cell / 2;
       data[y * size + x] = base + (dark ? -sd : sd);
     }
   }
@@ -127,7 +137,13 @@ describe('recognizeBoard の駒の有無（3 値）', () => {
   sds[5][2] = 15;
   vert[5][2] = true;
   bases[5][2] = 235;
-  const img = boardWithSd(sds, vert, bases);
+  // 🔴 ポインタが隅に掛かった空マス（実測 2 本目 16:37 の 4e）。sd は十分に
+  // 大きいので「駒あり」の門は通るが、**どのテンプレートとも中途半端にしか
+  // 似ず、1 位と 2 位も並ぶ**（NCC 0.577 で 3 種が同点）。
+  const mix = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => false));
+  sds[6][6] = 60;
+  mix[6][6] = true;
+  const img = boardWithSd(sds, vert, bases, mix);
   // ⚠ テンプレートが 1 種しか無いと 1 位と 2 位の差が定義できず（常に 1）、
   // 覆われたマスが必ず「決定的」になってしまう。**紛れる相手を必ず置く。**
   const templates: Template[] = [
@@ -169,6 +185,26 @@ describe('recognizeBoard の駒の有無（3 値）', () => {
 
   it('はっきり見えている駒はそのまま読める', () => {
     expect(r.board[8][0]).toEqual({ kind: 'P', side: 'sente' });
+  });
+
+  it('⭐ よく似ているなら、2 位と並んでいても盤に置く（金⇔全のような組）', () => {
+    // 横縞なので ▲歩 とも ▲香 とも NCC 1.0 で並び、差は 0。それでも
+    // **「そこに駒がある」ことは疑っていない**ので置く。ここで差を求めると、
+    // 実測では本物の `G*8f`（金・NCC 0.815・差 0.028）が落ちて 1 本目が
+    // 92 → 75 手に退行した。
+    expect(r.cells[8][0].margin).toBeLessThan(0.05);
+    expect(isUnknown(r.board[8][0])).toBe(false);
+  });
+
+  it('🔴 弱くしか似ておらず、しかも 2 位と並ぶなら盤に置かない', () => {
+    // 🔴 実測（2 本目 16:37 の 4e）: マウスポインタが隅に半分だけ掛かった
+    // **空マス**が sd=32.6 で「駒あり」の門を通り、▽角 0.467 対 ▽銀 0.454
+    // という差 0.013 の読みで盤に置かれた。差分は「空 → 駒」＝打ちの形なので
+    // そのまま棋譜に入り、偽の `B*4e` から 13 手が総崩れになった。
+    expect(r.cells[6][6].score).toBeLessThan(0.6);
+    expect(r.cells[6][6].margin).toBeLessThan(0.05);
+    expect(isUnknown(r.board[6][6])).toBe(true);
+    expect(r.lowConfidence.some((c) => c.row === 6 && c.col === 6)).toBe(true);
   });
 });
 

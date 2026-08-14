@@ -71,6 +71,62 @@ export const UNKNOWN_NCC_THRESHOLD = 0.45;
 export const COVERED_NCC_THRESHOLD = 0.7;
 export const COVERED_MARGIN_THRESHOLD = 0.25;
 
+/**
+ * 「駒あり」の門を通ったマスを盤に置いてよいのは、
+ * **「よく似ている」か「他と紛れていない」かのどちらかを満たすとき。**
+ *
+ * 🔴 実測（2 本目 16:37 の 4e・追記 130）: マウスポインタが**マスの隅に半分だけ**
+ * 掛かった空マスが `sd=32.6` で「駒あり」の門を通り、**▽角 0.467 対 ▽銀 0.454**
+ * ——差 0.013 で盤に置かれた。差分は「空 → 駒」なのでちょうど打ちの形になり、
+ * 後手は本当に角を持っていたので `canPlay` も通り、偽の `B*4e` が棋譜に入った。
+ * そこから 13 手が総崩れになり、断片が切れた。
+ *
+ * ⚠ `hasPointer` は「マスの 4% 超が輝度 235 超」で見るので、**隅に掛かった
+ * ポインタは通り抜ける**。🔒 だが**割合も `sd` の閾値も動かさない**——
+ * 代用が外れたら閾値ではなく「本当は何を判定したいのか」に戻る（README §）。
+ * 判定したいのは「駒があるか」ではなく **「どの駒か決まっているか」**。
+ *
+ * ##### 🔴 差だけを見る門は、本物の駒も一緒に落とした（追記 132）
+ *
+ * | | 2 本目 16:37 の 4e（偽） | 1 本目 16:32 の 8f（本物の金） |
+ * |---|---|---|
+ * | 中身 | ポインタが掛かった**空マス** | **本物の金**（全と 0.70〜0.81 相関） |
+ * | 照合 1 位の NCC | **0.467** | **0.815** |
+ * | 1 位と 2 位の差 | 0.013 | 0.028 |
+ *
+ * **差では並ぶ。NCC では倍近く開く。** 差だけで切ったら 1 本目が 92 → 75 手に
+ * 退行した（落ちたのは Phase B が拾えるようにした `G*8f` そのもの）。
+ * 🔒 **分布が 2 山に割れることは、割れ目が「正しい / 間違い」の境目である
+ * ことを意味しない。何が入っているかを見る。**
+ *
+ * ##### だから 2 つを一緒に見る（`probe-piece-margin.ts` の 2 次元の表）
+ *
+ * 2 本とも全編 2 秒刻み・盤に置かれたマス 29350 / 34944。**NCC < 0.6 の隅**:
+ *
+ * | 1 位と 2 位の差 | 1 本目 | 2 本目 | 2 本目の中身 |
+ * |---|---|---|---|
+ * | < 0.05 | **0** | 11 | 単発の読み（4c 香 / 4d 桂 / 6e 玉 …）。**問題の 4e もここ** |
+ * | 0.05〜0.10 | **0** | 430 | **7g に居座る本物の ▲角**（NCC 0.505 で読み続ける） |
+ * | 0.10〜0.15 | 3 | 5 | |
+ *
+ * ⭐ **谷がはっきり分かれている。** 下は「1 枚だけ現れて消える読み」＝演出や
+ * ポインタの指紋、上は「何分も同じマスに出続ける読み」＝本物の駒。
+ * ⭐⭐ **1 本目はこの隅が空なので、この門では 1 本目の結果が 1 ビットも変わらない。**
+ *
+ * ⚠ **NCC が低いこと自体は「駒でない」を意味しない**（7g の角がまさにそれ）。
+ * だから NCC 単独の門にはせず、**両方を満たさないときだけ**未確定にする。
+ */
+export const PIECE_MARGIN_THRESHOLD = Number(process.env.KIFU_VISION_PIECE_MARGIN ?? 0.05);
+
+/**
+ * これ以上よく似ていれば、2 位と並んでいても盤に置く。
+ *
+ * 金⇔全のように**字が似ている組は原理的に差が付かない**（0.70〜0.81 相関）。
+ * そこで差を求めると本物の駒が落ちる。**似ている相手がいるだけで、
+ * 「そこに駒がある」ことは疑っていない。**
+ */
+export const PIECE_STRONG_NCC = Number(process.env.KIFU_VISION_PIECE_STRONG_NCC ?? 0.6);
+
 export interface RecognizedCell {
   piece: Square;
   /** 駒があると判定されたマスのみ。空マスは NaN */
@@ -112,6 +168,10 @@ export interface RecognizeOptions {
   unknownThreshold?: number;
   /** これ以下の sd なら「空」と断定する。間の帯は未確定になる。 */
   emptyMaxSd?: number;
+  /** 盤に置くのに要る照合 1 位と 2 位の差。下回れば「駒はあるが何か分からない」。 */
+  pieceMargin?: number;
+  /** これ以上よく似ていれば、2 位と並んでいても盤に置く。 */
+  pieceStrongNcc?: number;
   /**
    * 盤に切り出した**色付き**の絵。渡すと、成駒と読めたマスの字が朱かを確かめ、
    * 朱でなければ生駒に限って読み直す。渡さなければ今までどおり形だけで読む。
@@ -159,6 +219,8 @@ export function recognizeBoard(
   const occThreshold = options.occupancyThreshold ?? OCCUPANCY_THRESHOLD;
   const unknownThreshold = options.unknownThreshold ?? UNKNOWN_NCC_THRESHOLD;
   const emptyMaxSd = options.emptyMaxSd ?? EMPTY_MAX_SD;
+  const pieceMargin = options.pieceMargin ?? PIECE_MARGIN_THRESHOLD;
+  const strongNcc = options.pieceStrongNcc ?? PIECE_STRONG_NCC;
 
   const pres = presence(board, emptyMaxSd, occThreshold);
   const squares: VisionSquare[][] = [];
@@ -242,7 +304,14 @@ export function recognizeBoard(
       // ⚠ 一致度が閾値を下回るなら、**第一候補であっても盤に置かない**。
       // 実測では 0.208 の当てずっぽうが 1 位を取ることがあり、それを置くと
       // 駒数が上限を超えて盤面ごと捨てられる。
-      const confident = match.score >= unknownThreshold && !pointer;
+      //
+      // 🔴 **1 位の高さだけでは足りない。** 弱く似ていて、しかも 2 位と並んで
+      // いるなら、それは「そこに何かがある」以上のことを何も言っていない。
+      // ポインタが隅に掛かった空マスがここをすり抜けて偽の打ちになっていた。
+      // ⚠ **どちらか一方で足りる。** よく似ていれば紛れていてもよい（金⇔全）し、
+      // 紛れていなければ弱くてもよい（テンプレートの甘い角）。
+      const decided = match.score >= strongNcc || match.margin >= pieceMargin;
+      const confident = match.score >= unknownThreshold && decided && !pointer;
       squares[row].push(confident ? piece : UNKNOWN);
       if (!confident) {
         lowConfidence.push({ row, col, score: match.score, margin: match.margin, guess: piece, pointer });

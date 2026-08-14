@@ -3,6 +3,7 @@ import { createInitialState, type Square } from 'shared';
 import { carryUnknowns, boardsEqual, boardDiff, recognizeBoard } from './recognize.ts';
 import { inferMove } from './moves.ts';
 import { cellImage, type Template } from './template.ts';
+import { hasPointer } from './occupancy.ts';
 import { isUnknown } from './uncertain.ts';
 import type { GrayImage } from './frame.ts';
 
@@ -81,15 +82,30 @@ describe('carryUnknowns', () => {
   });
 });
 
-/** 各マスの標準偏差を指定して合成した盤画像（`occupancy.test.ts` と同じ作り） */
-function boardWithSd(sds: number[][]): GrayImage {
+/**
+ * 各マスの標準偏差と縞の向きを指定して合成した盤画像（`occupancy.test.ts` と同じ作り）
+ *
+ * 縞の向きで「似ている / 似ていない」を作る。横縞どうしは NCC が 1.0
+ * （NCC は明るさとコントラストに影響されないので、振幅が違っても 1.0）、
+ * 横縞と縦縞は平均を引くと直交するのでちょうど 0 になる。
+ */
+function boardWithSd(
+  sds: number[][],
+  vertical: boolean[][] = [],
+  /** マスの明るさの中心。ポインタ（白）を作るときだけ上げる */
+  bases: number[][] = [],
+): GrayImage {
   const cell = 10;
   const size = cell * 9;
   const data = new Uint8Array(size * size);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const sd = sds[Math.floor(y / cell)][Math.floor(x / cell)];
-      data[y * size + x] = y % cell < cell / 2 ? 128 - sd : 128 + sd;
+      const row = Math.floor(y / cell);
+      const col = Math.floor(x / cell);
+      const sd = sds[row][col];
+      const base = bases[row]?.[col] ?? 128;
+      const dark = vertical[row]?.[col] ? x % cell < cell / 2 : y % cell < cell / 2;
+      data[y * size + x] = base + (dark ? -sd : sd);
     }
   }
   return { width: size, height: size, data };
@@ -97,24 +113,54 @@ function boardWithSd(sds: number[][]): GrayImage {
 
 describe('recognizeBoard の駒の有無（3 値）', () => {
   const sds = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 5));
-  sds[3][4] = 20; // 覆われて平らになった帯（12 < sd <= 30）
-  sds[8][0] = 60; // 駒がはっきり見えている
-  const img = boardWithSd(sds);
-  const templates: Template[] = [{ kind: 'P', side: 'sente', samples: 1, img: cellImage(img, 8, 0) }];
+  const vert = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => false));
+  sds[3][4] = 20; // 覆われて平らになった帯（12 < sd <= 30）。横縞
+  sds[3][6] = 20; // 同じく覆われているが、こちらは縦縞（照合が決定的になる）
+  vert[3][6] = true;
+  sds[8][0] = 60; // 駒がはっきり見えている（横縞）
+  sds[8][2] = 40; // もう 1 種のテンプレート（横縞・振幅だけ違う）
+  sds[8][4] = 60; // 縦縞のテンプレート
+  vert[8][4] = true;
+  // ポインタの白（235 超）を被った縦縞のマス。NCC は明るさに影響されないので
+  // 照合は決まるが、`hasPointer` は「読めなくて当然」と言う。
+  const bases = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => 128));
+  sds[5][2] = 15;
+  vert[5][2] = true;
+  bases[5][2] = 235;
+  const img = boardWithSd(sds, vert, bases);
+  // ⚠ テンプレートが 1 種しか無いと 1 位と 2 位の差が定義できず（常に 1）、
+  // 覆われたマスが必ず「決定的」になってしまう。**紛れる相手を必ず置く。**
+  const templates: Template[] = [
+    { kind: 'P', side: 'sente', samples: 1, img: cellImage(img, 8, 0) },
+    { kind: 'L', side: 'sente', samples: 1, img: cellImage(img, 8, 2) },
+    { kind: 'G', side: 'gote', samples: 1, img: cellImage(img, 8, 4) },
+  ];
   const r = recognizeBoard(img, templates);
 
-  it('帯の中のマスは未確定になる（「空」と断定しない）', () => {
+  it('照合が決まらない覆われたマスは未確定になる（「空」と断定しない）', () => {
+    // 横縞なので ▲歩 とも ▲香 とも NCC 1.0 で並ぶ。差が無いので決められない。
     expect(isUnknown(r.board[3][4])).toBe(true);
   });
 
   it('未確定にした理由が「覆われていた」として残る', () => {
     const covered = r.lowConfidence.filter((c) => c.covered);
     expect(covered).toHaveLength(1);
-    expect(covered[0]).toMatchObject({ row: 3, col: 4, guess: null });
+    expect(covered[0]).toMatchObject({ row: 3, col: 4 });
   });
 
-  it('覆われたマスに当てずっぽうの駒を置かない（fillGuesses で偽の駒にしない）', () => {
-    expect(r.guesses[3][4]).toBeNull();
+  it('⭐ 覆われていても、照合が決定的なら駒として読む', () => {
+    // 縦縞なので ▽金 だけが 1.0、横縞のテンプレートは 0。差が開くので決まる。
+    // 🔴 ここを捨てていたせいで、打った駒がその場で取られる形が丸ごと消えていた。
+    expect(r.board[3][6]).toEqual({ kind: 'G', side: 'gote' });
+    expect(r.lowConfidence.some((c) => c.row === 3 && c.col === 6)).toBe(false);
+  });
+
+  it('⭐ ポインタが乗っていても、照合が決定的なら駒として読む', () => {
+    // 🔴 打ちの演出は白く光るので、`hasPointer` から見るとマウスポインタと
+    // 区別が付かない（実測 20:57 の 3e）。ポインタは「読めなくて当然」という
+    // **推定**にすぎないので、決定的な証拠が出たら推定の方を譲る。
+    expect(hasPointer(cellImage(img, 5, 2))).toBe(true);
+    expect(r.board[5][2]).toEqual({ kind: 'G', side: 'gote' });
   });
 
   it('通常の空マスは空のまま', () => {

@@ -22,6 +22,32 @@ import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from 
  */
 export const UNKNOWN_NCC_THRESHOLD = 0.45;
 
+/**
+ * 覆われて「駒があるか」が決まらなかったマスでも、**照合がここまで決定的なら**
+ * 駒として認める。
+ *
+ * 🔴 実測（20:57 の 3e・打たれた歩が白く光っている）: `sd=18.8` で門に落ちるのに、
+ * 照合は ▽歩 0.829 に対して 2 位 0.330。**駒種は決まっているのに、その手前で
+ * 捨てていた。** 打った駒がその場で取られる形では、これが唯一の痕跡になる
+ * （盤の差分には何も残らない）。
+ *
+ * ⚠ **`sd` の閾値は動かさない。** 「代用は代用でしかない。代用が外れたら閾値を
+ * 動かさない」に反する。**別の証拠（照合の 1 位と 2 位の差）で門を通す。**
+ *
+ * 閾値は測って決めた（`probe-unclear.ts`・全編 3549 枚・覆われたマス 3288 個）:
+ *
+ * | 照合 1 位の NCC | 個数 |
+ * |---|---|
+ * | 0.40〜0.50 | **2622**（決まっていない山） |
+ * | 0.50〜0.70 | 19（**谷**） |
+ * | 0.70〜1.00 | **99**（決まっている山） |
+ *
+ * 両方を満たすのは 3288 個中 89 個（2.7%）で、中身は戦法エフェクトに覆われた
+ * 本物の駒ばかりだった。**谷に線を引いている。**
+ */
+export const COVERED_NCC_THRESHOLD = 0.7;
+export const COVERED_MARGIN_THRESHOLD = 0.25;
+
 export interface RecognizedCell {
   piece: Square;
   /** 駒があると判定されたマスのみ。空マスは NaN */
@@ -99,25 +125,47 @@ export function recognizeBoard(
         cells[row].push({ piece: null, score: NaN, margin: NaN });
         continue;
       }
-      if (p === 'empty' && pointer) {
-        // ポインタしか無いように見えないが、その下に駒が隠れているかもしれない。
-        // 「空」と断定できないので未確定にする。
-        squares[row].push(UNKNOWN);
-        guesses[row].push(null);
-        cells[row].push({ piece: null, score: NaN, margin: NaN });
-        lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, pointer: true });
-        continue;
-      }
-      if (p === 'unclear') {
-        // ⭐ **ポインタと同じ扱いを、覆われて平らになったマスにも広げる。**
-        // 散らばりが中途半端なマスは、演出に覆われた駒か、単に読み落とした駒。
-        // どちらにせよ「空」と断定してはいけない。照合にはかけない——
-        // 覆われた絵から起こした第一候補は当てにならず、`fillGuesses` の側で
-        // 偽の駒として盤に乗ってしまう。
-        squares[row].push(UNKNOWN);
-        guesses[row].push(null);
-        cells[row].push({ piece: null, score: NaN, margin: NaN });
-        lowConfidence.push({ row, col, score: NaN, margin: NaN, guess: null, covered: true });
+      // 「空と断定できない」形が 2 つある。ポインタが乗っている（その下に駒が
+      // 隠れているかもしれない）と、覆われて平らになった（演出の下に駒があるかも
+      // しれない）。どちらも未確定にするが、**その前に照合を見る。**
+      //
+      // ⭐⭐ 以前は「覆われた絵から起こした第一候補は当てにならない」として
+      // 照合を一切かけなかった。測ったら**2.7% は決まっていた**
+      // （`COVERED_NCC_THRESHOLD` の表）。決まっている分まで捨てると、
+      // **打った駒がその場で取られる形が丸ごと消える**（盤の差分には残らないので、
+      // ここが唯一の痕跡になる）。決定的でなければ今までどおり未確定。
+      //
+      // 🔴 **ポインタの判定も外せない。** `hasPointer` は白い画素で判定するが、
+      // **打ちの演出も白い**ので、打たれた駒はポインタと見分けが付かない
+      // （実測 20:57 の 3e: `pointer=true` なのに ▽歩 0.829・差 0.499）。
+      // ポインタは「読めなくて当然」という**推定**にすぎない。
+      // **決定的な証拠が出たら推定の方を譲る。**
+      if (p === 'unclear' || (p === 'empty' && pointer)) {
+        const match = classify(cut, templates);
+        const decisive =
+          match !== null &&
+          match.score >= COVERED_NCC_THRESHOLD &&
+          match.margin >= COVERED_MARGIN_THRESHOLD;
+        const coveredPiece: Square = decisive
+          ? { kind: match!.template.kind, side: match!.template.side }
+          : null;
+        squares[row].push(decisive ? coveredPiece : UNKNOWN);
+        guesses[row].push(coveredPiece);
+        cells[row].push({
+          piece: coveredPiece,
+          score: match?.score ?? NaN,
+          margin: match?.margin ?? NaN,
+        });
+        if (!decisive) {
+          lowConfidence.push({
+            row, col,
+            score: match?.score ?? NaN,
+            margin: match?.margin ?? NaN,
+            guess: coveredPiece,
+            pointer: pointer || undefined,
+            covered: p === 'unclear' || undefined,
+          });
+        }
         continue;
       }
       const match = classify(cut, templates);

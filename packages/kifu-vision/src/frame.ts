@@ -5,8 +5,10 @@
  * そのまま Uint8Array として扱う。PNG のデコードを挟まないので
  * 画像ライブラリへの依存が要らず、1 画素 1 バイトで添字計算も素直になる。
  *
- * 駒の判別に色はほぼ寄与しない（駒字は黒、盤は木目）ため、
- * グレースケールで落として構わない。
+ * 🔴 **「駒の判別に色は寄与しない」は誤りだった。** 生駒の字は黒だが、
+ * **成駒の字は朱**である。形だけを見る NCC では `金` と `全` が 0.70〜0.81 相関して
+ * 割り切れない（追記 62）のに対し、色は完全に分かれる（`src/ink.ts`）。
+ * 駒種の照合は今もグレースケールで行い、**成りの検算にだけ色を使う**。
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -31,6 +33,32 @@ export interface GrayImage {
 
 export function pixelAt(img: GrayImage, x: number, y: number): number {
   return img.data[y * img.width + x];
+}
+
+/**
+ * 輝度と色を 1 回の ffmpeg で取る。
+ *
+ * 🔴 **rgb24 で取って自分で輝度に落としてはいけない。** 実測で
+ * `-pix_fmt gray` と 72% の画素がずれた（最大 18）。動画は YUV で符号化されて
+ * いるので、rgb24 経由だと YUV→RGB→輝度と 2 回変換が入り、レンジの伸長も挟まる。
+ * `sd` が動けば駒の有無の判定が動く——**色を足すために輝度を変えることになる。**
+ *
+ * ⭐ `gray` は本質的に Y 平面そのもの。**フルレンジの `yuvj444p`** で取れば
+ * Y は `gray` と**画素単位で 100% 一致**する（実測）。`yuv444p`（リミテッド
+ * レンジ）では一致率 1.3% なので、**`j` を落とさないこと**。
+ */
+export interface YuvImage {
+  width: number;
+  height: number;
+  /** Y 平面。`-pix_fmt gray` と同じ値。 */
+  y: Uint8Array;
+  u: Uint8Array;
+  v: Uint8Array;
+}
+
+/** Y 平面をそのままグレースケール画像として見る（複製しない）。 */
+export function yuvGray(img: YuvImage): GrayImage {
+  return { width: img.width, height: img.height, data: img.y };
 }
 
 /**
@@ -69,6 +97,65 @@ export function grabFrame(
     );
   }
   return { width, height, data: new Uint8Array(res.stdout) };
+}
+
+/**
+ * 指定時刻のフレームを 1 枚、色付きで取る。
+ *
+ * `grabFrame` と同じ経路で `-pix_fmt` だけを変えたもの。転送量は 3 倍になるが、
+ * **ffmpeg の起動が支配的**（1 枚 0.15 秒）なので、gray を別に取り直すより
+ * ここから Y 平面を取り出す方が安い。
+ */
+export function grabFrameYuv(
+  videoPath: string,
+  seconds: number,
+  width: number,
+  height: number,
+): YuvImage {
+  const res = spawnSync(
+    'ffmpeg',
+    [
+      '-loglevel', 'error',
+      '-threads', String(FFMPEG_THREADS),
+      '-ss', String(seconds),
+      '-i', videoPath,
+      '-frames:v', '1',
+      '-f', 'rawvideo',
+      '-pix_fmt', 'yuvj444p',
+      '-',
+    ],
+    { maxBuffer: width * height * 8 },
+  );
+  if (res.status !== 0) {
+    throw new Error(`ffmpeg が失敗しました (t=${seconds}): ${res.stderr.toString()}`);
+  }
+  const n = width * height;
+  if (res.stdout.length !== n * 3) {
+    throw new Error(
+      `フレームのサイズが想定と違います: ${res.stdout.length} バイト（期待 ${n * 3}）`,
+    );
+  }
+  const buf = new Uint8Array(res.stdout);
+  return {
+    width,
+    height,
+    y: buf.subarray(0, n),
+    u: buf.subarray(n, n * 2),
+    v: buf.subarray(n * 2, n * 3),
+  };
+}
+
+/** YUV 画像を切り出す（`crop` の色版）。 */
+export function cropYuv(img: YuvImage, rect: Rect): YuvImage {
+  const { x, y, w, h } = rect;
+  const out = { y: new Uint8Array(w * h), u: new Uint8Array(w * h), v: new Uint8Array(w * h) };
+  for (const plane of ['y', 'u', 'v'] as const) {
+    for (let dy = 0; dy < h; dy++) {
+      const src = (y + dy) * img.width + x;
+      out[plane].set(img[plane].subarray(src, src + w), dy * w);
+    }
+  }
+  return { width: w, height: h, ...out };
 }
 
 /**

@@ -15,7 +15,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
-import { grabFrame, crop, type GrayImage } from './src/frame.ts';
+import { grabFrame, grabFrameYuv, yuvGray, cropYuv, crop, type GrayImage } from './src/frame.ts';
 import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
@@ -29,6 +29,7 @@ import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
+import { canPromote } from './src/legality.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
 import { replayGame, describeProblem } from './src/replay.ts';
@@ -403,10 +404,22 @@ interface Provisional {
   steps: Step[];
   index: number;
 }
+/**
+ * その USI の手が「成り」になり得るか。打ちは成れず、移動は敵陣に掛かるときだけ成れる。
+ * 座標は `toUsiSquare` の逆（col 0 が 9 筋、row 0 が一段目）。
+ */
+function promotionIsPossible(usi: string, side: Side): boolean {
+  if (usi[1] === '*') return false; // 打ちは成れない
+  const at = (i: number) => ({ col: 9 - Number(usi[i]), row: usi.charCodeAt(i + 1) - 97 });
+  return canPromote(at(0), at(2), side);
+}
+
 /** 確定待ちのマス。読めるようになるまで**何度でも**試みる。 */
 const provisional = new Map<string, Provisional>();
 const history = new ReadingHistory();
 let promotionsFixed = 0;
+/** 後から成りに直そうとしたが、敵陣に掛かっていないので断った読み */
+let promotionsRejected = 0;
 let overflowSeen = 0;
 /** 「駒が消えただけ」に見えたが、行き先が未確定のマスに見つかった手 */
 let rescuedVanished = 0;
@@ -484,14 +497,20 @@ for (let qi = 0; qi < queue.length; qi++) {
   // | 終局ダイアログ（19:15） | **(15.7, 8.0)** |
   //
   // ⚠ **失敗に数えない。** これは「読めなかった」のではなく「読むべきでない絵」。
-  const frame = grabFrame(video, t, geo.frameW, geo.frameH);
+  // ⭐ 色付きで取る。**成駒は朱・生駒は黒**で書かれており、照合（グレースケール）が
+  // 割り切れない `金`⇔`全` を色が決める（`src/ink.ts`）。ffmpeg の起動が支配的なので、
+  // gray を別に取り直すより 1 回の rgb24 から落とす方が安い。
+  const colorFrame = grabFrameYuv(video, t, geo.frameW, geo.frameH);
+  const frame = yuvGray(colorFrame);
   if (!isCalibrationTrustworthy(calibrateGeometry(frame, geo))) {
     offBoard++;
     if (VERBOSE && offBoard <= MAX_DETAIL) console.log(`  ▢ ${fmt(t)} 対局中の盤が写っていないので読まない`);
     continue;
   }
   const img = crop(frame, boardRect(geo));
-  const recognized = recognizeBoard(img, templates);
+  const recognized = recognizeBoard(img, templates, {
+    colorBoard: cropYuv(colorFrame, boardRect(geo)),
+  });
 
   // --- 盤が初期局面に戻ったら、そこからは別の対局 ---
   //
@@ -570,6 +589,23 @@ for (let qi = 0; qi < queue.length; qi++) {
       const wantsPlus = now.kind.startsWith('+');
       const hasPlus = step.usi.endsWith('+');
       if (wantsPlus !== hasPlus) {
+        // ⚠ 成りに直すのは、その手が本当に成れる位置のときだけ。
+        // 金は「全」と 0.70〜0.81 相関するので（追記 62）、自陣で動いた金が
+        // 「成った銀」に見えることがある。実測 4i3h+。読みだけでは割れないが、
+        // 敵陣に掛かっているかはルールで決まる。
+        // 🔒 規則があり得ないと言う答えは、読みが何と言おうと取らない。
+        const rejected = wantsPlus && !promotionIsPossible(step.usi, now.side);
+        if (rejected) {
+          promotionsRejected++;
+          if (VERBOSE) {
+            console.log(
+              `  ⚠ ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が` +
+                `${now.side === 'sente' ? '▲' : '▽'}${NAMES[now.kind]} に読めたが、` +
+                `${step.usi} は敵陣に掛からないので成りに直さない`,
+            );
+          }
+          continue; // 追跡中の盤面も触らない（読みの方が誤っている）
+        }
         step.usi = wantsPlus ? `${step.usi}+` : step.usi.slice(0, -1);
         promotionsFixed++;
       }
@@ -1085,6 +1121,7 @@ if (candidateFailures.size > 0) {
   );
 }
 console.log(`  成りを後から読み直して直した手: ${promotionsFixed}`);
+if (promotionsRejected) console.log(`  成れない位置なので読みの方を断った: ${promotionsRejected}`);
 console.log(`  駒数が規定を超えていた絵: ${overflowSeen}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
 // ⚠ これが多いと「追跡を始められない」。起点は全マスが読めている絵しか採れないが、

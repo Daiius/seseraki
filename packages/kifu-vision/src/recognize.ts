@@ -8,10 +8,33 @@
  */
 
 import type { Square } from 'shared';
-import type { GrayImage } from './frame.ts';
+import type { GrayImage, YuvImage } from './frame.ts';
+import { cropYuv } from './frame.ts';
 import { presence, OCCUPANCY_THRESHOLD, EMPTY_MAX_SD, hasPointer } from './occupancy.ts';
-import { cellImage, classify, type Template } from './template.ts';
+import { cellImage, classify, MATCH_INSET, type MatchResult, type Template } from './template.ts';
+import { inkRedness, isPromotedKind } from './ink.ts';
 import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from './uncertain.ts';
+
+/**
+ * 成駒と認めるのに要る「字の赤さ」（`ink.ts` の比）。
+ *
+ * ⭐ **成駒は朱、生駒は黒で書かれている。** 照合はグレースケールなので、
+ * `金` と `全` のように字が似ている組は形では割り切れない（0.70〜0.81 相関）。
+ * 色は**照合とは独立した証拠**になる。
+ *
+ * 閾値は測って決めた（`probe-ink-color.ts`・1 局目 10:00〜19:00 を 4 秒刻み・4130 マス）。
+ * **効くのは「成駒と読めた 136 マス」の中の分かれ方**で、そこが 2 つに割れる:
+ *
+ * | 赤み | 成駒と読めたマス | 中身 |
+ * |---|---|---|
+ * | 0.41〜0.50 | 11 | **誤読**（生駒を成駒と読んだ） |
+ * | 0.50〜1.03 | **0** | ← 谷 |
+ * | 1.03〜1.33 | 125 | 本物の成駒 |
+ *
+ * 谷の真ん中を取って 0.76。**間が 2 倍以上空いているので、少々ずれても動かない。**
+ * 参考: 生駒と読めたマスは中央 0.467・最大 0.816 で、こちらとも重ならない。
+ */
+export const PROMOTED_MIN_REDNESS = Number(process.env.KIFU_VISION_PROMOTED_REDNESS ?? 0.76);
 
 /**
  * これを下回る NCC は「テンプレートに無い駒」を疑う。
@@ -89,6 +112,43 @@ export interface RecognizeOptions {
   unknownThreshold?: number;
   /** これ以下の sd なら「空」と断定する。間の帯は未確定になる。 */
   emptyMaxSd?: number;
+  /**
+   * 盤に切り出した**色付き**の絵。渡すと、成駒と読めたマスの字が朱かを確かめ、
+   * 朱でなければ生駒に限って読み直す。渡さなければ今までどおり形だけで読む。
+   */
+  colorBoard?: YuvImage;
+}
+
+/**
+ * 成駒と読めたマスを、**字の色**で検算する。
+ *
+ * 朱で書かれていなければ成駒ではないので、**生駒に限って読み直す**。
+ * 🔒 これは「規則があり得ないと言う答えを取り除いてから読む」（`droppable.ts`）と
+ * 同じ形。今回あり得ないと言っているのは規則ではなく**色という別の証拠**。
+ */
+function classifyWithInk(
+  cut: GrayImage,
+  templates: Template[],
+  colorBoard: YuvImage | undefined,
+  row: number,
+  col: number,
+): MatchResult | null {
+  const match = classify(cut, templates);
+  if (!match || !colorBoard || !isPromotedKind(match.template.kind)) return match;
+
+  const cw = colorBoard.width / 9;
+  const ch = colorBoard.height / 9;
+  const w = Math.floor(cw * (1 - MATCH_INSET * 2));
+  const h = Math.floor(ch * (1 - MATCH_INSET * 2));
+  const x = Math.round(cw * col + cw * MATCH_INSET);
+  const y = Math.round(ch * row + ch * MATCH_INSET);
+  const { ratio } = inkRedness(cropYuv(colorBoard, { x, y, w, h }));
+
+  // 測れなかったときは口を出さない（木地が写っていない絵など）。
+  if (!Number.isFinite(ratio) || ratio >= PROMOTED_MIN_REDNESS) return match;
+
+  const plainOnly = templates.filter((t) => !isPromotedKind(t.kind));
+  return classify(cut, plainOnly) ?? match;
 }
 
 export function recognizeBoard(
@@ -141,7 +201,7 @@ export function recognizeBoard(
       // ポインタは「読めなくて当然」という**推定**にすぎない。
       // **決定的な証拠が出たら推定の方を譲る。**
       if (p === 'unclear' || (p === 'empty' && pointer)) {
-        const match = classify(cut, templates);
+        const match = classifyWithInk(cut, templates, options.colorBoard, row, col);
         const decisive =
           match !== null &&
           match.score >= COVERED_NCC_THRESHOLD &&
@@ -168,7 +228,7 @@ export function recognizeBoard(
         }
         continue;
       }
-      const match = classify(cut, templates);
+      const match = classifyWithInk(cut, templates, options.colorBoard, row, col);
       if (!match) {
         squares[row].push(null);
         guesses[row].push(null);

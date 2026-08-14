@@ -11,7 +11,7 @@
 // それとも**未確定として残る**のか」。前者なら差分が壊れるが、後者なら
 // carryUnknowns の領分なので、覆われている間も追跡を続けられる。
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
-import { grabFrame, crop } from './src/frame.ts';
+import { grabFrame, grabFrameYuv, yuvGray, cropYuv, crop } from './src/frame.ts';
 import { cellStats, OCCUPANCY_THRESHOLD } from './src/occupancy.ts';
 import { recognizeBoard } from './src/recognize.ts';
 import { extractTemplates } from './src/template.ts';
@@ -43,8 +43,11 @@ const stored = loadTemplates('data/templates/shogi-wars-vertical.json', {
 const templates = stored ? mergeTemplates(base, stored) : base;
 
 for (const t of times) {
-  const img = grabBoard(t);
-  const r = recognizeBoard(img, templates);
+  // 本線と同じく色も渡す（成駒は朱・生駒は黒。`src/ink.ts`）。
+  // 渡さないと `金`⇔`全` の誤読が診断側にだけ残り、実態とずれる。
+  const colorFrame = grabFrameYuv(video, t, geo.frameW, geo.frameH);
+  const img = crop(yuvGray(colorFrame), boardRect(geo));
+  const r = recognizeBoard(img, templates, { colorBoard: cropYuv(colorFrame, boardRect(geo)) });
   const stats = cellStats(img);
   let empty = 0;
   let unknown = 0;

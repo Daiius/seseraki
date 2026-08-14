@@ -18,7 +18,7 @@
 import type { PieceKind, Side, Square } from 'shared';
 import { applyMove, createInitialState } from 'shared';
 import { boardsEqual } from './recognize.ts';
-import { canMove, canDrop } from './legality.ts';
+import { canMove, canDrop, canPromote } from './legality.ts';
 
 /** 生駒 → 成駒 */
 const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
@@ -185,6 +185,13 @@ export function inferMove(before: Square[][], after: Square[][]): InferResult {
   if (to.piece.kind === moving.kind) {
     promoted = false;
   } else if (PROMOTE_MAP[moving.kind] === to.piece.kind) {
+    // 敵陣に掛かっていなければ成れない。ここを見ないと、金を「銀」と読み
+    // 行き先の金を「全」と読んだ絵が、成りとして自分で辻褄を合わせてしまう
+    // （実測: 自陣での 4i3h+）。読みの誤りが 2 つ重なると、差分だけでは
+    // 区別が付かない。
+    if (!canPromote(from, to, moving.side)) {
+      return { move: null, failure: 'promotion-mismatch', changedCells };
+    }
     promoted = true;
   } else {
     // 移動元と移動先で駒の種類が繋がらない。別々の手が重なって見えている。

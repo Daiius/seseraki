@@ -112,6 +112,29 @@ describe('inferMove', () => {
     expect(result.failure).toBe('promotion-mismatch');
   });
 
+  it('敵陣に掛かっていない成りは promotion-mismatch（読みの誤りが 2 つ重なった形）', () => {
+    // 実測: 4i の金を「銀」、3h の金を「全」と読むと、自陣での成りとして
+    // 差分の辻褄が合ってしまう。敵陣を見れば弾ける。
+    const before = emptyBoard();
+    put(before, '4i', { kind: 'S', side: 'sente' });
+    const after = emptyBoard();
+    put(after, '3h', { kind: '+S', side: 'sente' });
+
+    const result = inferMove(before, after);
+    expect(result.move).toBeNull();
+    expect(result.failure).toBe('promotion-mismatch');
+  });
+
+  it('敵陣に掛かる成りはそのまま通る', () => {
+    const before = emptyBoard();
+    put(before, '4d', { kind: 'S', side: 'sente' });
+    const after = emptyBoard();
+    put(after, '3c', { kind: '+S', side: 'sente' });
+
+    const result = inferMove(before, after);
+    expect(result.move?.usi).toBe('4d3c+');
+  });
+
   it('駒が消えるだけの差分は piece-vanished（スライド途中の絵）', () => {
     // 移動元が空いてから移動先が埋まるまでの間、駒はマスの間にあってどこにも属さない。
     // 「駒が盤から消える手」は存在しないので、この形は必ずアニメーション途中と分かる。

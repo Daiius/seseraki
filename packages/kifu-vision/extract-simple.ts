@@ -32,6 +32,7 @@ import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
 import { replayGame, describeProblem } from './src/replay.ts';
+import { isFlipped, orient } from './src/orientation.ts';
 import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
@@ -271,6 +272,10 @@ let state: BoardState | null = null;
 let byCandidate = 0;
 /** 候補手を当てにいったが決められなかった回数 */
 const candidateFailures = new Map<string, number>();
+/** 手番の交互が破れたので、間に相手の手を 1 手挿した回数 */
+let insertedMoves = 0;
+/** 手番の交互が破れたが、間の手を決められなかった回数（穴として残る） */
+let unresolvedGaps = 0;
 /** 盤面の論理で 2 手に分解して拾えた手 */
 let pairedMoves = 0;
 /**
@@ -422,8 +427,6 @@ let gameIndex = 0;
 const MIN_MOVES_BEFORE_NEW_GAME = Number(process.env.KIFU_VISION_MIN_MOVES_NEW_GAME ?? 4);
 /** 対局中の盤が写っていないので読まなかった絵 */
 let offBoard = 0;
-/** 1 手目が後手の手だったので断った回数 */
-let wrongFirstMover = 0;
 let undroppableReread = 0;
 /** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
 let stuckKinds = 0;
@@ -499,7 +502,6 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 対局が始まった直後（1〜2 手）は「穴のせいで初期局面に見える」ことがありうる。
   // 実際の対局が 2 手で初期局面へ戻ることは無いので、そこで切る。
   const movesInGame = runs.reduce((n, r) => (r.game === gameIndex ? n + r.steps.length : n), 0);
-  const firstMoveOfGame = movesInGame === 0;
   if (movesInGame >= MIN_MOVES_BEFORE_NEW_GAME && completeIfInitial(asHoles(recognized.board))) {
     gameIndex++;
     current = null;
@@ -783,18 +785,7 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 未確定のマスの中に一意に決まるなら、それは本当の手。
   if (result.failure === 'piece-vanished') {
     const rescue = rescueVanished(current, primary, recognized.board);
-    // 🔒 **対局の 1 手目は必ず先手。** これは追跡の状態に依らない絶対の事実。
-    //
-    // 🔴 実測（1 局目 0:04）: 先手の `7g7f` は 7g も 7f も未確定のまま引き継がれて
-    // **差分に現れず**、後手の `3c3d` だけが「駒が消えた」形で見えていた。そのまま
-    // 受け取ると 1 手目と 2 手目が入れ替わる（`3c3d 7g7f`）。
-    // **手番の交互率は 1.00 のままなので、この指標では検出できない。**
-    //
-    // 断ると、次に両方が読めた時点で差分が 4 マスになり、2 手分解が正しい順で拾う。
-    if (rescue && firstMoveOfGame && rescue.side === 'gote') {
-      wrongFirstMover++;
-      if (VERBOSE) console.log(`  ⚠ ${fmt(t)} 1 手目が後手の手なので断った: ${rescue.usi}`);
-    } else if (rescue) {
+    if (rescue) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
       state = nextState(state, rescue.board, { usi: rescue.usi, side: rescue.side as Side });
@@ -860,14 +851,59 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
-  // 🔒 **対局の 1 手目は必ず先手**（`rescueVanished` の側と同じ規則）。
-  // ⚠ 片方の経路にだけ掛けても効かない。実測: 0:04 の `✚` は断れたのに、
-  // 0:04.5 に**通常の差分経路**で同じ `3c3d` が通って順序が入れ替わったままだった。
-  // （候補手・2 手分解の経路は手番が既知なら先手の手しか作らないので、そちらは要らない）
-  if (result.move && firstMoveOfGame && result.move.side === 'gote') {
-    wrongFirstMover++;
-    if (VERBOSE) console.log(`  ⚠ ${fmt(t)} 1 手目が後手の手なので断った: ${result.move.usi}`);
-    result = { move: null, failure: 'ambiguous', changedCells: result.changedCells };
+  // --- 同じ側が 2 回続けて指したなら、間の 1 手を取りこぼしている ---
+  //
+  // 🔴 実測（2 局目 20:56〜20:58）: 飛が 3f の歩を取り、後手が `P*3e` と打ち、
+  // 飛がすぐ取り返した。**打った駒がその場で取られると、盤の差分には何も残らない。**
+  // 差分は「飛が 3f から 3e へ動いた」だけで、1 手として過不足なく説明できてしまう。
+  // だから 2 手分解（`!result.move` のとき）にも入らない。
+  //
+  // ⭐ **手番の交互が破れたことが、唯一の手がかり。** 破れたら、間に相手の手が
+  // あったものとして 2 手で説明し直す。読んだ手はそのままに、**前に 1 手挿す**
+  // だけなので、当たっていなければ何も変わらない。
+  const prevStep = steps.at(-1);
+  if (result.move && prevStep && prevStep.side === result.move.side && state) {
+    const read = markUnknown(recognized.board, suspicious);
+    // `state.sideToMove` は相手の手番になっているので、1 手目は相手の手が並ぶ。
+    const pair = pickCandidatePair(state, read, { maxConflicts: 1 });
+    // ⚠ 読めた手を置き換えはしない。**同じ手の前に相手の手が入る**ときだけ受ける。
+    if (pair.moves && pair.board && pair.moves[1].usi === result.move.usi) {
+      for (const m of pair.moves) {
+        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+        history.reset(m.to.row, m.to.col);
+        if (m.from) history.reset(m.from.row, m.from.col);
+      }
+      // ⚠ 2 手ぶんの持ち駒は `nextState` では進められない（盤から測り直しになる）。
+      // 打った駒がその場で取られる形なので、**盤は 1 手で説明したときと同じ**でも
+      // 持ち駒は違う。信用を落として盤に合わせる。
+      const second = pair.moves[1];
+      handsTrusted = false;
+      state = {
+        ...nextState(state, pair.board, { usi: second.usi, side: second.side }),
+        sideToMove: second.side === 'sente' ? 'gote' : 'sente',
+      };
+      current = state.board;
+      lastSyncTime = t;
+      consecutiveFailures = 0;
+      refusedDrop.count = 0;
+      insertedMoves++;
+      if (VERBOSE) {
+        console.log(`  ⤺ ${fmt(t)} 手番が飛んだので間に 1 手挿した: ${pair.moves[0].usi} → ${second.usi}`);
+      }
+      continue;
+    }
+    // 🔴 **決められないことがある。決められないと分かることには価値がある。**
+    // 実測（20:58）: 後手が 3e に何かを打ち、飛がすぐ取り返した。打った駒は
+    // **盤に一度も現れない**ので、`P*3e` と `B*3e` が同点で並ぶ（どちらも持っていた）。
+    // 🔒 当てずっぽうで決めない。**穴があることだけを残す。**
+    // → 決めるには画面の持ち駒欄が要る（GOAL Phase F）。
+    unresolvedGaps++;
+    if (VERBOSE) {
+      console.log(
+        `  ⤺? ${fmt(t)} 手番が飛んだ。${result.move.usi} の前に 1 手あるが決められない` +
+          `（${pair.failure ?? '2 手目が読めた手と違う'}・同点 ${pair.tiedCount}）`,
+      );
+    }
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
@@ -1036,10 +1072,11 @@ console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);
 console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);
 if (undroppableReread > 0) console.log(`  打てる駒に限って読み直して通った: ${undroppableReread}`);
-if (wrongFirstMover > 0) console.log(`  1 手目が後手の手なので断った: ${wrongFirstMover}`);
 if (stuckKinds > 0) console.log(`  同じ側の別の駒に化けて見えた絵（引き継いだ）: ${stuckKinds}`);
 console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
+if (insertedMoves > 0) console.log(`  手番が飛んだので間に挿した手: ${insertedMoves}`);
+if (unresolvedGaps > 0) console.log(`  手番が飛んだが決められなかった穴: ${unresolvedGaps}`);
 console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);
 if (candidateFailures.size > 0) {
   console.log(
@@ -1060,26 +1097,54 @@ if (failures.size > 0) {
   for (const [f, n] of [...failures].sort((a, b) => b[1] - a[1])) console.log(`    ${f}: ${n}`);
 }
 
+// --- 画面の下が先手とは限らない ---
+//
+// 🔴 このアプリは**対局者の視点で盤を描く**ので、録画した人が後手の対局では
+// 画面の下が後手になる。読みは一貫して「画面の下＝先手」で組んであるから、
+// そのままでは**盤を 180° 回して先後を入れ替えた別の棋譜**が出来上がる。
+// 初期局面はその変換で自分自身に移るので、**出来上がりは合法なまま**——
+// 通しで再生しても何も起きない（実測: 1 局目は変換後も 92 手すべて合法）。
+//
+// ⭐ **1 手目を指した側が先手。** 初期局面から最初に動いたのが「後手」として
+// 読めていたら、その対局は反転している。⚠ 対局ごとに向きは変わる
+// （実測: 1 局目は画面の下が後手、2 局目は先手）。
+const flippedGame = new Map<number, boolean>();
+for (let g = 0; g <= gameIndex; g++) {
+  const firstRun = runs
+    .filter((r) => r.game === g && r.steps.length > 0)
+    .sort((a, b) => a.startedAt - b.startedAt)[0];
+  if (firstRun) flippedGame.set(g, isFlipped(firstRun.steps[0].side));
+}
+
 const gameCount = gameIndex + 1;
 for (let g = 0; g < gameCount; g++) {
   const mine = runs.filter((r) => r.game === g && r.steps.length > 0).sort((a, b) => b.steps.length - a.steps.length);
   if (mine.length === 0) continue;
+  const flipped = flippedGame.get(g) ?? false;
   const moves = mine.reduce((n, r) => n + r.steps.length, 0);
   console.log(`\n# ${g + 1} 局目: ${moves} 手 / ${mine.length} 本の断片`);
+  console.log(
+    flipped
+      ? '  画面の下は後手だった（1 手目を指したのが上の側）→ 180° 回して書き出す'
+      : '  画面の下が先手（1 手目を指したのが下の側）',
+  );
   for (const r of mine.slice(0, 5)) {
     let alt = 0;
     for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
     const ratio = r.steps.length > 1 ? (alt / (r.steps.length - 1)).toFixed(2) : '-';
     console.log(`\n  ${fmt(r.startedAt)}〜${fmt(r.steps.at(-1)!.time)}  ${r.steps.length} 手  手番の交互率 ${ratio}`);
-    console.log(`    ${r.steps.map((s) => `${s.usi}${s.solved ? '*' : ''}`).join(' ')}`);
+    console.log(`    ${r.steps.map((s) => `${orient(s, flipped).usi}${s.solved ? '*' : ''}`).join(' ')}`);
   }
 
   // ⭐ **初期局面から通しで再生してみる。** 1 手ごとの合法性は走査中にも見ているが、
   // それは追跡中の盤面に対する検査で、その盤面は映像から再同期される。
   // **手の列が初期局面から繋がることは、ここでしか確かめられない。**
   // 手番の交互率では見つからない誤り（持っていない駒の打ちなど）がここに出る。
+  //
+  // ⚠ 向きを決めてから掛ける。反転したままでも合法に流れてしまうが、
+  // **1 手目が後手になる**ので、向きの取り違えはここに現れる。
   const first = [...mine].sort((a, b) => a.startedAt - b.startedAt)[0];
-  const result = replayGame(first.steps.map((s) => ({ usi: s.usi, side: s.side, time: s.time })));
+  const result = replayGame(first.steps.map((s) => orient({ usi: s.usi, side: s.side, time: s.time }, flipped)));
   console.log(`\n  # 初期局面から通しで再生: 合法 ${result.legal} / ${result.total}`);
   for (const p of result.problems) console.log(`    ${describeProblem(p)}`);
   if (result.problems.length === 0) console.log('    ✅ 問題なし');
@@ -1124,18 +1189,24 @@ for (let g = 0; g <= gameIndex; g++) {
   const suffix = gameIndex > 0 ? `-game${g + 1}` : '';
   const outPath = `${OUT_DIR}/${basename(video).replace(/\.[^.]+$/, '')}-${Math.round(fromSec)}-${Math.round(toSec)}${suffix}.json`;
   mkdirSync(dirname(outPath), { recursive: true });
+  // ⚠ **書き出すのは実際の先後に直したもの。** 画面の下が後手だった対局は
+  // 180° 回して先後を入れ替える（読みの座標のままでは別の棋譜になる）。
+  const flipped = flippedGame.get(g) ?? false;
   const payload = {
     source: basename(video),
     range: { fromSec, toSec, stepSec },
     game: g + 1,
+    /** 画面の下の対局者が先手だったか。1 手目を指した側から決めた。 */
+    bottomIsSente: !flipped,
     runs: mine
       .map((r) => {
         let alt = 0;
         for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
+        const oriented = r.steps.map((s) => orient({ usi: s.usi, side: s.side, time: s.time }, flipped));
         // 初期局面から通しで再生した結果。手番の交互率では見つからない誤りが出る。
         // ⚠ 途中から始まる断片は起点の局面が分からないので掛けられない。
         const replay = r === [...mine].sort((a, b) => a.startedAt - b.startedAt)[0]
-          ? replayGame(r.steps.map((s) => ({ usi: s.usi, side: s.side, time: s.time })))
+          ? replayGame(oriented)
           : null;
         return {
           startedAt: r.startedAt,
@@ -1144,8 +1215,8 @@ for (let g = 0; g <= gameIndex; g++) {
           // 手番が交互になっているか。1 でなければどこかで手を取りこぼしている。
           alternationRatio: r.steps.length > 1 ? alt / (r.steps.length - 1) : null,
           replay: replay && { legal: replay.legal, total: replay.total, problems: replay.problems },
-          usi: r.steps.map((x) => x.usi),
-          moves: r.steps.map((x) => ({ time: x.time, usi: x.usi, side: x.side, inferredKind: x.solved })),
+          usi: oriented.map((x) => x.usi),
+          moves: oriented.map((x, i) => ({ time: x.time, usi: x.usi, side: x.side, inferredKind: r.steps[i].solved })),
         };
       }),
   };

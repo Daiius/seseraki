@@ -48,18 +48,41 @@ export interface CalibrateOptions {
   pitchStep?: number;
 }
 
-/** 直交方向に平均した輝度の並び（縦線を探すなら列ごとの平均） */
+/**
+ * 直交方向に平均した輝度の並び（縦線を探すなら列ごとの平均）
+ *
+ * ⭐ **列ごとの平均は行を外側にして回す。** 素直に書くと「列 i を固定して行 j を
+ * 舐める」形になるが、それは**画素を 1080 バイト飛びに読む**ので、1 画素ごとに
+ * キャッシュラインを 1 本使い捨てることになる。行を外側にすれば連続読みになる。
+ *
+ * 🔒 **足す順序は変えていない。** 列 i について行 j は昇順のままなので、
+ * 浮動小数の丸めまで含めて**前と 1 ビットも変わらない**（順序を変えると
+ * 合計がわずかにずれ、`search` の同点の割れ方が変わりうる）。
+ *
+ * ⚠ **ただし、これ自体はほとんど効かなかった**（29.6ms → 27.9ms）。
+ * 重かったのは `search` の側で、そちらは `fitScoreFast` で 10.5ms まで落ちた。
+ * 🔒 **どこが重いかは、測るまで分からない。** キャッシュの筋は正しくても、
+ * 支配的でなければ数字は動かない。
+ */
 function profile(img: GrayImage, vertical: boolean, from: number, to: number): Float64Array {
   const n = vertical ? img.width : img.height;
   const lo = Math.max(0, Math.floor(from));
   const hi = Math.min(vertical ? img.height : img.width, Math.ceil(to));
   const out = new Float64Array(n);
+  const span = hi - lo;
+  if (vertical) {
+    for (let j = lo; j < hi; j++) {
+      const base = j * img.width;
+      for (let i = 0; i < n; i++) out[i] += img.data[base + i];
+    }
+    for (let i = 0; i < n; i++) out[i] /= span;
+    return out;
+  }
   for (let i = 0; i < n; i++) {
     let s = 0;
-    for (let j = lo; j < hi; j++) {
-      s += vertical ? img.data[j * img.width + i] : img.data[i * img.width + j];
-    }
-    out[i] = s / (hi - lo);
+    const base = i * img.width;
+    for (let j = lo; j < hi; j++) s += img.data[base + j];
+    out[i] = s / span;
   }
   return out;
 }
@@ -96,6 +119,52 @@ function lineContrasts(prof: Float64Array, origin: number, pitch: number): numbe
 }
 
 /**
+ * `lineContrasts` + 中央値を、**配列を 1 つも作らずに**計算する。
+ *
+ * 🔴 `search` は 1 フレーム 1 軸あたり **約 14000 回**ここを通る（原点 193 通り ×
+ * マス寸法 72 通り）。素直に書くと 1 回ごとに配列を 4 つ作るので、**割り当てだけで
+ * 較正が認識の 2 倍以上重くなっていた**。
+ *
+ * 実測（1 枚あたり / 全編 3703 枚に換算）: **27.9ms → 10.5ms**（103 秒 → 39 秒）。
+ * 「対局中の盤が写っているか」を見るだけの処理が、**認識より重かった**。
+ *
+ * 🔒 **値は `lineContrasts` → ソート → `(s[4]+s[5])/2` と 1 ビットも変えない。**
+ * 足す順序（`0 + left + right`）も、10 個の中央値の取り方もそのまま写している。
+ * `calibrate.test.ts` が両者の一致を見張る。
+ */
+export function fitScoreFast(prof: Float64Array, origin: number, pitch: number): number {
+  // 挿入ソートしながら 10 個を昇順に保つ。10 個なので比較の総数はたかが知れている。
+  const sorted = SORT_SCRATCH;
+  let n = 0;
+  for (let i = 0; i <= 9; i++) {
+    const li = Math.round(origin + pitch * i);
+    if (li < 0 || li >= prof.length) return -Infinity;
+    const line = prof[li];
+
+    let sum = 0;
+    let count = 0;
+    if (i > 0) {
+      const k = Math.round(origin + pitch * (i - 0.5));
+      if (k >= 0 && k < prof.length) { sum = sum + prof[k]; count++; }
+    }
+    if (i < 9) {
+      const k = Math.round(origin + pitch * (i + 0.5));
+      if (k >= 0 && k < prof.length) { sum = sum + prof[k]; count++; }
+    }
+    if (count === 0) return -Infinity;
+    const v = sum / count - line;
+
+    let j = n++;
+    while (j > 0 && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; }
+    sorted[j] = v;
+  }
+  return (sorted[4] + sorted[5]) / 2;
+}
+
+/** `fitScoreFast` の作業用。呼び出しは同期で入れ子にならないので使い回してよい。 */
+const SORT_SCRATCH = new Float64Array(10);
+
+/**
  * 当てはまりの良さ。**線の暗さそのものではなく、隣のマス中央との差の中央値**を使う。
  *
  * ⚠ 生の暗さで測ると失敗する。**盤には背景のグラデーションがある**（上ほど暗い）ので、
@@ -105,7 +174,7 @@ function lineContrasts(prof: Float64Array, origin: number, pitch: number): numbe
  * 実測（12 画素ずらした絵）: 合計で測ると「-4.75 画素ずれ・マス寸法 -0.95」と答えた。
  * 原点とマス寸法が互いを打ち消す degeneracy に落ちていた。中央値にすると当たる。
  */
-function fitScore(prof: Float64Array, origin: number, pitch: number): number {
+export function fitScore(prof: Float64Array, origin: number, pitch: number): number {
   const cs = lineContrasts(prof, origin, pitch);
   if (!cs) return -Infinity;
   const s = [...cs].sort((a, b) => a - b);
@@ -123,7 +192,7 @@ function search(
   const pitchHi = seedPitch * (1 + opts.pitchRange);
   for (let pitch = pitchLo; pitch <= pitchHi; pitch += opts.pitchStep) {
     for (let o = seedOrigin - opts.originRange; o <= seedOrigin + opts.originRange; o += opts.originStep) {
-      const score = fitScore(prof, o, pitch);
+      const score = fitScoreFast(prof, o, pitch);
       if (score > best.score) best = { origin: o, pitch, score };
     }
   }

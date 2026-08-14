@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GrayImage } from './frame.ts';
 import type { BoardGeometry } from './geometry.ts';
-import { calibrateGeometry, calibrateFromFrames, isCalibrationTrustworthy, refineByTemplates } from './calibrate.ts';
+import { calibrateGeometry, calibrateFromFrames, isCalibrationTrustworthy, refineByTemplates, fitScore, fitScoreFast } from './calibrate.ts';
 import { crop } from './frame.ts';
 import { boardRect } from './geometry.ts';
 import { cellImage } from './template.ts';
@@ -182,5 +182,46 @@ describe('テンプレートとの一致で格子を詰め直す', () => {
     const r = refineByTemplates(img, truth, known);
     expect(Math.abs(r.geo.originX - truth.originX)).toBeLessThan(0.5);
     expect(Math.abs(r.geo.cellW - truth.cellW)).toBeLessThan(0.2);
+  });
+});
+
+describe('fitScoreFast は fitScore と 1 ビットも変わらない', () => {
+  // 🔒 Phase I は「結果が 1 ビットも変わってはいけない」変更。速くした側が
+  // 元と同じ値を返すことを、**同じ入力を大量に通して**見張る。
+  // ⚠ 中央値は同点で割れうるので、`toBeCloseTo` ではなく **`toBe`** で見る。
+  const rng = (seed: number) => () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+
+  it('でたらめな並びで一致する', () => {
+    const next = rng(42);
+    for (let trial = 0; trial < 30; trial++) {
+      const prof = new Float64Array(400);
+      for (let i = 0; i < prof.length; i++) prof[i] = next() * 255;
+      for (let k = 0; k < 40; k++) {
+        const origin = next() * 420 - 10;
+        const pitch = 20 + next() * 30;
+        expect(fitScoreFast(prof, origin, pitch)).toBe(fitScore(prof, origin, pitch));
+      }
+    }
+  });
+
+  it('格子が並んだ絵でも、端をはみ出す場合でも一致する', () => {
+    const prof = new Float64Array(200);
+    for (let i = 0; i < prof.length; i++) prof[i] = i % 20 === 0 ? 30 : 200;
+    for (let origin = -30; origin <= 230; origin += 0.25) {
+      for (const pitch of [19.5, 20, 20.5]) {
+        expect(fitScoreFast(prof, origin, pitch)).toBe(fitScore(prof, origin, pitch));
+      }
+    }
+  });
+
+  it('端に寄って隣が 1 つも取れないときも同じく捨てる', () => {
+    const prof = new Float64Array(12);
+    for (let i = 0; i < prof.length; i++) prof[i] = 100 + i;
+    // 10 本が収まらない配置。どちらも -Infinity を返す。
+    expect(fitScoreFast(prof, 0, 5)).toBe(fitScore(prof, 0, 5));
+    expect(fitScoreFast(prof, -100, 1)).toBe(fitScore(prof, -100, 1));
   });
 });

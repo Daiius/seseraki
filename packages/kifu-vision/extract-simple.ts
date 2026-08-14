@@ -15,7 +15,10 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, basename } from 'node:path';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
-import { grabFrame, grabFrameYuv, yuvGray, cropYuv, crop, type GrayImage } from './src/frame.ts';
+import {
+  grabFrame, grabFrameYuv, yuvGray, cropYuv, crop, openFrameStream, probeFrameRate,
+  type GrayImage, type YuvImage,
+} from './src/frame.ts';
 import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
@@ -476,6 +479,55 @@ const queue: number[] = [];
 for (let t = fromSec; t <= toSec; t += stepSec) queue.push(Number(t.toFixed(3)));
 /** 一度細かく読み直した時刻。同じ区間を何度も掘らない。 */
 const refined = new Set<number>();
+
+// --- 絵の取り方: 格子の時刻は 1 パスで流し、挿し込みだけ 1 枚ずつ取る ---
+//
+// 🔴 **1 枚ごとに ffmpeg を起動するのが走査時間の 62% だった**（実測 143.6ms × 3703 枚
+// ＝ 534 秒）。デコード自体は全編 40 秒なので、**起動と探索の費用を何千回も
+// 払っていた**ことになる。
+//
+// ⭐ **挿し込みの時刻は必ず格子から外れる。** 0.1 秒刻みのうち格子に載る時刻は
+// 既に待ち行列にあり `queued` で除かれるので、**格子＝流れ / それ以外＝1 枚取り**と
+// きれいに分けられる。流れは引き取り式（`next()`）なので、挿し込みの間は止まる。
+//
+// 🔒 **絵が 1 画素でも変われば読みが変わる。**（追記 125 で色を足したときに踏んだ）
+// `fps=N` フィルタは `-ss` と**別のフレームを返す**ので使わない（`openFrameStream` の説明）。
+// フレーム番号で選ぶ形にして、2 本 × 90 枚で画素単位の完全一致を確認済み。
+const rate = probeFrameRate(video);
+const framesPerStep = (stepSec * rate.num) / rate.den;
+const stride = Math.round(framesPerStep);
+/** 刻みがフレームの整数倍でないなら流せない（格子の時刻が実フレームに載らない）。 */
+const canStream = stride >= 1 && Math.abs(framesPerStep - stride) < 1e-9;
+let stream = canStream
+  ? openFrameStream(video, geo.frameW, geo.frameH, stride, fromSec > 0 ? { startSec: fromSec } : undefined)
+  : null;
+console.log(
+  canStream
+    ? `# ${rate.num}/${rate.den} fps の ${stride} フレームおきを 1 パスで流す（挿し込みだけ 1 枚ずつ取る）`
+    : `# 刻み ${stepSec} 秒がフレームの整数倍でないので、1 枚ずつ取る`,
+);
+/** 流れから何枚目まで受け取ったか。時刻は fromSec + streamIndex * stepSec。 */
+let streamIndex = 0;
+let streamedFrames = 0;
+let seekedFrames = 0;
+
+async function frameAt(t: number): Promise<YuvImage> {
+  if (stream) {
+    const expected = Number((fromSec + streamIndex * stepSec).toFixed(3));
+    if (t === expected) {
+      const f = await stream.next();
+      if (f) {
+        streamIndex++;
+        streamedFrames++;
+        return f;
+      }
+      // 流れが尽きた（動画の終端）。以後は 1 枚ずつ取る。
+      stream = null;
+    }
+  }
+  seekedFrames++;
+  return grabFrameYuv(video, t, geo.frameW, geo.frameH);
+}
 /** 待ち行列に入れたことのある時刻。同じ絵を二度読まないための控え。 */
 const queued = new Set<number>(queue);
 
@@ -500,7 +552,9 @@ for (let qi = 0; qi < queue.length; qi++) {
   // ⭐ 色付きで取る。**成駒は朱・生駒は黒**で書かれており、照合（グレースケール）が
   // 割り切れない `金`⇔`全` を色が決める（`src/ink.ts`）。ffmpeg の起動が支配的なので、
   // gray を別に取り直すより 1 回の rgb24 から落とす方が安い。
-  const colorFrame = grabFrameYuv(video, t, geo.frameW, geo.frameH);
+  // ⚠ 流れが返す絵は**次の 1 枚を取るまでの間だけ有効**（内部の buffer を指している）。
+  // この反復の中で使い切ること（`crop` / `cropYuv` は複製を返すので持ち越してよい）。
+  const colorFrame = await frameAt(t);
   const frame = yuvGray(colorFrame);
   if (!isCalibrationTrustworthy(calibrateGeometry(frame, geo))) {
     offBoard++;
@@ -1099,7 +1153,10 @@ for (let qi = 0; qi < queue.length; qi++) {
   }
 }
 
+stream?.close();
+
 console.log(`\n# ${samples} 点を ${((Date.now() - started) / 1000).toFixed(1)} 秒で読んだ`);
+console.log(`  絵の取り方: 流れから ${streamedFrames} 枚 / 1 枚ずつ ${seekedFrames} 枚`);
 console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);

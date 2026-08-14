@@ -145,6 +145,144 @@ export function grabFrameYuv(
   };
 }
 
+/**
+ * 一定間隔のフレームを 1 パスで流し、**呼ばれた分だけ**返す。
+ *
+ * 🔴 **1 枚ごとに ffmpeg を起動するのが走査時間の 62% だった**（実測 143.6ms × 3703 枚
+ * ＝ 534 秒。残りは較正の確認 39 秒・認識 49 秒・その他）。デコード自体は全編で
+ * 40 秒しか掛からないので、**起動と探索の費用だけを何千回も払っていた**ことになる。
+ *
+ * ⚠ **押し出し（`streamBoardFrames` のように `onFrame` で呼び返す）ではなく引き取りにする。**
+ * 本線は「繋がらなかった区間を 0.1 秒刻みで読み直す」ために**待ち行列へ時刻を挿し込む**
+ * 設計なので、絵が勝手に流れてくると噛み合わない。`next()` で 1 枚ずつ引き取れば、
+ * 挿し込みの間は流れを止めておける（その間は ffmpeg 側で詰まるだけ）。
+ *
+ * ⭐ **挿し込みの時刻は必ず格子から外れる**（0.1 秒刻みのうち格子に載るものは
+ * 既に待ち行列にあるので除かれる）。だから**格子の時刻はこの流れが、
+ * それ以外は `grabFrameYuv` が**、と分けられる。
+ *
+ * ⚠ 返す `YuvImage` は**内部の buffer を指すだけで複製しない**。次の `next()` を
+ * 呼ぶまでの間だけ有効。持ち越したいなら呼び出し側で複製すること
+ * （1 枚 6.2MB あるので、複製しないことが効く）。
+ *
+ * 🔴🔴 **`fps=N` フィルタで間引いてはいけない。`-ss` と別のフレームが出る。**
+ * 実測（30fps の動画を 0.5 秒刻みにする場合）: `fps=2` の 1 枚目は**7 フレーム目**で、
+ * `-ss 0` が返す 0 フレーム目ではない。**`fps` は出力区間の「中央」に最も近い入力を
+ * 採る**（0〜0.5 秒の中央 0.25 秒に最も近いのは 0.2333 秒＝7 フレーム目）のに対し、
+ * `-ss` は区間の**先頭**を返す。ずれは全編で一定の 7 フレーム＝0.2333 秒だった。
+ * **絵が違えば読みも違う**ので、これは「速くしただけ」では済まない。
+ * → **フレーム番号で選ぶ**（`select='not(mod(n,K))'`）。こちらは `-ss` と一致する
+ * （`select=eq(n,300)` と `-ss 10` が md5 まで同じであることを確認済み）。
+ */
+export interface FrameStream {
+  /** 次のフレームを返す。終端なら null。 */
+  next(): Promise<YuvImage | null>;
+  close(): void;
+}
+
+/**
+ * 動画のフレームレートを分数のまま返す。
+ *
+ * ⚠ `30/1` のような分数で入っているので、割ってから使うと 29.97 系で誤差が出る。
+ * 「何フレームおきに読むか」を整数で決めたいので、分子と分母のまま返す。
+ */
+export function probeFrameRate(videoPath: string): { num: number; den: number } {
+  const res = spawnSync('ffprobe', [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=r_frame_rate',
+    '-of', 'default=nw=1:nk=1',
+    videoPath,
+  ]);
+  if (res.status !== 0) throw new Error(`ffprobe が失敗しました: ${res.stderr.toString()}`);
+  const [num, den] = res.stdout.toString().trim().split('/').map(Number);
+  if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) {
+    throw new Error(`フレームレートを読めませんでした: ${res.stdout.toString().trim()}`);
+  }
+  return { num, den };
+}
+
+/**
+ * @param stride 何フレームおきに 1 枚返すか。時刻は `startSec + index * stride / fps`。
+ */
+export function openFrameStream(
+  videoPath: string,
+  width: number,
+  height: number,
+  stride: number,
+  range?: { startSec?: number; durationSec?: number },
+): FrameStream {
+  const n = width * height;
+  const frameBytes = n * 3;
+  const seek = range?.startSec ? ['-ss', String(range.startSec)] : [];
+  const limit = range?.durationSec ? ['-t', String(range.durationSec)] : [];
+  // ⚠ `select` は間引くだけで時刻を詰め直さない。番号で数えるので詰め直す必要も無い。
+  const pick = stride === 1 ? [] : ['-vf', `select='not(mod(n\\,${stride}))'`, '-fps_mode', 'passthrough'];
+
+  const ff = spawn('ffmpeg', [
+    '-nostdin',
+    '-loglevel', 'error',
+    '-threads', String(FFMPEG_THREADS),
+    ...seek,
+    '-i', videoPath,
+    ...limit,
+    ...pick,
+    '-f', 'rawvideo',
+    '-pix_fmt', 'yuvj444p',
+    '-',
+  ]);
+
+  let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let ended = false;
+  let failure: Error | null = null;
+  let wake: (() => void) | null = null;
+  const stderr: Buffer[] = [];
+  const ring = () => { const w = wake; wake = null; w?.(); };
+
+  ff.stderr.on('data', (c: Buffer) => stderr.push(c));
+  ff.stdout.on('data', (chunk: Buffer) => {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+    // 2 枚ぶん溜まったら止める。**止めないと全編がメモリに載る**（30 分で 22GB）。
+    if (pending.length >= frameBytes * 2) ff.stdout.pause();
+    ring();
+  });
+  ff.stdout.on('end', () => { ended = true; ring(); });
+  ff.on('error', (e) => { failure = e; ended = true; ring(); });
+  ff.on('close', (code) => {
+    if (code !== 0 && code !== null) {
+      failure = new Error(`ffmpeg が終了コード ${code} で失敗: ${Buffer.concat(stderr).toString()}`);
+    }
+    ended = true;
+    ring();
+  });
+
+  return {
+    async next(): Promise<YuvImage | null> {
+      while (pending.length < frameBytes && !ended) {
+        ff.stdout.resume();
+        await new Promise<void>((resolve) => { wake = resolve; });
+      }
+      if (failure) throw failure;
+      if (pending.length < frameBytes) return null;
+      const frame = pending.subarray(0, frameBytes);
+      pending = pending.subarray(frameBytes);
+      // ⚠ 複製しない（次の next() までの間だけ有効）。subarray は view を返す。
+      const buf = new Uint8Array(frame.buffer, frame.byteOffset, frameBytes);
+      return {
+        width,
+        height,
+        y: buf.subarray(0, n),
+        u: buf.subarray(n, n * 2),
+        v: buf.subarray(n * 2, n * 3),
+      };
+    },
+    close() {
+      ff.stdout.destroy();
+      ff.kill('SIGKILL');
+    },
+  };
+}
+
 /** YUV 画像を切り出す（`crop` の色版）。 */
 export function cropYuv(img: YuvImage, rect: Rect): YuvImage {
   const { x, y, w, h } = rect;

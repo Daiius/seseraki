@@ -31,6 +31,7 @@ import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from
 import { ReadingHistory } from './src/confirm.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
+import { replayGame, describeProblem } from './src/replay.ts';
 import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
@@ -179,7 +180,7 @@ console.log(`\n# ${fmt(fromSec)}〜${fmt(toSec)} を ${stepSec} 秒間隔で読�
 interface Step {
   time: number;
   usi: string;
-  side: string;
+  side: Side;
   solved: boolean;
 }
 /**
@@ -1072,6 +1073,18 @@ for (let g = 0; g < gameCount; g++) {
     console.log(`\n  ${fmt(r.startedAt)}〜${fmt(r.steps.at(-1)!.time)}  ${r.steps.length} 手  手番の交互率 ${ratio}`);
     console.log(`    ${r.steps.map((s) => `${s.usi}${s.solved ? '*' : ''}`).join(' ')}`);
   }
+
+  // ⭐ **初期局面から通しで再生してみる。** 1 手ごとの合法性は走査中にも見ているが、
+  // それは追跡中の盤面に対する検査で、その盤面は映像から再同期される。
+  // **手の列が初期局面から繋がることは、ここでしか確かめられない。**
+  // 手番の交互率では見つからない誤り（持っていない駒の打ちなど）がここに出る。
+  const first = [...mine].sort((a, b) => a.startedAt - b.startedAt)[0];
+  const result = replayGame(first.steps.map((s) => ({ usi: s.usi, side: s.side, time: s.time })));
+  console.log(`\n  # 初期局面から通しで再生: 合法 ${result.legal} / ${result.total}`);
+  for (const p of result.problems) console.log(`    ${describeProblem(p)}`);
+  if (result.problems.length === 0) console.log('    ✅ 問題なし');
+  // ⚠ 途中から始まる断片は起点の局面が分からないので掛けられない。
+  if (mine.length > 1) console.log(`    （${mine.length - 1} 本の断片は初期局面から繋がらないので再生していない）`);
 }
 
 let alternations = 0;
@@ -1119,12 +1132,18 @@ for (let g = 0; g <= gameIndex; g++) {
       .map((r) => {
         let alt = 0;
         for (let i = 1; i < r.steps.length; i++) if (r.steps[i].side !== r.steps[i - 1].side) alt++;
+        // 初期局面から通しで再生した結果。手番の交互率では見つからない誤りが出る。
+        // ⚠ 途中から始まる断片は起点の局面が分からないので掛けられない。
+        const replay = r === [...mine].sort((a, b) => a.startedAt - b.startedAt)[0]
+          ? replayGame(r.steps.map((s) => ({ usi: s.usi, side: s.side, time: s.time })))
+          : null;
         return {
           startedAt: r.startedAt,
           endedAt: r.steps.at(-1)!.time,
           moveCount: r.steps.length,
           // 手番が交互になっているか。1 でなければどこかで手を取りこぼしている。
           alternationRatio: r.steps.length > 1 ? alt / (r.steps.length - 1) : null,
+          replay: replay && { legal: replay.legal, total: replay.total, problems: replay.problems },
           usi: r.steps.map((x) => x.usi),
           moves: r.steps.map((x) => ({ time: x.time, usi: x.usi, side: x.side, inferredKind: x.solved })),
         };

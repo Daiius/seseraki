@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop, type GrayImage } from './src/frame.ts';
 import {
-  cellImage, extractTemplates, ncc, resample, rotate180, shiftImage,
+  cellImage, cellImageForSide, extractTemplates, ncc, resample, rotate180, shiftImage,
   bestSubpixelShiftNcc, type Template,
 } from './src/template.ts';
 import { loadTemplates, saveTemplates } from './src/template-store.ts';
@@ -65,7 +65,12 @@ for (const [tag, v] of Object.entries(VIDEOS)) {
 const PLAIN_RE = /^(\w+):(\d+)-(sente|gote)-([A-Z])$/;
 const PROM_RE = /^(\w+):g\d+-(\d+)-(sente|gote)-p([A-Z])-\d[a-i]$/;
 const collected = new Map<string, GrayImage[]>();
-const lines = readFileSync(listPath, 'utf8').split('\n').map((s) => s.trim()).filter(Boolean);
+// `#` で始まる行は注記として読み飛ばす。**この控えは一度失われている**ので、
+// 出所の説明をリストと同じファイルに置けるようにしておく（追記 141）。
+const lines = readFileSync(listPath, 'utf8')
+  .split('\n')
+  .map((s) => s.trim())
+  .filter((s) => s && !s.startsWith('#'));
 console.log(`# 選択 ${lines.length} 枚`);
 for (const line of lines) {
   const plain = line.match(PLAIN_RE);
@@ -87,7 +92,8 @@ for (const line of lines) {
     const square = line.slice(-2);
     const col = 9 - Number(square[0]);
     const row = square.charCodeAt(1) - 97;
-    img = cellImage(board, row, col);
+    // 🔒 本線と同じ窓で切り出す（向きごとにずらす・追記 141）
+    img = cellImageForSide(board, row, col, side as Side);
   }
   const key = `${side}-${kind}`;
   collected.set(key, [...(collected.get(key) ?? []), img]);
@@ -199,7 +205,7 @@ let ng = 0;
 for (const t of final.filter((x) => x.kind.startsWith('+'))) {
   let worst = { margin: Infinity, at: '', real: 0, mine: 0 };
   for (const c of cells) {
-    const real = cellImage(refBoard, c.row, c.col);
+    const real = cellImageForSide(refBoard, c.row, c.col, c.side);
     const own = final.find((x) => x.kind === c.kind && x.side === c.side)!;
     const realScore = ncc(resample(own.img, real.width, real.height), real);
     const mineScore = ncc(resample(t.img, real.width, real.height), real);

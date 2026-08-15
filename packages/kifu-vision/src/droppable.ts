@@ -28,7 +28,7 @@
 
 import type { PieceKind, Side, Square } from 'shared';
 import type { GrayImage } from './frame.ts';
-import { cellImage, classify, type Template } from './template.ts';
+import { cellImageForSide, classify, type Template } from './template.ts';
 
 /** 打てる駒（成駒と玉は打てない） */
 export const DROPPABLE_KINDS: PieceKind[] = ['P', 'L', 'N', 'S', 'G', 'B', 'R'];
@@ -93,7 +93,8 @@ export function readAsDroppable(
   const allowed = templates.filter((t) => t.side === side && DROPPABLE.has(t.kind));
   if (allowed.length === 0) return null;
 
-  const match = classify(cellImage(board, row, col), allowed);
+  // 向きは決まっているので、その向きの窓で切り出す（追記 141）
+  const match = classify(cellImageForSide(board, row, col, side), allowed);
   if (!match) return null;
   if (match.score < minScore || match.margin < minMargin) return null;
   return { kind: match.template.kind, score: match.score, margin: match.margin };

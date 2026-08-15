@@ -21,7 +21,7 @@ import {
 } from './src/frame.ts';
 import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
-import { extractTemplates, cellImage, ncc, type Template } from './src/template.ts';
+import { extractTemplates, cellImage, cellImageForSide, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, asHoles, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
@@ -173,7 +173,7 @@ const learnedThisRun: Template[] = [];
 
 function learn(img: GrayImage, row: number, col: number, kind: PieceKind, side: 'sente' | 'gote', at: number) {
   if (templates.some((t) => t.kind === kind && t.side === side)) return;
-  const cell = cellImage(img, row, col);
+  const cell = cellImageForSide(img, row, col, side);
 
   // 🔴 **ポインタが乗ったマスからテンプレートを起こしてはいけない。**
   // そこに何の駒があるかを絵から決めるのは、ほぼ不可能に近い。逆算が

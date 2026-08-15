@@ -14,7 +14,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, crop, type GrayImage } from './src/frame.ts';
-import { cellImage, ncc, resample, rotate180 } from './src/template.ts';
+import { cellImage, cellImageForSide, ncc, resample, rotate180 } from './src/template.ts';
 import { loadTemplates } from './src/template-store.ts';
 import { calibrateFromFrames } from './src/calibrate.ts';
 import { occupancy, occupancyDistance, hasPointer } from './src/occupancy.ts';
@@ -102,7 +102,7 @@ for (const path of kifuPaths) {
         continue;
       }
       for (const p of promoted) {
-        const cell = cellImage(board, p.row, p.col);
+        const cell = cellImageForSide(board, p.row, p.col, p.side);
         if (hasPointer(cell)) {
           rejectedPointer++;
           continue;

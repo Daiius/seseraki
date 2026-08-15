@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createInitialState, type Square } from 'shared';
 import { carryUnknowns, boardsEqual, boardDiff, recognizeBoard } from './recognize.ts';
 import { inferMove } from './moves.ts';
-import { cellImage, type Template } from './template.ts';
+import { cellImage, cellImageForSide, type Template } from './template.ts';
 import { hasPointer } from './occupancy.ts';
 import { isUnknown } from './uncertain.ts';
 import type { GrayImage } from './frame.ts';
@@ -147,9 +147,11 @@ describe('recognizeBoard の駒の有無（3 値）', () => {
   // ⚠ テンプレートが 1 種しか無いと 1 位と 2 位の差が定義できず（常に 1）、
   // 覆われたマスが必ず「決定的」になってしまう。**紛れる相手を必ず置く。**
   const templates: Template[] = [
-    { kind: 'P', side: 'sente', samples: 1, img: cellImage(img, 8, 0) },
-    { kind: 'L', side: 'sente', samples: 1, img: cellImage(img, 8, 2) },
-    { kind: 'G', side: 'gote', samples: 1, img: cellImage(img, 8, 4) },
+    // 🔒 テンプレートは**本線と同じ窓**で切る（向きごとにずらす・追記 141）。
+    // 片方だけ動かすと照合が成り立たない。
+    { kind: 'P', side: 'sente', samples: 1, img: cellImageForSide(img, 8, 0, 'sente') },
+    { kind: 'L', side: 'sente', samples: 1, img: cellImageForSide(img, 8, 2, 'sente') },
+    { kind: 'G', side: 'gote', samples: 1, img: cellImageForSide(img, 8, 4, 'gote') },
   ];
   const r = recognizeBoard(img, templates);
 

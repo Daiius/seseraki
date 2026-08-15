@@ -11,7 +11,7 @@ import type { Square } from 'shared';
 import type { GrayImage, YuvImage } from './frame.ts';
 import { cropYuv } from './frame.ts';
 import { presence, OCCUPANCY_THRESHOLD, EMPTY_MAX_SD, hasPointer } from './occupancy.ts';
-import { cellImage, classify, MATCH_INSET, type MatchResult, type Template } from './template.ts';
+import { cellImage, classify, classifyAt, MATCH_DY, MATCH_INSET, type MatchResult, type Template } from './template.ts';
 import { inkRedness, isPromotedKind } from './ink.ts';
 import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from './uncertain.ts';
 
@@ -187,13 +187,13 @@ export interface RecognizeOptions {
  * 同じ形。今回あり得ないと言っているのは規則ではなく**色という別の証拠**。
  */
 function classifyWithInk(
-  cut: GrayImage,
+  board: GrayImage,
   templates: Template[],
   colorBoard: YuvImage | undefined,
   row: number,
   col: number,
 ): MatchResult | null {
-  const match = classify(cut, templates);
+  const match = classifyAt(board, row, col, templates);
   if (!match || !colorBoard || !isPromotedKind(match.template.kind)) return match;
 
   const cw = colorBoard.width / 9;
@@ -201,14 +201,19 @@ function classifyWithInk(
   const w = Math.floor(cw * (1 - MATCH_INSET * 2));
   const h = Math.floor(ch * (1 - MATCH_INSET * 2));
   const x = Math.round(cw * col + cw * MATCH_INSET);
-  const y = Math.round(ch * row + ch * MATCH_INSET);
+  // ⚠ 色を見る窓も、字と同じだけずらす（字の赤さを測るのだから字の上に置く）。
+  const dy = match.template.side === 'sente' ? MATCH_DY : -MATCH_DY;
+  const y = Math.min(
+    colorBoard.height - h,
+    Math.max(0, Math.round(ch * row + ch * MATCH_INSET + ch * dy)),
+  );
   const { ratio } = inkRedness(cropYuv(colorBoard, { x, y, w, h }));
 
   // 測れなかったときは口を出さない（木地が写っていない絵など）。
   if (!Number.isFinite(ratio) || ratio >= PROMOTED_MIN_REDNESS) return match;
 
   const plainOnly = templates.filter((t) => !isPromotedKind(t.kind));
-  return classify(cut, plainOnly) ?? match;
+  return classifyAt(board, row, col, plainOnly) ?? match;
 }
 
 export function recognizeBoard(
@@ -263,7 +268,7 @@ export function recognizeBoard(
       // ポインタは「読めなくて当然」という**推定**にすぎない。
       // **決定的な証拠が出たら推定の方を譲る。**
       if (p === 'unclear' || (p === 'empty' && pointer)) {
-        const match = classifyWithInk(cut, templates, options.colorBoard, row, col);
+        const match = classifyWithInk(board, templates, options.colorBoard, row, col);
         const decisive =
           match !== null &&
           match.score >= COVERED_NCC_THRESHOLD &&
@@ -290,7 +295,7 @@ export function recognizeBoard(
         }
         continue;
       }
-      const match = classifyWithInk(cut, templates, options.colorBoard, row, col);
+      const match = classifyWithInk(board, templates, options.colorBoard, row, col);
       if (!match) {
         squares[row].push(null);
         guesses[row].push(null);

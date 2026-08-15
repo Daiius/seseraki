@@ -42,25 +42,98 @@ export interface Template {
 export const MATCH_INSET = Number(process.env.KIFU_VISION_MATCH_INSET ?? 0.24);
 
 /**
+ * 窓を「**駒から見て下**」へずらす割合（マス高に対する比）。
+ *
+ * 🔴🔴 **既定は 0＝ずらさない。測って、採らなかった**（2026-08-16・追記 141）。
+ * 仕組みは再現のために残してある。**同じ道をもう一度掘らないこと。**
+ *
+ * ##### 動機は正しかった
+ *
+ * 窓を格子線から決めているので、**字の下端が切れている**（ユーザの指摘・追記 140）。
+ * 拡大して枠を焼き込むと一目で分かる——`金` の下棒・`歩` の左払い・`玉` の点が
+ * 窓の外に出て、**窓の上には木地の余白が残る**。字は駒の中で下寄りにある。
+ * ⚠ 上側の駒は 180 度回して描かれるので**画面では上寄り**。一律のずらしでは
+ * 必ず片側が悪化する（実測: 一律 +4px で上側 0.480 / 一律 -4px で下側 0.473）。
+ *
+ * ##### きれいなマスでは、狙いどおり良くなった
+ *
+ * | 窓 | 同じ向きどうしの最悪の相関 | 2 本目を読んだ 1 位と 2 位の差 |
+ * |---|---|---|
+ * | ずらさない | 0.411 | 0.512 |
+ * | **向きごと ±10px** | **0.335** | **0.606** |
+ *
+ * ##### 🔴 なのに棋譜は悪くなった（採らない理由）
+ *
+ * | | 基準 | 向きごと ±10px |
+ * |---|---|---|
+ * | 1 本目 | 92 + 81・各 1 断片 | 同左だが **2 局目 70 手目の成りが落ちた**（`7f7g+`→`7f7g`） |
+ * | 2 本目 手数 | **218** | 210 |
+ * | 2 本目 断片 / 仕切り直し | **4 / 1** | 7 / 4 |
+ *
+ * 🔒 **上の 2 つの数字は「きれいな初期局面」で測ったもので、実際に効くマスの
+ * 代用でしかなかった。** 棋譜が切れるのはポインタ・演出・ハイライトで半分
+ * 覆われたマスで、そこでは**駒の輪郭という共通の手がかり**が効いている。
+ * 窓を字に寄せると輪郭を捨てるので、**きれいなマスで得をして際どいマスで損をする**。
+ * 演出の多い 2 本目がいちばん壊れたのはそれと整合する。
+ *
+ * ⚠ 70 手目の 7g はどの時刻でも NCC 0.19〜0.23 で**読めていない**。
+ * つまり**基準の `7f7g+` も読んで決めたものではない**。**満点の指標が
+ * 隠していた偶然**であって、「正しく読めていたものを壊した」わけではない。
+ *
+ * 🔒 これは照合の窓だけを動かす案だった。盤の格子（`geo`）は動かしていない
+ * （`refineByTemplates` を動画フレームに当てると**縦のずれは 0.00 画素**で、
+ * 格子自体は合っている。動かせば駒の有無（`sd`）まで動いて手が変わる）。
+ */
+export const MATCH_DY = Number(process.env.KIFU_VISION_MATCH_DY ?? 0);
+
+/**
  * 盤画像から [row][col] のマスを、テンプレートと同じ切り取り方で取り出す。
  *
  * マスの幅・高さは小数なので、両端を丸めると位置によって 1 画素ぶれる。
  * NCC は同じ寸法どうしでしか測れないため、**寸法は固定して開始位置だけ丸める**。
  * こうすると全マスが必ず同じ大きさで揃う。
+ *
+ * @param dy 窓を下へずらす割合（マス高に対する比）。負なら上へ。
  */
-export function cellImage(board: GrayImage, row: number, col: number, inset = MATCH_INSET): GrayImage {
+export function cellImage(
+  board: GrayImage,
+  row: number,
+  col: number,
+  inset = MATCH_INSET,
+  dy = 0,
+): GrayImage {
   const cw = board.width / 9;
   const ch = board.height / 9;
   const w = Math.floor(cw * (1 - inset * 2));
   const h = Math.floor(ch * (1 - inset * 2));
   const x0 = Math.round(cw * col + cw * inset);
-  const y0 = Math.round(ch * row + ch * inset);
+  // 窓が盤からはみ出すと別の行を読んでしまうので、盤の内側へ丸める。
+  const y0 = Math.min(
+    board.height - h,
+    Math.max(0, Math.round(ch * row + ch * inset + ch * dy)),
+  );
   const data = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     const src = (y0 + y) * board.width + x0;
     data.set(board.data.subarray(src, src + w), y * w);
   }
   return { width: w, height: h, data };
+}
+
+/**
+ * 駒の向きに合わせて窓をずらして切り出す。
+ *
+ * ⚠ `side` は**画面での向き**（下側の駒が `sente` として描かれる）。
+ * 画面の下が後手の対局があるので、先手後手そのものではない。
+ */
+export function cellImageForSide(
+  board: GrayImage,
+  row: number,
+  col: number,
+  side: Side,
+  inset = MATCH_INSET,
+): GrayImage {
+  return cellImage(board, row, col, inset, side === 'sente' ? MATCH_DY : -MATCH_DY);
 }
 
 /**
@@ -112,7 +185,8 @@ export function extractTemplates(initialBoard: GrayImage): Template[] {
     for (let col = 0; col < 9; col++) {
       const piece = board[row][col];
       if (!piece) continue;
-      const cell = cellImage(initialBoard, row, col);
+      // 🔒 テンプレートも本線と同じ窓で切り出す。片方だけ動かすと照合が成り立たない。
+      const cell = cellImageForSide(initialBoard, row, col, piece.side);
       const key = `${piece.side}:${piece.kind}`;
       let bucket = buckets.get(key);
       if (!bucket) {
@@ -306,6 +380,37 @@ export interface MatchResult {
   score: number;
   /** 2 位との差。小さいほど紛らわしく、確信が持てない。 */
   margin: number;
+}
+
+/**
+ * 向きごとの窓で切り出して照合する。
+ *
+ * 🔒 **実際の照合ではマスの向きが分からない**ので、1 マスにつき 2 通り切り出し、
+ * **それぞれをその向きのテンプレートとだけ比べる**。向きを先に決めてから
+ * 切り出すことはできない（それが分かれば駒種もほぼ決まっている）。
+ */
+export function classifyAt(
+  board: GrayImage,
+  row: number,
+  col: number,
+  templates: Template[],
+  inset = MATCH_INSET,
+): MatchResult | null {
+  if (MATCH_DY === 0) return classify(cellImage(board, row, col, inset), templates);
+  const bySide: Record<Side, GrayImage> = {
+    sente: cellImageForSide(board, row, col, 'sente', inset),
+    gote: cellImageForSide(board, row, col, 'gote', inset),
+  };
+  const scored = templates
+    .filter((t) => t.img.width === bySide[t.side].width && t.img.height === bySide[t.side].height)
+    .map((t) => ({ template: t, score: ncc(t.img, bySide[t.side]) }))
+    .sort((a, b) => b.score - a.score);
+  if (scored.length === 0) return null;
+  return {
+    template: scored[0].template,
+    score: scored[0].score,
+    margin: scored.length > 1 ? scored[0].score - scored[1].score : 1,
+  };
 }
 
 /** マス画像に最もよく合うテンプレートを返す */

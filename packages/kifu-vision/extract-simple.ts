@@ -113,14 +113,29 @@ const templateSeg = initials.reduce((a, b) => (b.length > a.length ? b : a));
 const fromInitial = extractTemplates(grabBoard(templateSeg.representativeTime));
 console.log(`  ${fmt(templateSeg.representativeTime)} から ${fromInitial.length} 種を抽出（生駒のみ）`);
 
-// 以前に作った成駒のテンプレートがあれば足す。成駒は初期局面に無いので
-// ここで補わないと、別の駒として読まれたまま盤上に居座り続ける。
+// 🔒 **保存済みを正典にする。動画から起こしたものは、保存済みに無い駒種を補うだけ。**
+//
+// 初期局面のフレームには**対局開始の演出が乗っていることがある**（キャラクターの絵と
+// 光の帯）。2 本目の 0:02 がまさにそれで、演出の下にあった角と飛が濁り、
+// **同じ駒どうしで NCC 0.512** までしか合わなかった。その結果、盤上の本物の角は
+// どこにあっても 0.44 前後になり、駒があると分かっているマスが未確定のまま残って、
+// 指した手がそのまま棋譜から落ちた（先手の `B*4g` ほか 4 件）。
+//
+// ⚠ **「良いフレームを選ぶ」では閉じない。** どれが良いかは演出の出方次第で、
+// 動画ごとに当たり外れが出る。**駒の絵は動画に依存しない資産**なので、
+// 一度きれいに採って持っておけばよい（`extract-handoff-templates.ts`）。
+// 駒のデザインが変わったら採り直す——そのときだけ人の手が要る。
 const cellSize = { width: fromInitial[0].img.width, height: fromInitial[0].img.height };
 const stored = loadTemplates(TEMPLATE_STORE, cellSize);
-const templates: Template[] = stored ? mergeTemplates(fromInitial, stored) : fromInitial;
+const templates: Template[] = stored ? mergeTemplates(stored, fromInitial) : fromInitial;
 if (stored) {
-  const added = templates.length - fromInitial.length;
-  console.log(`  保存済みのテンプレートから ${added} 種を追加: ${templates.slice(fromInitial.length).map((t) => `${t.side === 'sente' ? '▲' : '▽'}${t.kind}`).join(' ')}`);
+  const filled = templates.slice(stored.length);
+  console.log(`  保存済みのテンプレート ${stored.length} 種を使う: ${stored.map((t) => `${t.side === 'sente' ? '▲' : '▽'}${t.kind}`).join(' ')}`);
+  console.log(
+    filled.length === 0
+      ? '  動画から起こした分は使わない（保存済みで足りている）'
+      : `  保存済みに無い ${filled.length} 種だけ動画から補う: ${filled.map((t) => `${t.side === 'sente' ? '▲' : '▽'}${t.kind}`).join(' ')}`,
+  );
 } else {
   console.log(`  保存済みのテンプレートは無し（${TEMPLATE_STORE}）`);
 }
@@ -145,6 +160,16 @@ function dumpPgm(img: GrayImage, path: string) {
  * `sanity` の却下が 10 → 507 に跳ね上がった。1 枚の間違いが全体を止める。
  */
 const LEARN_DUPLICATE_NCC = Number(process.env.KIFU_VISION_LEARN_DUP_NCC ?? 0.6);
+
+/**
+ * この走査で新しく覚えた駒だけを持つ。
+ *
+ * ⚠ **`templates` から拾い直してはいけない。** 保存済みのテンプレートは照合用に
+ * 引き伸ばして読み込まれているので、そこから選んで書き戻すと、走査のたびに
+ * 補間が積み重なって元の絵が甘くなる。`samples === 1` は「覚えたもの」の代用として
+ * 不正確でもある（保存済みにも 1 マスからしか採れない駒がある）。
+ */
+const learnedThisRun: Template[] = [];
 
 function learn(img: GrayImage, row: number, col: number, kind: PieceKind, side: 'sente' | 'gote', at: number) {
   if (templates.some((t) => t.kind === kind && t.side === side)) return;
@@ -176,6 +201,7 @@ function learn(img: GrayImage, row: number, col: number, kind: PieceKind, side: 
   }
 
   templates.push({ kind, side, samples: 1, img: cell });
+  learnedThisRun.push({ kind, side, samples: 1, img: cell });
   dumpPgm(cell, `${LEARN_DIR}/${side}-${kind.replace('+', 'p')}-at${Math.round(at)}s.pgm`);
   console.log(`  ★ ${fmt(at)} 新しい駒を覚えた: ${side === 'sente' ? '▲' : '▽'}${NAMES[kind]}`);
 }
@@ -1260,7 +1286,7 @@ console.log('  （断片の中では交互になっているはず。低いな�
 // 断片を書き出す。まだ 1 局を通せていないので、つながった単位で残しておく。
 // 走査中に覚えた駒があれば残す。次回以降は最初から使える。
 try {
-  const learned = templates.filter((t) => t.samples === 1 && t.kind.startsWith('+'));
+  const learned = learnedThisRun.filter((t) => t.kind.startsWith('+'));
   if (learned.length > 0) {
     // 保存し直すときは**保存されたままの寸法で読む**。照合用に引き伸ばした絵を
     // 書き戻すと、走査のたびに補間が積み重なって元の絵が甘くなっていく。

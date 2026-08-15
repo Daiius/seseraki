@@ -92,13 +92,13 @@ function NewKifuPage() {
               setSourceTz(e.target.value as 'auto' | 'JST' | 'UTC')
             }
           >
-            <option value="auto">自動（KIF 署名から判定・不明なら JST）</option>
+            <option value="auto">自動（JST として解釈）</option>
             <option value="JST">JST（日本時間）</option>
-            <option value="UTC">UTC（開始日時が UTC のアプリ）</option>
+            <option value="UTC">UTC（開始日時が UTC の棋譜）</option>
           </select>
           <div className="label whitespace-normal">
             <span className="label-text-alt opacity-60">
-              アプリによって開始日時が UTC のことがある。並び順がずれる場合は明示指定する
+              既定は JST。開始日時が UTC で書かれた棋譜（古いアプリの書き出し）を貼るときだけ UTC を選ぶ
             </span>
           </div>
         </label>

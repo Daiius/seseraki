@@ -45,9 +45,13 @@ import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
 import { attributionOf, type TacticLabel } from 'shared';
 import { replaceTactics } from './tactics';
-import { parseKif, type KifTimezone } from './kif/parser.js';
+import {
+  detectLegacyUtcTimezone,
+  parseKif,
+  type KifTimezone,
+} from './kif/parser.js';
 
-/** 投入時の TZ 指定。'auto' は KIF 署名から自動判定 */
+/** 投入時の TZ 指定。'auto' は自動判定＝現状 JST 固定（[parseKif]） */
 export type SourceTzChoice = 'auto' | KifTimezone;
 
 export const app = new Hono().basePath('/api');
@@ -78,7 +82,7 @@ interface KifIngestion {
 
 /**
  * KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用）。
- * @param tz 開始日時の解釈 TZ。'auto'（既定）は KIF 署名から自動判定。
+ * @param tz 開始日時の解釈 TZ。'auto'（既定）は JST。
  *   投入時にユーザーが選んだ値、再解析では保存済み sourceTz を渡す。
  */
 function convertKif(kifText: string, tz: SourceTzChoice = 'auto'): KifIngestion {
@@ -382,9 +386,12 @@ const route = app
 
       // kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
       // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
-      // TZ は投入時のユーザー選択（保存済み sourceTz）を維持する。未設定（旧データ）は
-      // 署名から自動判定にフォールバック。
-      const tz = (kifu.sourceTz as SourceTzChoice | null) ?? 'auto';
+      // TZ は投入時のユーザー選択（保存済み sourceTz）を維持する。未設定（旧データ＝TZ を
+      // 記録し始める前の投入分）は、当時 UTC で書き出していたアプリの棋譜がありうるので
+      // 旧署名で補う（新規取り込みは JST 固定。[detectLegacyUtcTimezone]）。
+      const tz =
+        (kifu.sourceTz as KifTimezone | null) ??
+        detectLegacyUtcTimezone(kifu.kifText);
       const { usiMoves, meta } = convertKif(kifu.kifText, tz);
       await db.transaction(async (tx) => {
         // 先に kifus を UPDATE して行ロックを取り、analysisRevision を +1（実行中の旧解析の

@@ -4,6 +4,10 @@
 // 背景: 従来パーサは開始日時を JST 決め打ちで解釈していたため、開始日時を UTC で
 // 書き出すアプリの棋譜が 9h 手前にずれて保存されていた。kifText から再パースして直す。
 //
+// ⚠ TZ の自動判定は取り込み経路から外した（App B が JST を書くようになったため。parser.ts の
+//    [detectLegacyUtcTimezone]）。ここは **過去行（TZ 記録より前＝切替前の投入分）専用**なので、
+//    旧署名を明示的に呼んで渡す。新しい取り込み経路はこの署名を使わない。
+//
 // 安全策:
 //  - 対象は sourceTz IS NULL の行だけ（投入時に TZ を明示選択した行は上書きしない）。
 //  - 既定は **dry-run**（変更内容を表示するだけ）。実際に書き込むには BACKFILL_APPLY=1。
@@ -19,7 +23,7 @@
 import { and, eq, isNull, isNotNull } from 'drizzle-orm';
 import { db } from './src/db/index.js';
 import { kifus } from './src/db/schema.js';
-import { parseKif } from './src/kif/parser.js';
+import { detectLegacyUtcTimezone, parseKif } from './src/kif/parser.js';
 
 const APPLY = process.env.BACKFILL_APPLY === '1';
 
@@ -40,7 +44,7 @@ try {
   let changed = 0;
   let skipped = 0;
   for (const row of manual) {
-    const { header } = parseKif(row.kifText);
+    const { header } = parseKif(row.kifText, detectLegacyUtcTimezone(row.kifText));
     const implausible =
       header.playedAt != null && header.playedAt.getTime() > row.createdAt.getTime();
     if (implausible) {

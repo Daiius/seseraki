@@ -30,7 +30,7 @@ export const kifus = mysqlTable(
     swarsGameKey: varchar({ length: 255 }).unique(),
     playedAt: timestamp(),
     // playedAt の解釈に用いたタイムゾーン。手動貼り付け KIF は開始日時に
-    // タイムゾーン欄が無いため、署名判定の結果（"JST" 既定 / "UTC"）を残す。
+    // タイムゾーン欄が無いため、投入時に決めた TZ（"JST" 既定 / "UTC" は投入時指定）を残す。
     // swars 経路は gameKey 由来で常に "JST"。
     sourceTz: varchar({ length: 8 }),
     analysisCompletedAt: timestamp(),

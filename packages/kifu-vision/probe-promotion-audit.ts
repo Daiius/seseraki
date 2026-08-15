@@ -117,6 +117,15 @@ let checked = 0;
 let cells = 0;
 let rejectedOcc = 0;
 let rejectedPointer = 0;
+/**
+ * 安全網で捨てた局面の記録。
+ *
+ * 🔴 **捨てた局面は「検査していない」であって「問題が無い」ではない。**
+ * しかも**食い違いが少ないほど怪しい**——20 マスも食い違えば演出か時刻ずれだが、
+ * **1〜2 マスなら、棋譜の方が間違っている可能性がある**。
+ * 安全網は正しいが、**捨てた中身を数えずに済ませてはいけない。**
+ */
+const rejected: { game: number; ply: number; at: number; diff: number; where: string[] }[] = [];
 
 for (const path of kifuPaths) {
   const kifu = JSON.parse(readFileSync(path, 'utf8'));
@@ -155,8 +164,18 @@ for (const path of kifuPaths) {
       }
       checked++;
       // 🔒 安全網。1 マスでも食い違えば、その絵からは何も言えない。
-      if (occupancyDistance(occupancy(gray), wantOcc) !== 0) {
+      const seenOcc = occupancy(gray);
+      const occDiff = occupancyDistance(seenOcc, wantOcc);
+      if (occDiff !== 0) {
         rejectedOcc++;
+        const where: string[] = [];
+        for (let r = 0; r < 9 && where.length < 6; r++) {
+          for (let c = 0; c < 9 && where.length < 6; c++) {
+            if (seenOcc[r][c] === wantOcc[r][c]) continue;
+            where.push(`${9 - c}${String.fromCharCode(97 + r)}${wantOcc[r][c] ? '(棋譜は駒/絵は空)' : '(棋譜は空/絵は駒)'}`);
+          }
+        }
+        rejected.push({ game, ply: i + 1, at, diff: occDiff, where });
         continue;
       }
       const color = cropYuv(grabFrameYuv(video, at, geo.frameW, geo.frameH), rect);
@@ -248,6 +267,34 @@ if (found.length === 0) {
     );
   }
   console.log('  🔒 まずフレームを見ること。棋譜と色のどちらが誤っているかは、絵でしか決まらない');
+}
+
+// --- 捨てた局面 ---
+//
+// 🔒 **数えずに済ませない。** 食い違いが少ない局面ほど、演出ではなく
+// 棋譜の誤りである可能性が高い。
+if (rejected.length > 0) {
+  const few = rejected.filter((r) => r.diff <= 2).sort((a, b) => a.diff - b.diff);
+  const hist = new Map<string, number>();
+  for (const r of rejected) {
+    const k = r.diff <= 2 ? String(r.diff) : r.diff <= 5 ? '3〜5' : r.diff <= 10 ? '6〜10' : '11 以上';
+    hist.set(k, (hist.get(k) ?? 0) + 1);
+  }
+  console.log(
+    `  ⚠ 有無が合わず捨てた ${rejected.length} 局面の内訳（食い違ったマス数）: ` +
+      ['1', '2', '3〜5', '6〜10', '11 以上'].filter((k) => hist.has(k)).map((k) => `${k}→${hist.get(k)}`).join(' / '),
+  );
+  if (few.length === 0) {
+    console.log('    ✅ 2 マス以下の食い違いは無い（＝どれも演出や時刻ずれの規模）');
+  } else {
+    console.log(`    🔴 **2 マス以下が ${few.length} 局面**。演出にしては小さい。棋譜を疑う値打ちがある`);
+    for (const r of few.slice(0, 10)) {
+      console.log(
+        `      ${r.game} 局目 ${r.ply} 手目 / ${Math.round(r.at)}秒（${Math.floor(r.at / 60)}:${String(Math.floor(r.at % 60)).padStart(2, '0')}）` +
+          `  ${r.diff} マス  ${r.where.join(' ')}`,
+      );
+    }
+  }
 }
 
 // --- 駒種 ---

@@ -37,6 +37,33 @@ import { UNKNOWN, isUnknown, markUnknown, resolveWith, type VisionSquare } from 
 export const PROMOTED_MIN_REDNESS = Number(process.env.KIFU_VISION_PROMOTED_REDNESS ?? 0.76);
 
 /**
+ * **生駒と読めたマスを成駒として読み直す**のに要る「字の赤さ」。
+ *
+ * 🔴 **色の検算は片側だけだった**（追記 139 で見つけて放置していた）。
+ * 「成駒と読めたが朱でない → 生駒に読み直す」はあったが、**逆が無かった**。
+ * 実測（2 本目 2 局目 30:19・追記 142）: `3c` の ▲銀 が `4b` へ動いて成ったのに
+ * **▲金 と読み**、「銀が金になった」＝ `promotion-mismatch` で**断片が切れていた**。
+ * 絵を見ると 4b は明らかに朱の `全` で、**赤さは 1.266〜1.277**。
+ * 金と全は形では割れない（NCC 0.70〜0.81）ので、**色でしか決められない**。
+ *
+ * 🔒 **降ろす側と同じ閾値は使えない。** 測ると分布の位置が動画で変わる:
+ *
+ * | | 1 本目 | 2 本目 2 局目（9776 マス） |
+ * |---|---|---|
+ * | 生駒と読めたマスの赤さ | 中央 0.467 / **最大 0.816** | 中央 0.475 / 95% 0.572 |
+ * | 谷 | 0.76 | **1.04**（±0.05 に 0 マス / 全 10007） |
+ * | 本物の成駒 | 1.03〜1.33 | 1.1〜1.4 |
+ *
+ * 1.04 は **1 本目の生駒の最大（0.816）より上**で、**2 本目の本物の成駒の
+ * 最小（1.1）より下**。2 本目で 1.0 を超えた生駒読みは 9776 中 **1 マス**だけで、
+ * それが当の 4b である。
+ *
+ * ⭐ 結果として色は 3 通りを答える: **黒（≤0.76）/ 分からない / 朱（≥1.04）**。
+ * 🔒 **間の帯では口を出さない。** 決められるときだけ決める。
+ */
+export const PROMOTED_CERTAIN_REDNESS = Number(process.env.KIFU_VISION_PROMOTED_CERTAIN ?? 1.04);
+
+/**
  * これを下回る NCC は「テンプレートに無い駒」を疑う。
  *
  * 実測では正しく読めたマスが 0.49〜0.999（中央値 0.986）で、0.49 は
@@ -192,9 +219,20 @@ function classifyWithInk(
   colorBoard: YuvImage | undefined,
   row: number,
   col: number,
+  /**
+   * そのマスに駒があると確定しているか。
+   *
+   * 🔒 **成駒へ読み直す側は、ここが true のときだけ効かせる。** `ink.ts` が
+   * 警告しているとおり、**駒が無いマスでは暗い側も木地になり比が 1 に近づく**
+   * （＝朱に見える）。覆われて有無すら決まらないマスでこれを効かせると、
+   * 空マスに成駒を捏造しかねない。しかも成駒だけに絞ると競争相手が減って
+   * **1 位と 2 位の差が見かけ上開く**ので、「決定的」の門まで通ってしまう。
+   * 降ろす側は候補が増える向きなので、この危険が無く、両方で効かせてよい。
+   */
+  certain: boolean,
 ): MatchResult | null {
   const match = classifyAt(board, row, col, templates);
-  if (!match || !colorBoard || !isPromotedKind(match.template.kind)) return match;
+  if (!match || !colorBoard) return match;
 
   const cw = colorBoard.width / 9;
   const ch = colorBoard.height / 9;
@@ -210,10 +248,21 @@ function classifyWithInk(
   const { ratio } = inkRedness(cropYuv(colorBoard, { x, y, w, h }));
 
   // 測れなかったときは口を出さない（木地が写っていない絵など）。
-  if (!Number.isFinite(ratio) || ratio >= PROMOTED_MIN_REDNESS) return match;
+  if (!Number.isFinite(ratio)) return match;
 
-  const plainOnly = templates.filter((t) => !isPromotedKind(t.kind));
-  return classifyAt(board, row, col, plainOnly) ?? match;
+  if (isPromotedKind(match.template.kind)) {
+    // 成駒と読めたが朱でない → 生駒に限って読み直す
+    if (ratio >= PROMOTED_MIN_REDNESS) return match;
+    const plainOnly = templates.filter((t) => !isPromotedKind(t.kind));
+    return classifyAt(board, row, col, plainOnly) ?? match;
+  }
+
+  // 🔴 生駒と読めたが字が朱 → 成駒に限って読み直す（追記 142 で足した逆向き）。
+  // 金と全は形では割れないので、ここが無いと成銀が金として棋譜に入り、
+  // 「銀が金になった」という説明の付かない差分になって断片が切れる。
+  if (!certain || ratio < PROMOTED_CERTAIN_REDNESS) return match;
+  const promotedOnly = templates.filter((t) => isPromotedKind(t.kind));
+  return classifyAt(board, row, col, promotedOnly) ?? match;
 }
 
 export function recognizeBoard(
@@ -268,7 +317,7 @@ export function recognizeBoard(
       // ポインタは「読めなくて当然」という**推定**にすぎない。
       // **決定的な証拠が出たら推定の方を譲る。**
       if (p === 'unclear' || (p === 'empty' && pointer)) {
-        const match = classifyWithInk(board, templates, options.colorBoard, row, col);
+        const match = classifyWithInk(board, templates, options.colorBoard, row, col, false);
         const decisive =
           match !== null &&
           match.score >= COVERED_NCC_THRESHOLD &&
@@ -295,7 +344,7 @@ export function recognizeBoard(
         }
         continue;
       }
-      const match = classifyWithInk(board, templates, options.colorBoard, row, col);
+      const match = classifyWithInk(board, templates, options.colorBoard, row, col, true);
       if (!match) {
         squares[row].push(null);
         guesses[row].push(null);

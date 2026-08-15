@@ -3,6 +3,7 @@ import { createInitialState, type Square } from 'shared';
 import { carryUnknowns, boardsEqual, boardDiff, recognizeBoard } from './recognize.ts';
 import { inferMove } from './moves.ts';
 import { cellImage, cellImageForSide, type Template } from './template.ts';
+import type { YuvImage } from './frame.ts';
 import { hasPointer } from './occupancy.ts';
 import { isUnknown } from './uncertain.ts';
 import type { GrayImage } from './frame.ts';
@@ -222,5 +223,69 @@ describe('boardsEqual / boardDiff', () => {
     const diff = boardDiff(a, b);
     expect(diff).toHaveLength(1);
     expect(diff[0]).toMatchObject({ row: 4, col: 4, before: null });
+  });
+});
+
+/**
+ * 🔴 **色の検算は片側だけだった**（追記 139 で見つけて放置し、追記 142 で直した）。
+ *
+ * 「成駒と読めたが朱でない → 生駒に読み直す」はあったが、**逆が無かった**。
+ * 実測（2 本目 2 局目 30:19）では、成った銀を `▲金` と読み、「銀が金になった」
+ * という説明の付かない差分になって断片が切れていた。金と全は形では割れない
+ * （NCC 0.70〜0.81）ので、**色でしか決められない**。
+ */
+describe('字の色で成駒と生駒を読み直す（両向き）', () => {
+  const cell = 10;
+  const size = cell * 9;
+
+  /** 上半分が暗い絵。`vertical` なら左半分が暗い。 */
+  const make = (vertical = false): GrayImage => {
+    const data = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dark = vertical ? x % cell < cell / 2 : y % cell < cell / 2;
+        data[y * size + x] = dark ? 60 : 200;
+      }
+    }
+    return { width: size, height: size, data };
+  };
+
+  /**
+   * 同じ絵に色を付ける。`redInk` なら**暗い画素だけ**を赤くする
+   * （インクの R−G が木地より大きくなる＝朱）。
+   * ⚠ R−G は `2.116(V−128) + 0.344(U−128)` なので V を動かせばよい。
+   */
+  const withInk = (img: GrayImage, redInk: boolean): YuvImage => {
+    const u = new Uint8Array(img.data.length).fill(128);
+    const v = new Uint8Array(img.data.length);
+    for (let i = 0; i < img.data.length; i++) {
+      const dark = img.data[i] < 128;
+      // 木地は常に少し赤い（実物の駒も橙）。インクは朱のときだけ強く赤い。
+      v[i] = dark ? (redInk ? 190 : 140) : 150;
+    }
+    return { width: img.width, height: img.height, y: img.data, u, v };
+  };
+
+  const img = make();
+  const templates: Template[] = [
+    { kind: 'G', side: 'sente', samples: 1, img: cellImageForSide(img, 0, 0, 'sente') },
+    // 成駒。字の形は金とまったく同じにしてある（実物の 金⇔全 と同じ状況）。
+    { kind: '+S', side: 'sente', samples: 1, img: cellImageForSide(img, 0, 0, 'sente') },
+    { kind: 'P', side: 'gote', samples: 1, img: cellImageForSide(make(true), 0, 0, 'gote') },
+  ];
+
+  it('🔴 生駒と読めても、字が朱なら成駒として読み直す', () => {
+    const r = recognizeBoard(img, templates, { colorBoard: withInk(img, true) });
+    expect(r.board[4][4]).toEqual({ kind: '+S', side: 'sente' });
+  });
+
+  it('字が朱でなければ生駒のまま', () => {
+    const r = recognizeBoard(img, templates, { colorBoard: withInk(img, false) });
+    expect(r.board[4][4]).toEqual({ kind: 'G', side: 'sente' });
+  });
+
+  it('色を渡さなければ今までどおり形だけで読む', () => {
+    const r = recognizeBoard(img, templates);
+    expect(r.board[4][4]).toEqual({ kind: 'G', side: 'sente' });
   });
 });

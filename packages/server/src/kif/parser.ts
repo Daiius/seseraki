@@ -116,9 +116,10 @@ export interface KifMove {
 
 /**
  * 開始日時ヘッダの時刻をどのタイムゾーンとして解釈するか。
- * KIF 形式にはタイムゾーン欄が無いため、アプリ（署名）ごとに補う。
- * - JST: 一般的な将棋アプリ（既定）
- * - UTC: 開始日時を UTC で書き出すアプリ（signature で検出。[detectKifTimezone]）
+ * KIF 形式にはタイムゾーン欄が無いため、外から補う。
+ * - JST: 一般的な将棋アプリ。**取り込み時の解釈はこれに固定**（[parseKif]）
+ * - UTC: 開始日時を UTC で書き出す KIF。**投入時のユーザー選択でのみ指定する**
+ *   （署名からの自動判定は廃止。[detectLegacyUtcTimezone]）
  */
 export type KifTimezone = "JST" | "UTC";
 
@@ -227,19 +228,25 @@ function parsePlayer(value: string): { name: string | null; dan: number | null }
 }
 
 /**
- * 手動貼り付け KIF のうち、開始日時を UTC で書き出すアプリ（App B）の署名。
- * 実データ観測に基づく指紋で、誤検出（JST のアプリを UTC と誤判定）を避けるため
- * 十分に絞る。App B の KIF は:
+ * **かつて**開始日時を UTC で書き出していたアプリ（App B）の署名。App B の KIF は:
  *   1. 先頭行が柿木形式コメント `# ---- KIF形式 ----`
  *   2. `持ち時間：` ヘッダを持つ
  *   3. JST 系アプリ（例: 終了日時／場所 を書き出すもの）に無い ＝ `終了日時`/`場所` を持たない
- * の 3 条件をすべて満たす。1 条件だけ（コメント or 持ち時間 単独）では JST 扱いのまま。
- * これに一致した棋譜のみ開始日時を UTC として解釈する。将来 UTC の別アプリが増えたら
- * その固有署名をここに足す（未知アプリは既定の JST ＝安全側）。
+ * の 3 条件をすべて満たす。
+ *
+ * ⚠ **取り込み時の自動判定からは外した**（[parseKif] は常に JST 既定）。App B はアップデートで
+ * 開始日時を JST で書くようになったが、**署名は 3 条件とも変わらない**ため、判定を残すと新しい
+ * KIF まで UTC と誤読して playedAt が 9h 未来へずれる。KIF 側に新旧を分ける手掛かりが無い以上
+ * 自動判定は諦め、UTC は投入時のユーザー選択に委ねる
+ * （prd/04 §2「署名はあくまで初期値の提案で、確定はユーザーの選択に委ねる」）。
+ *
+ * 残してあるのは **切替より前に書き出された過去の KIF** を読み直す用途だけ
+ * （`backfill-source-tz.ts`。対象の `sourceTz` 未設定行は TZ 記録より前＝切替前の投入分）。
+ * 新しい取り込み経路からは呼ばないこと。
  */
-function isUtcSourceKif(kifText: string): boolean {
+export function detectLegacyUtcTimezone(kifText: string): KifTimezone {
   // 署名判定も必ず正規化後のテキストへ当てる。生のままだと BOM・ゼロ幅文字の混入で
-  // 判定だけが外れ、UTC の棋譜が既定の JST として 9 時間ずれて入る。
+  // 判定だけが外れ、切替前の UTC の棋譜が JST として 9 時間ずれたまま残る。
   const normalized = normalizeKifText(kifText);
   const firstContent =
     splitLines(normalized).find((l) => l.trim() !== "")?.trim() ?? "";
@@ -250,12 +257,7 @@ function isUtcSourceKif(kifText: string): boolean {
   // JST 系アプリが出す終了日時／場所を持つものは App B ではない（誤検出防止）
   const hasEndTimeOrPlace =
     /^[^\S\r\n]*(終了日時|場所)[^\S\r\n]*[：:]/m.test(normalized);
-  return startsWithKifComment && hasMochiJikan && !hasEndTimeOrPlace;
-}
-
-/** KIF テキストから開始日時の解釈タイムゾーンを判定する（既定 JST） */
-export function detectKifTimezone(kifText: string): KifTimezone {
-  return isUtcSourceKif(kifText) ? "UTC" : "JST";
+  return startsWithKifComment && hasMochiJikan && !hasEndTimeOrPlace ? "UTC" : "JST";
 }
 
 /** "2026/07/15 15:54:18" 等を Date へ（tz として解釈。swars 経路の JST と揃える） */
@@ -318,14 +320,15 @@ function deriveResult(moveNum: number, marker: string): string | null {
 
 /**
  * KIF テキストを解析する。
- * @param tzOverride 開始日時の解釈 TZ を明示指定する。省略時は署名から自動判定
- *   （[detectKifTimezone]）。ユーザーが投入時に TZ を選んだ場合はその値を渡す。
+ * @param tzOverride 開始日時の解釈 TZ を明示指定する。**省略時は JST**（署名からの自動判定は
+ *   廃止した。理由は [detectLegacyUtcTimezone]）。ユーザーが投入時に TZ を選んだ場合、
+ *   および過去行の再導出でその値を渡す。
  */
 export function parseKif(kifText: string, tzOverride?: KifTimezone): ParsedKif {
   const lines = splitLines(kifText);
   const moves: KifMove[] = [];
   const errors: ParsedKif["errors"] = [];
-  const sourceTz = tzOverride ?? detectKifTimezone(kifText);
+  const sourceTz = tzOverride ?? "JST";
   const header: KifHeader = {
     sente: null,
     gote: null,

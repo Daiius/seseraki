@@ -41,7 +41,7 @@ kifus
 ├── result: varchar(50)?         -- 対局結果
 ├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
 ├── playedAt: timestamp?         -- 対局日時（sourceTz で解釈した絶対時刻）
-├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC"。署名判定。[04](./04-ingestion.md)）
+├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC" は投入時指定。[04](./04-ingestion.md)）
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
@@ -54,7 +54,8 @@ kifus
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
 - **`sourceTz`**: `開始日時` にタイムゾーン欄が無い KIF を正しく並べるため、`playedAt` を解釈した TZ を記録する。
-  投入時にユーザーが選択（`auto`/`JST`/`UTC`。`auto` は署名から推定＝既定 JST）。UTC のときは +9h 補正した絶対時刻を保存。
+  投入時にユーザーが選択（`auto`/`JST`/`UTC`。**`auto` は JST**。署名からの UTC 推定は廃止＝[04](./04-ingestion.md)）。
+  UTC のときは +9h 補正した絶対時刻を保存。
   swars 経路は `gameKey` 由来で常に `"JST"`。reanalyze はこの値を維持する（[04](./04-ingestion.md)）。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。

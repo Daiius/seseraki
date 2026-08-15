@@ -15,13 +15,20 @@
 // 演出のいずれかなので、色を測っても意味が無い。
 // 🔒 ポインタが乗ったマスは見ない。
 //
+// ⭐ **駒種も突き合わせる**（2026-08-16 に足した）。色は成/不成しか言えないので、
+// 「桂が動いた」と書いてある棋譜の駒が実は銀でも通ってしまう。照合は本線と
+// 同じ仕組みなので**独立した証拠ではない**が、**見ている単位が違う**——
+// 本線はフレーム間の差分から手を作るのに対し、ここは**確定した棋譜を再生した盤**と
+// 映像を直に比べる。差分では辻褄が合ってしまう誤りが、ここでは食い違いとして出る。
+//
 // ⚠ **駒が無いマスに `inkRedness` を使ってはいけない**（`ink.ts` の警告）。
 // 字が無いと暗い側も木地になり、比が 1 に近づいて朱に見える。ここでは再生した盤に
 // 駒があるマスだけを見るので条件を満たす。
 import { SHOGI_WARS_VERTICAL, boardRect } from './src/geometry.ts';
 import { grabFrame, grabFrameYuv, cropYuv, crop, type YuvImage } from './src/frame.ts';
 import { calibrateFromFrames } from './src/calibrate.ts';
-import { cellImage, MATCH_INSET } from './src/template.ts';
+import { cellImage, classify, MATCH_INSET, type Template } from './src/template.ts';
+import { loadTemplates } from './src/template-store.ts';
 import { occupancy, occupancyDistance, hasPointer } from './src/occupancy.ts';
 import { inkRedness } from './src/ink.ts';
 import { PROMOTED_MIN_REDNESS, PROMOTED_CERTAIN_REDNESS } from './src/recognize.ts';
@@ -66,6 +73,21 @@ const redness = (color: YuvImage, row: number, col: number): number => {
   ).ratio;
 };
 
+interface KindDisagreement {
+  game: number;
+  ply: number;
+  at: number;
+  square: string;
+  /** 棋譜が言っている駒 */
+  expected: string;
+  expectedSide: Side;
+  /** 映像がいちばん似ていると言った駒 */
+  read: string;
+  readSide: Side;
+  score: number;
+  margin: number;
+}
+
 interface Disagreement {
   game: number;
   ply: number;
@@ -78,7 +100,19 @@ interface Disagreement {
   shouldBePromoted: boolean;
 }
 
+/**
+ * 駒種の食い違いを言うのに要る確からしさ。
+ *
+ * 🔒 **弱い読みで棋譜を疑わない。** 本線が「盤に置いてよい」とする基準
+ * （`PIECE_STRONG_NCC` = 0.6）と同じ線を使う。ここを下回る読みは
+ * 「映像がそう言った」と主張できる強さが無い。
+ */
+const KIND_MIN_SCORE = Number(process.env.KIFU_VISION_AUDIT_MIN_SCORE ?? 0.6);
+const KIND_MIN_MARGIN = Number(process.env.KIFU_VISION_AUDIT_MIN_MARGIN ?? 0.05);
+
 const found: Disagreement[] = [];
+const kindFound: KindDisagreement[] = [];
+let templates: Template[] | null = null;
 let checked = 0;
 let cells = 0;
 let rejectedOcc = 0;
@@ -126,10 +160,41 @@ for (const path of kifuPaths) {
         continue;
       }
       const color = cropYuv(grabFrameYuv(video, at, geo.frameW, geo.frameH), rect);
+      if (!templates) {
+        const sample = cellImage(gray, 0, 0);
+        templates = loadTemplates(
+          process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars-vertical.json',
+          { width: sample.width, height: sample.height },
+        );
+      }
       for (const p of pieces) {
-        if (hasPointer(cellImage(gray, p.row, p.col))) {
+        const cut = cellImage(gray, p.row, p.col);
+        if (hasPointer(cut)) {
           rejectedPointer++;
           continue;
+        }
+        // --- 駒種の突き合わせ ---
+        if (templates) {
+          const m = classify(cut, templates);
+          if (
+            m &&
+            m.score >= KIND_MIN_SCORE &&
+            m.margin >= KIND_MIN_MARGIN &&
+            (m.template.kind !== p.kind || m.template.side !== p.side)
+          ) {
+            kindFound.push({
+              game,
+              ply: i + 1,
+              at,
+              square: `${9 - p.col}${String.fromCharCode(97 + p.row)}`,
+              expected: p.kind,
+              expectedSide: p.side,
+              read: m.template.kind,
+              readSide: m.template.side,
+              score: m.score,
+              margin: m.margin,
+            });
+          }
         }
         const ratio = redness(color, p.row, p.col);
         if (!Number.isFinite(ratio)) continue;
@@ -183,4 +248,29 @@ if (found.length === 0) {
     );
   }
   console.log('  🔒 まずフレームを見ること。棋譜と色のどちらが誤っているかは、絵でしか決まらない');
+}
+
+// --- 駒種 ---
+if (!templates) {
+  console.log('  ⚠ テンプレートが読めなかったので駒種は見ていない');
+} else if (kindFound.length === 0) {
+  console.log(`  ✅ 駒種も、確からしい読み（NCC ≥ ${KIND_MIN_SCORE}・差 ≥ ${KIND_MIN_MARGIN}）とは全マスで一致した`);
+} else {
+  const byCell = new Map<string, KindDisagreement[]>();
+  for (const d of kindFound) {
+    byCell.set(`${d.game}:${d.square}`, [...(byCell.get(`${d.game}:${d.square}`) ?? []), d]);
+  }
+  console.log(`  🔴 駒種の食い違い ${byCell.size} か所（延べ ${kindFound.length} マス）`);
+  for (const [key, ds] of [...byCell].sort((a, b) => b[1].length - a[1].length).slice(0, 20)) {
+    const [game, square] = key.split(':');
+    const d = ds[0];
+    const mark = (k: string, s: Side) => `${s === 'sente' ? '▲' : '▽'}${NAMES[k]}`;
+    console.log(
+      `    ${game} 局目 ${square}  棋譜 ${mark(d.expected, d.expectedSide)}` +
+        ` / 映像 ${mark(d.read, d.readSide)}  ${ds.length} 枚` +
+        `  NCC ${Math.min(...ds.map((x) => x.score)).toFixed(3)}〜${Math.max(...ds.map((x) => x.score)).toFixed(3)}` +
+        `  ${ds[0].ply}〜${ds[ds.length - 1].ply} 手目 / ${Math.round(ds[0].at)}秒〜`,
+    );
+  }
+  console.log('  🔒 照合は本線と同じ仕組みなので、映像側が誤っていることもある。**必ず絵を見る**');
 }

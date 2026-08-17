@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  customType,
   foreignKey,
   index,
   int,
@@ -145,6 +146,66 @@ export const kifuTactics = mysqlTable(
   ],
 );
 
+/**
+ * 固定長バイト列（`binary(N)`）を **Buffer のまま**扱う。
+ *
+ * ⚠ drizzle の `binary()` は値を string として扱うので、そのままでは
+ * `Buffer` を渡せず、読み出しも文字列になる（charset 変換で壊れうる）。
+ * 局面の盤・持ち駒はバイト列そのものに意味があるため、型を通す。
+ */
+const bytes = (length: number) =>
+  customType<{ data: Buffer; driverData: Buffer }>({
+    dataType: () => `binary(${length})`,
+  })();
+
+/**
+ * 局面索引（`kifus` に紐付く派生値。prd/10 §3.2）。
+ *
+ * **全棋譜（自分の対局を含む）の全局面**を展開する。正は `kifus.usiMoves` で、
+ * この表は**手順前後を吸収して盤の配置で探す**ための索引にすぎない（`kifuTactics` と同じ立場）。
+ *
+ * 🔒 **`usiMoves` が変われば必ず作り直す**（同一トランザクション）。全件の作り直しは
+ * `rebuild-positions.ts`。
+ */
+export const kifuPositions = mysqlTable(
+  'kifu_positions',
+  {
+    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 0 = 初期局面。N は N 手適用後の局面 */
+    moveNumber: int().notNull(),
+    /**
+     * この局面に**至った直前の手**（USI）。`moveNumber = 0` では null。
+     * ⭐ 枝の集計に要る——局面キーだけでは「同じ局面から指された別の手」を区別できない
+     * （`moveNumber` は必ず +1 になるので集計単位にならない。prd/10 §5.3）
+     */
+    move: varchar({ length: 8 }),
+    /**
+     * 局面キー（SFEN の 盤 / 手番 / 持ち駒）。**手数は含めない**ので手順前後が合流する。
+     * ⚠ ハッシュにしない——衝突すると無関係な棋譜が検索結果に混ざり、気づきにくい。
+     * 文字列そのものなら衝突せず、URL に載せられ、人が読める（prd/10 §5.1）
+     */
+    sfen: varchar({ length: 200 }).notNull(),
+    /** 先手側だけの配置（盤 + 先手の持ち駒）。相手の駒は空として書く */
+    senteSfen: varchar({ length: 200 }).notNull(),
+    goteSfen: varchar({ length: 200 }).notNull(),
+    /** 盤 81 マス（1 マス 1 バイト）。距離の計算に読む（prd/10 §5.2） */
+    board: bytes(81).notNull(),
+    /** 持ち駒（先手 7 種 → 後手 7 種の枚数） */
+    hands: bytes(14).notNull(),
+    sideToMove: mysqlEnum(['b', 'w']).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kifuId, table.moveNumber] }),
+    foreignKey({
+      columns: [table.kifuId],
+      foreignColumns: [kifus.id],
+    }).onDelete('cascade'),
+    index('kifu_positions_sfen_idx').on(table.sfen),
+    index('kifu_positions_sente_sfen_idx').on(table.senteSfen),
+    index('kifu_positions_gote_sfen_idx').on(table.goteSfen),
+  ],
+);
+
 export const candidateMoves = mysqlTable(
   'candidate_moves',
   {
@@ -172,7 +233,14 @@ export const candidateMoves = mysqlTable(
 );
 
 export const relations = defineRelations(
-  { kifus, moveAnalyses, candidateMoves, kifuTactics, videoKifuSources },
+  {
+    kifus,
+    moveAnalyses,
+    candidateMoves,
+    kifuTactics,
+    videoKifuSources,
+    kifuPositions,
+  },
   (r) => ({
     kifus: {
       moveAnalyses: r.many.moveAnalyses(),

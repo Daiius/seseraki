@@ -11,6 +11,7 @@ import { db } from './db';
 import { kifus, moveAnalyses, videoKifuSources } from './db/schema';
 import { composeKifVerified } from './kif/compose';
 import { replaceTactics } from './tactics';
+import { replacePositions } from './positions';
 
 /**
  * 取り込みの入力（`POST /api/video-analysis/kifus`）。
@@ -149,6 +150,7 @@ export async function importVideoKifu(
         .insert(videoKifuSources)
         .values({ kifuId: inserted.id, ...source });
       await replaceTactics(tx, inserted.id, input.usi);
+      await replacePositions(tx, inserted.id, input.usi);
       return { kifuId: inserted.id, created: true, changed: true, diff: [] };
     }
 
@@ -180,6 +182,7 @@ export async function importVideoKifu(
       .where(eq(kifus.id, existing.kifuId));
     await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, existing.kifuId));
     await replaceTactics(tx, existing.kifuId, input.usi);
+    await replacePositions(tx, existing.kifuId, input.usi);
 
     return { kifuId: existing.kifuId, created: false, changed: true, diff };
   });

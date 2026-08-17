@@ -66,6 +66,7 @@ import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
 import { attributionOf, type TacticLabel } from 'shared';
 import { replaceTactics } from './tactics';
+import { replacePositions } from './positions';
 import {
   detectLegacyUtcTimezone,
   parseKif,
@@ -388,6 +389,7 @@ const route = app
           })
           .$returningId();
         await replaceTactics(tx, result.id, usiMoves);
+        await replacePositions(tx, result.id, usiMoves);
         return result.id;
       });
       return c.json({ id }, 201);
@@ -532,6 +534,8 @@ const route = app
         // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
         // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
         await replaceTactics(tx, id, usiMoves);
+        // 局面索引も同じトランザクションで作り直す（派生値なので usiMoves に追随する。prd/10 §3.2）
+        await replacePositions(tx, id, usiMoves);
       });
       // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
       clearProgress(id);
@@ -857,6 +861,7 @@ const route = app
                 })
                 .$returningId();
               await replaceTactics(tx, result.id, usiMoves);
+        await replacePositions(tx, result.id, usiMoves);
               return result.id;
             });
             imported.push({ id: newId, gameKey });

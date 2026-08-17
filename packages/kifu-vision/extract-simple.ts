@@ -32,7 +32,7 @@ import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
-import { canPromote } from './src/legality.ts';
+import { canPromote, canMove } from './src/legality.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
 import { replayGame, describeProblem } from './src/replay.ts';
@@ -451,6 +451,36 @@ function promotionIsPossible(usi: string, side: Side): boolean {
   return canPromote(at(0), at(2), side);
 }
 
+/**
+ * 「打ち」と読めた手について、**引き継いだマスの中に出発点になりうる駒**を探す。
+ *
+ * 🔴 実測（3 本目 11:47・追記 154）: 先手の駒が 4a → 4b へ 1 つ下がっただけの手を
+ * **「4b への打ち」と読んだ**。移動元の 4a が未確定で `current` から引き継がれており、
+ * 差分が「埋まったマスが 1 つ」＝打ちの形になったため。
+ * その結果**追跡盤面に駒が取り残され**、後にカーソルを追う幻の駒を生んだ。
+ *
+ * ⭐ **絵を一切見ずに、盤の論理だけで疑える。** `rescueVanished` の鏡像で、
+ * あちらは「消えた・行き先が未確定」、こちらは「増えた・出発点が未確定」。
+ */
+function carriedOriginsForDrop(
+  board: Square[][],
+  to: { row: number; col: number },
+  kind: PieceKind,
+  side: Side,
+  pending: { row: number; col: number }[],
+): { row: number; col: number }[] {
+  const found: { row: number; col: number }[] = [];
+  for (const p of pending) {
+    const piece = board[p.row][p.col];
+    if (!piece || piece.side !== side) continue;
+    // 打った駒と同じ駒がそこから来られるか。成って着地した場合も同じ駒である。
+    if (piece.kind !== kind && `+${piece.kind}` !== kind) continue;
+    if (!canMove(board, p, to, piece.kind, piece.side)) continue;
+    found.push({ row: p.row, col: p.col });
+  }
+  return found;
+}
+
 /** 確定待ちのマス。読めるようになるまで**何度でも**試みる。 */
 const provisional = new Map<string, Provisional>();
 const history = new ReadingHistory();
@@ -462,6 +492,10 @@ let overflowSeen = 0;
 let rescuedVanished = 0;
 /** 行き先が「空」と確定したので取り消した手（幻の駒・追記 152〜154） */
 let phantomsUndone = 0;
+/** 📏 打ちと読めたが、引き継いだマスに出発点の候補があった手（測定のみ） */
+let dropsWithCarriedOrigin = 0;
+/** 📏 うち候補が 1 つだけ＝移動として一意に決まるもの（測定のみ） */
+let dropsWithSingleCarriedOrigin = 0;
 /** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
 let unreadableStart = 0;
 /** 演出に覆われたとみて読まずに捨てた絵 */
@@ -1070,6 +1104,26 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // 📏 測定のみ（まだ判定は変えない）。打ちと読めた手のうち、引き継いだマスに
+  // 出発点の候補があるものを数える。**入れる前に、どれだけ起きているかを見る。**
+  if (result.move && result.move.type === 'drop') {
+    const kind = result.move.usi[0] as PieceKind;
+    const origins = carriedOriginsForDrop(current, result.move.to, kind, result.move.side as Side, pending);
+    if (origins.length > 0) {
+      dropsWithCarriedOrigin++;
+      if (origins.length === 1) dropsWithSingleCarriedOrigin++;
+      if (VERBOSE) {
+        const where = origins
+          .map((o) => `${9 - o.col}${String.fromCharCode(97 + o.row)}`)
+          .join(' / ');
+        console.log(
+          `  📏 ${fmt(t)} ${result.move.usi} は打ちと読めたが、引き継いだ ${where} から` +
+            `来られる（候補 ${origins.length}）`,
+        );
+      }
+    }
+  }
+
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
     if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
     const before = state;
@@ -1242,6 +1296,12 @@ console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
 if (phantomsUndone > 0) console.log(`  行き先が空と確定したので取り消した手: ${phantomsUndone}`);
+if (dropsWithCarriedOrigin > 0) {
+  console.log(
+    `  📏 打ちと読めたが引き継ぎマスから来られた手: ${dropsWithCarriedOrigin}` +
+      `（うち候補が 1 つ: ${dropsWithSingleCarriedOrigin}）`,
+  );
+}
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);

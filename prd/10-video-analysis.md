@@ -151,9 +151,8 @@ kifus.subjectSide: enum('sente' | 'gote')?
 ```
 
 - **動画解析**: `bottomIsSente`（画面の下＝録画者）から確定できる
-- **自分の対局**: 所有者の名前候補と `sente`/`gote` の突き合わせ。**現在は web の env が単一の正**
-  （`VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID`）で server は設定を持たないため、**server 側ユーザーの
-  導入が前提**になる（§7 段階 3b）
+- **自分の対局**: 所有者の名前候補と `sente`/`gote` の突き合わせ。**server 側ユーザーの導入が前提**で、
+  導出規則と名前の有効期間は [11](./11-users.md) §4〜5 に定める
 
 🔒 **主体側を局面索引に焼き込まない。** `senteSfen` / `goteSfen` を両方持ち、どちらを引くかは
 クエリ時に `subjectSide` で選ぶ:
@@ -340,7 +339,7 @@ ORDER BY games DESC
 | **1** | `source` 列 / `videoKifuSources` / KIF 合成 + 往復検証 / 取り込み API / 復元側の import CLI / `/video-analysis` 一覧 | — | ✅ 実装済み |
 | **2** | `kifuPositions` + 再構築コマンド / `/positions`（完全一致・枝の列挙）/ 棋譜ビューアからの導線 | 段階 1 | ✅ 実装済み |
 | **3a** | 近さ検索（両側の比較） | 段階 2 | ✅ 実装済み |
-| **3b** | 主体側モード / `kifus.subjectSide` | **server 側ユーザー**（§8.1） | ⬜ 未着手 |
+| **3b** | 主体側モード / `kifus.subjectSide` | **[11](./11-users.md) の段階 A** | ⬜ 未着手 |
 
 ⭐ **段階 3 は 2 つに割れる。** 近さの計算そのもの（§5.2）は主体側と無関係に成り立つので、
 `subjectSide` を待たずに実装できる。**server 側ユーザーを待つのは「自分の配置だけで比較する」
@@ -354,9 +353,9 @@ ORDER BY games DESC
 
 ### 8.1 server 側ユーザー（段階 3b の前提）
 
-現在「自分」の定義は **web の env が単一の正**で、server は設定を持たない。将来の他ユーザー招待に
-備えて server 側にユーザーの概念を持たせる設計が要り、**`subjectSide` の確定はそこに乗る**。
-動画解析より先に決める。
+**設計は [11](./11-users.md) に定めた**（2026-08-17）。`users` / `userAliases` に名前候補を持ち、
+`kifus.ownerId` と `kifus.subjectSide` を足す。段階 3b は **[11](./11-users.md) の段階 A**
+（server に持たせる）が済めば通せる——web の切り替え（同 段階 B）は待たなくてよい。
 
 ### 8.2 不確定手を評価値で選ぶ
 

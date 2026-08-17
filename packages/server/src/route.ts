@@ -423,16 +423,16 @@ const route = app
     async (c) => {
       const sfen = c.req.valid('query').pos ?? INITIAL_SFEN;
 
+      // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
+      // kifuId では畳まず、到達した手数ごとに 1 行返す。
+      //
       // 🔒 **打ち切ったことを黙らない。** 初期局面は全棋譜が通るので、棋譜が増えれば
       // 必ず上限に当たる。件数を返さないと、UI の「N 件」が実数と食い違ううえ、
-      // 「この局面を通った棋譜はこれで全部」と誤読される
-      const [{ total }] = await db
-        .select({ total: count() })
-        .from(kifuPositions)
-        .where(eq(kifuPositions.sfen, sfen));
-
-      // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
-      // kifuId では畳まず、到達した手数ごとに 1 行返す
+      // 「この局面を通った棋譜はこれで全部」と誤読される。
+      // ⚠ **総数は `count(*) over ()` で同じクエリから取る。** count を別クエリにすると
+      // 2 つのスナップショットになり、その間に取り込み・削除・再構築が走ると
+      // 「total 199 なのに games 200 件」のような食い違いが出る（0 件なら 404 を返すので、
+      // 総数が取れない場合を扱う必要はない）
       const rows = await db
         .select({
           kifuId: kifuPositions.kifuId,
@@ -443,6 +443,7 @@ const route = app
           title: kifus.title,
           source: kifus.source,
           playedAt: kifus.playedAt,
+          total: sql<number>`count(*) over ()`,
         })
         .from(kifuPositions)
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
@@ -474,13 +475,16 @@ const route = app
 
       // 盤・持ち駒はこの局面のものなのでどの行でも同じ。web が盤を描くのに使う
       const [first] = rows;
+      const total = Number(first.total);
       return c.json({
         sfen,
         isInitial: sfen === INITIAL_SFEN,
         board: [...first.board],
         hands: [...first.hands],
         sideToMove: first.sideToMove,
-        games: rows.map(({ board: _b, hands: _h, sideToMove: _s, ...g }) => g),
+        games: rows.map(
+          ({ board: _b, hands: _h, sideToMove: _s, total: _t, ...g }) => g,
+        ),
         /** 到達の総数。`games` は上限で切れていることがある（`hasMore`） */
         total,
         hasMore: total > rows.length,

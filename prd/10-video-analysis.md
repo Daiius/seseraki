@@ -106,13 +106,26 @@ videoKifuSources
 kifuPositions
 ├── kifuId: bigint FK → kifus.id (CASCADE)   ┐ PK
 ├── moveNumber: int      -- 0 = 初期局面      ┘
+├── move: varchar(8)?        -- この局面に至った直前の手（USI）。moveNumber = 0 では null
 ├── posHash: binary(16)      -- 盤 + 持ち駒 + 手番        (INDEX)
 ├── senteHash: binary(16)    -- 先手側の配置のみ          (INDEX)
 ├── goteHash: binary(16)     -- 後手側の配置のみ          (INDEX)
-├── board: varbinary(41)     -- 81 マスのニブル圧縮
-├── hands: varbinary(14)     -- 側 × 駒種の枚数
+├── board: binary(81)        -- 1 マス 1 バイト（下記）
+├── hands: binary(14)        -- 側 × 駒種の枚数（先手 7 + 後手 7）
 └── sideToMove: enum('b' | 'w')
 ```
+
+**`board` は 1 マス 1 バイト**（`binary(81)`）。マスの状態は **空 + 14 駒種 × 2 側 = 29 通り**あり、
+ニブル（4 ビット = 16 値）では表せない。値は `0` = 空、`1..14` = 先手の `P L N S G B R K +P +L +N +S +B +R`、
+`17..30` = 後手の同順（上位ビットが側）とする。
+
+> 詰めれば 51 バイト（5 ビット × 81）に収まるが、**24 万行でも差は 7MB** で、詰めた分だけ距離計算
+> （§5.2）でビット取り出しが要る。**1 マス 1 バイトにして、比較をバイト単位のままにする。**
+
+⭐ **`move`（この局面に至った手）を持つ。** 局面ハッシュだけでは**枝を指し手で区別できない**——
+同じ局面から複数の異なる手が指されていても、`moveNumber` は必ず `+1` になるので集計単位にならない。
+`kifus.usiMoves` から取り出すこともできるが、JSON 関数の JOIN になり索引が効かない。**8 バイトの列で
+枝の集計が SQL 一本になる**（§5.3）。派生値なので再構築で作り直せる。
 
 行数は総手数ぶん（数百局で数万行、2000 局でも 24 万行）。**全手数を対象にする**——手数帯の絞り込みは
 検索時に行えばよく、索引を序盤に限る理由がない。
@@ -137,8 +150,21 @@ kifus.subjectSide: enum('sente' | 'gote')?
 クエリ時に `subjectSide` で選ぶ:
 
 ```sql
-CASE WHEN k.subjectSide = 'sente' THEN p.senteHash ELSE p.goteHash END
+-- 3 状態を明示する。未確定（NULL）を既定側に落とさない
+CASE k.subjectSide
+  WHEN 'sente' THEN p.senteHash
+  WHEN 'gote'  THEN p.goteHash
+  ELSE NULL
+END
 ```
+
+🔒 **`subjectSide` が NULL の棋譜は、主体側の検索から除外する**（`WHERE k.subjectSide IS NOT NULL`）。
+`ELSE p.goteHash` と書くと**未確定の棋譜が黙って後手側として比較される**。主体が決まらない対局は
+実在する——両対局者とも自分の名前候補に一致する場合で、[09](./09-analytics.md) §4 でも
+勝率の分母から外す扱いになっている。**同じものを、ここでは「後手」として数えない。**
+
+⚠ **除外した件数は表示する。** 黙って落とすと、結果が少ない理由が「似た局面が無い」のか
+「主体が決まらない棋譜を外した」のか区別できない。
 
 理由は 2 つ。**(a) 再構築の範囲** — 名前候補を変えたとき、焼き込んでいれば数万行の索引を作り直すが、
 `kifus` の列なら数百行で済む。**(b) 主体と無関係な検索** — 「先手番でこの配置になった局面」は
@@ -228,19 +254,20 @@ dist = Σ(81 マス)[ 駒種・側が不一致 ]
 | 種類 | 実装 |
 |---|---|
 | **完全一致**（両側） | `posHash` の index seek |
-| **完全一致**（片側） | `senteHash` / `goteHash` の index seek。どちらを引くかは `subjectSide` で決める |
+| **完全一致**（片側） | `senteHash` / `goteHash` の index seek。どちらを引くかは `subjectSide` で決める（§3.3。NULL は除外） |
 | **近い局面** | 手数帯などで粗く絞り、読み出した行に対してアプリ側で距離を計算 |
-| **枝の列挙** | 同じ `kifuId` の `moveNumber + 1` を self join し、指し手ごとに集計 |
+| **枝の列挙** | 同じ `kifuId` の `moveNumber + 1` を self join し、**次の局面が持つ `move`** で集計 |
 
 近さ検索は**手番を問わず候補に入れ**、結果に手番を表示する。
 
 ```sql
 -- この局面の次の手と、その出現数
-SELECT n.moveNumber, count(*)
+SELECT n.move, n.posHash, count(*) AS games
 FROM kifu_positions p
 JOIN kifu_positions n ON n.kifuId = p.kifuId AND n.moveNumber = p.moveNumber + 1
 WHERE p.posHash = ?
-GROUP BY ...
+GROUP BY n.move, n.posHash
+ORDER BY games DESC
 ```
 
 ## 6. UI

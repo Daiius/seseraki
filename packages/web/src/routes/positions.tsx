@@ -150,10 +150,12 @@ function PositionView({ position }: { position: Position }) {
                 {position.total} 件
               </span>
               {/* 🔒 打ち切りを黙らない。出ている数が全部だと誤読されるため。
-                  server 側でも上限があり、そちらは新しい対局順に残る */}
+                  ⚠ **文言は実際の並びに合わせる。** 第一キーは到達手数なので
+                  「新しい N 件」ではない——手順前後で到達が遅くなった対局は、
+                  新しくても上限の外に出る */}
               {position.hasMore && (
                 <span className="text-sm font-normal opacity-60 ml-2">
-                  （新しい {position.games.length} 件まで）
+                  （到達が早い順に {position.games.length} 件まで・同手数では新しい順）
                 </span>
               )}
             </h2>

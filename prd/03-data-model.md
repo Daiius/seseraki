@@ -21,10 +21,13 @@
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
 | `videoKifuSources` | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
 | `kifuPositions` | 局面索引（`kifus` に紐付く派生値。[10](./10-video-analysis.md) §3.2） |
+| `users`（計画中） | 自分（将来は招待したユーザー。[11](./11-users.md) §2） |
+| `userAliases`（計画中） | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
 
 - リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
-- **単一ユーザー前提**のため owner 分離は持たない（[07](./07-auth-and-privacy.md)）。
+- **認証は単一アカウント**（[07](./07-auth-and-privacy.md)）だが、**データ側には所有者を持つ**
+  （`kifus.ownerId`。[11](./11-users.md) §3）。
 - 投入・API 境界の **runtime 検証は zod で行い、検証スキーマは `shared` に置く**（型共有だけでは動作時に
   不正データを弾けないため。[02](./02-architecture.md) §3.2 / [04](./04-ingestion.md)）。
 
@@ -49,7 +52,8 @@ kifus
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
 ├── source: enum notNull default 'manual'  -- 出所（'manual' | 'swars' | 'video'。[10](./10-video-analysis.md) §2.1）
-├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。計画中。[10](./10-video-analysis.md) §3.3）
+├── ownerId: bigint → users.id          -- このデータを持っている人（対局者ではない。計画中。[11](./11-users.md) §3）
+├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。計画中。[11](./11-users.md) §4）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 ```

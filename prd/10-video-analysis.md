@@ -107,7 +107,7 @@ videoKifuSources
 ```
 kifuPositions
 ├── kifuId: bigint FK → kifus.id (CASCADE)   ┐ PK
-├── moveNumber: int      -- 0 = 初期局面      ┘
+├── moveNumber: int      -- 0 = 初期局面      ┘ ＋単独の INDEX（下記）
 ├── move: varchar(8)?        -- この局面に至った直前の手（USI）。moveNumber = 0 では null
 ├── sfen: varchar(200)       -- 局面キー（盤 / 手番 / 持ち駒）  (INDEX)
 ├── senteSfen: varchar(200)  -- 先手側の配置のみ                (INDEX)
@@ -131,6 +131,10 @@ URL に載せられ（`/positions?pos=<sfen>`）、DB を直接見たときに�
 同じ局面から複数の異なる手が指されていても、`moveNumber` は必ず `+1` になるので集計単位にならない。
 `kifus.usiMoves` から取り出すこともできるが、JSON 関数の JOIN になり索引が効かない。**8 バイトの列で
 枝の集計が SQL 一本になる**（§5.3）。派生値なので再構築で作り直せる。
+
+⚠ **`moveNumber` には単独の索引が要る。** 近い局面の検索は手数帯で候補を絞る（§5.2）が、
+**PK は `(kifuId, moveNumber)` なので先頭列が違い、この範囲条件には使えない**。索引が無いと
+ボタンを押すたびに全局面を走査することになる。
 
 行数は総手数ぶん（数百局で数万行、2000 局でも 24 万行）。**全手数を対象にする**——手数帯の絞り込みは
 検索時に行えばよく、索引を序盤に限る理由がない。

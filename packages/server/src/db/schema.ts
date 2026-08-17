@@ -203,6 +203,10 @@ export const kifuPositions = mysqlTable(
     index('kifu_positions_sfen_idx').on(table.sfen),
     index('kifu_positions_sente_sfen_idx').on(table.senteSfen),
     index('kifu_positions_gote_sfen_idx').on(table.goteSfen),
+    // 近い局面の検索は `moveNumber` の範囲で候補を粗く絞る（prd/10 §5.2）。
+    // ⚠ **PK は `(kifuId, moveNumber)` なので、この範囲条件には使えない**
+    //（先頭列が kifuId のため）。索引が無いと全局面を走査することになる
+    index('kifu_positions_move_number_idx').on(table.moveNumber),
   ],
 );
 

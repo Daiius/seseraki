@@ -119,4 +119,21 @@ describe('videoKifuInputSchema', () => {
       videoKifuInputSchema.safeParse({ ...valid, videoId: 'a'.repeat(33) }).success,
     ).toBe(false);
   });
+
+  it('区間が逆転していたら弾く（個々の値が非負なだけでは通ってしまう）', () => {
+    const result = videoKifuInputSchema.safeParse({
+      ...valid,
+      startedAtSec: 1140,
+      endedAtSec: 4,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0].path).toEqual(['endedAtSec']);
+  });
+
+  it('区間の長さ 0（1 手で終わった局）は通す', () => {
+    expect(
+      videoKifuInputSchema.safeParse({ ...valid, startedAtSec: 10, endedAtSec: 10 })
+        .success,
+    ).toBe(true);
+  });
 });

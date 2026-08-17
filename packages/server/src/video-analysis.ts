@@ -16,22 +16,30 @@ import { replaceTactics } from './tactics';
  * 取り込みの入力（`POST /api/video-analysis/kifus`）。
  * **型はここから導く**（スキーマと型が別々にあると片方だけ直る）。
  */
-export const videoKifuInputSchema = z.object({
-  /** 動画の識別子。列は varchar(32) */
-  videoId: z.string().min(1).max(32),
-  /** その動画の何局目か（1 始まり） */
-  gameIndex: z.number().int().min(1),
-  startedAtSec: z.number().int().min(0),
-  endedAtSec: z.number().int().min(0),
-  /** 画面の下が先手か（録画者の側） */
-  bottomIsSente: z.boolean(),
-  /** 走査時のコミット（git rev-parse HEAD） */
-  extractorRev: z.string().min(1).max(40),
-  /** 復元された USI 指し手列。`7g7f` / `8h2b+` / `P*3e` の長さに収まる */
-  usi: z.array(z.string().min(4).max(6)).min(1),
-  /** 走査の生出力（そのまま保存する） */
-  raw: z.record(z.unknown()),
-});
+export const videoKifuInputSchema = z
+  .object({
+    /** 動画の識別子。列は varchar(32) */
+    videoId: z.string().min(1).max(32),
+    /** その動画の何局目か（1 始まり） */
+    gameIndex: z.number().int().min(1),
+    startedAtSec: z.number().int().min(0),
+    endedAtSec: z.number().int().min(0),
+    /** 画面の下が先手か（録画者の側） */
+    bottomIsSente: z.boolean(),
+    /** 走査時のコミット（git rev-parse HEAD） */
+    extractorRev: z.string().min(1).max(40),
+    /** 復元された USI 指し手列。`7g7f` / `8h2b+` / `P*3e` の長さに収まる */
+    usi: z.array(z.string().min(4).max(6)).min(1),
+    /** 走査の生出力（そのまま保存する） */
+    raw: z.record(z.unknown()),
+  })
+  // 区間は**組として**成り立っていないといけない。個々の値が非負なだけでは
+  // 逆転した区間（終了 < 開始）が通り、そのまま保存されて一覧に出る。
+  // 🔒 検証はここ 1 箇所に置く（取り込みの経路はこの API だけ。prd/10 §4.1）
+  .refine((v) => v.endedAtSec >= v.startedAtSec, {
+    message: '区間が逆転している（endedAtSec は startedAtSec 以上）',
+    path: ['endedAtSec'],
+  });
 
 export type VideoKifuInput = z.infer<typeof videoKifuInputSchema>;
 

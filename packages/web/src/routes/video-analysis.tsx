@@ -44,15 +44,17 @@ function groupByVideo(games: Game[]): { videoId: string; games: Game[] }[] {
 }
 
 function StatusBadge({ game }: { game: Game }) {
+  // ⚠ バッジは折り返させない（「未解 / 析」と割れる）
+  const cls = 'badge badge-sm whitespace-nowrap';
   if (game.failed) {
     return (
-      <span className="badge badge-error badge-sm" title={game.analysisError ?? ''}>
+      <span className={`${cls} badge-error`} title={game.analysisError ?? ''}>
         解析失敗
       </span>
     );
   }
-  if (game.analyzed) return <span className="badge badge-success badge-sm">解析済</span>;
-  return <span className="badge badge-ghost badge-sm">未解析</span>;
+  if (game.analyzed) return <span className={`${cls} badge-success`}>解析済</span>;
+  return <span className={`${cls} badge-ghost`}>未解析</span>;
 }
 
 function VideoAnalysisPage() {
@@ -99,7 +101,9 @@ function VideoAnalysisPage() {
                   <th>区間</th>
                   <th className="text-right">手数</th>
                   <th>録画者</th>
-                  <th>戦型</th>
+                  {/* 戦型に余りを吸わせる。そうしないとタグの多い行が他の列を圧迫し、
+                      「未解析」が「未解 / 析」と割れる */}
+                  <th className="w-full">戦型</th>
                   <th>解析</th>
                   <th />
                 </tr>
@@ -116,13 +120,13 @@ function VideoAnalysisPage() {
                     <td className="whitespace-nowrap">
                       {game.bottomIsSente ? '▲先手' : '△後手'}
                     </td>
-                    <td>
+                    <td className="w-full">
                       <TacticTags tactics={game.tactics} userSide={null} />
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       <StatusBadge game={game} />
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       <Link
                         to="/kifus/$id"
                         params={{ id: String(game.kifuId) }}

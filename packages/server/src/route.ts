@@ -10,9 +10,13 @@ import {
   count,
   desc,
   eq,
+  gte,
   inArray,
   isNotNull,
   isNull,
+  lte,
+  ne,
+  notExists,
   sql,
 } from 'drizzle-orm';
 import { db } from './db/index.js';
@@ -70,7 +74,9 @@ import { getJob, startJob } from './swars/job-store.js';
 import {
   attributionOf,
   createInitialState,
+  positionDiff,
   positionSfen,
+  type PositionDiff,
   type TacticLabel,
 } from 'shared';
 import { replaceTactics } from './tactics';
@@ -93,6 +99,12 @@ const INITIAL_SFEN = positionSfen(createInitialState());
  * 全棋譜が通るので、棋譜が増えれば必ずここに当たる。
  */
 const POSITION_GAMES_LIMIT = 200;
+
+/**
+ * 近い局面の探索で読み出す行の上限。手数帯で絞った後の行数なので、
+ * 数百局なら普通は数千行で収まる。⚠ **当たったら `truncated` で知らせる**。
+ */
+const SIMILAR_SCAN_LIMIT = 20000;
 
 export const app = new Hono().basePath('/api');
 
@@ -497,6 +509,111 @@ const route = app
         total,
         hasMore: total > rows.length,
         branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
+      });
+    },
+  )
+  // 近い局面（prd/10 §5.2）。完全一致は `/positions` が返すので、ここは**別枠**。
+  // 距離の計算はアプリ側に置く——「近い」が何を意味するかは使ってみないと決まらないので、
+  // 定義を SQL に焼き込まない
+  .get(
+    '/positions/similar',
+    sessionRequired,
+    zv(
+      'query',
+      z.object({
+        pos: z.string().min(1).max(200),
+        /** 手数帯の幅（基準の手数 ± これ）。粗い絞り込みで、読み出す行数を決める */
+        window: z.coerce.number().int().min(0).max(20).default(4),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+      }),
+    ),
+    async (c) => {
+      const { pos, window, limit } = c.req.valid('query');
+
+      // 基準の局面。**最初に到達した手数**を手数帯の中心にする
+      // （同じ局面でも棋譜ごとに到達手数が違う）
+      const [base] = await db
+        .select({
+          moveNumber: kifuPositions.moveNumber,
+          board: kifuPositions.board,
+          hands: kifuPositions.hands,
+        })
+        .from(kifuPositions)
+        .where(eq(kifuPositions.sfen, pos))
+        .orderBy(asc(kifuPositions.moveNumber))
+        .limit(1);
+      if (!base) return c.json({ error: 'not found' } as const, 404);
+
+      // この局面を既に通った棋譜を外すためのエイリアス（下の NOT EXISTS で使う）
+      const exact = alias(kifuPositions, 'exact');
+      const from = Math.max(0, base.moveNumber - window);
+      const to = base.moveNumber + window;
+
+      // 粗く絞ってから全件に距離を掛ける。手数帯で絞れば 1 棋譜あたり高々
+      // `2 * window + 1` 行なので、数百局でも数千行に収まる
+      const candidates = await db
+        .select({
+          sfen: kifuPositions.sfen,
+          kifuId: kifuPositions.kifuId,
+          moveNumber: kifuPositions.moveNumber,
+          board: kifuPositions.board,
+          hands: kifuPositions.hands,
+          sideToMove: kifuPositions.sideToMove,
+          title: kifus.title,
+          source: kifus.source,
+          playedAt: kifus.playedAt,
+        })
+        .from(kifuPositions)
+        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
+        .where(
+          and(
+            gte(kifuPositions.moveNumber, from),
+            lte(kifuPositions.moveNumber, to),
+            // 完全一致は `/positions` の側で出ているので、ここでは除く
+            ne(kifuPositions.sfen, pos),
+            // 🔒 **この局面を通った棋譜そのものを外す。** 外さないと、序盤では
+            // 「1 手前の局面（距離 2）」が全棋譜ぶん並ぶだけになる——どの棋譜も
+            // 通っているので**当たり前の結果しか出ない**。近さが意味を持つのは
+            // 「完全一致はしないが似ている棋譜」で、それを探すのがこの機能の目的
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(exact)
+                .where(and(eq(exact.kifuId, kifuPositions.kifuId), eq(exact.sfen, pos))),
+            ),
+          ),
+        )
+        .limit(SIMILAR_SCAN_LIMIT);
+
+      // ⭐ **棋譜ごとに最も近い 1 局面へ畳む。** 隣接する局面は高々 2 マスしか違わないので、
+      // 畳まないと**同じ棋譜の連続する局面が上位を埋め尽くす**（似た棋譜が 1 局しか出ない）
+      const best = new Map<number, (typeof candidates)[number] & { diff: PositionDiff }>();
+      for (const row of candidates) {
+        const diff = positionDiff(base, row);
+        const current = best.get(row.kifuId);
+        if (!current || diff.total < current.diff.total) {
+          best.set(row.kifuId, { ...row, diff });
+        }
+      }
+
+      const similar = [...best.values()]
+        .sort((a, b) => a.diff.total - b.diff.total || a.moveNumber - b.moveNumber)
+        .slice(0, limit)
+        .map(({ board: _b, hands: _h, diff, ...r }) => ({
+          ...r,
+          distance: diff.total,
+          boardDiff: diff.board,
+          handsDiff: diff.hands,
+        }));
+
+      return c.json({
+        base: { sfen: pos, moveNumber: base.moveNumber, from, to },
+        similar,
+        /** 距離を掛けた行数と、読み出しを打ち切ったか（🔒 黙って切らない） */
+        scanned: candidates.length,
+        truncated: candidates.length === SIMILAR_SCAN_LIMIT,
+        /** 畳む前に見つかった棋譜の数（`similar` は limit で切れている） */
+        matchedGames: best.size,
       });
     },
   )

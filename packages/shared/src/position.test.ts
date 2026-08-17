@@ -3,6 +3,7 @@ import { buildPositions, createInitialState } from './board';
 import {
   boardBytes,
   handBytes,
+  positionDiff,
   positionDistance,
   positionKey,
   positionSfen,
@@ -193,5 +194,27 @@ describe('positionDistance', () => {
     const goteHas = positionKey({ ...base, hand: { sente: {}, gote: { P: 1 } } });
     // 盤は同じ。持ち駒は先手 +1 / 後手 +1 の 2 箇所で食い違う
     expect(positionDistance(senteHas, goteHas)).toBe(2);
+  });
+});
+
+describe('positionDiff（距離の内訳）', () => {
+  it('盤と持ち駒を分けて数え、合計が距離になる', () => {
+    // 角交換の直後: 盤 2 マス（8h と 2b）+ 先手の持ち駒に角 1 枚
+    const before = keyAfter(['7g7f', '3c3d']);
+    const after = keyAfter(['7g7f', '3c3d', '8h2b+']);
+    expect(positionDiff(before, after)).toEqual({ board: 2, hands: 1, total: 3 });
+    expect(positionDistance(before, after)).toBe(3);
+  });
+
+  it('盤だけが違うときは hands が 0', () => {
+    const a = positionKey(createInitialState());
+    const b = keyAfter(['7g7f']);
+    expect(positionDiff(a, b)).toEqual({ board: 2, hands: 0, total: 2 });
+  });
+
+  it('画面に出す「一致 N/81」は 81 - board で出せる', () => {
+    const a = positionKey(createInitialState());
+    const b = keyAfter(['7g7f', '3c3d']);
+    expect(81 - positionDiff(a, b).board).toBe(77);
   });
 });

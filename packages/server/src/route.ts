@@ -3,9 +3,25 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, count, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+} from 'drizzle-orm';
 import { db } from './db/index.js';
-import { kifus, moveAnalyses, candidateMoves, kifuTactics } from './db/schema.js';
+import {
+  kifus,
+  moveAnalyses,
+  candidateMoves,
+  kifuTactics,
+  videoKifuSources,
+} from './db/schema.js';
 import {
   kifuListOrderBy,
   kifuListQuerySchema,
@@ -21,6 +37,11 @@ import {
   statsTacticsWhere,
 } from './stats-tactics-query.js';
 import { apiKeyRequired } from './middlewares.js';
+import {
+  formatDiff,
+  importVideoKifu,
+  videoKifuInputSchema,
+} from './video-analysis.js';
 import {
   hasValidSession,
   issueSession,
@@ -370,6 +391,99 @@ const route = app
         return result.id;
       });
       return c.json({ id }, 201);
+    },
+  )
+  // --- 動画解析（prd/10）---
+  // 一覧は動画ごと → 局ごと。件数が少ない（1 動画 2〜3 局）ためページングは持たない
+  .get('/video-analysis/kifus', sessionRequired, async (c) => {
+    const rows = await db
+      .select({
+        kifuId: kifus.id,
+        title: kifus.title,
+        videoId: videoKifuSources.videoId,
+        gameIndex: videoKifuSources.gameIndex,
+        startedAtSec: videoKifuSources.startedAtSec,
+        endedAtSec: videoKifuSources.endedAtSec,
+        bottomIsSente: videoKifuSources.bottomIsSente,
+        extractorRev: videoKifuSources.extractorRev,
+        updatedAt: videoKifuSources.updatedAt,
+        // 一覧に要るのは手数だけ。指し手列そのものを載せると 1 局 100 手ぶんが無駄に流れる
+        moveCount: sql<number>`json_length(${kifus.usiMoves})`,
+        analyzedAt: kifus.analysisCompletedAt,
+        analysisError: kifus.analysisError,
+      })
+      .from(videoKifuSources)
+      .innerJoin(kifus, eq(kifus.id, videoKifuSources.kifuId))
+      .orderBy(
+        asc(videoKifuSources.videoId),
+        asc(videoKifuSources.gameIndex),
+      );
+
+    // 戦型ラベルはまとめて引く（一覧と同じ形。N+1 を避ける）
+    const ids = rows.map((r) => r.kifuId);
+    const tacticRows =
+      ids.length === 0
+        ? []
+        : await db
+            .select({
+              kifuId: kifuTactics.kifuId,
+              side: kifuTactics.side,
+              label: kifuTactics.label,
+              turn: kifuTactics.turn,
+            })
+            .from(kifuTactics)
+            .where(inArray(kifuTactics.kifuId, ids));
+    const tacticsByKifu = new Map<number, TacticLabel[]>();
+    for (const { kifuId, ...t } of tacticRows) {
+      const list = tacticsByKifu.get(kifuId);
+      if (list) list.push(t);
+      else tacticsByKifu.set(kifuId, [t]);
+    }
+
+    return c.json({
+      games: rows.map(({ analyzedAt, analysisError, ...r }) => ({
+        ...r,
+        moveCount: Number(r.moveCount ?? 0),
+        analyzed: analyzedAt !== null,
+        failed: analysisError !== null,
+        analysisError,
+        tactics: tacticsByKifu.get(r.kifuId) ?? [],
+      })),
+    });
+  })
+  // 復元側（実験パッケージ）から叩く。session ではなく API_KEY で通す：
+  // 呼ぶのはブラウザではなく CLI で、worker と同じ立場にある
+  .post(
+    '/video-analysis/kifus',
+    apiKeyRequired,
+    zv('json', videoKifuInputSchema),
+    async (c) => {
+      const input = c.req.valid('json');
+      const tag = `${input.videoId}#${input.gameIndex}`;
+      let result: Awaited<ReturnType<typeof importVideoKifu>>;
+      try {
+        result = await importVideoKifu(input);
+      } catch (e) {
+        // 往復検証に落ちた棋譜は保存しない（prd/10 §4.2）
+        const reason = e instanceof Error ? e.message : String(e);
+        console.warn(`[VideoAnalysis] 取り込み中止 ${tag}: ${reason}`);
+        return c.json({ error: reason }, 422);
+      }
+      if (result.created) {
+        console.log(
+          `[VideoAnalysis] 新規 ${tag} kifu=${result.kifuId} ${input.usi.length} 手`,
+        );
+      } else if (result.changed) {
+        // 🔒 上書きで何が変わったかは、ここでしか残らない（prd/10 §4.3）
+        console.log(
+          `[VideoAnalysis] 上書き ${tag} kifu=${result.kifuId} 差分 ${result.diff.length} 件: ${formatDiff(result.diff)}`,
+        );
+        // 解析をやり直させたので、旧解析の進捗表示を落とす（reanalyze と同じ）
+        clearProgress(result.kifuId);
+      } else {
+        console.log(`[VideoAnalysis] 変化なし ${tag} kifu=${result.kifuId}`);
+      }
+      return c.json(result, result.created ? 201 : 200);
     },
   )
   .post(

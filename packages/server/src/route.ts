@@ -118,6 +118,39 @@ const POSITION_GAMES_LIMIT = 200;
  */
 const SIMILAR_SCAN_LIMIT = 20000;
 
+/** `YYYY-MM-DD` の日付。名前候補の有効期間（prd/11 §5） */
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/**
+ * 有効期間は**組として**成り立っていないといけない。
+ *
+ * 🔴 **逆転した期間（開始 > 終了）を保存すると、その候補は日時のある全棋譜で不活性になり、
+ * 同じトランザクションの再導出で `subjectSide` が NULL に落ちる**——成績からも
+ * 自分視点の表示からも**静かに脱落する**。個々の値が日付として正しいだけでは足りない。
+ */
+const periodRefine = <T extends { validFrom?: string | null; validTo?: string | null }>(
+  schema: z.ZodType<T>,
+) =>
+  schema.refine((v) => !v.validFrom || !v.validTo || v.validFrom <= v.validTo, {
+    message: '期間が逆転している（validTo は validFrom 以降）',
+    path: ['validTo'],
+  });
+
+const aliasCreateSchema = periodRefine(
+  z.object({
+    name: z.string().trim().min(1).max(100),
+    validFrom: dateString.nullish(),
+    validTo: dateString.nullish(),
+  }),
+);
+
+const aliasPeriodSchema = periodRefine(
+  z.object({
+    validFrom: dateString.nullable(),
+    validTo: dateString.nullable(),
+  }),
+);
+
 export const app = new Hono().basePath('/api');
 
 const corsOrigins = (process.env.CORS_ORIGINS ?? '')
@@ -485,14 +518,7 @@ const route = app
   .post(
     '/users/me/aliases',
     sessionRequired,
-    zv(
-      'json',
-      z.object({
-        name: z.string().trim().min(1).max(100),
-        validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-        validTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-      }),
-    ),
+    zv('json', aliasCreateSchema),
     async (c) => {
       const { name, validFrom, validTo } = c.req.valid('json');
       const userId = await currentUserId();
@@ -516,13 +542,7 @@ const route = app
     '/users/me/aliases/:id',
     sessionRequired,
     zv('param', z.object({ id: z.coerce.number() })),
-    zv(
-      'json',
-      z.object({
-        validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-        validTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-      }),
-    ),
+    zv('json', aliasPeriodSchema),
     async (c) => {
       const { id } = c.req.valid('param');
       const { validFrom, validTo } = c.req.valid('json');

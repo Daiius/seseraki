@@ -89,8 +89,11 @@ interface Props {
    * 主体の手番（prd/11 §4）。**server が導出した値**を渡す。
    * ⚠ null は「自分の側が決まらない」——理由（両対局者とも候補に一致 / 名前候補が未設定 /
    * 自分の対局ではない）はここでは区別しない。**全体の件数は `/settings` で見える**
+   *
+   * 🔒 **必須にする**（`?` を付けない）。省略できると、渡し忘れたときに
+   * 「主体側が決まらない」と同じ見た目になり、**盤の反転も自分視点の評価も静かに消える**。
    */
-  subjectSide?: 'sente' | 'gote' | null;
+  subjectSide: 'sente' | 'gote' | null;
   /** 悪手判定の閾値（ページ側で localStorage から読み込んで配る） */
   thresholds: Thresholds;
 }

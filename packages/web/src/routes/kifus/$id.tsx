@@ -224,6 +224,7 @@ function KifuDetailPage() {
             analyses={kifu.analyses}
             sente={kifu.sente}
             gote={kifu.gote}
+            subjectSide={userSide}
             thresholds={thresholds}
           />
         )}

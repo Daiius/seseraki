@@ -19,7 +19,7 @@ import {
   grabFrame, grabFrameYuv, yuvGray, cropYuv, crop, openFrameStream, probeFrameRate,
   type GrayImage, type YuvImage,
 } from './src/frame.ts';
-import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer } from './src/occupancy.ts';
+import { occupancyDistance, INITIAL_OCCUPANCY, occupancy, hasPointer, presence } from './src/occupancy.ts';
 import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, cellImageForSide, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
@@ -545,6 +545,10 @@ let dropsWithSingleCarriedOrigin = 0;
 let dropsRewritten = 0;
 /** 推測で挿し込んだ打ちが誤りと分かって取り消した数 */
 let insertionsUndone = 0;
+/** 📏 駒種まで読めたマスのうち、`presence` が `piece` と言ったもの（測定のみ） */
+let piecesOnSolidCells = 0;
+/** 📏 同じく、`presence` が `piece` と言わない薄いマスに駒種を出したもの（測定のみ） */
+let piecesOnThinCells = 0;
 /** 📏 追跡盤面が空と思うマスに駒が現れ、**次の絵で消えた**（測定のみ） */
 let transientFills = 0;
 /** 📏 同じく現れて、**次の絵でも居座った**（測定のみ） */
@@ -689,6 +693,27 @@ for (let qi = 0; qi < queue.length; qi++) {
   const recognized = recognizeBoard(img, templates, {
     colorBoard: cropYuv(colorFrame, boardRect(geo)),
   });
+
+  // 📏 測定のみ（判定は変えない）。**「駒があるとすら言えない薄いマス」に駒種の答えを
+  // 出していないか**を数える（追記 163）。
+  //
+  // 🔴 3 本目 26:16.5 でスライド中の飛車が 3f に写り、`presence` は `piece` と言わない
+  // （sd が 12〜30 の「覆われていて分からない」帯）のに、認識側は `▽飛` を置いた。
+  // それが移動元の誤読になり、1 手ぶんの穴になった。
+  //
+  // 🔒 **締めてよいかは件数で決まる。** 少なければ安全に締められる。多ければ
+  // **その多くは本物の駒が薄く写ったもの**なので、締めると手が落ちる。
+  {
+    const where = presence(img);
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const read = recognized.board[r][c];
+        if (read === null || isUnknown(read)) continue;
+        if (where[r][c] === 'piece') piecesOnSolidCells++;
+        else piecesOnThinCells++;
+      }
+    }
+  }
 
   // 📏 測定のみ（判定は変えない）。**追跡盤面が「空」と思っているマスに、絵の側で
   // 駒が現れた**ものを数え、次の絵で消えたか居座ったかを見る。
@@ -1492,6 +1517,10 @@ if (insertionsUndone > 0) console.log(`  行き先が空と確定したので取
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(
   `  📏 空のはずのマスに駒が現れた: 次の絵で消えた ${transientFills} / 居座った ${persistentFills}`,
+);
+console.log(
+  `  📏 駒種を出したマス: presence=piece ${piecesOnSolidCells} / 薄いマス ${piecesOnThinCells}` +
+    `（${((piecesOnThinCells / (piecesOnSolidCells + piecesOnThinCells)) * 100).toFixed(2)}%）`,
 );
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);

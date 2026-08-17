@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { InferResponseType } from 'hono/client';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { stateFromBytes, usiToJapaneseWithPiece } from 'shared';
 import { client } from '../lib/honoClient';
@@ -56,6 +57,116 @@ function SourceBadge({ source }: { source: Position['games'][number]['source'] }
  * 総数は常に出したうえで、行は畳んでおく。
  */
 const GAMES_PAGE = 20;
+
+// ⚠ 200 の型に絞る。素の戻りは 404（`{ error }`）とのユニオンで、
+// `res.ok` では絞り込めない
+type Similar = InferResponseType<typeof client.api.positions.similar.$get, 200>;
+
+/**
+ * 近い局面（prd/10 §5.2）。**押されたときだけ取りに行く。**
+ *
+ * 完全一致は index seek だけで済むが、近さは手数帯ぶんの行を読んで距離を掛けるので
+ * 桁違いに重い。局面を辿るたびに走らせると、辿ること自体が重くなる。
+ */
+function SimilarSection({
+  sfen,
+  onPick,
+}: {
+  sfen: string;
+  onPick: (sfen: string) => void;
+}) {
+  const [state, setState] = useState<
+    { kind: 'idle' } | { kind: 'loading' } | { kind: 'done'; data: Similar } | { kind: 'error' }
+  >({ kind: 'idle' });
+
+  const load = async () => {
+    setState({ kind: 'loading' });
+    try {
+      const res = await client.api.positions.similar.$get({ query: { pos: sfen } });
+      if (!res.ok) {
+        setState({ kind: 'error' });
+        return;
+      }
+      setState({ kind: 'done', data: await res.json() });
+    } catch {
+      setState({ kind: 'error' });
+    }
+  };
+
+  return (
+    <section>
+      <h2 className="text-lg font-semibold mb-2">近い局面</h2>
+      {state.kind === 'idle' && (
+        <button type="button" className="btn btn-outline btn-sm" onClick={load}>
+          近い局面を探す
+        </button>
+      )}
+      {state.kind === 'loading' && (
+        <span className="loading loading-dots loading-md" aria-label="探しています" />
+      )}
+      {state.kind === 'error' && (
+        <div className="alert alert-warning">近い局面を取得できなかった</div>
+      )}
+      {state.kind === 'done' && (
+        <>
+          {/* ⚠ 文は組み立ててから出す。JSX で改行を挟むと語の間の空白が消える */}
+          <p className="text-sm opacity-60 mb-2">
+            {`${state.data.base.from}〜${state.data.base.to} 手目の局面 ${state.data.scanned} 件から、` +
+              `この局面を通っていない ${state.data.matchedGames} 局が見つかった`}
+            {/* 🔒 読み出しを打ち切ったら言う */}
+            {state.data.truncated && '（走査の上限に当たったので、これで全部ではない）'}
+          </p>
+          {state.data.similar.length === 0 ? (
+            <p className="text-sm opacity-60">近い局面は見つからなかった。</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table table-sm table-zebra">
+                <thead>
+                  <tr>
+                    <th className="whitespace-nowrap">違い</th>
+                    <th>出所</th>
+                    <th className="w-full">棋譜</th>
+                    <th className="text-right whitespace-nowrap">到達</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.data.similar.map((s) => (
+                    <tr key={`${s.kifuId}-${s.moveNumber}`}>
+                      <td className="whitespace-nowrap">
+                        <span className="font-mono">{s.distance}</span>
+                        <span className="text-xs opacity-60 ml-1">
+                          （盤 {81 - s.boardDiff}/81
+                          {s.handsDiff > 0 && ` ・持駒 ${s.handsDiff}`}）
+                        </span>
+                      </td>
+                      <td>
+                        <SourceBadge source={s.source} />
+                      </td>
+                      <td className="w-full">{s.title}</td>
+                      <td className="text-right whitespace-nowrap">
+                        {s.moveNumber} 手目
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => onPick(s.sfen)}
+                        >
+                          この局面へ
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
 
 function PositionsPage() {
   const { position, error } = Route.useLoaderData();
@@ -206,6 +317,8 @@ function PositionView({ position }: { position: Position }) {
               </button>
             )}
           </section>
+
+          <SimilarSection sfen={position.sfen} onPick={goTo} />
 
           <details className="collapse collapse-arrow bg-base-200">
             <summary className="collapse-title text-sm">局面キー（SFEN）</summary>

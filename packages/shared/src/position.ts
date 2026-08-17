@@ -208,8 +208,26 @@ export function positionDistance(
   a: { board: Uint8Array; hands: Uint8Array },
   b: { board: Uint8Array; hands: Uint8Array },
 ): number {
-  let dist = 0;
-  for (let i = 0; i < 81; i++) if (a.board[i] !== b.board[i]) dist++;
-  for (let i = 0; i < 14; i++) dist += Math.abs(a.hands[i] - b.hands[i]);
-  return dist;
+  return positionDiff(a, b).total;
+}
+
+/** 距離の内訳。**画面には「盤の一致 76/81」の形で出したい**ので、合計だけでは足りない */
+export interface PositionDiff {
+  /** 駒種・側が食い違うマスの数（0〜81） */
+  board: number;
+  /** 持ち駒の枚数差の合計（側 × 駒種で数える） */
+  hands: number;
+  /** `board + hands`。これが距離（§5.2） */
+  total: number;
+}
+
+export function positionDiff(
+  a: { board: Uint8Array; hands: Uint8Array },
+  b: { board: Uint8Array; hands: Uint8Array },
+): PositionDiff {
+  let board = 0;
+  for (let i = 0; i < 81; i++) if (a.board[i] !== b.board[i]) board++;
+  let hands = 0;
+  for (let i = 0; i < 14; i++) hands += Math.abs(a.hands[i] - b.hands[i]);
+  return { board, hands, total: board + hands };
 }

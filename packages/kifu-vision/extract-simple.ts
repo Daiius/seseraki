@@ -24,7 +24,7 @@ import { findSegments } from './src/segments.ts';
 import { extractTemplates, cellImage, cellImageForSide, ncc, type Template } from './src/template.ts';
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, asHoles, type VisionSquare } from './src/uncertain.ts';
-import { inferMove, verifyMove, opposite, type InferFailure } from './src/moves.ts';
+import { inferMove, verifyMove, opposite, toUsiSquare, type InferFailure } from './src/moves.ts';
 import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatchBoard } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
@@ -481,6 +481,34 @@ function carriedOriginsForDrop(
   return found;
 }
 
+/**
+ * 「打ち」と読めたが、引き継いだマスに出発点の候補が 1 つあった手。
+ *
+ * 🔒 **打った瞬間には決められない。** 引き継ぎマスは「駒があるが読めない」だけで、
+ * **本物の打ち（駒が居座っている）と移動の読み違い（駒はもう無い）が区別できない**。
+ * 実測（追記 156）でも 3 件中 2 件は本物の打ちだった。
+ *
+ * ⭐ **見分ける材料は後から来る。** 出発点のマスが読めるようになった時点で:
+ *
+ * - **駒のまま確定** → 本物の打ちだった。何もしない
+ * - **空と確定** → 実は移動だった → 打ちを移動に書き換え、持ち駒を戻す
+ *
+ * ⚠ 打ちと移動は**同じ 1 手**なので、後ろに手が積まれていても書き換えられる
+ * （手数も後続の手も変わらない）。取り消し（③）より安全に効く。
+ */
+interface WatchedDrop {
+  /** 見張るマス（出発点の候補） */
+  row: number;
+  col: number;
+  /** 打ったマス */
+  to: { row: number; col: number };
+  kind: PieceKind;
+  side: Side;
+  steps: Step[];
+  index: number;
+}
+const watchedDrops = new Map<string, WatchedDrop>();
+
 /** 確定待ちのマス。読めるようになるまで**何度でも**試みる。 */
 const provisional = new Map<string, Provisional>();
 const history = new ReadingHistory();
@@ -494,8 +522,10 @@ let rescuedVanished = 0;
 let phantomsUndone = 0;
 /** 📏 打ちと読めたが、引き継いだマスに出発点の候補があった手（測定のみ） */
 let dropsWithCarriedOrigin = 0;
-/** 📏 うち候補が 1 つだけ＝移動として一意に決まるもの（測定のみ） */
+/** 📏 うち候補が 1 つだけ＝移動として一意に決まるもの（見張る対象） */
 let dropsWithSingleCarriedOrigin = 0;
+/** 出発点が空と確定したので、打ち → 移動に書き換えた手 */
+let dropsRewritten = 0;
 /** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
 let unreadableStart = 0;
 /** 演出に覆われたとみて読まずに捨てた絵 */
@@ -696,6 +726,40 @@ for (let qi = 0; qi < queue.length; qi++) {
 
   // 読みを履歴に積む。**同じマスが何度も続けて同じ駒に読めたら確定**とみなす。
   history.observe(recognized.board);
+
+  // 見張っている「打ち」の出発点が読めたら、そこで打ちか移動かを決める。
+  for (const [key, watch] of [...watchedDrops]) {
+    const held = current[watch.row][watch.col];
+    // 追跡盤面からその駒が消えている（別の手が触った）なら、もう決められない
+    if (!held || held.side !== watch.side || held.kind !== watch.kind) {
+      watchedDrops.delete(key);
+      continue;
+    }
+    const c = history.confirmed(watch.row, watch.col);
+    if (!c) continue;
+    watchedDrops.delete(key);
+    if (c.value) continue; // 駒のまま確定＝本物の打ちだった。触らない
+
+    // 🔒 **空と確定した＝その駒はもう居ない。打ちではなく、そこからの移動だった。**
+    const step = watch.steps[watch.index];
+    if (!step) continue;
+    const usi = `${toUsiSquare(watch.row, watch.col)}${toUsiSquare(watch.to.row, watch.to.col)}`;
+    const wasDrop = step.usi;
+    step.usi = usi;
+    // 盤: 出発点を空にする（打った先は既に正しい）
+    current[watch.row][watch.col] = null;
+    // 持ち駒: 打ちで減らした 1 枚を戻す。移動なら手から出ていない。
+    const hand = state?.hand[watch.side];
+    if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
+    history.reset(watch.row, watch.col);
+    dropsRewritten++;
+    if (VERBOSE) {
+      console.log(
+        `  ⇄ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+          `${fmt(step.time)} の ${wasDrop} は打ちではなく ${usi} だった`,
+      );
+    }
+  }
 
   // 覆われていて決めきれなかったマスを、読めるようになった時点で確定させる。
   // ⚠ 一発勝負ではなく**毎回試みる**。ポインタは動けば退くが、いつ退くかは
@@ -1104,24 +1168,22 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
-  // 📏 測定のみ（まだ判定は変えない）。打ちと読めた手のうち、引き継いだマスに
-  // 出発点の候補があるものを数える。**入れる前に、どれだけ起きているかを見る。**
-  if (result.move && result.move.type === 'drop') {
-    const kind = result.move.usi[0] as PieceKind;
-    const origins = carriedOriginsForDrop(current, result.move.to, kind, result.move.side as Side, pending);
-    if (origins.length > 0) {
-      dropsWithCarriedOrigin++;
-      if (origins.length === 1) dropsWithSingleCarriedOrigin++;
-      if (VERBOSE) {
-        const where = origins
-          .map((o) => `${9 - o.col}${String.fromCharCode(97 + o.row)}`)
-          .join(' / ');
-        console.log(
-          `  📏 ${fmt(t)} ${result.move.usi} は打ちと読めたが、引き継いだ ${where} から` +
-            `来られる（候補 ${origins.length}）`,
-        );
-      }
-    }
+  // 打ちと読めた手のうち、引き継いだマスに出発点の候補が**ちょうど 1 つ**あるものは
+  // 保留にする（🔒 ここでは決めない・追記 156）。候補が複数なら移動として一意に
+  // 決まらないので、見張っても書き換えられない。
+  const dropWatch =
+    result.move && result.move.type === 'drop'
+      ? carriedOriginsForDrop(
+          current,
+          result.move.to,
+          result.move.usi[0] as PieceKind,
+          result.move.side as Side,
+          pending,
+        )
+      : [];
+  if (dropWatch.length > 0) {
+    dropsWithCarriedOrigin++;
+    if (dropWatch.length === 1) dropsWithSingleCarriedOrigin++;
   }
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
@@ -1140,6 +1202,28 @@ for (let qi = 0; qi < queue.length; qi++) {
     const from = result.move.from;
     history.reset(to.row, to.col);
     if (from) history.reset(from.row, from.col);
+
+    // 打ちだが、引き継いだマスから来られる駒がちょうど 1 つあるなら、
+    // **その出発点を見張る**（🔒 いまは決めない・追記 156）。
+    if (result.move.type === 'drop' && dropWatch.length === 1) {
+      const origin = dropWatch[0];
+      history.reset(origin.row, origin.col);
+      watchedDrops.set(`${origin.row},${origin.col}`, {
+        row: origin.row,
+        col: origin.col,
+        to: { row: to.row, col: to.col },
+        kind: result.move.usi[0] as PieceKind,
+        side: result.move.side as Side,
+        steps,
+        index: steps.length - 1,
+      });
+      if (VERBOSE) {
+        console.log(
+          `  👁 ${fmt(t)} ${result.move.usi} は打ちと読めたが、引き継いだ ` +
+            `${toUsiSquare(origin.row, origin.col)} から来られる。出発点を見張る`,
+        );
+      }
+    }
 
     // 移動先が読めていなかったなら、**その手はまだ確かめられていない**。
     // 読めるようになるまで持ち越して、後の場面で確定させる。
@@ -1302,6 +1386,7 @@ if (dropsWithCarriedOrigin > 0) {
       `（うち候補が 1 つ: ${dropsWithSingleCarriedOrigin}）`,
   );
 }
+if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);

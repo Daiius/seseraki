@@ -19,6 +19,8 @@
 | `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く） |
 | `kifuTactics`（計画中） | 戦型ラベル（`kifus` に紐付く派生値。[01](./01-domain.md) §6） |
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
+| `videoKifuSources`（計画中） | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
+| `kifuPositions`（計画中） | 局面索引（`kifus` に紐付く派生値。[10](./10-video-analysis.md) §3.2） |
 
 - リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
@@ -46,6 +48,8 @@ kifus
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
+├── source: enum notNull default 'manual'  -- 出所（'manual' | 'swars' | 'video'。計画中。[10](./10-video-analysis.md) §2.1）
+├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。計画中。[10](./10-video-analysis.md) §3.3）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 ```
@@ -53,6 +57,9 @@ kifus
 - **`kifText` は原本**（KIF）。`usiMoves` は登録時に変換した派生物で、解析前でも盤面表示に使える（[05](./05-analysis.md)）。
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
+- **`source`**（計画中）: 棋譜の出所。動画解析（`'video'`）は自分の対局ではないため、
+  🔒 **一覧・分析・統計のクエリは `source <> 'video'` を既定で強制する**（引数で外せる条件にしない。
+  [10](./10-video-analysis.md) §2.2）。棋譜ビューアは共用する。
 - **`sourceTz`**: `開始日時` にタイムゾーン欄が無い KIF を正しく並べるため、`playedAt` を解釈した TZ を記録する。
   投入時にユーザーが選択（`auto`/`JST`/`UTC`。**`auto` は JST**。署名からの UTC 推定は廃止＝[04](./04-ingestion.md)）。
   UTC のときは +9h 補正した絶対時刻を保存。

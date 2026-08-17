@@ -15,6 +15,7 @@
     "db:baseline": "pnpm --filter server db:baseline",
     "db:backfill-tz": "pnpm --filter server exec tsx backfill-source-tz.ts",
     "tactics:redetect": "pnpm --filter server exec tsx redetect-tactics.ts",
+    "positions:rebuild": "pnpm --filter server exec tsx rebuild-positions.ts",
     "db:push": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost drizzle-kit push --force'",
     "db:migrate:dev": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost tsx migrate.ts'",
     "db:baseline:dev": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost tsx baseline.ts'",

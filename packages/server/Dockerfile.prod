@@ -36,6 +36,12 @@ COPY --from=build /workspace/packages/server/dist/server.js ./server.js
 # distroless は ENTRYPOINT=node なので command はパスだけでよい。
 COPY --from=build /workspace/packages/server/dist/redetect-tactics.js ./redetect-tactics.js
 
+# 局面索引の一括再構築のエントリ。**マイグレーション直後に一度流す必要がある**——
+# マイグレーションは空の kifu_positions を作るだけなので、これを流さないと
+# 既存棋譜が局面検索に 1 件も出ない（初期局面すら 404 になる）。
+#   docker compose run --rm <service>   # command: ["/app/rebuild-positions.js"]
+COPY --from=build /workspace/packages/server/dist/rebuild-positions.js ./rebuild-positions.js
+
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
 #   docker compose run --rm <service>   # command: ["/app/migrate.js"]

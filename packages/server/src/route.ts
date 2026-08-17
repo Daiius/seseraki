@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
+import { alias } from 'drizzle-orm/mysql-core';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -21,11 +22,13 @@ import {
   candidateMoves,
   kifuTactics,
   videoKifuSources,
+  kifuPositions,
 } from './db/schema.js';
 import {
   kifuListOrderBy,
   kifuListQuerySchema,
   kifuListWhere,
+  playedOrCreatedAt,
 } from './kifu-list-query.js';
 import {
   statsTacticsJoinOn,
@@ -64,8 +67,14 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
-import { attributionOf, type TacticLabel } from 'shared';
+import {
+  attributionOf,
+  createInitialState,
+  positionSfen,
+  type TacticLabel,
+} from 'shared';
 import { replaceTactics } from './tactics';
+import { replacePositions } from './positions';
 import {
   detectLegacyUtcTimezone,
   parseKif,
@@ -74,6 +83,16 @@ import {
 
 /** 投入時の TZ 指定。'auto' は自動判定＝現状 JST 固定（[parseKif]） */
 export type SourceTzChoice = 'auto' | KifTimezone;
+
+/** 局面検索の起点。`pos` 未指定ならここから辿る（prd/10 §6.2） */
+const INITIAL_SFEN = positionSfen(createInitialState());
+
+/**
+ * 1 つの局面について返す到達行の上限。
+ * ⚠ **切ったことは `total` / `hasMore` で必ず知らせる**（prd/10 §6.2）。初期局面は
+ * 全棋譜が通るので、棋譜が増えれば必ずここに当たる。
+ */
+const POSITION_GAMES_LIMIT = 200;
 
 export const app = new Hono().basePath('/api');
 
@@ -388,9 +407,97 @@ const route = app
           })
           .$returningId();
         await replaceTactics(tx, result.id, usiMoves);
+        await replacePositions(tx, result.id, usiMoves);
         return result.id;
       });
       return c.json({ id }, 201);
+    },
+  )
+  // --- 局面検索（prd/10 §5.3）---
+  // 🔒 **ここには `ownGamesOnly` を掛けない。** 一覧・集計は「自分の成績」なので動画解析を
+  // 外すが、局面検索は**自分の対局と動画解析を横断して探す**のが目的そのもの（prd/10 §5.3）。
+  // 結果には `source` を添えて、どちらの出所かを画面で区別できるようにする。
+  .get(
+    '/positions',
+    sessionRequired,
+    zv('query', z.object({ pos: z.string().max(200).optional() })),
+    async (c) => {
+      const sfen = c.req.valid('query').pos ?? INITIAL_SFEN;
+
+      // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
+      // kifuId では畳まず、到達した手数ごとに 1 行返す。
+      //
+      // 🔒 **打ち切ったことを黙らない。** 初期局面は全棋譜が通るので、棋譜が増えれば
+      // 必ず上限に当たる。件数を返さないと、UI の「N 件」が実数と食い違ううえ、
+      // 「この局面を通った棋譜はこれで全部」と誤読される。
+      // ⚠ **総数は `count(*) over ()` で同じクエリから取る。** count を別クエリにすると
+      // 2 つのスナップショットになり、その間に取り込み・削除・再構築が走ると
+      // 「total 199 なのに games 200 件」のような食い違いが出る（0 件なら 404 を返すので、
+      // 総数が取れない場合を扱う必要はない）
+      const rows = await db
+        .select({
+          kifuId: kifuPositions.kifuId,
+          moveNumber: kifuPositions.moveNumber,
+          board: kifuPositions.board,
+          hands: kifuPositions.hands,
+          sideToMove: kifuPositions.sideToMove,
+          title: kifus.title,
+          source: kifus.source,
+          playedAt: kifus.playedAt,
+          total: sql<number>`count(*) over ()`,
+        })
+        .from(kifuPositions)
+        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
+        .where(eq(kifuPositions.sfen, sfen))
+        // ⚠ **並びは打ち切りとセットで意味を持つ。** 序盤の局面はどの棋譜も通るので
+        // 必ず上限に当たる。そこで残るのが「古い棋譜」では使い物にならないので、
+        // 到達が早い順 → **新しい対局順**に並べる（基準は一覧と同じ playedOrCreatedAt）
+        .orderBy(
+          asc(kifuPositions.moveNumber),
+          desc(playedOrCreatedAt),
+          desc(kifuPositions.kifuId),
+        )
+        .limit(POSITION_GAMES_LIMIT);
+      if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
+
+      // 枝の列挙。**次の局面が持つ `move` で集計する**——局面キーだけでは
+      // 「同じ局面から指された別の手」を区別できない（prd/10 §5.3）
+      const next = alias(kifuPositions, 'next');
+      const branches = await db
+        .select({
+          move: next.move,
+          sfen: next.sfen,
+          games: sql<number>`count(*)`,
+        })
+        .from(kifuPositions)
+        .innerJoin(
+          next,
+          and(
+            eq(next.kifuId, kifuPositions.kifuId),
+            eq(next.moveNumber, sql`${kifuPositions.moveNumber} + 1`),
+          ),
+        )
+        .where(eq(kifuPositions.sfen, sfen))
+        .groupBy(next.move, next.sfen)
+        .orderBy(desc(sql`count(*)`), asc(next.move));
+
+      // 盤・持ち駒はこの局面のものなのでどの行でも同じ。web が盤を描くのに使う
+      const [first] = rows;
+      const total = Number(first.total);
+      return c.json({
+        sfen,
+        isInitial: sfen === INITIAL_SFEN,
+        board: [...first.board],
+        hands: [...first.hands],
+        sideToMove: first.sideToMove,
+        games: rows.map(
+          ({ board: _b, hands: _h, sideToMove: _s, total: _t, ...g }) => g,
+        ),
+        /** 到達の総数。`games` は上限で切れていることがある（`hasMore`） */
+        total,
+        hasMore: total > rows.length,
+        branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
+      });
     },
   )
   // --- 動画解析（prd/10）---
@@ -532,6 +639,8 @@ const route = app
         // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
         // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
         await replaceTactics(tx, id, usiMoves);
+        // 局面索引も同じトランザクションで作り直す（派生値なので usiMoves に追随する。prd/10 §3.2）
+        await replacePositions(tx, id, usiMoves);
       });
       // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
       clearProgress(id);
@@ -857,6 +966,7 @@ const route = app
                 })
                 .$returningId();
               await replaceTactics(tx, result.id, usiMoves);
+        await replacePositions(tx, result.id, usiMoves);
               return result.id;
             });
             imported.push({ id: newId, gameKey });

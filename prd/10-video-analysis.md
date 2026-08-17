@@ -7,7 +7,9 @@
 ドメイン用語は [01](./01-domain.md)、スキーマ全体は [03](./03-data-model.md)、投入ルートは
 [04](./04-ingestion.md)、解析は [05](./05-analysis.md) を参照。
 
-> 本章は**全体が計画中**（2026-08-17 時点で未実装）。設計判断とその根拠を定め、実装はここを正典とする。
+> **段階 1（取り込み）と段階 2（局面索引・検索）は実装済み**（2026-08-17）。段階 3（近さ検索・
+> 主体側モード）は未実装で、`kifus.subjectSide` もまだ無い（§7 / §8.1）。設計判断とその根拠を
+> 定め、実装はここを正典とする。
 > ⚠ 棋譜を復元する側（`packages/kifu-vision`）は**実験ブランチにのみ存在し、main には無い**。
 > 本章は**復元された棋譜を受け取る側**の設計なので、復元側の実装状況とは独立に読める。
 
@@ -107,13 +109,16 @@ kifuPositions
 ├── kifuId: bigint FK → kifus.id (CASCADE)   ┐ PK
 ├── moveNumber: int      -- 0 = 初期局面      ┘
 ├── move: varchar(8)?        -- この局面に至った直前の手（USI）。moveNumber = 0 では null
-├── posHash: binary(16)      -- 盤 + 持ち駒 + 手番        (INDEX)
-├── senteHash: binary(16)    -- 先手側の配置のみ          (INDEX)
-├── goteHash: binary(16)     -- 後手側の配置のみ          (INDEX)
+├── sfen: varchar(200)       -- 局面キー（盤 / 手番 / 持ち駒）  (INDEX)
+├── senteSfen: varchar(200)  -- 先手側の配置のみ                (INDEX)
+├── goteSfen: varchar(200)   -- 後手側の配置のみ                (INDEX)
 ├── board: binary(81)        -- 1 マス 1 バイト（下記）
 ├── hands: binary(14)        -- 側 × 駒種の枚数（先手 7 + 後手 7）
 └── sideToMove: enum('b' | 'w')
 ```
+
+🔒 **キーはハッシュではなく SFEN 文字列そのもの**（§5.1）。**衝突しない**うえ、
+URL に載せられ（`/positions?pos=<sfen>`）、DB を直接見たときに人が読める。
 
 **`board` は 1 マス 1 バイト**（`binary(81)`）。マスの状態は **空 + 14 駒種 × 2 側 = 29 通り**あり、
 ニブル（4 ビット = 16 値）では表せない。値は `0` = 空、`1..14` = 先手の `P L N S G B R K +P +L +N +S +B +R`、
@@ -146,20 +151,20 @@ kifus.subjectSide: enum('sente' | 'gote')?
   （`VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID`）で server は設定を持たないため、**server 側ユーザーの
   導入が前提**になる（§7 段階 3）
 
-🔒 **主体側を局面索引に焼き込まない。** `senteHash` / `goteHash` を両方持ち、どちらを引くかは
+🔒 **主体側を局面索引に焼き込まない。** `senteSfen` / `goteSfen` を両方持ち、どちらを引くかは
 クエリ時に `subjectSide` で選ぶ:
 
 ```sql
 -- 3 状態を明示する。未確定（NULL）を既定側に落とさない
 CASE k.subjectSide
-  WHEN 'sente' THEN p.senteHash
-  WHEN 'gote'  THEN p.goteHash
+  WHEN 'sente' THEN p.senteSfen
+  WHEN 'gote'  THEN p.goteSfen
   ELSE NULL
 END
 ```
 
 🔒 **`subjectSide` が NULL の棋譜は、主体側の検索から除外する**（`WHERE k.subjectSide IS NOT NULL`）。
-`ELSE p.goteHash` と書くと**未確定の棋譜が黙って後手側として比較される**。主体が決まらない対局は
+`ELSE p.goteSfen` と書くと**未確定の棋譜が黙って後手側として比較される**。主体が決まらない対局は
 実在する——両対局者とも自分の名前候補に一致する場合で、[09](./09-analytics.md) §4 でも
 勝率の分母から外す扱いになっている。**同じものを、ここでは「後手」として数えない。**
 
@@ -168,7 +173,7 @@ END
 
 理由は 2 つ。**(a) 再構築の範囲** — 名前候補を変えたとき、焼き込んでいれば数万行の索引を作り直すが、
 `kifus` の列なら数百行で済む。**(b) 主体と無関係な検索** — 「先手番でこの配置になった局面」は
-主体がどちらかと関係なく引きたくなる。両側ハッシュならタダで付く。
+主体がどちらかと関係なく引きたくなる。両側を持てばタダで付く。
 
 ## 4. 取り込み
 
@@ -233,6 +238,16 @@ POST /api/video-analysis/kifus   (API_KEY 必須)
 
 ⚠ **持ち駒をキーから外さない。** 同じ盤面でも持ち駒が違えば別の局面で、序盤の判断が変わる。
 
+🔒 **キーはハッシュにせず、SFEN 文字列そのものを使う。** 理由は 3 つ:
+
+1. **衝突しない。** ハッシュだと別の局面が同じキーになりうる。確率は小さいが、起きたときの
+   症状は「検索結果に無関係な棋譜が混ざる」で、**気づきにくい壊れ方**をする
+2. **URL に載せられる**（`/positions?pos=<sfen>`）
+3. **人が読める。** DB を直接見たときに、それがどの局面か分かる
+
+⚠ 加えて `shared` は環境非依存（`lib: esnext` / `types: []`）なので、node の `crypto` も
+Web Crypto も使えない。ハッシュを自前で書くことになるが、**書かずに済む方がよい。**
+
 ### 5.2 距離 — 盤の不一致 + 持ち駒の差
 
 ```
@@ -253,8 +268,8 @@ dist = Σ(81 マス)[ 駒種・側が不一致 ]
 
 | 種類 | 実装 |
 |---|---|
-| **完全一致**（両側） | `posHash` の index seek |
-| **完全一致**（片側） | `senteHash` / `goteHash` の index seek。どちらを引くかは `subjectSide` で決める（§3.3。NULL は除外） |
+| **完全一致**（両側） | `sfen` の index seek |
+| **完全一致**（片側） | `senteSfen` / `goteSfen` の index seek。どちらを引くかは `subjectSide` で決める（§3.3。NULL は除外） |
 | **近い局面** | 手数帯などで粗く絞り、読み出した行に対してアプリ側で距離を計算 |
 | **枝の列挙** | 同じ `kifuId` の `moveNumber + 1` を self join し、**次の局面が持つ `move`** で集計 |
 
@@ -262,11 +277,11 @@ dist = Σ(81 マス)[ 駒種・側が不一致 ]
 
 ```sql
 -- この局面の次の手と、その出現数
-SELECT n.move, n.posHash, count(*) AS games
+SELECT n.move, n.sfen, count(*) AS games
 FROM kifu_positions p
 JOIN kifu_positions n ON n.kifuId = p.kifuId AND n.moveNumber = p.moveNumber + 1
-WHERE p.posHash = ?
-GROUP BY n.move, n.posHash
+WHERE p.sfen = ?
+GROUP BY n.move, n.sfen
 ORDER BY games DESC
 ```
 
@@ -283,23 +298,37 @@ ORDER BY games DESC
 あり、「動画解析」の下に自分の棋譜が並ぶのは名前と中身がずれる。
 
 - 起点から辿る（初期局面 → 枝を降りる）
-- 局面を指定して来る（`/positions?pos=<hash>`）
+- 局面を指定して来る（`/positions?pos=<sfen>`）
 - 一致・近さの結果に**出所のバッジ**（自分 / 動画）を出す
 - 主体側だけ比較 / 両側を比較 をトグルで切り替える（§3.3）
 
+🔒 **打ち切ったら必ず言う。** 到達行には上限がある（server 側 200・画面は 20 ずつ展開）。
+初期局面は全棋譜が通るので、棋譜が増えれば必ず当たる。**総数（`total`）と打ち切りの有無
+（`hasMore`）を返し、画面に出す**——出ている数が全部だと誤読されると、「この局面を通った
+棋譜はこれだけ」という誤った結論になる。
+
+⚠ **序盤の局面はどの棋譜も通る。** 初手付近では到達が数百件になり、全部並べると
+**この画面の主役である分岐が棋譜一覧に埋もれる**。行は畳んでおき、総数だけ常に出す。
+🔒 **並びは打ち切りとセットで意味を持つ**——到達が早い順 → **同手数では新しい対局順**にする。
+切れたときに残るのが古い棋譜では使い物にならない。
+⚠ **画面の文言は実際の並びに合わせる。** 第一キーは到達手数なので「新しい N 件」ではない
+——手順前後で到達が遅くなった対局は、新しくても上限の外に出る。
+
 ### 6.3 棋譜ビューアからの導線
 
-`/kifus/$id` の各局面に「この局面を探す」を置き、`/positions?pos=<hash>` へ飛ばす。
+`/kifus/$id` の各局面に「この局面を探す」を置き、`/positions?pos=<sfen>` へ飛ばす。
+**表示中の局面**（分岐を辿っている途中ならその局面）を鍵にする。
 
 ## 7. 段階分け
 
-| 段階 | 内容 | 依存 |
-|---|---|---|
-| **1** | `source` 列 / `videoKifuSources` / KIF 合成 + 往復検証 / 取り込み API / 復元側の import CLI / `/video-analysis` 一覧 | — |
-| **2** | `kifuPositions` + 再構築コマンド / `/positions`（完全一致・枝の列挙）/ 棋譜ビューアからの導線 | 段階 1 |
-| **3** | 近さ検索 / 主体側モード / `kifus.subjectSide` | **server 側ユーザー**（§8.1） |
+| 段階 | 内容 | 依存 | 状態 |
+|---|---|---|---|
+| **1** | `source` 列 / `videoKifuSources` / KIF 合成 + 往復検証 / 取り込み API / 復元側の import CLI / `/video-analysis` 一覧 | — | ✅ 実装済み |
+| **2** | `kifuPositions` + 再構築コマンド / `/positions`（完全一致・枝の列挙）/ 棋譜ビューアからの導線 | 段階 1 | ✅ 実装済み |
+| **3** | 近さ検索 / 主体側モード / `kifus.subjectSide` | **server 側ユーザー**（§8.1） | ⬜ 未着手 |
 
 段階 1 の完了条件は「復元済みの棋譜が DB に入り、戦型が付き、worker が解析を始める」こと。
+段階 2 の完了条件は「初期局面から枝を辿れて、同じ局面を通った棋譜が出所付きで並ぶ」こと。
 
 ## 8. 未決・将来の拡張
 

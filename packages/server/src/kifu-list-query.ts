@@ -11,6 +11,7 @@ import {
   isNull,
   like,
   lte,
+  ne,
   notInArray,
   or,
   sql,
@@ -22,6 +23,21 @@ import { candidateMoves, kifus, kifuTactics, moveAnalyses } from './db/schema.js
 
 /** 一覧の基準日時。表示・並びとも `coalesce(playedAt, createdAt)`（prd/04 §6.1） */
 export const playedOrCreatedAt = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`;
+
+/**
+ * **自分の対局だけ**に絞る（prd/10 §2.2）。
+ *
+ * 動画解析（`source = 'video'`）は自分の対局ではないため、一覧・分析・統計から外す。
+ * 勝敗も対局者も無いので、混ざっても意味のある数字にならない。
+ *
+ * 🔒 **これを引数で外せる条件にしない。** トグルにすると集計の意味が UI 状態に依存し、
+ * 「この数字は何を数えたのか」が画面を見ても決まらなくなる。動画解析データは
+ * 専用ページ（`/video-analysis`）と棋譜ビューアから見る。
+ * ⚠ 混ざっても SQL は何も言わない——だから条件の側を固定する。
+ */
+export function ownGamesOnly(): SQL {
+  return ne(kifus.source, 'video');
+}
 
 /** LIKE のワイルドカード（`%` `_` `\`）を打ち消し、入力を素の部分一致として扱う */
 export function escapeLike(s: string): string {
@@ -233,7 +249,9 @@ export function missedMateCondition(limit: number, names: string[]): SQL {
 
 /** 絞り込み条件を組み立てる（件数取得と行取得で同じものを使う）。無条件なら `undefined` */
 export function kifuListWhere(query: KifuListQuery): SQL | undefined {
-  const conditions: SQL[] = [];
+  // 🔒 query に依らず常に先頭に置く（prd/10 §2.2）。ここが「自分の対局の一覧」である
+  // ことの単一の出所で、絞り込みの有無で意味が変わってはいけない
+  const conditions: SQL[] = [ownGamesOnly()];
 
   if (query.q) {
     const pattern = `%${escapeLike(query.q)}%`;

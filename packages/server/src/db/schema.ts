@@ -1,5 +1,7 @@
 import {
   bigint,
+  boolean,
+  foreignKey,
   index,
   int,
   json,
@@ -39,11 +41,64 @@ export const kifus = mysqlTable(
     // （実行中の旧解析がリセット後の状態を上書きするのを防ぐ）
     analysisRevision: int().notNull().default(0),
     memo: text(),
+    // 棋譜の出所（prd/10 §2.1）。動画解析（'video'）は自分の対局ではないため、
+    // 🔒 一覧・分析・統計のクエリは `source <> 'video'` を**既定で強制する**
+    // （引数で外せる条件にしない。prd/10 §2.2）。既定値は安全側の 'manual'。
+    source: mysqlEnum(['manual', 'swars', 'video']).notNull().default('manual'),
     createdAt: timestamp().notNull().defaultNow(),
     updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
   },
   (table) => [
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
+    // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
+    index('kifus_source_idx').on(table.source),
+  ],
+);
+
+/**
+ * 動画解析の由来メタ（`kifus` と 1:1。prd/10 §3.1）。
+ *
+ * **`kifus` に列を足さず外出しする**のは、自分の対局行で常に NULL になる列を
+ * 中心テーブルに持ち込まないため。
+ *
+ * ⭐ **`raw` に走査の生出力を丸ごと持つ**（1 局 8〜16KB）。後から仕様を変えても
+ * 再走査せずに派生値を作り直せる。手ごとのメタ（time / side / inferredKind）はここに入る。
+ * 🔒 索引が要ると分かった値だけ、後から `raw` の外に列として昇格させる。
+ */
+export const videoKifuSources = mysqlTable(
+  'video_kifu_sources',
+  {
+    // ⚠ FK は下の table extras で `foreignKey()` として書く。列側の `.references()` は
+    // **単一列 PK のテーブルでは生成 SQL から `ON DELETE CASCADE` が落ちる**
+    // （複合 PK の kifuTactics では落ちない）。CASCADE が無いと棋譜を消せなくなる
+    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 動画の識別子 */
+    videoId: varchar({ length: 32 }).notNull(),
+    /** その動画の何局目か（1 始まり） */
+    gameIndex: int().notNull(),
+    /** 断片の開始秒 / 終了秒 */
+    startedAtSec: int().notNull(),
+    endedAtSec: int().notNull(),
+    /** 画面の下が先手か（録画者の側を示す。主体側の導出に使う。prd/10 §3.3） */
+    bottomIsSente: boolean().notNull(),
+    /** 走査時のコミット。上書きの経緯を辿るために残す */
+    extractorRev: varchar({ length: 40 }).notNull(),
+    /** 走査の生出力（range / replay / moves[{time,usi,side,inferredKind}]） */
+    raw: json().notNull(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kifuId] }),
+    foreignKey({
+      columns: [table.kifuId],
+      foreignColumns: [kifus.id],
+    }).onDelete('cascade'),
+    // 「同じ動画の同じ局」は 1 つの実体。再取り込みはこのキーで上書きする（prd/10 §4.3）
+    uniqueIndex('video_kifu_sources_video_id_game_index_uq').on(
+      table.videoId,
+      table.gameIndex,
+    ),
   ],
 );
 
@@ -117,10 +172,20 @@ export const candidateMoves = mysqlTable(
 );
 
 export const relations = defineRelations(
-  { kifus, moveAnalyses, candidateMoves, kifuTactics },
+  { kifus, moveAnalyses, candidateMoves, kifuTactics, videoKifuSources },
   (r) => ({
     kifus: {
       moveAnalyses: r.many.moveAnalyses(),
+      videoSource: r.one.videoKifuSources({
+        from: r.kifus.id,
+        to: r.videoKifuSources.kifuId,
+      }),
+    },
+    videoKifuSources: {
+      kifu: r.one.kifus({
+        from: r.videoKifuSources.kifuId,
+        to: r.kifus.id,
+      }),
     },
     moveAnalyses: {
       kifu: r.one.kifus({

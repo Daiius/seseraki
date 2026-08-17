@@ -12,6 +12,7 @@ import {
   analyzedCondition,
   bySelfSide,
   missedMateCondition,
+  ownGamesOnly,
   parseSelfNames,
   periodConditions,
 } from './kifu-list-query.js';
@@ -54,16 +55,25 @@ function targetGame(names: string[]): SQL {
   return bySelfSide(names, (s) => or(s.won, s.lost)!);
 }
 
-/** 期間の絞り込みだけ（除外の内訳を数える母集団）。無指定なら `undefined` = 全期間 */
-export function statsTacticsPeriodWhere(query: StatsTacticsQuery): SQL | undefined {
-  const conditions = periodConditions(query.from, query.to);
-  return conditions.length > 0 ? and(...conditions) : undefined;
+/**
+ * 期間の絞り込みだけ（除外の内訳を数える母集団）。
+ *
+ * 🔒 **動画解析はここでも外す**（prd/10 §2.2）。`targetGame` は勝敗のついた対局に絞るので
+ * 行の集計からは自動的に落ちるが、**総局数と除外の内訳はこの母集団で数える**ため、
+ * ここを外し忘れると動画解析が `ambiguousSelf` に積み上がって総局数が膨らむ。
+ */
+export function statsTacticsPeriodWhere(query: StatsTacticsQuery): SQL {
+  return and(ownGamesOnly(), ...periodConditions(query.from, query.to))!;
 }
 
 /** 行の集計対象（期間 かつ 対象局）。名前候補が空なら `1 = 0` で 0 件になる */
 export function statsTacticsWhere(query: StatsTacticsQuery): SQL {
   const names = parseSelfNames(query.self);
-  return and(...periodConditions(query.from, query.to), targetGame(names))!;
+  return and(
+    ownGamesOnly(),
+    ...periodConditions(query.from, query.to),
+    targetGame(names),
+  )!;
 }
 
 /**

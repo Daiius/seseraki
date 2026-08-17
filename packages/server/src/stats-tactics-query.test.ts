@@ -46,8 +46,12 @@ describe('statsTacticsQuerySchema', () => {
 });
 
 describe('statsTacticsPeriodWhere', () => {
-  it('期間の指定が無ければ undefined（全期間）', () => {
-    expect(statsTacticsPeriodWhere(parse(SELF))).toBeUndefined();
+  it('期間の指定が無くても動画解析は母集団から外れる（prd/10 §2.2）', () => {
+    // 🔒 総局数と除外の内訳はこの母集団で数えるので、ここを外し忘れると
+    // 動画解析が ambiguousSelf に積み上がって総局数が膨らむ
+    const { sql, params } = render(statsTacticsPeriodWhere(parse(SELF)));
+    expect(sql).toBe('`kifus`.`source` <> ?');
+    expect(params).toEqual(['video']);
   });
 
   it('基準は一覧と同じ coalesce(playedAt, createdAt) で両端を含む', () => {
@@ -56,7 +60,7 @@ describe('statsTacticsPeriodWhere', () => {
     );
     expect(sql).toContain('coalesce(`kifus`.`playedAt`, `kifus`.`createdAt`) >=');
     expect(sql).toContain('date_add(?, interval 1 day)');
-    expect(params).toEqual(['2026-07-01', '2026-07-31']);
+    expect(params).toEqual(['video', '2026-07-01', '2026-07-31']);
   });
 });
 
@@ -67,6 +71,7 @@ describe('statsTacticsWhere', () => {
     expect(sql).toContain('not in');
     // 勝敗は勝者コードの部分一致。引き分け（DRAW_*）と result null はこれで落ちる
     expect(params).toEqual([
+      'video',
       'me', 'me', '%SENTE_WIN%', '%GOTE_WIN%',
       'me', 'me', '%GOTE_WIN%', '%SENTE_WIN%',
     ]);
@@ -75,12 +80,13 @@ describe('statsTacticsWhere', () => {
 
   it('期間は対象局の条件と AND で結合される', () => {
     const { params } = render(statsTacticsWhere(parse({ ...SELF, from: '2026-01-01' })));
-    expect(params[0]).toBe('2026-01-01');
+    expect(params[0]).toBe('video');
+    expect(params[1]).toBe('2026-01-01');
   });
 
   it('名前候補が空なら 0 件（自分が決まらなければ何も集計できない）', () => {
-    expect(render(statsTacticsWhere(parse())).sql).toBe('1 = 0');
-    expect(render(statsTacticsWhere(parse({ self: ' , ' }))).sql).toBe('1 = 0');
+    expect(render(statsTacticsWhere(parse())).sql).toContain('1 = 0');
+    expect(render(statsTacticsWhere(parse({ self: ' , ' }))).sql).toContain('1 = 0');
   });
 });
 

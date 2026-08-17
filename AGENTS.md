@@ -88,6 +88,13 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > export して実行）。dev DB に対して試すときは `.env.database` を読む **`db:migrate:dev` / `db:baseline:dev`** を使う。
 > 本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
 >
+> 🔴 **`db:generate` が出した SQL は目視で確認する。** drizzle-kit 1.0.0-beta.23 は
+> **新規テーブルの `CREATE TABLE` 内 FK から `ON DELETE CASCADE` を落とす**（`snapshot.json` には
+> `"onDelete": "CASCADE"` が正しく入るのに SQL にだけ出ない）。実際に踏んだ（`video_kifu_sources`）。
+> `.references(..., { onDelete: 'cascade' })` でも `foreignKey().onDelete('cascade')` でも同じ。
+> **既存テーブルの FK は正しい**（過去の drizzle-kit で生成されたもの）ので、差分を見ても気づけない。
+> **生成 SQL を手で直す**（snapshot は正しいので次回生成の差分にはならない）。
+>
 > ⚠ **本番のマイグレーションはホストから流さず、イメージ同梱のエントリを使う**（下記）。
 > **生成は drizzle-kit（dev 専用）、適用は drizzle-orm の migrator**（本番の実行時依存）なので、
 > 本番イメージに drizzle-kit を入れずに適用でき、**dev と本番で適用経路が 1 本になる**。

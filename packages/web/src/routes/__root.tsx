@@ -64,6 +64,22 @@ function RootComponent() {
               </svg>
             </Link>
             <Link
+              to="/video-analysis"
+              className="btn btn-ghost btn-sm btn-square"
+              aria-label="動画解析"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+                className="size-5"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5 21 6.75v10.5l-5.25-3.75M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+              </svg>
+            </Link>
+            <Link
               to="/settings"
               className="btn btn-ghost btn-sm btn-square"
               aria-label="設定"

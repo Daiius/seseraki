@@ -509,6 +509,23 @@ interface WatchedDrop {
 }
 const watchedDrops = new Map<string, WatchedDrop>();
 
+/**
+ * 手番が飛んだので**推測で挿し込んだ**打ち。行き先が「空」と確定したら取り消す。
+ *
+ * ⚠ ②（`watchedDrops`）と違い、**断片の途中から 1 手を抜く**ことになる
+ * （挿し込みは 2 手のうちの 1 手目で、2 手目は読めた本物の手）。
+ * 抜いた後は、同じ `steps` を指している他の見張りの位置をずらす必要がある。
+ */
+interface InsertedDrop {
+  row: number;
+  col: number;
+  kind: PieceKind;
+  side: Side;
+  steps: Step[];
+  index: number;
+}
+const insertedDrops = new Map<string, InsertedDrop>();
+
 /** 確定待ちのマス。読めるようになるまで**何度でも**試みる。 */
 const provisional = new Map<string, Provisional>();
 const history = new ReadingHistory();
@@ -526,6 +543,8 @@ let dropsWithCarriedOrigin = 0;
 let dropsWithSingleCarriedOrigin = 0;
 /** 出発点が空と確定したので、打ち → 移動に書き換えた手 */
 let dropsRewritten = 0;
+/** 推測で挿し込んだ打ちが誤りと分かって取り消した数 */
+let insertionsUndone = 0;
 /** 📏 追跡盤面が空と思うマスに駒が現れ、**次の絵で消えた**（測定のみ） */
 let transientFills = 0;
 /** 📏 同じく現れて、**次の絵でも居座った**（測定のみ） */
@@ -755,6 +774,39 @@ for (let qi = 0; qi < queue.length; qi++) {
 
   // 読みを履歴に積む。**同じマスが何度も続けて同じ駒に読めたら確定**とみなす。
   history.observe(recognized.board);
+
+  // 推測で挿し込んだ打ちの行き先が読めたら、挿し込みが本物だったかを決める。
+  for (const [key, watch] of [...insertedDrops]) {
+    const held = current?.[watch.row][watch.col];
+    if (!held || held.side !== watch.side || held.kind !== watch.kind) {
+      insertedDrops.delete(key); // 別の手が触った。もう決められない
+      continue;
+    }
+    const c = history.confirmed(watch.row, watch.col);
+    if (!c) continue;
+    insertedDrops.delete(key);
+    if (c.value) continue; // 駒のまま確定＝挿し込みは当たっていた
+
+    // 🔒 **空と確定した＝その駒は盤に無い。挿し込みは誤りだった。**
+    const step = watch.steps[watch.index];
+    if (!step || step.usi !== `${watch.kind}*${toUsiSquare(watch.row, watch.col)}`) continue;
+    watch.steps.splice(watch.index, 1);
+    // 同じ列を指している他の見張りの位置をずらす（抜いた位置より後ろだけ）
+    for (const other of [...provisional.values(), ...watchedDrops.values(), ...insertedDrops.values()]) {
+      if (other.steps === watch.steps && other.index > watch.index) other.index--;
+    }
+    if (current) current[watch.row][watch.col] = null;
+    const hand = state?.hand[watch.side];
+    if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
+    history.reset(watch.row, watch.col);
+    insertionsUndone++;
+    if (VERBOSE) {
+      console.log(
+        `  ⤻ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+          `${fmt(step.time)} に挿し込んだ ${step.usi} を取り消した`,
+      );
+    }
+  }
 
   // 見張っている「打ち」の出発点が読めたら、そこで打ちか移動かを決める。
   for (const [key, watch] of [...watchedDrops]) {
@@ -1178,6 +1230,26 @@ for (let qi = 0; qi < queue.length; qi++) {
       consecutiveFailures = 0;
       refusedDrop.count = 0;
       insertedMoves++;
+      // 🔒 **挿し込んだ手は「推測」なので、後から証拠で確かめる。**
+      //
+      // 🔴 実測（3 本目 26:17・追記 160）: 本物の手は `2f3g+` の 1 手だけだったのに、
+      // 隣の 3h が駒ありに見えたため **存在しない `P*3h` を挿し込んだ**。
+      // 架空の歩は盤に残り続け、28:19 以降の 4 マスのずれになった。
+      //
+      // ⭐ 打ちなら見張れる。**行き先が「空」と確定し、盤がまだその駒を持っているなら、
+      // 挿し込みは誤りだった。** ②（打ちの書き換え）と同じ形。
+      const first = pair.moves[0];
+      if (first.usi[1] === '*') {
+        insertedDrops.set(`${first.to.row},${first.to.col}`, {
+          row: first.to.row,
+          col: first.to.col,
+          kind: first.usi[0] as PieceKind,
+          side: first.side as Side,
+          steps,
+          index: steps.length - 2, // 挿し込んだ 1 手目（2 手目は読めた手）
+        });
+        history.reset(first.to.row, first.to.col);
+      }
       if (VERBOSE) {
         console.log(`  ⤺ ${fmt(t)} 手番が飛んだので間に 1 手挿した: ${pair.moves[0].usi} → ${second.usi}`);
       }
@@ -1416,6 +1488,7 @@ if (dropsWithCarriedOrigin > 0) {
   );
 }
 if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
+if (insertionsUndone > 0) console.log(`  行き先が空と確定したので取り消した挿し込み: ${insertionsUndone}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(
   `  📏 空のはずのマスに駒が現れた: 次の絵で消えた ${transientFills} / 居座った ${persistentFills}`,

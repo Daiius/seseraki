@@ -1,9 +1,14 @@
 import { generateKifuMarkdown, type KifuExportInput } from '../kifu-export';
-import { resolveUserSide } from '../lib/self';
 import { CopyButton } from './CopyButton';
 
-export function KifuExport({ kifu }: { kifu: KifuExportInput }) {
-  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
+export function KifuExport({
+  kifu,
+  userSide,
+}: {
+  kifu: KifuExportInput;
+  /** 主体の手番（prd/11 §4）。server が導出した値を渡す */
+  userSide: 'sente' | 'gote' | null;
+}) {
 
   // 注目局面の選定は判定と同じ閾値を使う（ページ側から渡ってくる）
   const markdown = generateKifuMarkdown({ ...kifu, userSide });

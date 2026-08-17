@@ -214,7 +214,11 @@ describe('kifuListWhere', () => {
   it('⭐ 名前候補が無くても SQL は成り立つ（主体側が NULL なら合わないだけ）', () => {
     // 以前は「名前候補が空 → 1 = 0」で 0 件にしていた。いまは subjectSide が NULL に
     // なるので、どちらの側の条件にも合わず**自然に 0 件**になる（prd/11 §4）
-    for (const q of [{ tactic: '四間飛車', tacticSide: 'self' }, { missedMate: '10' }]) {
+    const queries: Record<string, string>[] = [
+      { tactic: '四間飛車', tacticSide: 'self' },
+      { missedMate: '10' },
+    ];
+    for (const q of queries) {
       const { sql } = render(kifuListWhere(parse(q)));
       expect(sql).not.toContain('1 = 0');
       expect(sql).toContain('`kifus`.`subjectSide` = ?');

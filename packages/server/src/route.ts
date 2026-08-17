@@ -28,6 +28,8 @@ import {
   kifuTactics,
   videoKifuSources,
   kifuPositions,
+  users,
+  userAliases,
 } from './db/schema.js';
 import {
   kifuListOrderBy,
@@ -82,7 +84,15 @@ import {
 } from 'shared';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
-import { currentUserId, refreshSubjectSide } from './users';
+import {
+  addAlias,
+  countUnresolvedSubjects,
+  currentUserId,
+  rebuildSubjectSides,
+  refreshSubjectSide,
+  removeAlias,
+  updateAliasPeriod,
+} from './users';
 import {
   detectLegacyUtcTimezone,
   parseKif,
@@ -432,6 +442,112 @@ const route = app
         return result.id;
       });
       return c.json({ id }, 201);
+    },
+  )
+  // --- 自分（prd/11）---
+  // 🔒 名前候補を変えたら、**同じトランザクションで主体側を引き直す**（prd/11 §4.2）。
+  // 手動の再導出に頼ると、変えた直後に画面の数字が古いまま残り、
+  // しかも間違っていることが画面から分からない。
+  .get('/users/me', sessionRequired, async (c) => {
+    const userId = await currentUserId();
+    const [user] = await db
+      .select({ id: users.id, displayName: users.displayName })
+      .from(users)
+      .where(eq(users.id, userId));
+    const aliases = await db
+      .select({
+        id: userAliases.id,
+        name: userAliases.name,
+        validFrom: userAliases.validFrom,
+        validTo: userAliases.validTo,
+      })
+      .from(userAliases)
+      .where(eq(userAliases.userId, userId))
+      .orderBy(asc(userAliases.id));
+    return c.json({
+      ...user,
+      aliases,
+      /** 主体側が決まらない棋譜の数（名前候補の設定を促すために出す） */
+      unresolvedSubjects: await countUnresolvedSubjects(userId),
+    });
+  })
+  .patch(
+    '/users/me',
+    sessionRequired,
+    zv('json', z.object({ displayName: z.string().trim().min(1).max(100) })),
+    async (c) => {
+      const { displayName } = c.req.valid('json');
+      const userId = await currentUserId();
+      await db.update(users).set({ displayName }).where(eq(users.id, userId));
+      return c.json({ ok: true } as const);
+    },
+  )
+  .post(
+    '/users/me/aliases',
+    sessionRequired,
+    zv(
+      'json',
+      z.object({
+        name: z.string().trim().min(1).max(100),
+        validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+        validTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+      }),
+    ),
+    async (c) => {
+      const { name, validFrom, validTo } = c.req.valid('json');
+      const userId = await currentUserId();
+      try {
+        const updated = await db.transaction(async (tx) => {
+          await addAlias(tx, userId, name, { validFrom, validTo });
+          return rebuildSubjectSides(tx, userId);
+        });
+        return c.json({ ok: true, rederived: updated } as const, 201);
+      } catch (e) {
+        // `name` は UNIQUE（大文字小文字を区別する。prd/11 §2.1）
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.includes('Duplicate')) {
+          return c.json({ error: 'この名前は既に登録されている' } as const, 409);
+        }
+        throw e;
+      }
+    },
+  )
+  .patch(
+    '/users/me/aliases/:id',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number() })),
+    zv(
+      'json',
+      z.object({
+        validFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+        validTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+      }),
+    ),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const { validFrom, validTo } = c.req.valid('json');
+      const userId = await currentUserId();
+      const updated = await db.transaction(async (tx) => {
+        await updateAliasPeriod(tx, id, { validFrom, validTo });
+        return rebuildSubjectSides(tx, userId);
+      });
+      return c.json({ ok: true, rederived: updated } as const);
+    },
+  )
+  .delete(
+    '/users/me/aliases/:id',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number() })),
+    async (c) => {
+      // ⚠ **旧名を消すと、その名前で指した過去の棋譜が「自分の対局」でなくなる**
+      // （prd/11 §2.2）。画面側で警告してから呼ぶ
+      const { id } = c.req.valid('param');
+      const userId = await currentUserId();
+      const updated = await db.transaction(async (tx) => {
+        await removeAlias(tx, id);
+        return rebuildSubjectSides(tx, userId);
+      });
+      return c.json({ ok: true, rederived: updated } as const);
     },
   )
   // --- 局面検索（prd/10 §5.3）---

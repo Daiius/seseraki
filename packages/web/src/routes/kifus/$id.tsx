@@ -18,7 +18,6 @@ import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
 import { TacticTags } from '../../components/TacticTags';
-import { resolveUserSide } from '../../lib/self';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -115,7 +114,8 @@ function KifuDetailPage() {
     }
   };
 
-  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
+  // 主体側は server が導出済み（prd/11 §4）
+  const userSide = kifu.subjectSide ?? null;
 
   return (
     <div>
@@ -244,6 +244,7 @@ function KifuDetailPage() {
         {kifu.analyses.length > 0 && (
           <LazyDetails title="LLM 解説用テキスト">
             <KifuExport
+              userSide={userSide}
               kifu={{
                 title: kifu.title,
                 usiMoves,

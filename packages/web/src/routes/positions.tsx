@@ -168,6 +168,123 @@ function SimilarSection({
   );
 }
 
+type Subject = InferResponseType<typeof client.api.positions.subject.$get, 200>;
+
+/**
+ * 主体側モード（prd/10 §3.3）。**自分の駒の配置**が同じ棋譜を、先後をまたいで探す。
+ *
+ * ⭐ `goteSfen` は盤を 180 度回して保存されているので、「自分が先手のときの形」と
+ * 「自分が後手のときの同じ形」が一致する。
+ *
+ * ⚠ **枝は出せない。** 片側の配置だけでは次の局面が決まらないため（prd/10 §3.3）。
+ * ここは「似た形の棋譜を探す」機能で、ツリーを降りる操作とは別。
+ */
+function SubjectSection({ sfen }: { sfen: string }) {
+  const [state, setState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading' }
+    | { kind: 'done'; side: 'sente' | 'gote'; data: Subject }
+    | { kind: 'error' }
+  >({ kind: 'idle' });
+
+  const load = async (side: 'sente' | 'gote') => {
+    setState({ kind: 'loading' });
+    try {
+      const res = await client.api.positions.subject.$get({ query: { pos: sfen, side } });
+      if (!res.ok) {
+        setState({ kind: 'error' });
+        return;
+      }
+      setState({ kind: 'done', side, data: await res.json() });
+    } catch {
+      setState({ kind: 'error' });
+    }
+  };
+
+  return (
+    <section>
+      <h2 className="text-lg font-semibold mb-2">同じ配置の棋譜（主体側だけで比較）</h2>
+      <p className="text-sm opacity-60 mb-2">
+        相手の駒は見ずに、自分側の配置だけで探す。先手と後手は盤の向きを揃えて比べるので、
+        先後をまたいで同じ形が見つかる。
+      </p>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => load('sente')}
+        >
+          ▲先手側の配置で探す
+        </button>
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          onClick={() => load('gote')}
+        >
+          △後手側の配置で探す
+        </button>
+      </div>
+      {state.kind === 'loading' && (
+        <span className="loading loading-dots loading-md" aria-label="探しています" />
+      )}
+      {state.kind === 'error' && (
+        <div className="alert alert-warning">検索できなかった</div>
+      )}
+      {state.kind === 'done' && (
+        <>
+          <p className="text-sm opacity-60 mb-2">
+            {`${state.side === 'sente' ? '▲先手' : '△後手'}側の配置に一致 ${state.data.total} 件`}
+            {state.data.hasMore && `（先頭 ${state.data.games.length} 件まで）`}
+            {/* 🔒 除外した件数を黙らない（prd/10 §3.3） */}
+            {state.data.unresolvedSubjects > 0 &&
+              `／主体側が決まらない ${state.data.unresolvedSubjects} 件は対象外`}
+          </p>
+          {state.data.games.length === 0 ? (
+            <p className="text-sm opacity-60">一致する棋譜は無かった。</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table table-sm table-zebra">
+                <thead>
+                  <tr>
+                    <th>出所</th>
+                    <th>主体</th>
+                    <th className="w-full">棋譜</th>
+                    <th className="text-right whitespace-nowrap">到達</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.data.games.map((g) => (
+                    <tr key={`${g.kifuId}-${g.moveNumber}`}>
+                      <td>
+                        <SourceBadge source={g.source} />
+                      </td>
+                      <td className="whitespace-nowrap">
+                        {g.subjectSide === 'sente' ? '▲先手' : '△後手'}
+                      </td>
+                      <td className="w-full">{g.title}</td>
+                      <td className="text-right whitespace-nowrap">{g.moveNumber} 手目</td>
+                      <td className="whitespace-nowrap">
+                        <Link
+                          to="/kifus/$id"
+                          params={{ id: String(g.kifuId) }}
+                          className="btn btn-ghost btn-xs"
+                        >
+                          開く
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function PositionsPage() {
   const { position, error } = Route.useLoaderData();
 
@@ -317,6 +434,8 @@ function PositionView({ position }: { position: Position }) {
               </button>
             )}
           </section>
+
+          <SubjectSection sfen={position.sfen} />
 
           <SimilarSection sfen={position.sfen} onPick={goTo} />
 

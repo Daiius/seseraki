@@ -84,6 +84,25 @@ describe('sideSfen（片側だけの配置）', () => {
     expect(sente).toContain('PPPPPPPPP');
   });
 
+  it('🔴 後手側は盤を 180 度回して、常に自分が手前になる', () => {
+    // 初期局面は 180 度回転で自分自身に移るので、先後の配置は
+    // 「駒の大小文字」以外まったく同じ形になる
+    const state = createInitialState();
+    expect(sideSfen(state, 'sente').toLowerCase()).toBe(
+      sideSfen(state, 'gote').toLowerCase(),
+    );
+  });
+
+  it('🔴 先後をまたいで同じ形が一致する', () => {
+    // 先手が 7六歩を突いた形 と、後手が（自分から見て）同じ位置に歩を突いた形。
+    // 盤の向きを揃えるので、自分側の配置としては同じ
+    const asSente = buildPositions(['7g7f'])[1];
+    const asGote = buildPositions(['1g1f', '3c3d'])[2];
+    expect(sideSfen(asSente, 'sente').toLowerCase()).toBe(
+      sideSfen(asGote, 'gote').toLowerCase(),
+    );
+  });
+
   it('手番を含めない（同じ配置なら手番が違っても同じ）', () => {
     const afterSente = buildPositions(['7g7f'])[1];
     const sente = sideSfen(afterSente, 'sente');

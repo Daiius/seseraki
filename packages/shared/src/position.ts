@@ -99,8 +99,22 @@ export function positionSfen(state: BoardState): string {
  * ⚠ **手番は含めない。** 同じ配置なら、どちらの手番でも同じ形として扱う。
  */
 export function sideSfen(state: BoardState, side: Side): string {
-  const board = state.board.map((row) => rankToSfen(row, side)).join('/');
+  // 🔴 **後手側は盤を 180 度回してから書く。**
+  //
+  // この鍵の用途は「**自分の駒の配置**が似ている局面を探す」こと（prd/10 §3.3）。
+  // 先手の配置と後手の配置は**盤の向きが逆**なので、そのまま比べると
+  // 「自分が先手のときの形」と「自分が後手のときの同じ形」が一致しない。
+  // 回して**常に自分が手前**に揃えることで、先後をまたいで比べられる。
+  //
+  // ⚠ 持ち駒は向きを持たないのでそのまま。
+  const rows = side === 'gote' ? rotated(state.board) : state.board;
+  const board = rows.map((row) => rankToSfen(row, side)).join('/');
   return `${board} ${handToSfen(state, side)}`;
+}
+
+/** 盤を 180 度回す（段も筋も逆順にする） */
+function rotated(board: Square[][]): Square[][] {
+  return [...board].reverse().map((row) => [...row].reverse());
 }
 
 /** 盤 81 マスを 1 マス 1 バイトで表す（距離の計算に使う。§5.2） */

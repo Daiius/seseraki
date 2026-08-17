@@ -17,6 +17,7 @@ import {
   lte,
   ne,
   notExists,
+  or,
   sql,
 } from 'drizzle-orm';
 import { db } from './db/index.js';
@@ -517,6 +518,88 @@ const route = app
         total,
         hasMore: total > rows.length,
         branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
+      });
+    },
+  )
+  // 主体側モード（prd/10 §3.3）。**自分の駒の配置**が同じ棋譜を、先後をまたいで探す。
+  // 🔒 `subjectSide` が NULL の棋譜は除外し、**その件数を返す**——黙って落とすと、
+  // 結果が少ない理由が「似た形が無い」のか「主体が決まらない棋譜を外した」のか分からない
+  .get(
+    '/positions/subject',
+    sessionRequired,
+    zv(
+      'query',
+      z.object({
+        pos: z.string().min(1).max(200),
+        /** 基準局面を**どちら側から見るか** */
+        side: z.enum(['sente', 'gote']),
+      }),
+    ),
+    async (c) => {
+      const { pos, side } = c.req.valid('query');
+
+      // 基準となる片側の配置。⚠ `goteSfen` は 180 度回して保存されているので、
+      // 先後をまたいでそのまま比べられる（prd/10 §3.2）
+      const [base] = await db
+        .select({
+          senteSfen: kifuPositions.senteSfen,
+          goteSfen: kifuPositions.goteSfen,
+        })
+        .from(kifuPositions)
+        .where(eq(kifuPositions.sfen, pos))
+        .limit(1);
+      if (!base) return c.json({ error: 'not found' } as const, 404);
+      const baseSideSfen = side === 'sente' ? base.senteSfen : base.goteSfen;
+
+      const rows = await db
+        .select({
+          kifuId: kifuPositions.kifuId,
+          moveNumber: kifuPositions.moveNumber,
+          sfen: kifuPositions.sfen,
+          title: kifus.title,
+          source: kifus.source,
+          subjectSide: kifus.subjectSide,
+          playedAt: kifus.playedAt,
+          total: sql<number>`count(*) over ()`,
+        })
+        .from(kifuPositions)
+        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
+        .where(
+          and(
+            isNotNull(kifus.subjectSide),
+            or(
+              and(
+                eq(kifus.subjectSide, 'sente'),
+                eq(kifuPositions.senteSfen, baseSideSfen),
+              ),
+              and(
+                eq(kifus.subjectSide, 'gote'),
+                eq(kifuPositions.goteSfen, baseSideSfen),
+              ),
+            ),
+          ),
+        )
+        .orderBy(
+          asc(kifuPositions.moveNumber),
+          desc(playedOrCreatedAt),
+          desc(kifuPositions.kifuId),
+        )
+        .limit(POSITION_GAMES_LIMIT);
+
+      // 主体側が決まらない棋譜の数（この検索の対象外になっているもの）
+      const [{ unresolved }] = await db
+        .select({ unresolved: count() })
+        .from(kifus)
+        .where(isNull(kifus.subjectSide));
+
+      const total = rows.length > 0 ? Number(rows[0].total) : 0;
+      return c.json({
+        base: { sfen: pos, side, sideSfen: baseSideSfen },
+        games: rows.map(({ total: _t, ...g }) => g),
+        total,
+        hasMore: total > rows.length,
+        /** 🔒 主体側が決まらないので除外した棋譜の数（prd/10 §3.3） */
+        unresolvedSubjects: unresolved,
       });
     },
   )

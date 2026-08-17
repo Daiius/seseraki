@@ -23,6 +23,7 @@
 | [prd/07-auth-and-privacy.md](./prd/07-auth-and-privacy.md) | 認証 / API_KEY / 公開配置 |
 | [prd/08-roadmap.md](./prd/08-roadmap.md) | フェーズ分け / 未実装・計画中 / 確定事項 |
 | [prd/09-analytics.md](./prd/09-analytics.md) | 分析ページ（戦型別成績 / 取りこぼし / 一覧へのドリルダウン） |
+| [prd/10-video-analysis.md](./prd/10-video-analysis.md) | 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 

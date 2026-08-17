@@ -661,7 +661,18 @@ for (let qi = 0; qi < queue.length; qi++) {
     if (!c) continue;
     provisional.delete(key);
     const now = c.value;
-    if (!now) continue; // 空に読めた＝取られた等。手の側では扱えないので触らない
+    if (!now) {
+      // 空に読めた＝取られた等。手の側では扱えないので触らない。
+      // 🔍 調査中（追記 152）: 幻の駒の場合、これが唯一の証拠になっている。
+      if (VERBOSE) {
+        const step = watch.steps[watch.index];
+        console.log(
+          `  🔍 ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が空と確定` +
+            `（${c.streak} 回連続）${step ? ` — ${fmt(step.time)} の ${step.usi} の行き先` : ''}`,
+        );
+      }
+      continue;
+    }
     if (now.kind === current[watch.row][watch.col]?.kind) continue; // 逆算が当たっていた
 
     const step = watch.steps[watch.index];

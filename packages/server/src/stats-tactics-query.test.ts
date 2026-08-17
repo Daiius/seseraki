@@ -26,7 +26,8 @@ function parse(query: Record<string, string> = {}) {
   return statsTacticsQuerySchema.parse(query);
 }
 
-const SELF = { self: 'me' };
+// ⭐ 名前候補はもう受け取らない。主体側は kifus.subjectSide に導出済み（prd/11 §4）
+const SELF: Record<string, string> = {};
 
 describe('statsTacticsQuerySchema', () => {
   it('未指定なら全期間・詰み手数の上限 10（prd/09 §3.1）', () => {
@@ -67,13 +68,13 @@ describe('statsTacticsPeriodWhere', () => {
 describe('statsTacticsWhere', () => {
   it('対象局は「自分の側が確定」かつ「勝敗がついた」局に限る', () => {
     const { sql, params } = render(statsTacticsWhere(parse(SELF)));
-    // 自分の側の確定 = 自分が一致し、相手は名前候補に一致しない（ambiguous を外す）
-    expect(sql).toContain('not in');
+    // ⭐ 自分の側は kifus.subjectSide に導出済み（prd/11 §4）。名前候補は SQL に出てこない
+    expect(sql).toContain('`kifus`.`subjectSide` = ?');
     // 勝敗は勝者コードの部分一致。引き分け（DRAW_*）と result null はこれで落ちる
     expect(params).toEqual([
       'video',
-      'me', 'me', '%SENTE_WIN%', '%GOTE_WIN%',
-      'me', 'me', '%GOTE_WIN%', '%SENTE_WIN%',
+      'sente', '%SENTE_WIN%', '%GOTE_WIN%',
+      'gote', '%GOTE_WIN%', '%SENTE_WIN%',
     ]);
     expect(sql).not.toContain('DRAW_');
   });
@@ -84,9 +85,10 @@ describe('statsTacticsWhere', () => {
     expect(params[1]).toBe('2026-01-01');
   });
 
-  it('名前候補が空なら 0 件（自分が決まらなければ何も集計できない）', () => {
-    expect(render(statsTacticsWhere(parse())).sql).toContain('1 = 0');
-    expect(render(statsTacticsWhere(parse({ self: ' , ' }))).sql).toContain('1 = 0');
+  it('⭐ 主体側で絞る（名前候補が無ければ subjectSide が NULL になり自然に 0 件）', () => {
+    const { sql } = render(statsTacticsWhere(parse()));
+    expect(sql).toContain('`kifus`.`subjectSide` = ?');
+    expect(sql).not.toContain('1 = 0');
   });
 });
 
@@ -104,7 +106,7 @@ describe('statsTacticsSummarySelect', () => {
     expect(render(select.ambiguousSelf).sql).toContain('not (');
     // 引き分けは指し直しになるもの。勝敗として数えない（prd/09 §4）
     expect(render(select.draw).params).toEqual([
-      'me', 'me', 'me', 'me', 'DRAW_REPETITION', 'DRAW_IMPASSE',
+      'sente', 'gote', 'DRAW_REPETITION', 'DRAW_IMPASSE',
     ]);
     expect(render(select.unknownResult).sql).toContain('`result` is null');
   });
@@ -115,13 +117,13 @@ describe('statsTacticsSummarySelect', () => {
     }
   });
 
-  it('名前候補が空なら期間内の全局が自分未確定に落ちる', () => {
+  it('主体側が決まらない局は「自分未確定」に落ちる', () => {
     const select = statsTacticsSummarySelect(parse());
-    // 総局数は 0、引き分け・結果不明も 0 になり、`not (1 = 0)` だけが真になる
-    expect(render(select.totalGames).sql).toContain('case when 1 = 0 then');
-    expect(render(select.ambiguousSelf).sql).toContain('case when not (1 = 0) then');
-    expect(render(select.draw).sql).toContain('(1 = 0) and');
-    expect(render(select.unknownResult).sql).toContain('(1 = 0) and');
+    // ⭐ どの列も subjectSide で絞る。名前候補は現れない（prd/11 §4）
+    for (const fragment of Object.values(select)) {
+      expect(render(fragment).sql).toContain('`kifus`.`subjectSide` = ?');
+      expect(render(fragment).sql).not.toContain('1 = 0');
+    }
   });
 });
 
@@ -131,16 +133,17 @@ describe('statsTacticsJoinOn', () => {
     expect(sql).toContain('`kifu_tactics`.`kifuId` = `kifus`.`id`');
     expect(sql).toContain('`kifu_tactics`.`side` =');
     // 自分が先手なら side=gote、自分が後手なら side=sente（相手の側）
-    expect(params.slice(0, 3)).toEqual(['me', 'me', 'gote']);
-    expect(params.slice(3, 6)).toEqual(['me', 'me', 'sente']);
+    // 主体が先手の局では相手（gote）側のラベル、後手の局では sente 側のラベルを数える
+    expect(params.slice(0, 2)).toEqual(['sente', 'gote']);
+    expect(params.slice(2, 4)).toEqual(['gote', 'sente']);
   });
 
   it('帰属が side でないラベルは side を見ずに 1 行として数える', () => {
     const { sql, params } = render(statsTacticsJoinOn(parse(SELF)));
     // 一覧の絞り込みと同じく shared の公開 export から取る（配列を書き直さない。prd/09 §6.1）
-    expect(params.slice(6)).toEqual([...NON_SIDE_ATTRIBUTED_LABELS]);
-    expect(params.slice(6)).toContain('角換わり');
-    expect(params.slice(6)).toContain('相掛かり');
+    expect(params.slice(4)).toEqual([...NON_SIDE_ATTRIBUTED_LABELS]);
+    expect(params.slice(4)).toContain('角換わり');
+    expect(params.slice(4)).toContain('相掛かり');
     // side 条件との OR なので、これらのラベルは side に関係なく拾われる
     expect(sql).toContain('or (`kifu_tactics`.`label` in (');
   });
@@ -170,12 +173,12 @@ describe('statsTacticsRowsSelect', () => {
     ]);
     expect(render(select.games).sql).toBe('count(*)');
     // 先手時は「自分が先手だった」だけを条件にする（自分が後手の行は数えない）
-    expect(render(select.senteGames).params).toEqual(['me', 'me']);
-    expect(render(select.senteWins).params).toEqual(['me', 'me', '%SENTE_WIN%']);
-    expect(render(select.goteWins).params).toEqual(['me', 'me', '%GOTE_WIN%']);
+    expect(render(select.senteGames).params).toEqual(['sente']);
+    expect(render(select.senteWins).params).toEqual(['sente', '%SENTE_WIN%']);
+    expect(render(select.goteWins).params).toEqual(['gote', '%GOTE_WIN%']);
     // 全体は両方の側の OR
     expect(render(select.wins).params).toEqual([
-      'me', 'me', '%SENTE_WIN%', 'me', 'me', '%GOTE_WIN%',
+      'sente', '%SENTE_WIN%', 'gote', '%GOTE_WIN%',
     ]);
   });
 
@@ -187,7 +190,7 @@ describe('statsTacticsRowsSelect', () => {
     expect(sql).toContain('`analysisCompletedAt` is not null');
     // 負け（自分が先手なら GOTE_WIN、後手なら SENTE_WIN）
     expect(params).toEqual([
-      'me', 'me', '%GOTE_WIN%', 'me', 'me', '%SENTE_WIN%',
+      'sente', '%GOTE_WIN%', 'gote', '%SENTE_WIN%',
     ]);
     // ⚠ 「実手が詰みでない」の確認は不要（負けたことに含まれる。prd/09 §3.1）
     expect(sql).not.toContain('`candidate_moves`');
@@ -200,12 +203,12 @@ describe('statsTacticsRowsSelect', () => {
     expect(sql).toContain('mod(`move_analyses`.`moveNumber`, 2) =');
     expect(sql).toContain('exists (select 1 from `candidate_moves`');
     // 自分が先手: 負け = GOTE_WIN・parity 0・rank 1・mate・1..7
-    expect(params.slice(0, 8)).toEqual(['me', 'me', '%GOTE_WIN%', 0, 1, 'mate', 1, 7]);
+    expect(params.slice(0, 7)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 7]);
     // 自分が後手: 負け = SENTE_WIN・parity 1
-    expect(params.slice(8)).toEqual(['me', 'me', '%SENTE_WIN%', 1, 1, 'mate', 1, 7]);
+    expect(params.slice(7)).toEqual(['gote', '%SENTE_WIN%', 1, 1, 'mate', 1, 7]);
   });
 
-  it('名前候補が空なら側に依存する列はすべて 0 件条件になる', () => {
+  it('⭐ 側に依存する列は subjectSide で絞る（名前候補は現れない）', () => {
     const select = statsTacticsRowsSelect(parse());
     for (const key of [
       'wins',
@@ -214,7 +217,10 @@ describe('statsTacticsRowsSelect', () => {
       'goteGames',
       'goteWins',
     ] as const) {
-      expect(render(select[key]).sql).toContain('case when 1 = 0 then');
+      // ⭐ 名前候補ではなく主体側で絞る。名前が未設定なら subjectSide が NULL に
+      // なるので、条件に合う行が無く自然に 0 件になる（prd/11 §4）
+      expect(render(select[key]).sql).toContain('`kifus`.`subjectSide` = ?');
+      expect(render(select[key]).sql).not.toContain('1 = 0');
     }
   });
 });

@@ -6,13 +6,11 @@ import {
   desc,
   eq,
   gte,
-  inArray,
   isNotNull,
   isNull,
   like,
   lte,
   ne,
-  notInArray,
   or,
   sql,
   type SQL,
@@ -52,10 +50,6 @@ export const kifuListQuerySchema = z.object({
   status: z.enum(['all', 'analyzed', 'unanalyzed', 'failed']).default('all'),
   /** 自分から見た勝敗。`decided` は「勝敗がついた」（分析ページの対象局と同じ。prd/09 §4） */
   outcome: z.enum(['all', 'win', 'loss', 'decided']).default('all'),
-  // 自分の名前候補（カンマ区切り）。「自分」の定義は web の
-  // `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` が単一の正なので、server は設定を持たず
-  // 勝敗条件を組み立てるためだけに受け取る（prd/01 §3 対局のメタ情報）
-  self: z.string().optional(),
   /** 戦型ラベル名（`kifuTactics.label` と同じ表示名。prd/09 §7） */
   tactic: z.string().trim().max(32).optional(),
   // ラベルをどちらの側で絞るか。`tactic` と組で使う。
@@ -74,37 +68,28 @@ export const kifuListQuerySchema = z.object({
 
 export type KifuListQuery = z.infer<typeof kifuListQuerySchema>;
 
-/** カンマ区切りの名前候補を正規化する（空要素・重複を除く） */
-export function parseSelfNames(self: string | undefined): string[] {
-  return [
-    ...new Set(
-      (self ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
 /**
  * 「自分がこの側だった場合」の条件の組。**自分の側に依存する絞り込みはすべてこれを通す**
  * （勝敗・戦型の自分/相手・取りこぼし）。同じ意味論を何箇所にも書かないための単一の出所。
  *
- * 両対局者とも自分の名前候補に一致する対局は側を確定できないため除外する
- * （web の `resolveUserSide` が ambiguous として勝敗バッジを出さないのと同じ扱い）。
+ * ⭐ **主体側は `kifus.subjectSide` に入っている**（prd/11 §4）。名前候補との突き合わせも、
+ * 名前の有効期間も、動画解析の `bottomIsSente` も、**導出の側で解決済み**なので、
+ * ここは列を読むだけでよい。
+ *
+ * 🔒 **側を確定できない対局（`subjectSide` が NULL）は自動的に外れる。** 両対局者とも
+ * 名前候補に一致した場合などがここに落ちる（prd/11 §4.1）。
  */
 export interface SelfSide {
   side: 'sente' | 'gote';
   opponent: 'sente' | 'gote';
-  /** その側が自分であること（相手が候補に一致する ambiguous な対局は含まない） */
+  /** その側が自分であること */
   isSelf: SQL;
   /** 自分が勝った / 負けた */
   won: SQL;
   lost: SQL;
 }
 
-export function selfSides(names: string[]): SelfSide[] {
-  if (names.length === 0) return [];
+export function selfSides(): SelfSide[] {
   // 結果コードは `SENTE_WIN_RESIGN` 等（prd/01 §3）。一覧のバッジと同じ部分一致で判定する
   const senteWin = like(kifus.result, '%SENTE_WIN%');
   const goteWin = like(kifus.result, '%GOTE_WIN%');
@@ -112,20 +97,14 @@ export function selfSides(names: string[]): SelfSide[] {
     {
       side: 'sente',
       opponent: 'gote',
-      isSelf: and(
-        inArray(kifus.sente, names),
-        or(isNull(kifus.gote), notInArray(kifus.gote, names)),
-      )!,
+      isSelf: eq(kifus.subjectSide, 'sente'),
       won: senteWin,
       lost: goteWin,
     },
     {
       side: 'gote',
       opponent: 'sente',
-      isSelf: and(
-        inArray(kifus.gote, names),
-        or(isNull(kifus.sente), notInArray(kifus.sente, names)),
-      )!,
+      isSelf: eq(kifus.subjectSide, 'gote'),
       won: goteWin,
       lost: senteWin,
     },
@@ -133,18 +112,18 @@ export function selfSides(names: string[]): SelfSide[] {
 }
 
 /**
- * 自分の側ごとの条件を OR で束ねる。**自分を特定できなければ 0 件**にする
- * （全件返すと絞り込みの意味が変わるため）。
+ * 自分の側ごとの条件を OR で束ねる。
+ *
+ * ⚠ **名前候補が未設定でも「0 件」の分岐は要らない。** その場合は全棋譜の `subjectSide` が
+ * NULL になり、どちらの側の条件にも合わないので**自然に 0 件**になる。
  *
  * `only` を渡すとその側だけに限定する（分析の「先手時 / 後手時」の条件付き集計。prd/09 §3）。
  */
 export function bySelfSide(
-  names: string[],
   build: (s: SelfSide) => SQL,
   only?: 'sente' | 'gote',
 ): SQL {
-  const sides = selfSides(names).filter((s) => only === undefined || s.side === only);
-  if (sides.length === 0) return sql`1 = 0`;
+  const sides = selfSides().filter((s) => only === undefined || s.side === only);
   return or(...sides.map((s) => and(s.isSelf, build(s))))!;
 }
 
@@ -184,9 +163,8 @@ export function periodConditions(from?: string, to?: string): SQL[] {
  */
 function outcomeCondition(
   outcome: Exclude<KifuListQuery['outcome'], 'all'>,
-  names: string[],
 ): SQL {
-  return bySelfSide(names, (s) =>
+  return bySelfSide((s) =>
     outcome === 'win' ? s.won : outcome === 'loss' ? s.lost : or(s.won, s.lost)!,
   );
 }
@@ -209,7 +187,7 @@ function tacticCondition(query: KifuListQuery, label: string): SQL {
   if (query.tacticSide === 'any' || NON_SIDE_ATTRIBUTED_LABELS.includes(label)) {
     return tacticExists(label);
   }
-  return bySelfSide(parseSelfNames(query.self), (s) =>
+  return bySelfSide((s) =>
     tacticExists(label, query.tacticSide === 'self' ? s.side : s.opponent),
   );
 }
@@ -243,8 +221,8 @@ export function selfMateExists(limit: number, side: 'sente' | 'gote'): SQL {
  * ⚠ **「詰みを逃した」ではなく「詰みを逃して落とした」**。負け条件を内包するのが定義そのもので
  * （詰みを実行していれば負けていない）、そのぶん「実手が詰みでないこと」を確かめずに済む。
  */
-export function missedMateCondition(limit: number, names: string[]): SQL {
-  return bySelfSide(names, (s) => and(s.lost, selfMateExists(limit, s.side))!);
+export function missedMateCondition(limit: number): SQL {
+  return bySelfSide((s) => and(s.lost, selfMateExists(limit, s.side))!);
 }
 
 /** 絞り込み条件を組み立てる（件数取得と行取得で同じものを使う）。無条件なら `undefined` */
@@ -275,13 +253,13 @@ export function kifuListWhere(query: KifuListQuery): SQL | undefined {
   }
 
   if (query.outcome !== 'all') {
-    conditions.push(outcomeCondition(query.outcome, parseSelfNames(query.self)));
+    conditions.push(outcomeCondition(query.outcome));
   }
 
   if (query.tactic) conditions.push(tacticCondition(query, query.tactic));
 
   if (query.missedMate !== undefined) {
-    conditions.push(missedMateCondition(query.missedMate, parseSelfNames(query.self)));
+    conditions.push(missedMateCondition(query.missedMate));
   }
 
   conditions.push(...periodConditions(query.from, query.to));

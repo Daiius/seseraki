@@ -93,10 +93,10 @@ describe('kifuListWhere', () => {
       {},
       { q: '羽生' },
       { status: 'analyzed' },
-      { outcome: 'win', self: 'me' },
+      { outcome: 'win' },
       { tactic: '四間飛車' },
       { from: '2026-07-01' },
-      { missedMate: '10', self: 'me' },
+      { missedMate: '10' },
     ];
     for (const query of queries) {
       const { sql } = render(kifuListWhere(parse(query)));
@@ -131,20 +131,18 @@ describe('kifuListWhere', () => {
     );
   });
 
-  it('勝ちは自分の側と勝者コードの組み合わせで絞る', () => {
-    const { sql, params } = render(
-      kifuListWhere(parse({ outcome: 'win', self: 'Daiius,daiius' })),
-    );
-    expect(params).toContain('%SENTE_WIN%');
-    expect(params).toContain('%GOTE_WIN%');
-    // 相手も自分の名前候補に一致する対局（側を確定できない）は除外する
-    expect(sql).toContain('not in');
-    expect(params.filter((p) => p === 'Daiius')).toHaveLength(4);
+  it('勝ちは主体側と勝者コードの組み合わせで絞る', () => {
+    const { sql, params } = render(kifuListWhere(parse({ outcome: 'win' })));
+    // ⭐ 名前候補は SQL に出てこない。主体側は kifus.subjectSide に導出済み（prd/11 §4）
+    expect(sql).toContain('`kifus`.`subjectSide` = ?');
+    expect(params).toEqual([OWN, 'sente', '%SENTE_WIN%', 'gote', '%GOTE_WIN%']);
+    // 🔒 側を確定できない対局（subjectSide が NULL）はどちらの条件にも合わないので自然に外れる
+    expect(sql).not.toContain('not in');
   });
 
   it('負けは勝ちと勝者コードの対応が逆になる', () => {
-    const win = render(kifuListWhere(parse({ outcome: 'win', self: 'me' })));
-    const loss = render(kifuListWhere(parse({ outcome: 'loss', self: 'me' })));
+    const win = render(kifuListWhere(parse({ outcome: 'win' })));
+    const loss = render(kifuListWhere(parse({ outcome: 'loss' })));
     expect(loss.sql).toBe(win.sql);
     // 先手側 / 後手側それぞれに割り当てる勝者コードが入れ替わる
     expect(loss.params).not.toEqual(win.params);
@@ -152,21 +150,15 @@ describe('kifuListWhere', () => {
   });
 
   it('decided は勝ちと負けの両方を含む（分析ページの対象局と同じ母集団）', () => {
-    const decided = render(kifuListWhere(parse({ outcome: 'decided', self: 'me' })));
-    const win = render(kifuListWhere(parse({ outcome: 'win', self: 'me' })));
+    const decided = render(kifuListWhere(parse({ outcome: 'decided' })));
+    const win = render(kifuListWhere(parse({ outcome: 'win' })));
     // 勝者コードは先手側・後手側それぞれに 2 つずつ現れる（勝ち条件の 2 倍）
     expect(decided.params.filter((p) => p === '%SENTE_WIN%')).toHaveLength(2);
     expect(decided.params.filter((p) => p === '%GOTE_WIN%')).toHaveLength(2);
     expect(win.params.filter((p) => p === '%SENTE_WIN%')).toHaveLength(1);
-    // 側を確定できない対局を外す条件は勝ち負けと同じものを通る
-    expect(decided.sql).toContain('not in');
-  });
-
-  it('自分の名前候補が無ければ勝敗では 0 件にする', () => {
-    expect(render(kifuListWhere(parse({ outcome: 'win' }))).sql).toContain('1 = 0');
-    expect(render(kifuListWhere(parse({ outcome: 'win', self: ' , ' }))).sql).toContain(
-      '1 = 0',
-    );
+    // 主体側で絞るので、どちらの条件にも subjectSide が現れる
+    expect(decided.params.filter((p) => p === 'sente')).toHaveLength(1);
+    expect(decided.params.filter((p) => p === 'gote')).toHaveLength(1);
   });
 
   it('期間は coalesce(playedAt, createdAt) を基準に両端を含む', () => {
@@ -190,20 +182,21 @@ describe('kifuListWhere', () => {
     expect(sql).not.toContain('`kifu_tactics`.`side`');
   });
 
-  it('自分 / 相手で絞ると side が自分の側・相手の側になる', () => {
-    const self = render(kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'self', self: 'me' })));
+  it('自分 / 相手で絞ると side が主体側・相手側になる', () => {
+    const self = render(kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'self' })));
     expect(self.sql).toContain('`kifu_tactics`.`side` =');
-    // 先手が自分なら side=sente、後手が自分なら side=gote を見る
+    // 主体が先手なら side=sente、主体が後手なら side=gote を見る
     expect(self.params).toEqual([
-      OWN, 'me', 'me', '四間飛車', 'sente', 'me', 'me', '四間飛車', 'gote',
+      OWN, 'sente', '四間飛車', 'sente', 'gote', '四間飛車', 'gote',
     ]);
 
     const opponent = render(
-      kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'opponent', self: 'me' })),
+      kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'opponent' })),
     );
     expect(opponent.sql).toBe(self.sql);
+    // 相手側なので、主体が先手の棋譜では side=gote を見る
     expect(opponent.params).toEqual([
-      OWN, 'me', 'me', '四間飛車', 'gote', 'me', 'me', '四間飛車', 'sente',
+      OWN, 'sente', '四間飛車', 'gote', 'gote', '四間飛車', 'sente',
     ]);
   });
 
@@ -218,23 +211,26 @@ describe('kifuListWhere', () => {
     }
   });
 
-  it('自分の名前候補が無ければ側を要する戦型の絞り込みは 0 件にする', () => {
-    expect(
-      render(kifuListWhere(parse({ tactic: '四間飛車', tacticSide: 'self' }))).sql,
-    ).toContain('1 = 0');
-    expect(render(kifuListWhere(parse({ missedMate: '10' }))).sql).toContain('1 = 0');
+  it('⭐ 名前候補が無くても SQL は成り立つ（主体側が NULL なら合わないだけ）', () => {
+    // 以前は「名前候補が空 → 1 = 0」で 0 件にしていた。いまは subjectSide が NULL に
+    // なるので、どちらの側の条件にも合わず**自然に 0 件**になる（prd/11 §4）
+    for (const q of [{ tactic: '四間飛車', tacticSide: 'self' }, { missedMate: '10' }]) {
+      const { sql } = render(kifuListWhere(parse(q)));
+      expect(sql).not.toContain('1 = 0');
+      expect(sql).toContain('`kifus`.`subjectSide` = ?');
+    }
   });
 
   it('取りこぼしは「自分の手番の rank=1 の詰み」かつ「負け」で絞る', () => {
-    const { sql, params } = render(kifuListWhere(parse({ missedMate: '10', self: 'me' })));
+    const { sql, params } = render(kifuListWhere(parse({ missedMate: '10' })));
     expect(sql).toContain('exists (select 1 from `move_analyses`');
     expect(sql).toContain('exists (select 1 from `candidate_moves`');
     // 自分の手番は moveNumber の parity（先手なら偶数・後手なら奇数。prd/03 §2.3）
     expect(sql).toContain('mod(`move_analyses`.`moveNumber`, 2) =');
     expect(params[0]).toBe(OWN);
-    expect(params.slice(1, 9)).toEqual(['me', 'me', '%GOTE_WIN%', 0, 1, 'mate', 1, 10]);
+    expect(params.slice(1, 8)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 10]);
     // ⚠ 負け条件を内包する（outcome=loss を別途付ける必要はない。prd/09 §3.1）
-    expect(params.slice(9)).toEqual(['me', 'me', '%SENTE_WIN%', 1, 1, 'mate', 1, 10]);
+    expect(params.slice(8)).toEqual(['gote', '%SENTE_WIN%', 1, 1, 'mate', 1, 10]);
   });
 
   it('複数の条件は AND で結合される', () => {

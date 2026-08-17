@@ -432,6 +432,14 @@ interface Provisional {
   /** 直したい手が入っている配列とその位置 */
   steps: Step[];
   index: number;
+  /**
+   * その手を指す直前の状態。
+   *
+   * 🔒 **行き先が「空」と確定したら、その手は無かったことにする**ための巻き戻し先。
+   * `nextState` は毎回新しい state を作り、盤の配列も差し替わるので、
+   * ここに持っておいた state が後から書き換わることはない。
+   */
+  before: BoardState | null;
 }
 /**
  * その USI の手が「成り」になり得るか。打ちは成れず、移動は敵陣に掛かるときだけ成れる。
@@ -452,6 +460,8 @@ let promotionsRejected = 0;
 let overflowSeen = 0;
 /** 「駒が消えただけ」に見えたが、行き先が未確定のマスに見つかった手 */
 let rescuedVanished = 0;
+/** 行き先が「空」と確定したので取り消した手（幻の駒・追記 152〜154） */
+let phantomsUndone = 0;
 /** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
 let unreadableStart = 0;
 /** 演出に覆われたとみて読まずに捨てた絵 */
@@ -662,13 +672,38 @@ for (let qi = 0; qi < queue.length; qi++) {
     provisional.delete(key);
     const now = c.value;
     if (!now) {
-      // 空に読めた＝取られた等。手の側では扱えないので触らない。
-      // 🔍 調査中（追記 152）: 幻の駒の場合、これが唯一の証拠になっている。
-      if (VERBOSE) {
-        const step = watch.steps[watch.index];
+      // 🔒 **「居るはずなのに空」だけが、幻の手を見分ける材料である。**
+      //
+      // マスが空になること自体は普通に起きる（取られた・その駒がまた動いた）。
+      // だから「空に読めた」は単独では誤りの証拠にならず、長らくここで捨てていた。
+      // ⚠ **だが置いた駒がまだそこに居るはずの時点で空なら、その手は無かった。**
+      //
+      // 実測（3 本目 12:14〜12:38・追記 152〜154）: マウスカーソルが空きマスに
+      // 乗ると sd が跳ねて「駒があるが読めない」になり、`rescueVanished` が
+      // そこを行き先に選ぶ。カーソルが動くと幻がそれを追いかけて盤上を歩いた。
+      // **その行き先は 2〜4 秒後に毎回「空」と確定していた。3 回とも。**
+      //
+      // 巻き戻すのは**その手が断片の最後のときだけ**。後ろに手が積まれていたら、
+      // それらがこの手の上に建っているので、ここで抜くと辻褄が合わなくなる。
+      const step = watch.steps[watch.index];
+      const isLast = step && watch.steps === steps && watch.index === steps.length - 1;
+      if (step && isLast && watch.before) {
+        steps.pop();
+        state = watch.before;
+        current = state.board;
+        history.reset(watch.row, watch.col);
+        phantomsUndone++;
+        if (VERBOSE) {
+          console.log(
+            `  ✂ ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が空と確定` +
+              `（${c.streak} 回連続）→ ${fmt(step.time)} の ${step.usi} を取り消した`,
+          );
+        }
+      } else if (VERBOSE && step) {
         console.log(
           `  🔍 ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が空と確定` +
-            `（${c.streak} 回連続）${step ? ` — ${fmt(step.time)} の ${step.usi} の行き先` : ''}`,
+            `（${c.streak} 回連続）— ${fmt(step.time)} の ${step.usi} の行き先だが、` +
+            `後ろに手が積まれているので取り消さない`,
         );
       }
       continue;
@@ -914,6 +949,7 @@ for (let qi = 0; qi < queue.length; qi++) {
     const rescue = rescueVanished(current, primary, recognized.board);
     if (rescue) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
+      const before = state;
       steps.push({ time: t, usi: rescue.usi, side: rescue.side, solved: true });
       state = nextState(state, rescue.board, { usi: rescue.usi, side: rescue.side as Side });
       current = state.board;
@@ -930,6 +966,7 @@ for (let qi = 0; qi < queue.length; qi++) {
         col: rescue.to.col,
         steps,
         index: steps.length - 1,
+        before,
       });
       if (VERBOSE) {
         console.log(
@@ -1035,6 +1072,7 @@ for (let qi = 0; qi < queue.length; qi++) {
 
   if (result.move && verifyMove(current, result.move.usi, result.move.side, board)) {
     if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
+    const before = state;
     steps.push({ time: t, usi: result.move.usi, side: result.move.side, solved });
     state = nextState(state, board, { usi: result.move.usi, side: result.move.side as Side });
     current = state.board;
@@ -1056,7 +1094,13 @@ for (let qi = 0; qi < queue.length; qi++) {
       from &&
       pending.some((c) => c.row === to.row && c.col === to.col)
     ) {
-      provisional.set(`${to.row},${to.col}`, { row: to.row, col: to.col, steps, index: steps.length - 1 });
+      provisional.set(`${to.row},${to.col}`, {
+        row: to.row,
+        col: to.col,
+        steps,
+        index: steps.length - 1,
+        before,
+      });
     }
     continue;
   }
@@ -1197,6 +1241,7 @@ console.log(`  絵の取り方: 流れから ${streamedFrames} 枚 / 1 枚ずつ
 console.log(`  配置が変わらなかった: ${unchanged}`);
 console.log(`  スライド途中で捨てた: ${vanished}`);
 if (rescuedVanished > 0) console.log(`  消えた駒の行き先を未確定のマスに見つけた: ${rescuedVanished}`);
+if (phantomsUndone > 0) console.log(`  行き先が空と確定したので取り消した手: ${phantomsUndone}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);

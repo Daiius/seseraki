@@ -1,5 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
+import { alias } from 'drizzle-orm/mysql-core';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -21,6 +22,7 @@ import {
   candidateMoves,
   kifuTactics,
   videoKifuSources,
+  kifuPositions,
 } from './db/schema.js';
 import {
   kifuListOrderBy,
@@ -64,7 +66,12 @@ import {
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
-import { attributionOf, type TacticLabel } from 'shared';
+import {
+  attributionOf,
+  createInitialState,
+  positionSfen,
+  type TacticLabel,
+} from 'shared';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
 import {
@@ -75,6 +82,9 @@ import {
 
 /** 投入時の TZ 指定。'auto' は自動判定＝現状 JST 固定（[parseKif]） */
 export type SourceTzChoice = 'auto' | KifTimezone;
+
+/** 局面検索の起点。`pos` 未指定ならここから辿る（prd/10 §6.2） */
+const INITIAL_SFEN = positionSfen(createInitialState());
 
 export const app = new Hono().basePath('/api');
 
@@ -393,6 +403,71 @@ const route = app
         return result.id;
       });
       return c.json({ id }, 201);
+    },
+  )
+  // --- 局面検索（prd/10 §5.3）---
+  // 🔒 **ここには `ownGamesOnly` を掛けない。** 一覧・集計は「自分の成績」なので動画解析を
+  // 外すが、局面検索は**自分の対局と動画解析を横断して探す**のが目的そのもの（prd/10 §5.3）。
+  // 結果には `source` を添えて、どちらの出所かを画面で区別できるようにする。
+  .get(
+    '/positions',
+    sessionRequired,
+    zv('query', z.object({ pos: z.string().max(200).optional() })),
+    async (c) => {
+      const sfen = c.req.valid('query').pos ?? INITIAL_SFEN;
+
+      // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
+      // kifuId では畳まず、到達した手数ごとに 1 行返す
+      const rows = await db
+        .select({
+          kifuId: kifuPositions.kifuId,
+          moveNumber: kifuPositions.moveNumber,
+          board: kifuPositions.board,
+          hands: kifuPositions.hands,
+          sideToMove: kifuPositions.sideToMove,
+          title: kifus.title,
+          source: kifus.source,
+          playedAt: kifus.playedAt,
+        })
+        .from(kifuPositions)
+        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
+        .where(eq(kifuPositions.sfen, sfen))
+        .orderBy(asc(kifuPositions.moveNumber), asc(kifuPositions.kifuId))
+        .limit(200);
+      if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
+
+      // 枝の列挙。**次の局面が持つ `move` で集計する**——局面キーだけでは
+      // 「同じ局面から指された別の手」を区別できない（prd/10 §5.3）
+      const next = alias(kifuPositions, 'next');
+      const branches = await db
+        .select({
+          move: next.move,
+          sfen: next.sfen,
+          games: sql<number>`count(*)`,
+        })
+        .from(kifuPositions)
+        .innerJoin(
+          next,
+          and(
+            eq(next.kifuId, kifuPositions.kifuId),
+            eq(next.moveNumber, sql`${kifuPositions.moveNumber} + 1`),
+          ),
+        )
+        .where(eq(kifuPositions.sfen, sfen))
+        .groupBy(next.move, next.sfen)
+        .orderBy(desc(sql`count(*)`), asc(next.move));
+
+      // 盤・持ち駒はこの局面のものなのでどの行でも同じ。web が盤を描くのに使う
+      const [first] = rows;
+      return c.json({
+        sfen,
+        isInitial: sfen === INITIAL_SFEN,
+        board: [...first.board],
+        hands: [...first.hands],
+        sideToMove: first.sideToMove,
+        games: rows.map(({ board: _b, hands: _h, sideToMove: _s, ...g }) => g),
+        branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
+      });
     },
   )
   // --- 動画解析（prd/10）---

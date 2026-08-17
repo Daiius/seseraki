@@ -7,6 +7,7 @@ import {
   positionKey,
   positionSfen,
   sideSfen,
+  stateFromBytes,
 } from './position';
 
 /** 指し手列を適用した後の局面キー */
@@ -134,6 +135,34 @@ describe('handBytes', () => {
     expect(bytes[1]).toBe(1);
     expect(bytes[8]).toBe(1);
     expect([...bytes].reduce((a, b) => a + b, 0)).toBe(2);
+  });
+});
+
+describe('stateFromBytes（バイト列から局面を戻す）', () => {
+  it('往復して同じ局面キーになる', () => {
+    // 成駒・持ち駒・後手番が揃う局面で確かめる
+    const moves = ['7g7f', '3c3d', '8h2b+', '3a2b', '2b3c', 'P*3e'];
+    for (const state of buildPositions(moves)) {
+      const key = positionKey(state);
+      const restored = stateFromBytes(key.board, key.hands, key.sideToMove);
+      expect(positionKey(restored)).toEqual(key);
+    }
+  });
+
+  it('初期局面を戻すと初期局面になる', () => {
+    const key = positionKey(createInitialState());
+    const restored = stateFromBytes(key.board, key.hands, key.sideToMove);
+    expect(positionSfen(restored)).toBe(positionSfen(createInitialState()));
+  });
+
+  it('成駒と後手の駒を取り違えない', () => {
+    const state = buildPositions(['7g7f', '3c3d', '8h2b+'])[3];
+    const key = positionKey(state);
+    const restored = stateFromBytes(key.board, key.hands, key.sideToMove);
+    // 2b は先手の馬（row=1, col=7）
+    expect(restored.board[1][7]).toEqual({ kind: '+B', side: 'sente' });
+    // 3a は後手の銀
+    expect(restored.board[0][6]).toEqual({ kind: 'S', side: 'gote' });
   });
 });
 

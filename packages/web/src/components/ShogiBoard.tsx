@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
+import { Link } from '@tanstack/react-router';
 import {
   applyMove,
+  positionSfen,
   usiToJapaneseWithPiece,
   type BoardState,
   type PieceKind,
@@ -88,7 +90,7 @@ interface Props {
   thresholds: Thresholds;
 }
 
-function HandDisplay({
+export function HandDisplay({
   hand,
   side,
   name,
@@ -131,7 +133,8 @@ function lastMoveDestination(usiMove: string): [number, number] | null {
   return null;
 }
 
-function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
+// 局面検索（/positions）でも使うので export する（盤の見た目を 1 箇所に保つ）
+export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
   const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
   const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
   const rowOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -418,6 +421,15 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresho
           </span>
         )}
         <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
+          {/* 局面検索へ（prd/10 §6.3）。**表示中の局面**を鍵にして横断検索へ飛ぶ */}
+          <Link
+            to="/positions"
+            search={{ pos: positionSfen(displayState) }}
+            className="btn btn-ghost btn-xs"
+            title="この局面を通った他の棋譜と、そこからの分岐を見る"
+          >
+            この局面を探す
+          </Link>
           <span className="font-mono text-base-content/60">
             {moveIndex} / {totalMoves}
           </span>

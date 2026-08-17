@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as VideoAnalysisRouteImport } from './routes/video-analysis'
 import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as PositionsRouteImport } from './routes/positions'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
 import { Route as IndexRouteImport } from './routes/index'
@@ -31,6 +32,11 @@ const StatsRoute = StatsRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PositionsRoute = PositionsRouteImport.update({
+  id: '/positions',
+  path: '/positions',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -63,6 +69,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
+  '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
   '/video-analysis': typeof VideoAnalysisRoute
@@ -73,6 +80,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
+  '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
   '/video-analysis': typeof VideoAnalysisRoute
@@ -84,6 +92,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
   '/login': typeof LoginRoute
+  '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
   '/video-analysis': typeof VideoAnalysisRoute
@@ -96,6 +105,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dev-gallery'
     | '/login'
+    | '/positions'
     | '/settings'
     | '/stats'
     | '/video-analysis'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dev-gallery'
     | '/login'
+    | '/positions'
     | '/settings'
     | '/stats'
     | '/video-analysis'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
     | '/'
     | '/dev-gallery'
     | '/login'
+    | '/positions'
     | '/settings'
     | '/stats'
     | '/video-analysis'
@@ -127,6 +139,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DevGalleryRoute: typeof DevGalleryRoute
   LoginRoute: typeof LoginRoute
+  PositionsRoute: typeof PositionsRoute
   SettingsRoute: typeof SettingsRoute
   StatsRoute: typeof StatsRoute
   VideoAnalysisRoute: typeof VideoAnalysisRoute
@@ -155,6 +168,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/positions': {
+      id: '/positions'
+      path: '/positions'
+      fullPath: '/positions'
+      preLoaderRoute: typeof PositionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -199,6 +219,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DevGalleryRoute: DevGalleryRoute,
   LoginRoute: LoginRoute,
+  PositionsRoute: PositionsRoute,
   SettingsRoute: SettingsRoute,
   StatsRoute: StatsRoute,
   VideoAnalysisRoute: VideoAnalysisRoute,

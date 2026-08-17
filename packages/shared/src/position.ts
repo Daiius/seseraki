@@ -129,6 +129,48 @@ export function handBytes(state: BoardState): Uint8Array {
   );
 }
 
+/** `PIECE_CODE` の逆引き（`boardBytes` から局面を戻すのに使う） */
+const CODE_PIECE: PieceKind[] = [
+  'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
+  '+P', '+L', '+N', '+S', '+B', '+R',
+];
+
+/**
+ * `boardBytes` / `handBytes` から局面を戻す。
+ *
+ * 局面索引が持つのはバイト列だけなので、**盤を描くにはここで戻す**（prd/10 §6.2）。
+ * ⚠ 手番はバイト列に入っていないので別に渡す。
+ */
+export function stateFromBytes(
+  board: Uint8Array,
+  hands: Uint8Array,
+  sideToMove: 'b' | 'w',
+): BoardState {
+  const rows: Square[][] = [];
+  for (let r = 0; r < 9; r++) {
+    const row: Square[] = [];
+    for (let c = 0; c < 9; c++) {
+      const code = board[r * 9 + c];
+      if (code === 0) {
+        row.push(null);
+        continue;
+      }
+      const side: Side = code >= GOTE_FLAG ? 'gote' : 'sente';
+      row.push({ kind: CODE_PIECE[(code % GOTE_FLAG) - 1], side });
+    }
+    rows.push(row);
+  }
+  const hand: BoardState['hand'] = { sente: {}, gote: {} };
+  HAND_ORDER.forEach(({ side, kind }, i) => {
+    if (hands[i] > 0) hand[side][kind] = hands[i];
+  });
+  return {
+    board: rows,
+    hand,
+    sideToMove: sideToMove === 'b' ? 'sente' : 'gote',
+  };
+}
+
 /** 局面索引 1 行ぶんの値（`kifuPositions`。prd/10 §3.2） */
 export interface PositionKey {
   sfen: string;

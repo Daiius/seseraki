@@ -81,6 +81,7 @@ import {
 } from 'shared';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
+import { currentUserId, refreshSubjectSide } from './users';
 import {
   detectLegacyUtcTimezone,
   parseKif,
@@ -247,6 +248,9 @@ const route = app
           analyzedAt: kifus.analysisCompletedAt,
           analysisError: kifus.analysisError,
           hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
+          // 主体の手番（prd/11 §4）。web はこれで自分/相手を出せる——
+          // 名前候補から毎回判定しなくてよくなる（移行は prd/11 §6 の段階 B）
+          subjectSide: kifus.subjectSide,
         })
         .from(kifus)
         .where(where)
@@ -403,6 +407,7 @@ const route = app
       // 別にすると、戦型判定で落ちたときに「指し手はあるがラベルが無い」棋譜が残り、
       // 一覧の絞り込みから黙って外れる
       const id = await db.transaction(async (tx) => {
+        const ownerId = await currentUserId(tx);
         const [result] = await tx
           .insert(kifus)
           .values({
@@ -416,10 +421,13 @@ const route = app
             result: meta.result,
             playedAt: meta.playedAt,
             sourceTz: meta.sourceTz,
+            ownerId,
           })
           .$returningId();
         await replaceTactics(tx, result.id, usiMoves);
         await replacePositions(tx, result.id, usiMoves);
+        // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
+        await refreshSubjectSide(tx, result.id);
         return result.id;
       });
       return c.json({ id }, 201);
@@ -758,6 +766,8 @@ const route = app
         await replaceTactics(tx, id, usiMoves);
         // 局面索引も同じトランザクションで作り直す（派生値なので usiMoves に追随する。prd/10 §3.2）
         await replacePositions(tx, id, usiMoves);
+        // 再変換で対局者名が変わりうるので、主体側も引き直す（prd/11 §4.2）
+        await refreshSubjectSide(tx, id);
       });
       // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
       clearProgress(id);
@@ -1066,9 +1076,11 @@ const route = app
             const title = formatTitle(gameData);
             const playedAt = parsePlayedAt(gameKey);
             const newId = await db.transaction(async (tx) => {
+              const ownerId = await currentUserId(tx);
               const [result] = await tx
                 .insert(kifus)
                 .values({
+                  ownerId,
                   title,
                   kifText,
                   usiMoves,
@@ -1084,6 +1096,8 @@ const route = app
                 .$returningId();
               await replaceTactics(tx, result.id, usiMoves);
         await replacePositions(tx, result.id, usiMoves);
+        // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
+        await refreshSubjectSide(tx, result.id);
               return result.id;
             });
             imported.push({ id: newId, gameKey });

@@ -12,6 +12,7 @@ import { kifus, moveAnalyses, videoKifuSources } from './db/schema';
 import { composeKifVerified } from './kif/compose';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
+import { currentUserId, subjectSideFromVideo } from './users';
 
 /**
  * 取り込みの入力（`POST /api/video-analysis/kifus`）。
@@ -144,6 +145,10 @@ export async function importVideoKifu(
           kifText,
           usiMoves: input.usi,
           source: 'video',
+          // 動画解析も「投入した人」が所有者（prd/11 §3）
+          ownerId: await currentUserId(tx),
+          // 画面の下が録画者なので、主体側はここで決まる（prd/11 §4.1）
+          subjectSide: subjectSideFromVideo(input.bottomIsSente),
         })
         .$returningId();
       await tx
@@ -156,6 +161,12 @@ export async function importVideoKifu(
 
     const diff = diffUsiMoves(existing.usiMoves ?? [], input.usi);
     const changed = diff.length > 0;
+
+    // 録画者の側が変わることはまず無いが、再走査で向きの判定が直ることはある（prd/10 §1 の欠陥 5）
+    await tx
+      .update(kifus)
+      .set({ subjectSide: subjectSideFromVideo(input.bottomIsSente) })
+      .where(eq(kifus.id, existing.kifuId));
 
     // 走査のメタ（コミット・区間・生出力）は、指し手が変わらなくても新しいものに置き換える。
     // 「いつ・どの版で読み直したか」は棋譜が同じでも記録として要る

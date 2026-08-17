@@ -2,6 +2,7 @@ import {
   bigint,
   boolean,
   customType,
+  date,
   foreignKey,
   index,
   int,
@@ -17,6 +18,63 @@ import {
   varchar,
 } from 'drizzle-orm/mysql-core';
 import { defineRelations } from 'drizzle-orm';
+
+/**
+ * ユーザー（自分）。**認証は単一アカウントのまま**（prd/07）で、セッションは常に
+ * ただ一人のこの行を指す。招待の本体（ユーザーごとの資格情報・セッションへの userId・
+ * 所有者スコープ）は prd/11 §1 のスコープ外。
+ */
+export const users = mysqlTable('users', {
+  id: serial().primaryKey(),
+  /** 画面に出す名前。**対局者名とは別**（対局者名は `userAliases`） */
+  displayName: varchar({ length: 100 }).notNull(),
+  createdAt: timestamp().notNull().defaultNow(),
+  updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+});
+
+/**
+ * 対局者名と突き合わせる名前候補（prd/11 §2）。
+ *
+ * 🔒 **`name` に UNIQUE を張る。** 別のユーザーが同じ対局者名を登録できると、
+ * **同じ棋譜が 2 人の「自分の対局」になり、両方の成績に入る**。
+ *
+ * ⚠ **旧名を消してはいけない**（prd/11 §2.2）。消すと、その名前で指した過去の棋譜が
+ * 「自分の対局」でなくなり、成績から静かに落ちる。名前を変えたときは**足す**。
+ */
+export const userAliases = mysqlTable(
+  'user_aliases',
+  {
+    id: serial().primaryKey(),
+    userId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /**
+     * 棋譜の `sente` / `gote` と突き合わせる値。swars の ID もここに入る。
+     *
+     * 🔴 **照合順序は `utf8mb4_bin`（大文字小文字を区別する）。** MySQL の既定
+     * （`utf8mb4_0900_ai_ci`）では `daiius` と `Daiius` が**同じ値として扱われ**、
+     * UNIQUE に引っかかって両方を登録できない。実際に踏んだ。
+     * ⚠ 判定する JS 側（`subjectSideFromNames`）は `Set` で区別するので、
+     * **DB 側だけ区別しないと食い違う**。
+     * ⚠ drizzle は照合順序を扱えないので**マイグレーション SQL で指定している**。
+     * `db:push` で作り直すと既定に戻るため、dev で作り直したときは要確認。
+     */
+    name: varchar({ length: 100 }).notNull(),
+    /**
+     * 有効期間（prd/11 §5）。**既定は無期限**（両方 null）で、
+     * 旧名を他人が使い始めるなどの**衝突に気づいたときだけ埋める**。
+     * ⚠ `playedAt` が NULL の棋譜では期間を見ない（prd/11 §5.3）
+     */
+    validFrom: date({ mode: 'string' }),
+    validTo: date({ mode: 'string' }),
+    createdAt: timestamp().notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+    }).onDelete('cascade'),
+    uniqueIndex('user_aliases_name_uq').on(table.name),
+  ],
+);
 
 export const kifus = mysqlTable(
   'kifus',
@@ -46,6 +104,16 @@ export const kifus = mysqlTable(
     // 🔒 一覧・分析・統計のクエリは `source <> 'video'` を**既定で強制する**
     // （引数で外せる条件にしない。prd/10 §2.2）。既定値は安全側の 'manual'。
     source: mysqlEnum(['manual', 'swars', 'video']).notNull().default('manual'),
+    /**
+     * **このデータを持っている人**（prd/11 §3）。⚠ 対局者ではない——動画解析の棋譜も
+     * 投入した人が所有者で、対局者は `sente` / `gote` の話。
+     */
+    ownerId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /**
+     * 主体の手番（prd/11 §4）。**導出値**で、`source = 'video'` は `bottomIsSente` から、
+     * それ以外は所有者の名前候補との突き合わせで決まる。両対局者とも一致したら null。
+     */
+    subjectSide: mysqlEnum(['sente', 'gote']),
     createdAt: timestamp().notNull().defaultNow(),
     updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
   },
@@ -53,6 +121,9 @@ export const kifus = mysqlTable(
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
     // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
     index('kifus_source_idx').on(table.source),
+    // ⚠ ユーザーを消しても棋譜は道連れにしない（CASCADE にしない）。
+    // ユーザー削除は prd/11 のスコープ外で、消せないことが正しい既定
+    foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
   ],
 );
 
@@ -244,6 +315,8 @@ export const relations = defineRelations(
     kifuTactics,
     videoKifuSources,
     kifuPositions,
+    users,
+    userAliases,
   },
   (r) => ({
     kifus: {

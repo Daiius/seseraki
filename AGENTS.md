@@ -80,6 +80,9 @@ pnpm --filter worker test   # worker のユニットテスト（vitest）
 pnpm --filter web test      # web のユニットテスト（vitest・純ロジックのみ）
 pnpm --filter shared test   # shared のユニットテスト（vitest・将棋ドメインの純ロジック）
 pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run / REDETECT_APPLY=1 で実書込）
+pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
+pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
+pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定（移行時に 1 回・既定 dry-run / --apply で実書込）
 ```
 
 > **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
@@ -88,6 +91,12 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > **`db:migrate`/`db:baseline`/`db:generate` は接続先を呼び出し環境の `DB_HOST`/`DB_PORT`/`MYSQL_*` から取る**（本番は prod 資格情報を
 > export して実行）。dev DB に対して試すときは `.env.database` を読む **`db:migrate:dev` / `db:baseline:dev`** を使う。
 > 本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
+>
+> 🔴 **大文字小文字を区別したい列は照合順序を明示する。** MySQL の既定は
+> `utf8mb4_0900_ai_ci` で、**`daiius` と `Daiius` を同じ値として扱う**。UNIQUE を張ると
+> 片方しか登録できず、**JS 側（`Set` などで区別する）と食い違う**。実際に踏んだ
+> （`user_aliases.name`）。drizzle は照合順序を扱えないので、**マイグレーション SQL に
+> `COLLATE utf8mb4_bin` を手で書く**。⚠ `db:push` で作り直すと既定へ戻る。
 >
 > 🔴 **新しいテーブルを足したら、DB の FK を `show create table` で確認する。**
 > drizzle-kit 1.0.0-beta.23 は **新規テーブルの FK から `ON DELETE CASCADE` を落とす**

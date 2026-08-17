@@ -86,6 +86,13 @@ export type SourceTzChoice = 'auto' | KifTimezone;
 /** 局面検索の起点。`pos` 未指定ならここから辿る（prd/10 §6.2） */
 const INITIAL_SFEN = positionSfen(createInitialState());
 
+/**
+ * 1 つの局面について返す到達行の上限。
+ * ⚠ **切ったことは `total` / `hasMore` で必ず知らせる**（prd/10 §6.2）。初期局面は
+ * 全棋譜が通るので、棋譜が増えれば必ずここに当たる。
+ */
+const POSITION_GAMES_LIMIT = 200;
+
 export const app = new Hono().basePath('/api');
 
 const corsOrigins = (process.env.CORS_ORIGINS ?? '')
@@ -416,6 +423,14 @@ const route = app
     async (c) => {
       const sfen = c.req.valid('query').pos ?? INITIAL_SFEN;
 
+      // 🔒 **打ち切ったことを黙らない。** 初期局面は全棋譜が通るので、棋譜が増えれば
+      // 必ず上限に当たる。件数を返さないと、UI の「N 件」が実数と食い違ううえ、
+      // 「この局面を通った棋譜はこれで全部」と誤読される
+      const [{ total }] = await db
+        .select({ total: count() })
+        .from(kifuPositions)
+        .where(eq(kifuPositions.sfen, sfen));
+
       // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
       // kifuId では畳まず、到達した手数ごとに 1 行返す
       const rows = await db
@@ -433,7 +448,7 @@ const route = app
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
         .where(eq(kifuPositions.sfen, sfen))
         .orderBy(asc(kifuPositions.moveNumber), asc(kifuPositions.kifuId))
-        .limit(200);
+        .limit(POSITION_GAMES_LIMIT);
       if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
 
       // 枝の列挙。**次の局面が持つ `move` で集計する**——局面キーだけでは
@@ -466,6 +481,9 @@ const route = app
         hands: [...first.hands],
         sideToMove: first.sideToMove,
         games: rows.map(({ board: _b, hands: _h, sideToMove: _s, ...g }) => g),
+        /** 到達の総数。`games` は上限で切れていることがある（`hasMore`） */
+        total,
+        hasMore: total > rows.length,
         branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
       });
     },

@@ -138,6 +138,18 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > ⚠ ホストから叩く `pnpm tactics:redetect` も残してあるが、接続先は呼び出し環境の
 > `DB_HOST`/`DB_PORT`/`MYSQL_*` 次第なので、**取り違えの余地がある方**であることを承知して使う。
 
+> **局面索引の一括再構築**（`prd/10` §3.2）: 局面キーの作り方を変えたら流す。
+> **既定は dry-run**、`REBUILD_POSITIONS_APPLY=1` で実書込。
+> ```bash
+> docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 server pnpm --filter server exec tsx rebuild-positions.ts
+> ```
+> 🔴 **`kifu_positions` を作るマイグレーションの直後に、本番でも一度流す**（`dist/rebuild-positions.js`）。
+> マイグレーションは**空のテーブルを作るだけ**で、既存棋譜の行は 1 つも入らない。流し忘れると
+> **局面検索に既存棋譜が 1 件も出ず、初期局面すら 404 になる**（新規取り込みぶんだけが現れる）。
+> ```bash
+> docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 <server サービス> /app/rebuild-positions.js
+> ```
+
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。
 

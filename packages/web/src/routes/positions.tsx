@@ -128,8 +128,15 @@ function PositionsPage() {
             <h2 className="text-lg font-semibold mb-2">
               この局面を通った棋譜
               <span className="text-sm font-normal opacity-60 ml-2">
-                {position.games.length} 件
+                {position.total} 件
               </span>
+              {/* 🔒 打ち切りを黙らない。出ている数が全部だと誤読されるため。
+                  並びは到達手数の昇順なので「新しい」ではなく「先頭」 */}
+              {position.hasMore && (
+                <span className="text-sm font-normal opacity-60 ml-2">
+                  （到達が早い順に {position.games.length} 件のみ表示）
+                </span>
+              )}
             </h2>
             <div className="overflow-x-auto">
               <table className="table table-sm table-zebra">

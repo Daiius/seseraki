@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useRouter } from '@tanstack/react-router';
 import { useThresholds } from '../lib/thresholds';
 import {
   isValidMateMax,
@@ -7,8 +7,18 @@ import {
   useMateMax,
 } from '../lib/mateMax';
 import { ThresholdSettings } from '../components/ThresholdSettings';
+import { SelfSettings } from '../components/SelfSettings';
+import { client } from '../lib/honoClient';
 
 export const Route = createFileRoute('/settings')({
+  loader: async () => {
+    try {
+      const res = await client.api.users.me.$get();
+      return { me: res.ok ? await res.json() : null };
+    } catch {
+      return { me: null };
+    }
+  },
   component: SettingsPage,
 });
 
@@ -23,12 +33,15 @@ export const Route = createFileRoute('/settings')({
  * ⚠ **こちらは「既定値」で、`/stats` では URL の `mateMax` が優先される**（prd/09 §3.1）。
  */
 function SettingsPage() {
+  const { me } = Route.useLoaderData();
+  const router = useRouter();
   const { thresholds, setThresholds } = useThresholds();
   const { mateMax, setMateMax } = useMateMax();
 
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">設定</h2>
+      {me && <SelfSettings me={me} onChanged={() => router.invalidate()} />}
       <section className="flex flex-col gap-3">
         <h3 className="text-lg font-semibold">悪手判定のしきい値</h3>
         <ThresholdSettings thresholds={thresholds} onChange={setThresholds} />

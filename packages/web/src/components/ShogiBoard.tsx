@@ -18,7 +18,6 @@ import {
   type MoveLoss,
   type Thresholds,
 } from '../lib/cpl';
-import { resolveUserSide } from '../lib/self';
 import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
@@ -86,6 +85,15 @@ interface Props {
   analyses: Analysis[];
   sente?: string | null;
   gote?: string | null;
+  /**
+   * 主体の手番（prd/11 §4）。**server が導出した値**を渡す。
+   * ⚠ null は「自分の側が決まらない」——理由（両対局者とも候補に一致 / 名前候補が未設定 /
+   * 自分の対局ではない）はここでは区別しない。**全体の件数は `/settings` で見える**
+   *
+   * 🔒 **必須にする**（`?` を付けない）。省略できると、渡し忘れたときに
+   * 「主体側が決まらない」と同じ見た目になり、**盤の反転も自分視点の評価も静かに消える**。
+   */
+  subjectSide: 'sente' | 'gote' | null;
   /** 悪手判定の閾値（ページ側で localStorage から読み込んで配る） */
   thresholds: Thresholds;
 }
@@ -189,10 +197,10 @@ export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; l
   );
 }
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresholds }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
-  const { side: userSide, ambiguous: userAmbiguous } = resolveUserSide(sente, gote);
+  const userSide = subjectSide ?? null;
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -355,12 +363,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresho
 
   return (
     <div className="flex flex-col">
-      {userAmbiguous && (
-        <div className="alert alert-warning mb-2 text-sm">
-          両対局者とも自分の名前候補に一致しています（先手={sente} / 後手={gote}）。
-          自分視点の表示（盤の向き・悪手ハイライト等）は無効化しました。
-        </div>
-      )}
       {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
       <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
       {/* 盤面 */}

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
-import { getSelfNames } from '../lib/self';
 import {
   DEFAULT_MATE_MAX,
   loadMateMax,
@@ -72,18 +71,12 @@ export const Route = createFileRoute('/stats')({
     mateMax: search.mateMax ?? loadMateMax(),
   }),
   loader: async ({ deps }) => {
-    // server は「自分」を知らない（VITE_SELF_NAMES ∪ VITE_SWARS_USER_ID が単一の正。prd/09 §4）。
-    // 名前候補が無いと自分の側が決まらず、全局が「自分未確定」で除外されるので問い合わせない
-    const self = getSelfNames();
-    if (self.length === 0) return { stats: null, error: null };
+    // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は kifus.subjectSide に
+    // 導出済み（prd/11 §4）。名前候補が未設定なら全局が「自分未確定」に落ちるが、
+    // それは server が数えて `excluded.ambiguousSelf` として返す
     try {
       const res = await client.api.stats.tactics.$get({
-        query: {
-          self: self.join(','),
-          mateMax: deps.mateMax,
-          from: deps.from,
-          to: deps.to,
-        },
+        query: { mateMax: deps.mateMax, from: deps.from, to: deps.to },
       });
       if (!res.ok)
         return { stats: null, error: `サーバーエラー (${res.status})` };
@@ -201,13 +194,7 @@ function StatsPage() {
         側を見ずに数えます。
       </p>
 
-      {stats === null && !error ? (
-        <div className="alert alert-warning">
-          自分の名前候補が設定されていないため集計できません（
-          <code>VITE_SELF_NAMES</code> / <code>VITE_SWARS_USER_ID</code>）。
-          自分の側が決まらないと「相手の戦型」も勝敗も決まりません。
-        </div>
-      ) : error ? (
+      {error ? (
         <div className="alert alert-warning">{error}</div>
       ) : (
         stats && (

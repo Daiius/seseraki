@@ -21,7 +21,6 @@ import {
   type TacticSide,
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
-import { getSelfNames, resolveUserSide } from '../lib/self';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
 import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
 
@@ -106,32 +105,29 @@ export const Route = createFileRoute('/')({
     order: search.order ?? DEFAULT_ORDER,
   }),
   loader: async ({ deps }) => {
-    // server は「自分」を知らないので、自分の側に依存する絞り込みでは名前候補を渡す
-    // （VITE_SELF_NAMES ∪ VITE_SWARS_USER_ID が単一の正）。
-    // 取りこぼしは**負け条件を内包する**ので、それだけでも自分の側が要る（prd/09 §3.1）
-    const needsSelf =
-      deps.outcome !== 'all' ||
-      deps.missedMate !== undefined ||
-      (deps.tactic !== undefined && deps.tacticSide !== 'any');
+    // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は
+    // kifus.subjectSide に導出済み（prd/11 §4）。
+    // `me` は「名前候補が設定されているか」を見るために取る（絞り込み UI の出し分け）
     try {
-      const res = await client.api.kifus.$get({
-        query: {
-          ...deps,
-          self: needsSelf ? getSelfNames().join(',') : undefined,
-        },
-      });
-      if (!res.ok) return { kifus: [], pagination: null, error: `サーバーエラー (${res.status})` };
+      const [res, meRes] = await Promise.all([
+        client.api.kifus.$get({ query: deps }),
+        client.api.users.me.$get(),
+      ]);
+      if (!res.ok) {
+        return { kifus: [], pagination: null, me: null, error: `サーバーエラー (${res.status})` };
+      }
       const data = await res.json();
-      return { kifus: data.kifus, pagination: data.pagination, error: null };
+      const me = meRes.ok ? await meRes.json() : null;
+      return { kifus: data.kifus, pagination: data.pagination, me, error: null };
     } catch {
-      return { kifus: [], pagination: null, error: 'サーバーに接続できません' };
+      return { kifus: [], pagination: null, me: null, error: 'サーバーに接続できません' };
     }
   },
   component: KifuListPage,
 });
 
 function KifuListPage() {
-  const { kifus, pagination, error } = Route.useLoaderData();
+  const { kifus, pagination, me, error } = Route.useLoaderData();
   const {
     page = 1,
     q = '',
@@ -209,15 +205,16 @@ function KifuListPage() {
     sort,
     order,
   });
-  const canFilterByOutcome = getSelfNames().length > 0;
-  // 側で絞れるのは手番固有のラベルだけ（角換わり・相掛かりは server も side を見ない）。
-  // 自分の名前候補が無いときも自分/相手は決まらない
+  // 名前候補が 1 つも無いと主体側が決まらず、勝敗・自分/相手の絞り込みが常に 0 件になる。
+  // ⚠ その状態で絞り込み UI を出すと「該当なし」の理由が分からないので、出さない
+  const canFilterByOutcome = (me?.aliases.length ?? 0) > 0;
+  // 側で絞れるのは手番固有のラベルだけ（角換わり・相掛かりは server も side を見ない）
   const canFilterByTacticSide = tacticSideApplies(tactic) && canFilterByOutcome;
 
   // 見出しの凡例は**このページで実際に使われている色分け**から組む。
   // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
   const legendModes = kifus
-    .map((k) => legendModeOf(k.tactics, resolveUserSide(k.sente, k.gote).side))
+    .map((k) => legendModeOf(k.tactics, k.subjectSide ?? null))
     .reduce(
       (acc, mode) => (mode === null ? acc : { ...acc, [mode]: true }),
       { self: false, unresolved: false },
@@ -444,7 +441,7 @@ function KifuListPage() {
               <tbody>
                 {kifus.map((kifu) => {
                   const r = kifu.result;
-                  const { side: userSide } = resolveUserSide(kifu.sente, kifu.gote);
+                  const userSide = kifu.subjectSide ?? null;
                   const isSente = userSide === 'sente';
                   const isGote = userSide === 'gote';
                   const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));

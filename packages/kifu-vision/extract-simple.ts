@@ -526,6 +526,11 @@ let dropsWithCarriedOrigin = 0;
 let dropsWithSingleCarriedOrigin = 0;
 /** 出発点が空と確定したので、打ち → 移動に書き換えた手 */
 let dropsRewritten = 0;
+/** 📏 追跡盤面が空と思うマスに駒が現れ、**次の絵で消えた**（測定のみ） */
+let transientFills = 0;
+/** 📏 同じく現れて、**次の絵でも居座った**（測定のみ） */
+let persistentFills = 0;
+let prevFilled = new Set<string>();
 /** 起点にしようとしたが、未確定のマスが残っていて採れなかった絵 */
 let unreadableStart = 0;
 /** 演出に覆われたとみて読まずに捨てた絵 */
@@ -665,6 +670,30 @@ for (let qi = 0; qi < queue.length; qi++) {
   const recognized = recognizeBoard(img, templates, {
     colorBoard: cropYuv(colorFrame, boardRect(geo)),
   });
+
+  // 📏 測定のみ（判定は変えない）。**追跡盤面が「空」と思っているマスに、絵の側で
+  // 駒が現れた**ものを数え、次の絵で消えたか居座ったかを見る。
+  //
+  // 🔴 3 本目 26:17 の起点はこれだった（追記 160）: 3h が 1 サンプルだけ駒ありに見え、
+  // 差分が 3 マスに膨れて、存在しない `P*3h` が発明された。
+  // ⚠ 本物の手も最初の 1 サンプルはここに現れる。**消えたか居座ったかで割れるはず。**
+  if (current) {
+    const nowFilled = new Set<string>();
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        if (!current[r][c] && recognized.board[r][c] !== null) nowFilled.add(`${r},${c}`);
+      }
+    }
+    for (const k of prevFilled) {
+      if (!nowFilled.has(k)) transientFills++; // 次の絵で消えた＝手にならなかった
+    }
+    for (const k of nowFilled) {
+      if (prevFilled.has(k)) persistentFills++; // 居座った
+    }
+    prevFilled = nowFilled;
+  } else {
+    prevFilled = new Set();
+  }
 
   // --- 盤が初期局面に戻ったら、そこからは別の対局 ---
   //
@@ -1388,6 +1417,9 @@ if (dropsWithCarriedOrigin > 0) {
 }
 if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
+console.log(
+  `  📏 空のはずのマスに駒が現れた: 次の絵で消えた ${transientFills} / 居座った ${persistentFills}`,
+);
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);
 console.log(`  細かく読み直した区間: ${refinedWindows}（追加で読んだ絵: ${refinedSamples}）`);

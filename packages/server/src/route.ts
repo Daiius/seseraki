@@ -28,6 +28,7 @@ import {
   kifuListOrderBy,
   kifuListQuerySchema,
   kifuListWhere,
+  playedOrCreatedAt,
 } from './kifu-list-query.js';
 import {
   statsTacticsJoinOn,
@@ -448,7 +449,14 @@ const route = app
         .from(kifuPositions)
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
         .where(eq(kifuPositions.sfen, sfen))
-        .orderBy(asc(kifuPositions.moveNumber), asc(kifuPositions.kifuId))
+        // ⚠ **並びは打ち切りとセットで意味を持つ。** 序盤の局面はどの棋譜も通るので
+        // 必ず上限に当たる。そこで残るのが「古い棋譜」では使い物にならないので、
+        // 到達が早い順 → **新しい対局順**に並べる（基準は一覧と同じ playedOrCreatedAt）
+        .orderBy(
+          asc(kifuPositions.moveNumber),
+          desc(playedOrCreatedAt),
+          desc(kifuPositions.kifuId),
+        )
         .limit(POSITION_GAMES_LIMIT);
       if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
 

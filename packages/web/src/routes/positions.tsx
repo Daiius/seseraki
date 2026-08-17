@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { stateFromBytes, usiToJapaneseWithPiece } from 'shared';
 import { client } from '../lib/honoClient';
@@ -47,9 +48,17 @@ function SourceBadge({ source }: { source: Position['games'][number]['source'] }
   return <span className="badge badge-ghost badge-sm whitespace-nowrap">自分</span>;
 }
 
+/**
+ * 一度に出す棋譜の行数。
+ *
+ * ⚠ **序盤の局面はどの棋譜も通る**ので、初手付近では到達が数百件になる。
+ * 全部並べると画面が棋譜一覧で埋まり、**この画面の主役である分岐が見えなくなる**。
+ * 総数は常に出したうえで、行は畳んでおく。
+ */
+const GAMES_PAGE = 20;
+
 function PositionsPage() {
   const { position, error } = Route.useLoaderData();
-  const navigate = useNavigate();
 
   if (error || !position) {
     return (
@@ -61,6 +70,16 @@ function PositionsPage() {
       </div>
     );
   }
+
+  // ⚠ key を付けて局面ごとに作り直す。付けないと、別の局面へ降りたときに
+  // 「さらに表示」で広げた状態がそのまま残る
+  return <PositionView key={position.sfen} position={position} />;
+}
+
+function PositionView({ position }: { position: Position }) {
+  const navigate = useNavigate();
+  const [shown, setShown] = useState(GAMES_PAGE);
+  const visible = position.games.slice(0, shown);
 
   // 索引が持つのはバイト列なので、盤を描くにはここで局面へ戻す（prd/10 §6.2）
   const state = stateFromBytes(
@@ -131,10 +150,10 @@ function PositionsPage() {
                 {position.total} 件
               </span>
               {/* 🔒 打ち切りを黙らない。出ている数が全部だと誤読されるため。
-                  並びは到達手数の昇順なので「新しい」ではなく「先頭」 */}
+                  server 側でも上限があり、そちらは新しい対局順に残る */}
               {position.hasMore && (
                 <span className="text-sm font-normal opacity-60 ml-2">
-                  （到達が早い順に {position.games.length} 件のみ表示）
+                  （新しい {position.games.length} 件まで）
                 </span>
               )}
             </h2>
@@ -149,7 +168,7 @@ function PositionsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {position.games.map((g) => (
+                  {visible.map((g) => (
                     <tr key={`${g.kifuId}-${g.moveNumber}`}>
                       <td>
                         <SourceBadge source={g.source} />
@@ -172,6 +191,18 @@ function PositionsPage() {
                 </tbody>
               </table>
             </div>
+            {visible.length < position.games.length && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm mt-2"
+                onClick={() => setShown(shown + GAMES_PAGE)}
+              >
+                さらに {Math.min(GAMES_PAGE, position.games.length - shown)} 件を表示
+                <span className="opacity-60">
+                  （残り {position.games.length - shown}）
+                </span>
+              </button>
+            )}
           </section>
 
           <details className="collapse collapse-arrow bg-base-200">

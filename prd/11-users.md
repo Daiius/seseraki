@@ -18,8 +18,9 @@
 1. 🔒 **判定の正が 2 つある状態を作らない。** 局面検索の主体側モード（[10](./10-video-analysis.md) §3.3）は
    server が「どちらが自分か」を知らないと解けない。web の env を server にも複製すると、
    **片方だけ更新して食い違ったとき、画面のどの数字が正しいか分からなくなる**
-2. **将来の他ユーザー招待に備える。** 時期は先だが、`ownerId` を後から足すのは
-   「nullable で追加 → 全行 backfill → NOT NULL へ」の 3 手順になり、**招待というもっとも忙しいときに乗る**
+2. **将来の他ユーザー招待に備える。** 時期は先だが、`ownerId` を後から足すと
+   **既存行の所有者を「推定」することになる**（誰のものか自明でなくなった後だから）。
+   今なら全行が自明にただ一人のもので、判断が要らない（§3）
 
 ### 今回やること
 
@@ -164,8 +165,9 @@ kifus.subjectSide: enum('sente' | 'gote')?   -- 導出値
 
 ### 段階 A — server に持たせる（web は変えない）
 
-- `users` / `userAliases` / `kifus.ownerId` / `kifus.subjectSide` をスキーマに入れる（順序は §6.1）
-- **初期データを backfill**（§6.2）
+- `users` / `userAliases` / `kifus.ownerId` / `kifus.subjectSide` を**マイグレーションで入れる**
+  （データ投入まで含めて 1 本で完結させる。§6.1）
+- **名前を backfill で設定する**（§6.2）
 - API が `subjectSide` を返し始める
 
 ⭐ **[10](./10-video-analysis.md) の段階 3b（主体側モード）は、ここで通せる。** `subjectSide` が DB に
@@ -191,31 +193,70 @@ kifus.subjectSide: enum('sente' | 'gote')?   -- 導出値
 - `VITE_SELF_NAMES` / `VITE_SWARS_USER_ID` を削除する
 - **`/settings` に「自分」セクション**を足す（§6.3）
 
-### 6.1 `ownerId` を足す順序
+### 6.1 `ownerId` を足す順序 — マイグレーションの中で完結させる
 
-🔴 **既存データのあるテーブルに `NOT NULL` + FK の列をいきなり足せない**（§3）。**同じデプロイの中で**
-次の順に進める:
+🔴 **既存データのあるテーブルに `NOT NULL` + FK の列をいきなり足せない**（§3）。
+そして **`db:migrate` は未適用のマイグレーションを全部流す**ので、
+「スキーマ → backfill → スキーマ」と**ファイルを分けても間に処理を挟めない**
+（1 回目の実行で両方適用される）。イメージを 2 回デプロイすれば分けられるが、
+**移行手順が「途中で止まった状態」を持つことになる**。
 
-1. `users` / `userAliases` を作る
-2. **単一ユーザーの行を作る**（backfill の `--apply`。§6.2）
-3. `kifus.ownerId` を **nullable** で足す
-4. **全行を埋める**（backfill）
-5. `ownerId` に **`NOT NULL` と FK** を付ける
+したがって **1 本のマイグレーションの中でデータ投入まで完結させる**:
 
-⚠ **3〜5 の間に棋譜が投入されると `ownerId` が NULL のまま残り、5 で落ちる。** 投入経路は
-web（`POST /kifus`）と動画解析の取り込み（API_KEY）で、いずれも**人が明示的に叩く**ものなので、
-**移行の間は投入しない**。worker は `kifus` に行を足さない（`moveAnalyses` だけ）ので影響しない。
+```sql
+-- 1. users / userAliases を作る
+CREATE TABLE users ...;
+CREATE TABLE user_aliases ...;
 
-### 6.2 初期データは backfill の引数で渡す
+-- 2. 単一ユーザーの行を作る（冪等。既にあれば何もしない）
+--    ⚠ 表示名はプレースホルダ。実際の名前は §6.2 で入れる
+INSERT INTO users (displayName)
+SELECT '(未設定)' WHERE NOT EXISTS (SELECT 1 FROM users);
+
+-- 3. ownerId を nullable + FK で足す（既存行は NULL なので FK を満たす）
+ALTER TABLE kifus ADD ownerId bigint unsigned NULL,
+                  ADD CONSTRAINT ... FOREIGN KEY (ownerId) REFERENCES users(id);
+
+-- 4. 全行を埋める
+UPDATE kifus SET ownerId = (SELECT id FROM users ORDER BY id LIMIT 1)
+WHERE ownerId IS NULL;
+
+-- 5. NOT NULL にする
+ALTER TABLE kifus MODIFY ownerId bigint unsigned NOT NULL;
+
+-- 6. subjectSide を足す（nullable なのでいつでもよい）
+ALTER TABLE kifus ADD subjectSide enum('sente','gote') NULL;
+```
+
+⚠ **マイグレーションにデータ投入を書くのは、この 1 箇所だけの例外。** 他のマイグレーションは
+スキーマのみを扱う。ここで例外にするのは、**`NOT NULL` + FK の成立にデータが必要**という
+避けられない依存があるため。
+
+🔒 **名前はここに書かない。** プレースホルダ（`(未設定)`）だけを入れ、表示名と名前候補は
+§6.2 の backfill で設定する。**公開リポにアカウント名を置かない**（[README](./README.md) §秘匿方針）。
+
+⚠ **この間に棋譜が投入されると 4 と 5 の間で NULL が生まれうる**が、マイグレーションは
+**1 トランザクションではない**（MySQL の DDL は暗黙コミット）。投入経路は web（`POST /kifus`）と
+動画解析の取り込みで、いずれも**人が明示的に叩く**ものなので、**移行の間は投入しない**。
+worker は `kifus` に行を足さない（`moveAnalyses` だけ）ので影響しない。
+
+### 6.2 名前は backfill の引数で渡す
+
+**マイグレーション（§6.1）の後に、1 回だけ実行する。**
 
 ```bash
 pnpm db:backfill-user --display "<表示名>" --names "<名前1>,<名前2>,..." [--apply]
 ```
 
-1. `users` 行を作る（無ければ）
+1. `users` の表示名を設定する（プレースホルダ `(未設定)` を置き換える）
 2. `userAliases` に名前候補を入れる
-3. `kifus.ownerId` を全行に設定する
-4. `kifus.subjectSide` を導出する
+3. `kifus.subjectSide` を導出する
+
+⭐ **`ownerId` はここでは触らない。** §6.1 のマイグレーションが既に全行を埋めている
+（`NOT NULL` の成立にデータが要るため、そちらでやるしかない）。ここは
+**名前に関わることだけ**を扱う。
+
+⚠ **列が揃った後に走る。** 逆順にすると、まだ無い列を更新しようとして落ちる。
 
 🔒 **env にもコードにも名前を残さない。**
 - **env に置くと消し忘れる。** そして env の方が目に付くので、後から読んだ人が**そちらを正だと思う**

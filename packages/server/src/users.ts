@@ -39,15 +39,36 @@ export async function currentUserId(tx: Tx | typeof db = db): Promise<number> {
 }
 
 /**
+ * 絶対時刻を「対局地の暦日」（`YYYY-MM-DD`）にする。
+ *
+ * 🔴 **UTC の日付で切ってはいけない。** `playedAt` は `sourceTz` で解釈した**絶対時刻**
+ * （prd/03 §2）なので、JST の午前 0 時台の対局を UTC 日付にすると**前日**になる。
+ * 名前の有効期間は「対局日」の境界なので、改名の前後で **1 局ずれて誤判定する**。
+ *
+ * ⚠ `sourceTz` が未設定（列を足す前の古い行）は **JST 扱い**——投入時の既定と揃える
+ * （prd/04）。
+ */
+export function localDay(playedAt: Date, sourceTz: string | null): string {
+  const offsetMinutes = sourceTz === 'UTC' ? 0 : 9 * 60;
+  return new Date(playedAt.getTime() + offsetMinutes * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
  * 対局日時の時点で有効な名前候補を返す（prd/11 §5）。
  *
  * 🔒 **`playedAt` が null なら期間を見ない**（§5.3）。日時の分からない棋譜で主体側が
  * 決まらない方が実害が大きい、という判断。⚠ `createdAt` で代用しない——あれは
  * 「取り込んだ日」であって対局日ではなく、過去の KIF をまとめて貼ると全部「今日」になる。
  */
-export function activeAliases(aliases: Alias[], playedAt: Date | null): string[] {
+export function activeAliases(
+  aliases: Alias[],
+  playedAt: Date | null,
+  sourceTz: string | null = null,
+): string[] {
   if (playedAt === null) return aliases.map((a) => a.name);
-  const day = playedAt.toISOString().slice(0, 10);
+  const day = localDay(playedAt, sourceTz);
   return aliases
     .filter((a) => (!a.validFrom || a.validFrom <= day) && (!a.validTo || day <= a.validTo))
     .map((a) => a.name);
@@ -91,12 +112,63 @@ export async function aliasesOf(tx: Tx | typeof db, userId: number): Promise<Ali
     .where(eq(userAliases.userId, userId));
 }
 
+/** 主体側の導出に要る 1 局ぶんの値 */
+export interface SubjectInput {
+  source: 'manual' | 'swars' | 'video';
+  sente: string | null;
+  gote: string | null;
+  playedAt: Date | null;
+  sourceTz: string | null;
+  /** 動画解析のときだけ入る（`videoKifuSources`） */
+  bottomIsSente: boolean | null;
+}
+
 /**
- * 1 局ぶんの主体側を導出して書き込む（prd/11 §4）。
+ * 主体側を導出する（**書き込まない純関数**。prd/11 §4.1）。
  *
  * 導出規則は `source` で分かれる:
  * - `video` → `videoKifuSources.bottomIsSente`
  * - それ以外 → 所有者の名前候補と `sente` / `gote` の突き合わせ
+ *
+ * ⭐ **書き込みと分けてあるのは、dry-run で「これから何になるか」を出せるようにするため。**
+ * 現在の保存値を数えるだけでは、導出規則を直したときに**適用後と違う要約**が出る。
+ */
+export function computeSubjectSide(
+  row: SubjectInput,
+  aliases: Alias[],
+): SubjectSide | null {
+  if (row.source === 'video') {
+    return row.bottomIsSente === null ? null : subjectSideFromVideo(row.bottomIsSente);
+  }
+  return subjectSideFromNames(
+    row.sente,
+    row.gote,
+    activeAliases(aliases, row.playedAt, row.sourceTz),
+  );
+}
+
+/** 導出に要る値を 1 局ぶん読む */
+export async function subjectInputOf(
+  tx: Tx | typeof db,
+  kifuId: number,
+): Promise<SubjectInput | null> {
+  const [row] = await tx
+    .select({
+      source: kifus.source,
+      sente: kifus.sente,
+      gote: kifus.gote,
+      playedAt: kifus.playedAt,
+      sourceTz: kifus.sourceTz,
+      bottomIsSente: videoKifuSources.bottomIsSente,
+    })
+    .from(kifus)
+    .leftJoin(videoKifuSources, eq(videoKifuSources.kifuId, kifus.id))
+    .where(eq(kifus.id, kifuId));
+  return row ?? null;
+}
+
+/**
+ * 1 局ぶんの主体側を導出して書き込む（prd/11 §4）。
  *
  * @param aliases 呼び出し側が読んだ名前候補（一括更新で N+1 を避けるため外から渡す）
  */
@@ -105,30 +177,9 @@ export async function replaceSubjectSide(
   kifuId: number,
   aliases: Alias[],
 ): Promise<SubjectSide | null> {
-  const [row] = await tx
-    .select({
-      source: kifus.source,
-      sente: kifus.sente,
-      gote: kifus.gote,
-      playedAt: kifus.playedAt,
-      bottomIsSente: videoKifuSources.bottomIsSente,
-    })
-    .from(kifus)
-    .leftJoin(videoKifuSources, eq(videoKifuSources.kifuId, kifus.id))
-    .where(eq(kifus.id, kifuId));
+  const row = await subjectInputOf(tx, kifuId);
   if (!row) return null;
-
-  const side =
-    row.source === 'video'
-      ? row.bottomIsSente === null
-        ? null
-        : subjectSideFromVideo(row.bottomIsSente)
-      : subjectSideFromNames(
-          row.sente,
-          row.gote,
-          activeAliases(aliases, row.playedAt),
-        );
-
+  const side = computeSubjectSide(row, aliases);
   await tx.update(kifus).set({ subjectSide: side }).where(eq(kifus.id, kifuId));
   return side;
 }

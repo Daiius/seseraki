@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   activeAliases,
+  computeSubjectSide,
+  localDay,
   overlaps,
   subjectSideFromNames,
   subjectSideFromVideo,
@@ -95,6 +97,79 @@ describe('activeAliases（名前の有効期間）', () => {
     const names = activeAliases(mine, new Date('2026-08-01T00:00:00Z'));
     // 相手がたまたま候補と同じ名前 → 確定できない（1 局ごとの上書きは将来の拡張）
     expect(subjectSideFromNames('B', 'X', names)).toBeNull();
+  });
+});
+
+describe('localDay（対局地の暦日）', () => {
+  it('🔴 JST の午前 0 時台を UTC 日付にすると前日になる', () => {
+    // 2026-07-01 01:00 JST = 2026-06-30 16:00 UTC
+    const t = new Date('2026-06-30T16:00:00Z');
+    expect(t.toISOString().slice(0, 10)).toBe('2026-06-30'); // ← 素の UTC 日付
+    expect(localDay(t, 'JST')).toBe('2026-07-01'); // ← 対局日はこちら
+  });
+
+  it('sourceTz が UTC ならそのまま', () => {
+    expect(localDay(new Date('2026-06-30T16:00:00Z'), 'UTC')).toBe('2026-06-30');
+  });
+
+  it('sourceTz が未設定なら JST 扱い（投入時の既定と揃える）', () => {
+    expect(localDay(new Date('2026-06-30T16:00:00Z'), null)).toBe('2026-07-01');
+  });
+});
+
+describe('有効期間とタイムゾーン', () => {
+  const mine = [alias('A', undefined, '2026-06-30'), alias('B', '2026-07-01')];
+
+  it('🔴 改名境界の対局が 1 局ずれない', () => {
+    // 2026-07-01 01:00 JST の対局は「新しい名前 B」の期間に入る
+    const t = new Date('2026-06-30T16:00:00Z');
+    expect(activeAliases(mine, t, 'JST')).toEqual(['B']);
+    // ⚠ TZ を渡さず UTC で切ると旧名 A になってしまう（これが直した誤り）
+    expect(activeAliases(mine, t, 'UTC')).toEqual(['A']);
+  });
+});
+
+describe('computeSubjectSide（書き込まない導出）', () => {
+  const aliases = [alias('me')];
+  const base = {
+    sente: 'me' as string | null,
+    gote: 'other' as string | null,
+    playedAt: null as Date | null,
+    sourceTz: null as string | null,
+    bottomIsSente: null as boolean | null,
+  };
+
+  it('動画解析は bottomIsSente で決まる（対局者名は見ない）', () => {
+    expect(
+      computeSubjectSide(
+        { ...base, source: 'video', sente: null, gote: null, bottomIsSente: false },
+        aliases,
+      ),
+    ).toBe('gote');
+  });
+
+  it('動画解析で由来メタが無ければ null', () => {
+    expect(
+      computeSubjectSide({ ...base, source: 'video', bottomIsSente: null }, aliases),
+    ).toBeNull();
+  });
+
+  it('それ以外は名前候補で決まる', () => {
+    expect(computeSubjectSide({ ...base, source: 'manual' }, aliases)).toBe('sente');
+  });
+
+  it('期間つきの候補は対局日で絞られる', () => {
+    const periodic = [alias('me', '2026-07-01')];
+    const before = {
+      ...base,
+      source: 'manual' as const,
+      playedAt: new Date('2026-06-01T00:00:00Z'),
+      sourceTz: 'JST',
+    };
+    expect(computeSubjectSide(before, periodic)).toBeNull();
+    expect(
+      computeSubjectSide({ ...before, playedAt: new Date('2026-08-01T00:00:00Z') }, periodic),
+    ).toBe('sente');
   });
 });
 

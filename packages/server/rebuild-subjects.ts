@@ -13,7 +13,12 @@
 import { eq } from 'drizzle-orm';
 import { client, db } from './src/db';
 import { kifus, users } from './src/db/schema';
-import { aliasesOf, replaceSubjectSide } from './src/users';
+import {
+  aliasesOf,
+  computeSubjectSide,
+  replaceSubjectSide,
+  subjectInputOf,
+} from './src/users';
 
 const APPLY = process.env.REBUILD_SUBJECTS_APPLY === '1';
 
@@ -34,13 +39,11 @@ async function main() {
     games += rows.length;
 
     if (!APPLY) {
-      // dry-run では書かずに、決まる件数だけ数える
+      // 🔒 **これから何になるかを出す。** 現在の保存値を数えるだけでは、導出規則を
+      // 直したときに**適用後と違う要約**が出る（dry-run の意味が無い）
       for (const { id } of rows) {
-        const [row] = await db
-          .select({ subjectSide: kifus.subjectSide })
-          .from(kifus)
-          .where(eq(kifus.id, id));
-        if (row?.subjectSide) resolved++;
+        const input = await subjectInputOf(db, id);
+        if (input && computeSubjectSide(input, aliases)) resolved++;
       }
       continue;
     }
@@ -53,7 +56,8 @@ async function main() {
   }
 
   console.log(
-    `対象 ${games} 局 / 主体側が決まる ${resolved} 局 / 決まらない ${games - resolved} 局`,
+    `対象 ${games} 局 / 主体側が決まる ${resolved} 局 / 決まらない ${games - resolved} 局` +
+      `${APPLY ? '' : '（この規則を適用したときの見込み）'}`,
   );
   // 🔒 決まらない件数を必ず出す。ambiguous（両対局者とも候補に一致）や
   // 名前候補が未設定の棋譜がここに落ちる（prd/11 §4.1）

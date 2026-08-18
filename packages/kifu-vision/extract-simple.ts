@@ -549,6 +549,18 @@ let insertionsUndone = 0;
 let piecesOnSolidCells = 0;
 /** 📏 同じく、`presence` が `piece` と言わない薄いマスに駒種を出したもの（測定のみ） */
 let piecesOnThinCells = 0;
+/** 📏 薄いマスへの駒種出しのうち、追跡盤面が既に同じ駒と思っていた「確認」（測定のみ） */
+let thinConfirms = 0;
+/** 📏 同じく「新出」（追跡は空か別駒）。ここが分かれ目（追記 164） */
+let thinNews = 0;
+/** 📏 新出のうち、後のサンプルで `presence` が `piece` と言った＝居座った（本物の形） */
+let thinNewPersisted = 0;
+/** 📏 新出のうち、後のサンプルで `presence` が `empty` と言った＝消えた（スライド経由地の形） */
+let thinNewVanished = 0;
+/** 📏 新出のうち、薄いまま追い切れなかった（数サンプル待っても piece とも empty とも言わない） */
+let thinNewUnresolved = 0;
+/** 薄いマスに新出した駒の見張り。key は `${r},${c}` */
+const watchedThinNews = new Map<string, { time: number; label: string; age: number }>();
 /** 📏 追跡盤面が空と思うマスに駒が現れ、**次の絵で消えた**（測定のみ） */
 let transientFills = 0;
 /** 📏 同じく現れて、**次の絵でも居座った**（測定のみ） */
@@ -705,12 +717,49 @@ for (let qi = 0; qi < queue.length; qi++) {
   // **その多くは本物の駒が薄く写ったもの**なので、締めると手が落ちる。
   {
     const where = presence(img);
+
+    // 見張り中の「薄いマスに新出した駒」を、後から来た証拠で締める（追記 164）。
+    // ⭐ 本物（20:58 の P*3e）は次のサンプルで駒として写り、スライド経由地
+    // （26:16.5 の 3f ▽飛）は次のサンプルで空になる——はず。それを数える。
+    for (const [key, w] of watchedThinNews) {
+      const [r, c] = key.split(',').map(Number);
+      const p = where[r][c];
+      if (p === 'piece') {
+        thinNewPersisted++;
+        if (VERBOSE) console.log(`  📏 ${fmt(w.time)} 薄いマスに新出した ${toUsiSquare(r, c)} ${w.label} → 居座った（${fmt(t)}）`);
+      } else if (p === 'empty') {
+        thinNewVanished++;
+        if (VERBOSE) console.log(`  📏 ${fmt(w.time)} 薄いマスに新出した ${toUsiSquare(r, c)} ${w.label} → 消えた（${fmt(t)}）`);
+      } else {
+        if (++w.age < 6) continue; // まだ薄い。もう少し待つ
+        thinNewUnresolved++;
+        if (VERBOSE) console.log(`  📏 ${fmt(w.time)} 薄いマスに新出した ${toUsiSquare(r, c)} ${w.label} → 追い切れず`);
+      }
+      watchedThinNews.delete(key);
+    }
+
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
         const read = recognized.board[r][c];
         if (read === null || isUnknown(read)) continue;
-        if (where[r][c] === 'piece') piecesOnSolidCells++;
-        else piecesOnThinCells++;
+        if (where[r][c] === 'piece') {
+          piecesOnSolidCells++;
+          continue;
+        }
+        piecesOnThinCells++;
+        // 内訳（追記 164）: 追跡盤面が既に同じ駒と思っているなら「確認」で、締めても
+        // `carryUnknowns` が引き継ぐので無害のはず。追跡が空か別駒なら「新出」で、
+        // ここから差分＝手が生まれうる。見張って居座り/消えを数える。
+        if (!current) continue; // 追跡が無い区間は分類できない
+        const cur = current[r][c];
+        if (cur && isUnknown(cur)) continue; // 追跡が未確定なら「確認」とも「新出」とも言えない
+        if (cur && cur.kind === read.kind && cur.side === read.side) {
+          thinConfirms++;
+        } else if (!watchedThinNews.has(`${r},${c}`)) {
+          thinNews++;
+          const label = `${read.side === 'sente' ? '▲' : '▽'}${read.kind}`;
+          watchedThinNews.set(`${r},${c}`, { time: t, label, age: 0 });
+        }
       }
     }
   }
@@ -1521,6 +1570,10 @@ console.log(
 console.log(
   `  📏 駒種を出したマス: presence=piece ${piecesOnSolidCells} / 薄いマス ${piecesOnThinCells}` +
     `（${((piecesOnThinCells / (piecesOnSolidCells + piecesOnThinCells)) * 100).toFixed(2)}%）`,
+);
+console.log(
+  `  📏 薄いマスの内訳: 確認 ${thinConfirms} / 新出 ${thinNews}` +
+    `（居座った ${thinNewPersisted} / 消えた ${thinNewVanished} / 追い切れず ${thinNewUnresolved}）`,
 );
 console.log(`  演出に覆われたとみて捨てた絵: ${covered}`);
 if (offBoard > 0) console.log(`  対局中の盤が写っていないので読まなかった絵: ${offBoard}`);

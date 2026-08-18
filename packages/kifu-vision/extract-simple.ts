@@ -545,6 +545,8 @@ let dropsWithSingleCarriedOrigin = 0;
 let dropsRewritten = 0;
 /** 推測で挿し込んだ打ちが誤りと分かって取り消した数 */
 let insertionsUndone = 0;
+/** 滑りの経由地を独立した 1 手と読んでいて、後から 1 手に併合した数 */
+let transitsMerged = 0;
 /** 📏 駒種まで読めたマスのうち、`presence` が `piece` と言ったもの（測定のみ） */
 let piecesOnSolidCells = 0;
 /** 📏 同じく、`presence` が `piece` と言わない薄いマスに駒種を出したもの（測定のみ） */
@@ -952,12 +954,63 @@ for (let qi = 0; qi < queue.length; qi++) {
               `（${c.streak} 回連続）→ ${fmt(step.time)} の ${step.usi} を取り消した`,
           );
         }
-      } else if (VERBOSE && step) {
-        console.log(
-          `  🔍 ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が空と確定` +
-            `（${c.streak} 回連続）— ${fmt(step.time)} の ${step.usi} の行き先だが、` +
-            `後ろに手が積まれているので取り消さない`,
-        );
+      } else if (step) {
+        // ⭐ 併合: **直後の手が同じ側で、この手の行き先から一直線の先へ出て行く**なら、
+        // この 2 手は「滑るアニメーションの経由地」を独立した 1 手と読んだもの
+        // （追記 165: 3 本目 26:16。飛が 3b→3g へ滑る途中の絵が 3f に写り、
+        // 本物の 1 手 `3b3g+` が `3b3f`＋`3f3g+` に割れた）。
+        //
+        // 同じ側の連続 2 手は将棋では起こりえないので、どちらかが誤り。
+        // 累積効果（駒の位置・取った駒・成り）は併合後の 1 手と完全に同じなので、
+        // 盤・持ち駒・状態には触らず**手の列だけ**を直せる。
+        // ⚠ 本物の連続（駒が Y に止まり、相手が指し、また動く）は間に相手の手が
+        // 挟まって交互になるので、この条件（隣接して同じ側）には掛からない。
+        const next = watch.steps[watch.index + 1];
+        const via = toUsiSquare(watch.row, watch.col);
+        const straightThrough = (() => {
+          if (!next || next.side !== step.side) return false;
+          if (step.usi.includes('*') || next.usi.includes('*')) return false;
+          if (step.usi.length !== 4) return false; // 経由地で成る形は対象外
+          if (next.usi.slice(0, 2) !== via) return false;
+          const sq = (s: string) => ({ col: 9 - Number(s[0]), row: s.charCodeAt(1) - 97 });
+          const x = sq(step.usi.slice(0, 2));
+          const y = { col: watch.col, row: watch.row };
+          const z = sq(next.usi.slice(2, 4));
+          const d1 = { c: Math.sign(y.col - x.col), r: Math.sign(y.row - x.row) };
+          const d2 = { c: Math.sign(z.col - y.col), r: Math.sign(z.row - y.row) };
+          if (d1.c !== d2.c || d1.r !== d2.r) return false; // 向きが揃わないなら滑りではない
+          // 各区間自体も直線（縦・横・斜め）であること
+          const line = (a: typeof x, b: typeof x) => {
+            const dc = Math.abs(b.col - a.col);
+            const dr = Math.abs(b.row - a.row);
+            return dc === 0 || dr === 0 || dc === dr;
+          };
+          return line(x, y) && line(y, z);
+        })();
+        if (straightThrough && next) {
+          const was = `${step.usi} + ${next.usi}`;
+          step.usi = step.usi.slice(0, 2) + next.usi.slice(2);
+          step.time = next.time;
+          step.solved = step.solved && next.solved;
+          watch.steps.splice(watch.index + 1, 1);
+          // 同じ列を指している他の見張りの位置をずらす（抜いた位置より後ろだけ）
+          for (const other of [...provisional.values(), ...watchedDrops.values(), ...insertedDrops.values()]) {
+            if (other.steps === watch.steps && other.index > watch.index) other.index--;
+          }
+          transitsMerged++;
+          if (VERBOSE) {
+            console.log(
+              `  ⛙ ${fmt(t)} ${via} が空と確定（${c.streak} 回連続）→ 滑りの経由地だった。` +
+                `${was} を ${step.usi} に併合した`,
+            );
+          }
+        } else if (VERBOSE) {
+          console.log(
+            `  🔍 ${fmt(t)} ${9 - watch.col}${String.fromCharCode(97 + watch.row)} が空と確定` +
+              `（${c.streak} 回連続）— ${fmt(step.time)} の ${step.usi} の行き先だが、` +
+              `後ろに手が積まれているので取り消さない`,
+          );
+        }
       }
       continue;
     }
@@ -1563,6 +1616,7 @@ if (dropsWithCarriedOrigin > 0) {
 }
 if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
 if (insertionsUndone > 0) console.log(`  行き先が空と確定したので取り消した挿し込み: ${insertionsUndone}`);
+if (transitsMerged > 0) console.log(`  滑りの経由地と分かって 1 手に併合した: ${transitsMerged}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(
   `  📏 空のはずのマスに駒が現れた: 次の絵で消えた ${transientFills} / 居座った ${persistentFills}`,

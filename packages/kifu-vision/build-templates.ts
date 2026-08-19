@@ -33,10 +33,15 @@ const STORE_IN = process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars
 const STORE_OUT = process.argv[3] ?? STORE_IN;
 const SAVE = process.env.KIFU_VISION_SAVE === '1';
 
-/** 名前の頭に付く動画の別名と、その走査範囲（較正を本線と揃えるために要る）。 */
+/**
+ * 名前の頭に付く動画の別名と、その走査範囲（較正を本線と揃えるために要る）。
+ *
+ * 素材そのものはリポジトリに入れていないので、パスは中立名を既定にしてある。
+ * 手元のファイル名が違うときは `KIFU_VISION_V1` / `KIFU_VISION_V2` で差し替える。
+ */
 const VIDEOS: Record<string, { path: string; from: number; to: number }> = {
-  v1: { path: 'data/videos/fQR9Fx7DOvk.mp4', from: 0, to: 1833 },
-  v2: { path: 'data/videos/WuXYIqUGOiE.mp4', from: 0, to: 2120 },
+  v1: { path: process.env.KIFU_VISION_V1 ?? 'data/videos/v1.mp4', from: 0, to: 1833 },
+  v2: { path: process.env.KIFU_VISION_V2 ?? 'data/videos/v2.mp4', from: 0, to: 2120 },
 };
 
 const NAMES: Record<PieceKind, string> = {

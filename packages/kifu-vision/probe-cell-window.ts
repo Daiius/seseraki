@@ -1,7 +1,7 @@
 // 切り出し窓が、字が実際に描かれている位置と合っているかを測る（Phase M 段取り 1）。
 //
 //   pnpm --filter kifu-vision exec tsx probe-cell-window.ts <動画パス> <初期局面の秒> [較正の右端秒]
-//   例: probe-cell-window.ts data/videos/fQR9Fx7DOvk.mp4 2 1833
+//   例: probe-cell-window.ts data/videos/v1.mp4 2 1833
 //
 // 🔴 きっかけはユーザの指摘（追記 140 末尾）:
 //   「字の下端が切れている。窓の上には余白が残り、下は `玉` の点・`金` の下棒・

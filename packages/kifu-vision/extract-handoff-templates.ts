@@ -26,7 +26,7 @@ import { loadTemplates, saveTemplates } from './src/template-store.ts';
 import { montage, magnify, writePgm, toPng, type MontageCell } from './src/montage.ts';
 
 const imagePath = process.argv[2] ?? 'data/handoff/promoted.png';
-const video = process.argv[3] ?? 'data/videos/fQR9Fx7DOvk.mp4';
+const video = process.argv[3] ?? 'data/videos/v1.mp4';
 const initialAt = Number(process.argv[4] ?? 2.5);
 const STORE = process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars-vertical.json';
 const DUMP_DIR = process.env.KIFU_VISION_DUMP_DIR ?? 'data/handoff-templates';

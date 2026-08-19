@@ -17,7 +17,7 @@ import { extractTemplates, cellImage, ncc, resample, bestShiftNcc, type Template
 import { calibrateGeometry, refineByTemplates, type KnownCell } from './src/calibrate.ts';
 
 const imagePath = process.argv[2] ?? 'data/handoff/promoted.png';
-const video = process.argv[3] ?? 'data/videos/fQR9Fx7DOvk.mp4';
+const video = process.argv[3] ?? 'data/videos/v1.mp4';
 const initialAt = Number(process.argv[4] ?? 2.5);
 
 const NAMES: Record<PieceKind, string> = {

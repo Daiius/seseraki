@@ -10,7 +10,7 @@ import { grabFrame, crop } from './src/frame.ts';
 import { extractTemplates, ncc } from './src/template.ts';
 import { loadTemplates } from './src/template-store.ts';
 
-const video = process.argv[2] ?? 'data/videos/fQR9Fx7DOvk.mp4';
+const video = process.argv[2] ?? 'data/videos/v1.mp4';
 const initialAt = Number(process.argv[3] ?? 2.5);
 const STORE = process.env.KIFU_VISION_TEMPLATES ?? 'data/templates/shogi-wars-vertical.json';
 

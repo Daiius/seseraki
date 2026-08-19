@@ -10,6 +10,16 @@
 //   KIFU_VISION_IMPORT_URL   送信先（既定は web の開発プロキシ経由）
 //   API_KEY                  未設定ならリポジトリの .env.server から読む
 //   KIFU_VISION_IMPORT_DRY_RUN=1  送らずに送信内容の要約だけ出す
+//   KIFU_VISION_VIDEO_ID     動画の識別子（走査 json に `videoId` が無いときは必須）
+//   KIFU_VISION_IMPORT_FORCE=1    通し再生に指摘のある棋譜も送る（既定は中止）
+//
+// 🔒 **`(videoId, gameIndex)` は server 側の上書きキー**（prd/10 §4.3）。走査 json の
+// `source` は動画の basename しか持たないので、**別の録画が同じ名前なら既存の棋譜を
+// 静かに置き換えてしまう**。識別子は推測せず、明示されたものだけを使う。
+//
+// 🔒 **通し再生の指摘は警告で済ませない。** server は合法性を検査しない（往復検証は
+// KIF の話）ので、ここで止めなければ手番の欠落や持っていない駒の打ちがそのまま
+// 正式な `kifus.usiMoves` と局面索引に入る。調査目的で送りたいときだけ FORCE を立てる。
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -28,6 +38,8 @@ const url =
   process.env.KIFU_VISION_IMPORT_URL ??
   'http://localhost:5173/api/video-analysis/kifus';
 const dryRun = process.env.KIFU_VISION_IMPORT_DRY_RUN === '1';
+/** 🔒 通し再生に指摘のある棋譜を、承知のうえで送るための逃げ道（既定は中止） */
+const force = process.env.KIFU_VISION_IMPORT_FORCE === '1';
 
 /** API_KEY を環境変数か `.env.server` から取る（worker と同じ鍵） */
 function apiKey(): string {
@@ -70,7 +82,16 @@ let failed = 0;
 
 for (const path of paths) {
   const data = JSON.parse(readFileSync(path, 'utf8'));
-  const videoId = String(data.source).replace(/\.[^.]+$/, '');
+  // 🔒 basename から推測しない（同名の別録画が既存の棋譜を上書きする）。
+  const videoId: string | undefined = data.videoId ?? process.env.KIFU_VISION_VIDEO_ID;
+  if (!videoId) {
+    console.error(
+      `🔴 ${path}: 動画の識別子が無い。走査 json の videoId か KIFU_VISION_VIDEO_ID で渡すこと` +
+        `（source="${data.source}" は basename なので上書きキーには使わない）`,
+    );
+    failed++;
+    continue;
+  }
 
   // 🔒 **初期局面から繋がるのは最初の断片だけ**（check-kifu.ts と同じ扱い）。
   // 途中から始まる断片は起点が分からないので棋譜にならない
@@ -88,12 +109,22 @@ for (const path of paths) {
         `（残り ${dropped} 手は棋譜に入らない）`,
     );
   }
-  // 合法性は server 側で検査していない（往復検証は KIF の話）。**ここで気づけるようにする**
-  if (run.replay && run.replay.problems.length > 0) {
-    console.warn(
-      `⚠ ${videoId}#${data.game}: 通し再生に ${run.replay.problems.length} 件の指摘がある` +
-        `（合法 ${run.replay.legal} / ${run.replay.total}）`,
-    );
+  // 🔒 合法性は server 側で検査していない（往復検証は KIF の話）。**ここで止める。**
+  const replay = run.replay;
+  const unsound = !replay || replay.problems.length > 0 || replay.legal !== replay.total;
+  if (unsound) {
+    const detail = replay
+      ? `通し再生に ${replay.problems.length} 件の指摘がある（合法 ${replay.legal} / ${replay.total}）`
+      : '通し再生の結果が走査 json に入っていない';
+    if (!force) {
+      console.error(
+        `🔴 ${videoId}#${data.game}: ${detail}。送らない` +
+          `（承知のうえで送るなら KIFU_VISION_IMPORT_FORCE=1）`,
+      );
+      failed++;
+      continue;
+    }
+    console.warn(`⚠ ${videoId}#${data.game}: ${detail}。FORCE が立っているので送る`);
   }
 
   const payload = {

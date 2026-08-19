@@ -4,7 +4,16 @@ import { MockTaskSource } from "./polling/mock.js";
 import type { TaskSource } from "./polling/types.js";
 import { analyzeTask } from "./analysis.js";
 import { createClient } from "./polling/client.js";
-import { analyzeKifu, ChunkSubmitError } from "./kifu-analysis.js";
+import {
+  analyzeKifu,
+  buildGoCommand,
+  ChunkSubmitError,
+} from "./kifu-analysis.js";
+import {
+  drainEvaluationJobs,
+  InteractiveEngineError,
+  type PositionJobSource,
+} from "./position-eval.js";
 
 /** エンジンのオプションを適用し readyok まで待つ（起動時・再起動時で共用） */
 async function configureEngine(engine: UsiEngine, config: Config): Promise<void> {
@@ -102,6 +111,44 @@ async function main() {
     // 復旧するまで棋譜を取得しない（dead なエンジンで正常棋譜まで失敗扱いする連鎖を防ぐ）
     let engineReady = true;
 
+    // エンジンを作り直してオプションを入れ直す。失敗したら engineReady=false にして
+    // 復旧するまで次の棋譜を取得しない（連鎖失敗を防ぐ）
+    const restartEngine = async () => {
+      try {
+        console.log("[Worker] Restarting engine...");
+        await engine.restart();
+        await configureEngine(engine, config);
+      } catch (restartErr) {
+        console.error("[Worker] Engine restart failed:", restartErr);
+        engineReady = false;
+      }
+    };
+
+    // 検討局面の評価（prd/12 §2）。棋譜解析と**同じエンジン・同じパラメータ**に相乗りする
+    const positionJobs: PositionJobSource = {
+      claim: () => client.claimPositionJob(),
+      report: async (id, report) => {
+        await client.reportPositionResult(id, report);
+      },
+    };
+    const goCommand = buildGoCommand({
+      depth: config.engineDepth,
+      movetime: config.engineMovetime,
+    });
+    /** 待っている評価ジョブを捌く。エンジンが落ちたら再起動し、捌けなかったことを返す */
+    const drainPositionJobs = async (): Promise<boolean> => {
+      try {
+        await drainEvaluationJobs(engine, positionJobs, goCommand);
+        return true;
+      } catch (err) {
+        if (!(err instanceof InteractiveEngineError)) throw err;
+        // 🔒 棋譜起因ではないので analysisError は立てない（prd/12 §2.5）
+        console.error("[Worker] Interactive evaluation failed:", err.message);
+        await restartEngine();
+        return false;
+      }
+    };
+
     const poll = async () => {
       if (!running || analyzing) return;
       analyzing = true;
@@ -122,6 +169,10 @@ async function main() {
             return; // 次の poll で再試行。棋譜は掴まない
           }
         }
+
+        // 棋譜より先に検討局面の評価を捌く（棋譜が無いときもここが処理の場になる）。
+        // エンジンを作り直したときは、この poll では棋譜に進まない
+        if (!(await drainPositionJobs())) return;
 
         // fetch 失敗はインフラ起因（一時）。次の poll で再試行する
         const kifu = await client.fetchNextKifu();
@@ -151,6 +202,11 @@ async function main() {
                   console.warn("[Worker] Failed to report progress:", err);
                 });
             },
+            // 1 局面ごとに検討局面の評価を差し込む（prd/12 §2.1）。
+            // 最大待ちは「現局面の解析残り時間 + ポーリング間隔」に収まる
+            onPositionBoundary: async () => {
+              await drainEvaluationJobs(engine, positionJobs, goCommand);
+            },
             // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
             // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）
             onChunk: async (analyses) => {
@@ -171,6 +227,13 @@ async function main() {
             console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
             return;
           }
+          // --- 検討局面の評価でエンジンが落ちた: 棋譜は無関係なので analysisError は
+          // 立てない（prd/12 §2.5）。エンジンを作り直し、次の poll で続きから再開する ---
+          if (err instanceof InteractiveEngineError) {
+            console.error("[Worker] Interactive evaluation failed:", err.message);
+            await restartEngine();
+            return;
+          }
           const reason = err instanceof Error ? err.message : String(err);
           console.error(`[Worker] Analysis failed for kifu ${kifu.id}:`, reason);
           try {
@@ -180,14 +243,7 @@ async function main() {
           }
           // エンジン再起動。失敗したら engineReady=false にして、
           // 復旧するまで次の棋譜を取得しない（連鎖失敗を防ぐ）
-          try {
-            console.log("[Worker] Restarting engine...");
-            await engine.restart();
-            await configureEngine(engine, config);
-          } catch (restartErr) {
-            console.error("[Worker] Engine restart failed:", restartErr);
-            engineReady = false;
-          }
+          await restartEngine();
           return;
         }
 

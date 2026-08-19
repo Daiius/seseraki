@@ -68,6 +68,23 @@ export class ChunkSubmitError extends Error {
 export const CHUNK_INTERVAL_MS = 30_000;
 
 /**
+ * `go` コマンドを組み立てる。
+ *
+ * 時間で区切るときは byoyomi ではなく movetime を使う。byoyomi は対局用の指定で、
+ * やねうら王が NetworkDelay2（既定 1120ms）を引くため指定値どおりの思考時間にならない。
+ * movetime は「時間固定モード」として扱われ、指定値がそのまま思考時間になる。
+ *
+ * 🔒 検討局面の評価も**同じパラメータ**を使う（prd/12 §2.1）ので、ここに 1 本化する。
+ */
+export function buildGoCommand(options: {
+  depth?: number;
+  movetime?: number;
+}): string {
+  const { depth = 10, movetime } = options;
+  return movetime ? `go movetime ${movetime}` : `go depth ${depth}`;
+}
+
+/**
  * 同じ multipv 番号について、後から来た info 行で上書きしてよいかを判定する。
  *
  * 基本は「後の行ほど深い結果」なので上書きしてよい。ただし byoyomi で探索を打ち切ると
@@ -91,8 +108,10 @@ function shouldReplace(next: UsiInfo, prev: UsiInfo): boolean {
 /**
  * MultiPV の info 行群から各 PV の最終結果を抽出する
  * (同じ multipv 番号の最後の info を採用。ただし暫定値への後退は採らない)
+ *
+ * 検討局面の評価（`position-eval.ts`）も同じ抽出を使う。
  */
-function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
+export function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
   const best = new Map<number, UsiInfo>();
 
   for (const info of infoLines) {
@@ -144,6 +163,8 @@ function extractHashfull(infoLines: UsiInfo[]): number | undefined {
  * @param options.onProgress - 1 局面解析するたびに呼ばれる (解析済み局面数, 全局面数)
  * @param options.onChunk - チャンクの送信。**完了を待ち**、投げれば解析を中断する
  *   （進捗報告と違い、握りつぶすと `moveNumber` に穴が空いて再開位置が決まらなくなる）
+ * @param options.onPositionBoundary - **1 局面を解析する前**に呼ばれる割り込み点
+ *   （検討局面の評価を差し込む場所。prd/12 §2.1）。投げれば解析を中断する
  */
 export async function analyzeKifu(
   engine: AnalysisEngine,
@@ -156,6 +177,7 @@ export async function analyzeKifu(
     chunkIntervalMs?: number;
     onProgress?: (analyzed: number, total: number) => void;
     onChunk?: (analyses: MoveAnalysis[]) => Promise<void>;
+    onPositionBoundary?: () => Promise<void>;
   } = {},
 ): Promise<KifuAnalysisSummary> {
   const {
@@ -166,13 +188,9 @@ export async function analyzeKifu(
     chunkIntervalMs = CHUNK_INTERVAL_MS,
     onProgress,
     onChunk,
+    onPositionBoundary,
   } = options;
-  // 時間で区切るときは byoyomi ではなく movetime を使う。byoyomi は対局用の指定で、
-  // やねうら王が NetworkDelay2（既定 1120ms）を引くため指定値どおりの思考時間にならない。
-  // movetime は「時間固定モード」として扱われ、指定値がそのまま思考時間になる。
-  const goCommand = movetime
-    ? `go movetime ${movetime}`
-    : `go depth ${depth}`;
+  const goCommand = buildGoCommand({ depth, movetime });
 
   const total = usiMoves.length + 1;
   // 既に入っている局面は飛ばす（チャンク submit 中断からの再開）。範囲外の値でも走り抜けないよう挟む
@@ -194,6 +212,10 @@ export async function analyzeKifu(
 
   // 各局面を解析（初期局面 + 各手の後の局面）
   for (let i = start; i <= usiMoves.length; i++) {
+    // 局面の境目が自然な割り込み点。ここで検討局面の評価を先に処理する（prd/12 §2.1）。
+    // USI は毎回 `position` で局面を明示するので、割り込んでもエンジンの状態は汚れない
+    await onPositionBoundary?.();
+
     const movesPlayed = usiMoves.slice(0, i);
     const position =
       movesPlayed.length === 0

@@ -15,7 +15,7 @@
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
-import type { BoardState, PieceKind, Side, Square } from './board';
+import { applyMove, type BoardState, type PieceKind, type Side, type Square } from './board';
 
 /** 違反の種別。文言に依らず機械的に扱えるようにコードで持つ */
 export type PositionViolationCode =
@@ -27,7 +27,9 @@ export type PositionViolationCode =
   | 'invalid_hand_piece'
   | 'king_capturable'
   | 'malformed_move'
-  | 'no_such_piece';
+  | 'no_such_piece'
+  | 'captures_king'
+  | 'illegal_promotion';
 
 export interface PositionViolation {
   code: PositionViolationCode;
@@ -292,6 +294,16 @@ export function validatePositionForEngine(state: BoardState): PositionValidation
   return violations.length === 0 ? { ok: true } : { ok: false, violations };
 }
 
+/** 成れる駒（玉・金・既に成った駒は成れない） */
+const PROMOTABLE: Partial<Record<PieceKind, true>> = {
+  P: true, L: true, N: true, S: true, B: true, R: true,
+};
+
+/** 敵陣（自分から見て奥の 3 段）か。成れるのは移動元・移動先のどちらかが敵陣のとき */
+function inPromotionZone(row: number, side: Side): boolean {
+  return side === 'sente' ? row <= 2 : row >= 6;
+}
+
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
 const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
 
@@ -303,10 +315,14 @@ function usiToIndex(usi: string): [row: number, col: number] {
 /**
  * 名指し評価（prd/12 §2.2）で渡す手が、エンジンに渡してよいかを見る。
  *
- * 🔒 **合法性は判定しない**（合法手生成器は作らない。prd/12 §2.5）。見るのは書式と、
- * **動かす駒が手番側の物として実在するか**だけ——実在しない駒を動かす手を
- * `position … moves` で適用させると、エンジンが持つ局面が壊れる。
- * 王手放置・二歩・打ち歩詰めといった「指せば負けだが盤は壊れない」手は通す。
+ * 🔒 **合法手生成器は作らない**（prd/12 §2.5）。駒の動き方（歩は前に 1 マス、飛は走る…）は
+ * 判定しない。見るのは「**その手を適用した局面をエンジンに渡してよいか**」だけで、判定は
+ * 局面の検証（{@link validatePositionForEngine}）を**適用後の局面にもう一度かける**ことで行う。
+ *
+ * こうする理由は、名指し評価のフォールバックが `position … moves <手>` で
+ * **手を適用した局面をエンジンに渡す**こと（prd/12 §2.2）。渡る局面が同じ最小条件を
+ * 満たしていなければ、局面側だけ検証しても意味がない——相手玉を取る手・成れない駒の成り・
+ * 打った歩で二歩になる手などは、いずれも**盤の不変条件が壊れた局面**をエンジンへ渡す。
  */
 export function validateMoveOnPosition(
   state: BoardState,
@@ -340,25 +356,61 @@ export function validateMoveOnPosition(
         message: `${to} には駒があるので打てません`,
       });
     }
-    return violations.length === 0 ? { ok: true } : { ok: false, violations };
+  } else {
+    const [, from, to, promote] = usiMove.match(
+      /^([1-9][a-i])([1-9][a-i])(\+?)$/,
+    )!;
+    const [fromRow, fromCol] = usiToIndex(from);
+    const [toRow, toCol] = usiToIndex(to);
+    const moving = state.board[fromRow][fromCol];
+    if (!moving || moving.side !== side) {
+      violations.push({
+        code: 'no_such_piece',
+        message: `${from} に${SIDE_NAME[side]}の駒がありません`,
+      });
+    }
+    const captured = state.board[toRow][toCol];
+    if (captured && captured.side === side) {
+      violations.push({
+        code: 'no_such_piece',
+        message: `${to} には自分の駒があります`,
+      });
+    }
+    // 相手玉を取る手は、玉が盤上に在り続けるというエンジンの前提を壊す
+    // （局面側の `king_capturable` と同じ理由）
+    if (captured && captured.side !== side && captured.kind === 'K') {
+      violations.push({
+        code: 'captures_king',
+        message: `${to} の${SIDE_NAME[captured.side]}玉を取る手は渡せません`,
+      });
+    }
+    if (promote && moving && moving.side === side) {
+      if (!PROMOTABLE[moving.kind]) {
+        violations.push({
+          code: 'illegal_promotion',
+          message: `${PIECE_NAME[moving.kind]}は成れません`,
+        });
+      } else if (!inPromotionZone(fromRow, side) && !inPromotionZone(toRow, side)) {
+        violations.push({
+          code: 'illegal_promotion',
+          message: `${from}${to} は敵陣に入らないので成れません`,
+        });
+      }
+    }
   }
 
-  const [, from, to] = usiMove.match(/^([1-9][a-i])([1-9][a-i])/)!;
-  const [fromRow, fromCol] = usiToIndex(from);
-  const [toRow, toCol] = usiToIndex(to);
-  const moving = state.board[fromRow][fromCol];
-  if (!moving || moving.side !== side) {
-    violations.push({
-      code: 'no_such_piece',
-      message: `${from} に${SIDE_NAME[side]}の駒がありません`,
-    });
-  }
-  const captured = state.board[toRow][toCol];
-  if (captured && captured.side === side) {
-    violations.push({
-      code: 'no_such_piece',
-      message: `${to} には自分の駒があります`,
-    });
-  }
-  return violations.length === 0 ? { ok: true } : { ok: false, violations };
+  if (violations.length > 0) return { ok: false, violations };
+
+  // ここまで通ったら**手を適用した局面**を同じ条件で見る。フォールバックはこの局面を
+  // そのままエンジンへ渡すので、局面として渡せないなら手としても渡せない
+  // （二歩になる打ち・行き所のない駒になる手・自玉を取られる形で手番を渡す手を含む）
+  const applied = validatePositionForEngine(applyMove(state, usiMove));
+  if (applied.ok) return { ok: true };
+  return {
+    ok: false,
+    violations: applied.violations.map((v) => ({
+      code: v.code,
+      message: `この手を指した後の局面: ${v.message}`,
+    })),
+  };
 }

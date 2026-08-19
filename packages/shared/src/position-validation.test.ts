@@ -176,3 +176,63 @@ describe('validateMoveOnPosition', () => {
     expect(onPiece.ok).toBe(false);
   });
 });
+
+describe('validateMoveOnPosition（適用後の局面も検証する）', () => {
+  /** SFEN と指し手から違反コードを取り出す */
+  function moveCodesOf(sfen: string, move: string): PositionViolationCode[] {
+    const state = parseSfen(sfen);
+    expect(state, `parseSfen failed: ${sfen}`).not.toBeNull();
+    const result = validateMoveOnPosition(state!, move);
+    return result.ok ? [] : result.violations.map((v) => v.code);
+  }
+
+  it('相手玉を取る手を弾く', () => {
+    // 玉が 8 マス飛ぶ非合法手だが、駒の動き方は判定しないので「玉が消える」ことで弾く
+    expect(moveCodesOf('4k4/9/9/9/9/9/9/9/4K4 b -', '5i5a')).toContain(
+      'captures_king',
+    );
+  });
+
+  it('成れない駒の成りを弾く', () => {
+    expect(moveCodesOf('4k4/9/9/9/9/9/9/9/4K4 b -', '5i5h+')).toContain(
+      'illegal_promotion',
+    );
+    expect(moveCodesOf('4k4/3G5/9/9/9/9/9/9/4K4 b -', '6b6a+')).toContain(
+      'illegal_promotion',
+    );
+  });
+
+  it('敵陣に入らない成りを弾く', () => {
+    expect(moveCodesOf('4k4/9/9/9/4P4/9/9/9/4K4 b -', '5e5d+')).toContain(
+      'illegal_promotion',
+    );
+  });
+
+  it('敵陣に入る成りは通す', () => {
+    expect(moveCodesOf('4k4/9/9/4P4/9/9/9/9/4K4 b -', '5d5c+')).toEqual([]);
+  });
+
+  it('打った結果が二歩になる手を弾く', () => {
+    expect(moveCodesOf('4k4/9/9/9/4P4/9/9/9/4K4 b P', 'P*5c')).toContain(
+      'two_pawns',
+    );
+  });
+
+  it('打った駒に行き所が無くなる手を弾く', () => {
+    expect(moveCodesOf('4k4/9/9/9/9/9/9/9/4K4 b P', 'P*4a')).toContain(
+      'stuck_piece',
+    );
+  });
+
+  it('自玉を取られる形のまま手番を渡す手を弾く（王手放置）', () => {
+    // 後手の飛車が 5 筋で先手玉に当たっている。関係のない手を指すと、
+    // 相手番で玉が取れる局面をエンジンに渡すことになる
+    expect(moveCodesOf('4k4/9/9/9/4r4/9/9/9/L3K4 b -', '9i9h')).toContain(
+      'king_capturable',
+    );
+  });
+
+  it('王手を外す手は通す', () => {
+    expect(moveCodesOf('4k4/9/9/9/4r4/9/9/9/L3K4 b -', '5i4i')).toEqual([]);
+  });
+});

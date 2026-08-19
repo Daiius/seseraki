@@ -365,3 +365,84 @@ describe("hashfull（置換表の使用率）", () => {
     expect(summary.maxHashfull).toBeUndefined();
   });
 });
+
+describe("局面境界の割り込み（prd/12 §2.1）", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 解析した局面と、割り込みが呼ばれた位置を混ぜて記録するエンジン */
+  function createTracingEngine(trace: string[]): AnalysisEngine {
+    return {
+      setOption: () => {},
+      analyze: async (position: string): Promise<UsiSearchResult> => {
+        trace.push(position);
+        const line: UsiInfo = {
+          multipv: 1,
+          depth: 5,
+          score: { type: "cp", value: 0 },
+          pv: ["7g7f"],
+        };
+        return { bestmove: { move: "7g7f" }, infoLines: [line], lastInfo: line };
+      },
+    };
+  }
+
+  it("1 局面ごとに、解析の前へ割り込みを挟む", async () => {
+    const trace: string[] = [];
+    const engine = createTracingEngine(trace);
+
+    await analyzeKifu(engine, ["7g7f", "3c3d"], {
+      onChunk: async () => {},
+      onPositionBoundary: async () => {
+        trace.push("boundary");
+      },
+    });
+
+    // 3 局面（初期局面 + 2 手）それぞれの手前で呼ばれる
+    expect(trace).toEqual([
+      "boundary",
+      "position startpos",
+      "boundary",
+      "position startpos moves 7g7f",
+      "boundary",
+      "position startpos moves 7g7f 3c3d",
+    ]);
+  });
+
+  it("再開時は残りの局面ぶんだけ割り込む", async () => {
+    const trace: string[] = [];
+    const engine = createTracingEngine(trace);
+
+    await analyzeKifu(engine, ["7g7f", "3c3d"], {
+      startMoveNumber: 2,
+      onChunk: async () => {},
+      onPositionBoundary: async () => {
+        trace.push("boundary");
+      },
+    });
+
+    expect(trace.filter((t) => t === "boundary")).toHaveLength(1);
+  });
+
+  it("割り込みが投げたら解析を中断する（エンジンの再起動は呼び出し側の責務）", async () => {
+    const engine = createTracingEngine([]);
+    const chunks: MoveAnalysis[][] = [];
+
+    await expect(
+      analyzeKifu(engine, ["7g7f", "3c3d"], {
+        onChunk: async (analyses) => {
+          chunks.push(analyses);
+        },
+        onPositionBoundary: async () => {
+          throw new Error("engine died during interactive evaluation");
+        },
+      }),
+    ).rejects.toThrow("engine died");
+    expect(chunks).toHaveLength(0);
+  });
+});

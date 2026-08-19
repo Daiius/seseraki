@@ -53,6 +53,20 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 - ジョブの完了には**失敗も含む**（`failed` + エラー内容）。失敗したジョブは待機中の long-poll に
   エラーを返して完了させる（結果もエラーも返さないまま待たせ続けない）。
 
+#### エンドポイント（M1 実装）
+
+| Method | Path | 認証 | 内容 |
+|---|---|---|---|
+| POST | `/api/positions/evaluate` | セッション | `{ sfen, move? }`。`move` があれば名指し評価。**結果が出るまで待って返す**（long-poll） |
+| GET | `/api/worker/position-jobs` | API_KEY | 待っているジョブを 1 件 claim（無ければ `null`） |
+| POST | `/api/worker/position-jobs/:id/result` | API_KEY | 結果 `{ candidates, fallback }` または失敗 `{ error }` を報告 |
+
+- 応答は `{ sfen, move, status: 'done' | 'failed', … }`。`sfen` は**読み直して書き戻した正規化キー**
+  （手数の有無や書き方の揺れで同じ局面が別扱いにならないようにする）。
+- 検証で弾いた局面・指し手は **400**（違反の一覧を添える）、キューが一杯なら **503**。
+- 期限（`POSITION_EVAL_QUEUE_TIMEOUT_MS` / `POSITION_EVAL_RUN_TIMEOUT_MS`・既定 120 秒）を過ぎた
+  ジョブは `failed` で完了させる。**待たせ続けない**ための最後の砦。
+
 ### 2.5 局面検証（エンジン保護）
 
 - 合法手生成器は**作らない**（決定・2026-08-20。フル編集を許すため合法性は問わない）。

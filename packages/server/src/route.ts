@@ -71,14 +71,23 @@ import {
   isChunkInRange,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
+import {
+  claimEvaluationJob,
+  completeEvaluationJob,
+  EvaluationQueueFullError,
+  requestEvaluation,
+} from './position-eval.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
 import {
   attributionOf,
   createInitialState,
+  parseSfen,
   positionDiff,
   positionSfen,
+  validateMoveOnPosition,
+  validatePositionForEngine,
   type PositionDiff,
   type TacticLabel,
 } from 'shared';
@@ -844,6 +853,62 @@ const route = app
       });
     },
   )
+  // 検討局面の評価（prd/12 §2）。**結果が出るまで待って返す**（long-poll）。
+  // `move` を付けると名指し評価（`go searchmoves`。その手のスコアと咎め筋）になる。
+  // 🔒 評価は**手番側から見た値**（検討モードでは自分。prd/12 §2.3）。
+  .post(
+    '/positions/evaluate',
+    sessionRequired,
+    zv(
+      'json',
+      z.object({
+        /** 局面キーと同じ 3 フィールドの SFEN。手数付き（4 フィールド）も受ける */
+        sfen: z.string().min(1).max(200),
+        /** 名指し評価の対象手（USI）。省略すれば局面評価 */
+        move: z.string().min(2).max(8).nullish(),
+      }),
+    ),
+    async (c) => {
+      const { sfen, move = null } = c.req.valid('json');
+
+      // エンジンに渡す前に検証する（prd/12 §2.5）。合法性は問わないが、
+      // エンジンをクラッシュ・ハングさせうる局面は 4xx で弾く
+      const state = parseSfen(sfen);
+      if (!state) {
+        return c.json({ error: 'SFEN を読めません', violations: [] }, 400);
+      }
+      const position = validatePositionForEngine(state);
+      if (!position.ok) {
+        return c.json(
+          { error: 'エンジンに渡せない局面です', violations: position.violations },
+          400,
+        );
+      }
+      if (move !== null) {
+        const moveCheck = validateMoveOnPosition(state, move);
+        if (!moveCheck.ok) {
+          return c.json(
+            { error: 'エンジンに渡せない指し手です', violations: moveCheck.violations },
+            400,
+          );
+        }
+      }
+
+      // キャッシュ・ジョブのキーは**読み直して書き戻した SFEN**にする。
+      // 手数の有無や書き方の揺れで同じ局面が別扱いになるのを防ぐ（prd/12 §2.4）
+      const normalized = positionSfen(state);
+      try {
+        const outcome = await requestEvaluation({ sfen: normalized, move });
+        return c.json({ sfen: normalized, move, ...outcome });
+      } catch (err) {
+        if (err instanceof EvaluationQueueFullError) {
+          // worker が止まっている疑い。積み上げずにその場で断る
+          return c.json({ error: '評価キューが一杯です' } as const, 503);
+        }
+        throw err;
+      }
+    },
+  )
   // --- 動画解析（prd/10）---
   // 一覧は動画ごと → 局ごと。件数が少ない（1 動画 2〜3 局）ためページングは持たない
   .get('/video-analysis/kifus', sessionRequired, async (c) => {
@@ -1243,6 +1308,49 @@ const route = app
       // 消えてしまう（旧世代の破棄されたチャンクでも触らない）
       if (completed) clearProgress(kifuId);
       return c.json({ ok: true, applied, completed }, 201);
+    },
+  )
+  // 検討局面の評価ジョブ（prd/12 §2.1）。worker は棋譜解析の**局面境界**でここを叩き、
+  // 待っているジョブがあれば先に処理する。無ければ null（inbound の口は増やさない）
+  .get('/worker/position-jobs', apiKeyRequired, (c) => {
+    return c.json(claimEvaluationJob());
+  })
+  // 評価結果の報告。**失敗も完了**として扱い、待っている long-poll をエラーで起こす
+  // （結果もエラーも返さないまま待たせ続けない。prd/12 §2.4）。
+  // 🔒 ここは棋譜の `analysisError` / `analysisRevision` に触れない——interactive な
+  // ジョブには対応する棋譜も世代も無い（prd/12 §2.5）
+  .post(
+    '/worker/position-jobs/:id/result',
+    apiKeyRequired,
+    zv('param', z.object({ id: z.string() })),
+    zv(
+      'json',
+      z.union([
+        z.object({
+          candidates: z.array(candidateMoveSchema),
+          /** 名指し評価を符号反転のフォールバックで求めたか（prd/12 §2.2） */
+          fallback: z.boolean().default(false),
+        }),
+        z.object({ error: z.string().min(1).max(500) }),
+      ]),
+    ),
+    (c) => {
+      const { id } = c.req.valid('param');
+      const body = c.req.valid('json');
+      const applied = completeEvaluationJob(
+        id,
+        'error' in body
+          ? { error: body.error }
+          : {
+              candidates: body.candidates.map((candidate) => ({
+                ...candidate,
+                pv: candidate.pv ?? [],
+              })),
+              fallback: body.fallback,
+            },
+      );
+      // applied=false は期限切れで既に落ちたジョブ（worker 側は次へ進んでよい）
+      return c.json({ ok: true, applied } as const, 201);
     },
   )
   // --- swars 棋譜取得 ---

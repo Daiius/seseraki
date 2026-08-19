@@ -1,0 +1,208 @@
+import { describe, expect, it } from 'vitest';
+import { createInitialState, type Square } from 'shared';
+import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './sanity.ts';
+import { UNKNOWN, type VisionSquare } from './uncertain.ts';
+
+function emptyBoard(): Square[][] {
+  return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
+}
+
+function put(board: Square[][], usi: string, piece: Square): void {
+  board[usi.charCodeAt(1) - 97][9 - Number(usi[0])] = piece;
+}
+
+/** 玉だけ置いた、それ以外は問題のない盤面 */
+function withKings(): Square[][] {
+  const b = emptyBoard();
+  put(b, '5i', { kind: 'K', side: 'sente' });
+  put(b, '5a', { kind: 'K', side: 'gote' });
+  return b;
+}
+
+describe('checkBoard', () => {
+  it('平手初期配置は成立する', () => {
+    const result = checkBoard(createInitialState().board);
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it('玉が無ければ成立しない', () => {
+    const result = checkBoard(emptyBoard());
+    expect(result.ok).toBe(false);
+    expect(result.problems.join()).toContain('玉');
+  });
+
+  it('同じ側の玉が 2 枚あれば成立しない', () => {
+    const b = withKings();
+    put(b, '4i', { kind: 'K', side: 'sente' });
+    expect(checkBoard(b).ok).toBe(false);
+  });
+
+  it('二歩を見つける', () => {
+    const b = withKings();
+    put(b, '7f', { kind: 'P', side: 'sente' });
+    put(b, '7d', { kind: 'P', side: 'sente' });
+    const result = checkBoard(b);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join()).toContain('二歩');
+  });
+
+  it('筋が違えば二歩ではない', () => {
+    const b = withKings();
+    put(b, '7f', { kind: 'P', side: 'sente' });
+    put(b, '6f', { kind: 'P', side: 'sente' });
+    expect(checkBoard(b).ok).toBe(true);
+  });
+
+  it('先後で同じ筋に歩があっても二歩ではない', () => {
+    const b = withKings();
+    put(b, '7f', { kind: 'P', side: 'sente' });
+    put(b, '7d', { kind: 'P', side: 'gote' });
+    expect(checkBoard(b).ok).toBe(true);
+  });
+
+  it('駒が規定より多ければ成立しない', () => {
+    const b = withKings();
+    // 飛車を 3 枚置く（規定は 2 枚）
+    put(b, '2h', { kind: 'R', side: 'sente' });
+    put(b, '3h', { kind: 'R', side: 'sente' });
+    put(b, '4h', { kind: 'R', side: 'gote' });
+    const result = checkBoard(b);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join()).toContain('R');
+  });
+
+  it('成駒は元の駒として数える', () => {
+    const b = withKings();
+    put(b, '2h', { kind: 'R', side: 'sente' });
+    put(b, '3h', { kind: '+R', side: 'sente' });
+    expect(checkBoard(b).ok).toBe(true);
+    put(b, '4h', { kind: '+R', side: 'gote' });
+    expect(checkBoard(b).ok).toBe(false);
+  });
+
+  it('行き所のない駒を見つける', () => {
+    const b = withKings();
+    put(b, '9a', { kind: 'P', side: 'sente' });
+    expect(checkBoard(b).ok).toBe(false);
+
+    const b2 = withKings();
+    put(b2, '9b', { kind: 'N', side: 'sente' });
+    expect(checkBoard(b2).ok).toBe(false);
+
+    // 成っていれば問題ない
+    const b3 = withKings();
+    put(b3, '9a', { kind: '+P', side: 'sente' });
+    expect(checkBoard(b3).ok).toBe(true);
+  });
+
+  it('後手の行き所のない駒は下段側で判定する', () => {
+    const b = withKings();
+    put(b, '9i', { kind: 'P', side: 'gote' });
+    expect(checkBoard(b).ok).toBe(false);
+  });
+});
+
+describe('overflowCells', () => {
+  /** 全マス NaN の一致度表（駒があるマスだけ後から入れる） */
+  function noScores(): number[][] {
+    return Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => NaN));
+  }
+
+  function setScore(scores: number[][], usi: string, v: number): void {
+    scores[usi.charCodeAt(1) - 97][9 - Number(usi[0])] = v;
+  }
+
+  it('規定どおりなら何も挙げない', () => {
+    const scores = noScores();
+    expect(overflowCells(createInitialState().board, scores)).toEqual([]);
+  });
+
+  it('はみ出した枚数だけ、一致度の低い方から挙げる', () => {
+    // 桂を 5 枚置く（上限 4）。テンプレートの無い成桂が「桂」と読まれた状況。
+    const b = withKings();
+    const scores = noScores();
+    const cells = ['9a', '1a', '9i', '1i', '5e'];
+    for (const [i, usi] of cells.entries()) {
+      put(b, usi, { kind: 'N', side: i < 2 ? 'gote' : 'sente' });
+      setScore(scores, usi, i === 4 ? 0.2 : 0.98); // 5e だけ一致度が低い
+    }
+
+    const over = overflowCells(b, scores);
+    expect(over).toHaveLength(1);
+    expect(over[0]).toEqual({ row: 4, col: 4 }); // 5e
+  });
+
+  it('2 枚はみ出していれば 2 マス挙げる', () => {
+    const b = withKings();
+    const scores = noScores();
+    const cells = ['9a', '1a', '9i', '1i', '5e', '4e'];
+    for (const [i, usi] of cells.entries()) {
+      put(b, usi, { kind: 'N', side: i < 2 ? 'gote' : 'sente' });
+      setScore(scores, usi, i >= 4 ? 0.2 : 0.98);
+    }
+    expect(overflowCells(b, scores)).toHaveLength(2);
+  });
+
+  it('成駒は元の駒として数える', () => {
+    const b = withKings();
+    const scores = noScores();
+    // 飛 2 枚 + 龍 1 枚 = 3 枚で上限 2 を超える
+    for (const [i, usi] of ['2h', '8b', '5e'].entries()) {
+      put(b, usi, { kind: i === 2 ? '+R' : 'R', side: 'sente' });
+      setScore(scores, usi, i === 2 ? 0.3 : 0.99);
+    }
+    expect(overflowCells(b, scores)).toEqual([{ row: 4, col: 4 }]);
+  });
+});
+
+describe('pieceCount', () => {
+  it('初期配置は 40 枚', () => {
+    expect(pieceCount(createInitialState().board)).toBe(40);
+  });
+});
+
+describe('sameSideKindCells', () => {
+  const board = (): Square[][] => Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => null as Square));
+
+  it('同じ側の別の駒に化けたマスを挙げる（起こりえない変化）', () => {
+    // 8f の ▽金 を ▽全（成銀）と読んだ。実測で踏んだ形。
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: '+S', side: 'gote' };
+
+    expect(sameSideKindCells(tracked, read)).toEqual([{ row: 5, col: 1 }]);
+  });
+
+  it('相手の駒に変わったマスは挙げない（取られた形なのでありうる）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: 'S', side: 'sente' };
+
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+
+  it('空になったマスは挙げない（動いた形なのでありうる）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    expect(sameSideKindCells(tracked, board())).toEqual([]);
+  });
+
+  it('未確定のマスは挙げない（読めていないだけ）', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = UNKNOWN;
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+
+  it('同じ駒なら挙げない', () => {
+    const tracked = board();
+    tracked[5][1] = { kind: 'G', side: 'gote' };
+    const read: VisionSquare[][] = board();
+    read[5][1] = { kind: 'G', side: 'gote' };
+    expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+});

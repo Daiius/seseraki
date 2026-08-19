@@ -1,0 +1,193 @@
+/**
+ * マスに駒があるかの判定
+ *
+ * 空マスは盤の木目だけなので輝度がのっぺり並ぶのに対し、駒があるマスは
+ * 黒い駒字と明るい駒面が同居するので輝度が大きく散らばる。実測では
+ * 標準偏差が空マス 2〜9 / 駒あり 51〜71 と 2 山に完全に割れ、間に 40 以上の
+ * 隙間があった。閾値の置き所に神経を使う必要がない。
+ *
+ * 盤の背景演出（終盤に赤くなる等）で輝度の水準自体は動くが、
+ * 標準偏差は水準に依らないのでそのまま使える。
+ *
+ * 入力は「盤ちょうど」に切り出した画像で、これを 9x9 に等分して見る。
+ * 縮小した画像でもそのまま通るので、変化検出用の粗いフレームにも使える。
+ */
+
+import type { GrayImage } from './frame.ts';
+
+/** 標準偏差がこれを超えたら駒あり。2 山の隙間のほぼ中央。 */
+export const OCCUPANCY_THRESHOLD = 30;
+
+/** マスの内側どれだけを見るか。格子線と隣のマスのはみ出しを避ける。 */
+export const CELL_INSET = 0.18;
+
+export interface CellStat {
+  mean: number;
+  sd: number;
+}
+
+/** 盤画像を 9x9 に等分した [row][col] のマスの統計を返す */
+export function cellStats(board: GrayImage, inset = CELL_INSET): CellStat[][] {
+  const cw = board.width / 9;
+  const ch = board.height / 9;
+  const mx = cw * inset;
+  const my = ch * inset;
+
+  const out: CellStat[][] = [];
+  for (let row = 0; row < 9; row++) {
+    out.push([]);
+    for (let col = 0; col < 9; col++) {
+      const x0 = Math.round(cw * col + mx);
+      const y0 = Math.round(ch * row + my);
+      const x1 = Math.round(cw * (col + 1) - mx);
+      const y1 = Math.round(ch * (row + 1) - my);
+
+      let sum = 0;
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        const base = y * board.width;
+        for (let x = x0; x < x1; x++) {
+          sum += board.data[base + x];
+          n++;
+        }
+      }
+      const mean = sum / n;
+      let varSum = 0;
+      for (let y = y0; y < y1; y++) {
+        const base = y * board.width;
+        for (let x = x0; x < x1; x++) {
+          varSum += (board.data[base + x] - mean) ** 2;
+        }
+      }
+      out[row].push({ mean, sd: Math.sqrt(varSum / n) });
+    }
+  }
+  return out;
+}
+
+/** 各マスに駒があるかを 9x9 で返す */
+export function occupancy(
+  board: GrayImage,
+  threshold = OCCUPANCY_THRESHOLD,
+): boolean[][] {
+  return cellStats(board).map((r) => r.map((s) => s.sd > threshold));
+}
+
+/**
+ * これ以下の sd なら「空」と断定してよい。
+ *
+ * 🔴 **2 値では「覆われていて分からない」が書けなかった。** 半透明の演出が
+ * 盤を覆うと駒字が薄れて散らばりが減り、`sd > 30` に届かないマスが「空」と
+ * 断定される。差分の側から見ると「駒が消えた」ことになり、そこで追跡が切れる。
+ *
+ * ⭐ **帯は分かれている**（1 局目 283 枚・13327 マスの実測・追記 84）:
+ *
+ * | sd | 割合 |
+ * |---|---|
+ * | 0〜10 | 98.1% |
+ * | 10〜12 | 0.22%（**谷**） |
+ * | 12 以上 | 221 マス＝1 枚あたり 0.8 マス |
+ *
+ * 戦法エフェクトのピーク（0:20.4）で誤って「空」になった 6 マスの sd は
+ * 13 / 15 / 19 / 25 / 28 / 30 で、通常の空マス（2〜12）とは重ならない。
+ *
+ * ⚠ **12 以上が全部「覆われている」わけではない。** 初期局面（正解が分かっている）
+ * の 1c が sd 26.2 で「空」判定だった——そこには歩がある。つまりこの帯は
+ * **駒の見落とし**でもある。どちらにせよ「空と断定してはいけない」点は同じ。
+ */
+export const EMPTY_MAX_SD = 12;
+
+/** 空 / 覆われていて分からない / 駒あり */
+export type Presence = 'empty' | 'unclear' | 'piece';
+
+export function presenceOf(
+  sd: number,
+  emptyMax = EMPTY_MAX_SD,
+  pieceMin = OCCUPANCY_THRESHOLD,
+): Presence {
+  if (sd > pieceMin) return 'piece';
+  return sd <= emptyMax ? 'empty' : 'unclear';
+}
+
+/**
+ * 各マスの駒の有無を 3 値で返す。
+ *
+ * ⚠ **2 値の `occupancy` は残してある。** 初期局面探し（`findSegments` /
+ * `INITIAL_OCCUPANCY` / `occupancyDistance`）は「盤の配置が変わったか」を
+ * 見るだけなので 2 値でよく、そちらに未確定を持ち込むと距離が定義できなくなる。
+ */
+export function presence(
+  board: GrayImage,
+  emptyMax = EMPTY_MAX_SD,
+  pieceMin = OCCUPANCY_THRESHOLD,
+): Presence[][] {
+  return cellStats(board).map((r) => r.map((s) => presenceOf(s.sd, emptyMax, pieceMin)));
+}
+
+/** 平手の初期配置で駒が置かれているマス */
+export const INITIAL_OCCUPANCY: boolean[][] = [
+  [true, true, true, true, true, true, true, true, true],
+  [false, true, false, false, false, false, false, true, false],
+  [true, true, true, true, true, true, true, true, true],
+  [false, false, false, false, false, false, false, false, false],
+  [false, false, false, false, false, false, false, false, false],
+  [false, false, false, false, false, false, false, false, false],
+  [true, true, true, true, true, true, true, true, true],
+  [false, true, false, false, false, false, false, true, false],
+  [true, true, true, true, true, true, true, true, true],
+];
+
+/** 2 つの occupancy が食い違うマスの数 */
+export function occupancyDistance(a: boolean[][], b: boolean[][]): number {
+  let n = 0;
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      if (a[row][col] !== b[row][col]) n++;
+    }
+  }
+  return n;
+}
+
+/**
+ * マウスポインタが乗っているマスか
+ *
+ * ポインタは**白い矢印**で、盤の木目（実測 130〜210）よりはっきり明るい。
+ * マス内に極端に明るい画素がまとまってあれば、そこにポインタがいるとみてよい。
+ *
+ * ポインタが乗ると輝度の散らばりが増えて空マスが「駒あり」と誤判定され、
+ * テンプレート照合が適当な駒を当ててしまう。**駒を動かす瞬間ポインタは必ず
+ * 盤上にいる**ので、いちばん読みたい場面でいちばん邪魔になる。
+ *
+ * 集めた「読めなかったマス」23 枚を並べて見たところ、**大半がポインタだった**
+ * （成駒は数枚）。誤認識の主因はテンプレート不足ではなくこれだった。
+ */
+export function hasPointer(cell: GrayImage, threshold = POINTER_BRIGHTNESS, ratio = POINTER_AREA): boolean {
+  let bright = 0;
+  for (const v of cell.data) if (v > threshold) bright++;
+  return bright / cell.data.length > ratio;
+}
+
+/**
+ * これより明るい画素はポインタの白とみなす。
+ *
+ * 実測（4941 マス）で決めた。この基準を超える画素を 1% 以上含むマスは 41 個で、
+ * フレーム 61 枚に対し 1 枚あたり 0.67 マス。**ポインタは常に 1 個**なので妥当な数。
+ * 基準を 225 に下げると 546 マス（1 枚あたり 8.9 マス）に急増し、駒や盤の
+ * 明るい部分を拾い始める。マス内の最大輝度は中央 214 なので、235 で分離が成立する。
+ */
+export const POINTER_BRIGHTNESS = 235;
+
+/**
+ * マスのこの割合を超えて白ければポインタがいる。
+ *
+ * ⚠ 実測の分布だけを見て 1% に下げたら**最終結果が悪化した**（最長の断片が
+ * 26 手 → 19 手）。駒の明るい部分も 235 を超えることがあり、本物の駒まで
+ * 「読めなかった」扱いにしてしまう。中間の指標（何マス引っ掛かるか）が
+ * それらしく見えても、**抽出できた手で判断しないといけない**。
+ */
+export const POINTER_AREA = 0.04;
+
+/** 目視用に occupancy を 9 行の文字列にする */
+export function formatOccupancy(occ: boolean[][]): string {
+  return occ.map((r) => r.map((v) => (v ? '#' : '.')).join('')).join('\n');
+}

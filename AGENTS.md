@@ -23,6 +23,8 @@
 | [prd/07-auth-and-privacy.md](./prd/07-auth-and-privacy.md) | 認証 / API_KEY / 公開配置 |
 | [prd/08-roadmap.md](./prd/08-roadmap.md) | フェーズ分け / 未実装・計画中 / 確定事項 |
 | [prd/09-analytics.md](./prd/09-analytics.md) | 分析ページ（戦型別成績 / 取りこぼし / 一覧へのドリルダウン） |
+| [prd/10-video-analysis.md](./prd/10-video-analysis.md) | 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索） |
+| [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 
@@ -78,6 +80,9 @@ pnpm --filter worker test   # worker のユニットテスト（vitest）
 pnpm --filter web test      # web のユニットテスト（vitest・純ロジックのみ）
 pnpm --filter shared test   # shared のユニットテスト（vitest・将棋ドメインの純ロジック）
 pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run / REDETECT_APPLY=1 で実書込）
+pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
+pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
+pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定（移行時に 1 回・既定 dry-run / --apply で実書込）
 ```
 
 > **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
@@ -86,6 +91,23 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > **`db:migrate`/`db:baseline`/`db:generate` は接続先を呼び出し環境の `DB_HOST`/`DB_PORT`/`MYSQL_*` から取る**（本番は prod 資格情報を
 > export して実行）。dev DB に対して試すときは `.env.database` を読む **`db:migrate:dev` / `db:baseline:dev`** を使う。
 > 本番接続の具体（cloudflared tunnel・prod 資格情報）は `.claude-personal/`。
+>
+> 🔴 **大文字小文字を区別したい列は照合順序を明示する。** MySQL の既定は
+> `utf8mb4_0900_ai_ci` で、**`daiius` と `Daiius` を同じ値として扱う**。UNIQUE を張ると
+> 片方しか登録できず、**JS 側（`Set` などで区別する）と食い違う**。実際に踏んだ
+> （`user_aliases.name`）。drizzle は照合順序を扱えないので、**マイグレーション SQL に
+> `COLLATE utf8mb4_bin` を手で書く**。⚠ `db:push` で作り直すと既定へ戻る。
+>
+> 🔴 **新しいテーブルを足したら、DB の FK を `show create table` で確認する。**
+> drizzle-kit 1.0.0-beta.23 は **新規テーブルの FK から `ON DELETE CASCADE` を落とす**
+> （`snapshot.json` には `"onDelete": "CASCADE"` が正しく入るのに、**`db:generate` の SQL にも
+> `db:push` の適用結果にも出ない**）。実際に踏んだ（`video_kifu_sources`）。
+> `.references(..., { onDelete: 'cascade' })` でも `foreignKey().onDelete('cascade')` でも同じ。
+> **既存テーブルの FK は正しい**（過去の drizzle-kit で生成されたもの）ので、差分を見ても気づけない。
+> ⚠ **CASCADE が無いと親行を消せなくなる**（棋譜の削除が FK 制約で落ちる）。**発現は削除時で、
+> 作った直後には何も起きない。**
+> - `db:generate`: 出力された `migration.sql` を手で直す（snapshot は正しいので次回生成の差分にならない）
+> - `db:push`（dev）: 適用後に `ALTER TABLE … DROP FOREIGN KEY` → `ADD CONSTRAINT … ON DELETE CASCADE`
 >
 > ⚠ **本番のマイグレーションはホストから流さず、イメージ同梱のエントリを使う**（下記）。
 > **生成は drizzle-kit（dev 専用）、適用は drizzle-orm の migrator**（本番の実行時依存）なので、
@@ -125,6 +147,18 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 > `command: ["/app/redetect-tactics.js"]`。
 > ⚠ ホストから叩く `pnpm tactics:redetect` も残してあるが、接続先は呼び出し環境の
 > `DB_HOST`/`DB_PORT`/`MYSQL_*` 次第なので、**取り違えの余地がある方**であることを承知して使う。
+
+> **局面索引の一括再構築**（`prd/10` §3.2）: 局面キーの作り方を変えたら流す。
+> **既定は dry-run**、`REBUILD_POSITIONS_APPLY=1` で実書込。
+> ```bash
+> docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 server pnpm --filter server exec tsx rebuild-positions.ts
+> ```
+> 🔴 **`kifu_positions` を作るマイグレーションの直後に、本番でも一度流す**（`dist/rebuild-positions.js`）。
+> マイグレーションは**空のテーブルを作るだけ**で、既存棋譜の行は 1 つも入らない。流し忘れると
+> **局面検索に既存棋譜が 1 件も出ず、初期局面すら 404 になる**（新規取り込みぶんだけが現れる）。
+> ```bash
+> docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 <server サービス> /app/rebuild-positions.js
+> ```
 
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

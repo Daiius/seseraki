@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
+import { Link } from '@tanstack/react-router';
 import {
   applyMove,
+  positionSfen,
   usiToJapaneseWithPiece,
   type BoardState,
   type PieceKind,
@@ -16,7 +18,6 @@ import {
   type MoveLoss,
   type Thresholds,
 } from '../lib/cpl';
-import { resolveUserSide } from '../lib/self';
 import { EvalGraph } from './EvalGraph';
 
 const PIECE_DISPLAY: Record<PieceKind, string> = {
@@ -84,11 +85,20 @@ interface Props {
   analyses: Analysis[];
   sente?: string | null;
   gote?: string | null;
+  /**
+   * 主体の手番（prd/11 §4）。**server が導出した値**を渡す。
+   * ⚠ null は「自分の側が決まらない」——理由（両対局者とも候補に一致 / 名前候補が未設定 /
+   * 自分の対局ではない）はここでは区別しない。**全体の件数は `/settings` で見える**
+   *
+   * 🔒 **必須にする**（`?` を付けない）。省略できると、渡し忘れたときに
+   * 「主体側が決まらない」と同じ見た目になり、**盤の反転も自分視点の評価も静かに消える**。
+   */
+  subjectSide: 'sente' | 'gote' | null;
   /** 悪手判定の閾値（ページ側で localStorage から読み込んで配る） */
   thresholds: Thresholds;
 }
 
-function HandDisplay({
+export function HandDisplay({
   hand,
   side,
   name,
@@ -131,7 +141,8 @@ function lastMoveDestination(usiMove: string): [number, number] | null {
   return null;
 }
 
-function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
+// 局面検索（/positions）でも使うので export する（盤の見た目を 1 箇所に保つ）
+export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
   const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
   const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
   const rowOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
@@ -186,10 +197,10 @@ function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMove
   );
 }
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresholds }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
-  const { side: userSide, ambiguous: userAmbiguous } = resolveUserSide(sente, gote);
+  const userSide = subjectSide ?? null;
 
   const totalMoves = positions.length - 1;
   const [moveIndex, setMoveIndex] = useState(0);
@@ -352,12 +363,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresho
 
   return (
     <div className="flex flex-col">
-      {userAmbiguous && (
-        <div className="alert alert-warning mb-2 text-sm">
-          両対局者とも自分の名前候補に一致しています（先手={sente} / 後手={gote}）。
-          自分視点の表示（盤の向き・悪手ハイライト等）は無効化しました。
-        </div>
-      )}
       {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
       <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
       {/* 盤面 */}
@@ -418,6 +423,15 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, thresho
           </span>
         )}
         <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
+          {/* 局面検索へ（prd/10 §6.3）。**表示中の局面**を鍵にして横断検索へ飛ぶ */}
+          <Link
+            to="/positions"
+            search={{ pos: positionSfen(displayState) }}
+            className="btn btn-ghost btn-xs"
+            title="この局面を通った他の棋譜と、そこからの分岐を見る"
+          >
+            この局面を探す
+          </Link>
           <span className="font-mono text-base-content/60">
             {moveIndex} / {totalMoves}
           </span>

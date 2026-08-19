@@ -1,5 +1,9 @@
 import {
   bigint,
+  boolean,
+  customType,
+  date,
+  foreignKey,
   index,
   int,
   json,
@@ -14,6 +18,63 @@ import {
   varchar,
 } from 'drizzle-orm/mysql-core';
 import { defineRelations } from 'drizzle-orm';
+
+/**
+ * ユーザー（自分）。**認証は単一アカウントのまま**（prd/07）で、セッションは常に
+ * ただ一人のこの行を指す。招待の本体（ユーザーごとの資格情報・セッションへの userId・
+ * 所有者スコープ）は prd/11 §1 のスコープ外。
+ */
+export const users = mysqlTable('users', {
+  id: serial().primaryKey(),
+  /** 画面に出す名前。**対局者名とは別**（対局者名は `userAliases`） */
+  displayName: varchar({ length: 100 }).notNull(),
+  createdAt: timestamp().notNull().defaultNow(),
+  updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+});
+
+/**
+ * 対局者名と突き合わせる名前候補（prd/11 §2）。
+ *
+ * 🔒 **`name` に UNIQUE を張る。** 別のユーザーが同じ対局者名を登録できると、
+ * **同じ棋譜が 2 人の「自分の対局」になり、両方の成績に入る**。
+ *
+ * ⚠ **旧名を消してはいけない**（prd/11 §2.2）。消すと、その名前で指した過去の棋譜が
+ * 「自分の対局」でなくなり、成績から静かに落ちる。名前を変えたときは**足す**。
+ */
+export const userAliases = mysqlTable(
+  'user_aliases',
+  {
+    id: serial().primaryKey(),
+    userId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /**
+     * 棋譜の `sente` / `gote` と突き合わせる値。swars の ID もここに入る。
+     *
+     * 🔴 **照合順序は `utf8mb4_bin`（大文字小文字を区別する）。** MySQL の既定
+     * （`utf8mb4_0900_ai_ci`）では `daiius` と `Daiius` が**同じ値として扱われ**、
+     * UNIQUE に引っかかって両方を登録できない。実際に踏んだ。
+     * ⚠ 判定する JS 側（`subjectSideFromNames`）は `Set` で区別するので、
+     * **DB 側だけ区別しないと食い違う**。
+     * ⚠ drizzle は照合順序を扱えないので**マイグレーション SQL で指定している**。
+     * `db:push` で作り直すと既定に戻るため、dev で作り直したときは要確認。
+     */
+    name: varchar({ length: 100 }).notNull(),
+    /**
+     * 有効期間（prd/11 §5）。**既定は無期限**（両方 null）で、
+     * 旧名を他人が使い始めるなどの**衝突に気づいたときだけ埋める**。
+     * ⚠ `playedAt` が NULL の棋譜では期間を見ない（prd/11 §5.3）
+     */
+    validFrom: date({ mode: 'string' }),
+    validTo: date({ mode: 'string' }),
+    createdAt: timestamp().notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+    }).onDelete('cascade'),
+    uniqueIndex('user_aliases_name_uq').on(table.name),
+  ],
+);
 
 export const kifus = mysqlTable(
   'kifus',
@@ -30,7 +91,7 @@ export const kifus = mysqlTable(
     swarsGameKey: varchar({ length: 255 }).unique(),
     playedAt: timestamp(),
     // playedAt の解釈に用いたタイムゾーン。手動貼り付け KIF は開始日時に
-    // タイムゾーン欄が無いため、署名判定の結果（"JST" 既定 / "UTC"）を残す。
+    // タイムゾーン欄が無いため、投入時に決めた TZ（"JST" 既定 / "UTC" は投入時指定）を残す。
     // swars 経路は gameKey 由来で常に "JST"。
     sourceTz: varchar({ length: 8 }),
     analysisCompletedAt: timestamp(),
@@ -39,11 +100,77 @@ export const kifus = mysqlTable(
     // （実行中の旧解析がリセット後の状態を上書きするのを防ぐ）
     analysisRevision: int().notNull().default(0),
     memo: text(),
+    // 棋譜の出所（prd/10 §2.1）。動画解析（'video'）は自分の対局ではないため、
+    // 🔒 一覧・分析・統計のクエリは `source <> 'video'` を**既定で強制する**
+    // （引数で外せる条件にしない。prd/10 §2.2）。既定値は安全側の 'manual'。
+    source: mysqlEnum(['manual', 'swars', 'video']).notNull().default('manual'),
+    /**
+     * **このデータを持っている人**（prd/11 §3）。⚠ 対局者ではない——動画解析の棋譜も
+     * 投入した人が所有者で、対局者は `sente` / `gote` の話。
+     */
+    ownerId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /**
+     * 主体の手番（prd/11 §4）。**導出値**で、`source = 'video'` は `bottomIsSente` から、
+     * それ以外は所有者の名前候補との突き合わせで決まる。両対局者とも一致したら null。
+     */
+    subjectSide: mysqlEnum(['sente', 'gote']),
     createdAt: timestamp().notNull().defaultNow(),
     updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
   },
   (table) => [
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
+    // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
+    index('kifus_source_idx').on(table.source),
+    // ⚠ ユーザーを消しても棋譜は道連れにしない（CASCADE にしない）。
+    // ユーザー削除は prd/11 のスコープ外で、消せないことが正しい既定
+    foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
+  ],
+);
+
+/**
+ * 動画解析の由来メタ（`kifus` と 1:1。prd/10 §3.1）。
+ *
+ * **`kifus` に列を足さず外出しする**のは、自分の対局行で常に NULL になる列を
+ * 中心テーブルに持ち込まないため。
+ *
+ * ⭐ **`raw` に走査の生出力を丸ごと持つ**（1 局 8〜16KB）。後から仕様を変えても
+ * 再走査せずに派生値を作り直せる。手ごとのメタ（time / side / inferredKind）はここに入る。
+ * 🔒 索引が要ると分かった値だけ、後から `raw` の外に列として昇格させる。
+ */
+export const videoKifuSources = mysqlTable(
+  'video_kifu_sources',
+  {
+    // ⚠ FK は下の table extras で `foreignKey()` として書く。列側の `.references()` は
+    // **単一列 PK のテーブルでは生成 SQL から `ON DELETE CASCADE` が落ちる**
+    // （複合 PK の kifuTactics では落ちない）。CASCADE が無いと棋譜を消せなくなる
+    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 動画の識別子 */
+    videoId: varchar({ length: 32 }).notNull(),
+    /** その動画の何局目か（1 始まり） */
+    gameIndex: int().notNull(),
+    /** 断片の開始秒 / 終了秒 */
+    startedAtSec: int().notNull(),
+    endedAtSec: int().notNull(),
+    /** 画面の下が先手か（録画者の側を示す。主体側の導出に使う。prd/10 §3.3） */
+    bottomIsSente: boolean().notNull(),
+    /** 走査時のコミット。上書きの経緯を辿るために残す */
+    extractorRev: varchar({ length: 40 }).notNull(),
+    /** 走査の生出力（range / replay / moves[{time,usi,side,inferredKind}]） */
+    raw: json().notNull(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kifuId] }),
+    foreignKey({
+      columns: [table.kifuId],
+      foreignColumns: [kifus.id],
+    }).onDelete('cascade'),
+    // 「同じ動画の同じ局」は 1 つの実体。再取り込みはこのキーで上書きする（prd/10 §4.3）
+    uniqueIndex('video_kifu_sources_video_id_game_index_uq').on(
+      table.videoId,
+      table.gameIndex,
+    ),
   ],
 );
 
@@ -90,6 +217,70 @@ export const kifuTactics = mysqlTable(
   ],
 );
 
+/**
+ * 固定長バイト列（`binary(N)`）を **Buffer のまま**扱う。
+ *
+ * ⚠ drizzle の `binary()` は値を string として扱うので、そのままでは
+ * `Buffer` を渡せず、読み出しも文字列になる（charset 変換で壊れうる）。
+ * 局面の盤・持ち駒はバイト列そのものに意味があるため、型を通す。
+ */
+const bytes = (length: number) =>
+  customType<{ data: Buffer; driverData: Buffer }>({
+    dataType: () => `binary(${length})`,
+  })();
+
+/**
+ * 局面索引（`kifus` に紐付く派生値。prd/10 §3.2）。
+ *
+ * **全棋譜（自分の対局を含む）の全局面**を展開する。正は `kifus.usiMoves` で、
+ * この表は**手順前後を吸収して盤の配置で探す**ための索引にすぎない（`kifuTactics` と同じ立場）。
+ *
+ * 🔒 **`usiMoves` が変われば必ず作り直す**（同一トランザクション）。全件の作り直しは
+ * `rebuild-positions.ts`。
+ */
+export const kifuPositions = mysqlTable(
+  'kifu_positions',
+  {
+    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 0 = 初期局面。N は N 手適用後の局面 */
+    moveNumber: int().notNull(),
+    /**
+     * この局面に**至った直前の手**（USI）。`moveNumber = 0` では null。
+     * ⭐ 枝の集計に要る——局面キーだけでは「同じ局面から指された別の手」を区別できない
+     * （`moveNumber` は必ず +1 になるので集計単位にならない。prd/10 §5.3）
+     */
+    move: varchar({ length: 8 }),
+    /**
+     * 局面キー（SFEN の 盤 / 手番 / 持ち駒）。**手数は含めない**ので手順前後が合流する。
+     * ⚠ ハッシュにしない——衝突すると無関係な棋譜が検索結果に混ざり、気づきにくい。
+     * 文字列そのものなら衝突せず、URL に載せられ、人が読める（prd/10 §5.1）
+     */
+    sfen: varchar({ length: 200 }).notNull(),
+    /** 先手側だけの配置（盤 + 先手の持ち駒）。相手の駒は空として書く */
+    senteSfen: varchar({ length: 200 }).notNull(),
+    goteSfen: varchar({ length: 200 }).notNull(),
+    /** 盤 81 マス（1 マス 1 バイト）。距離の計算に読む（prd/10 §5.2） */
+    board: bytes(81).notNull(),
+    /** 持ち駒（先手 7 種 → 後手 7 種の枚数） */
+    hands: bytes(14).notNull(),
+    sideToMove: mysqlEnum(['b', 'w']).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.kifuId, table.moveNumber] }),
+    foreignKey({
+      columns: [table.kifuId],
+      foreignColumns: [kifus.id],
+    }).onDelete('cascade'),
+    index('kifu_positions_sfen_idx').on(table.sfen),
+    index('kifu_positions_sente_sfen_idx').on(table.senteSfen),
+    index('kifu_positions_gote_sfen_idx').on(table.goteSfen),
+    // 近い局面の検索は `moveNumber` の範囲で候補を粗く絞る（prd/10 §5.2）。
+    // ⚠ **PK は `(kifuId, moveNumber)` なので、この範囲条件には使えない**
+    //（先頭列が kifuId のため）。索引が無いと全局面を走査することになる
+    index('kifu_positions_move_number_idx').on(table.moveNumber),
+  ],
+);
+
 export const candidateMoves = mysqlTable(
   'candidate_moves',
   {
@@ -117,10 +308,29 @@ export const candidateMoves = mysqlTable(
 );
 
 export const relations = defineRelations(
-  { kifus, moveAnalyses, candidateMoves, kifuTactics },
+  {
+    kifus,
+    moveAnalyses,
+    candidateMoves,
+    kifuTactics,
+    videoKifuSources,
+    kifuPositions,
+    users,
+    userAliases,
+  },
   (r) => ({
     kifus: {
       moveAnalyses: r.many.moveAnalyses(),
+      videoSource: r.one.videoKifuSources({
+        from: r.kifus.id,
+        to: r.videoKifuSources.kifuId,
+      }),
+    },
+    videoKifuSources: {
+      kifu: r.one.kifus({
+        from: r.videoKifuSources.kifuId,
+        to: r.kifus.id,
+      }),
     },
     moveAnalyses: {
       kifu: r.one.kifus({

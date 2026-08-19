@@ -13,6 +13,16 @@ const entryPoints = {
     //   docker compose run --rm <service>  # command: ["/app/redetect-tactics.js"]
     // ⚠ 本番イメージは distroless（ENTRYPOINT=node）なので command はパスだけでよい。
     "redetect-tactics": "./redetect-tactics.ts",
+    // 局面索引の一括再構築。**同梱しないと本番で既存棋譜が検索に出ない**——
+    // マイグレーションは空の kifu_positions を作るだけで、既存棋譜の行は
+    // 再構築を流すまで 1 行も入らない（新規取り込みぶんしか現れない）。
+    //   docker compose run --rm <service>  # command: ["/app/rebuild-positions.js"]
+    "rebuild-positions": "./rebuild-positions.ts",
+    // 主体側の一括再導出（導出規則を直したとき）と、移行時に 1 回だけ流す名前の設定。
+    // ⚠ backfill-user は引数を取る:
+    //   docker compose run --rm <service> /app/backfill-user.js --display "..." --names "..." --apply
+    "rebuild-subjects": "./rebuild-subjects.ts",
+    "backfill-user": "./backfill-user.ts",
     // マイグレーションの適用。**同梱する理由はポートを開けずに済むことではなく、
     // 適用する SQL とコードのバージョンが構造的に一致すること。**
     // ホストから流す方式は「手元にある SQL を、本番で動いているイメージへ流す」ことになり、

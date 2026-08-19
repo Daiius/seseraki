@@ -116,6 +116,57 @@ describe('detectTactics', () => {
     });
   });
 
+  describe('右玉 — 居飛車で玉を右へ置く作戦', () => {
+    it('玉が右辺へ出て飛車が 2八 のままなら右玉', () => {
+      // ▲7六歩 △3四歩 ▲4八玉 △8四歩 ▲3八玉。飛車は 2八 に据えたまま
+      const ls = detectTactics(['7g7f', '3c3d', '5i4h', '8c8d', '4h3h']);
+      expect(names(ls)).toContain('sente:右玉');
+      // **玉が右へ出た瞬間**に成立する（飛車は初手から 2八 に居るので順序は問わない）
+      expect(turnOf(ls, '右玉')).toBe(3);
+    });
+
+    it('飛車を 2九 へ引いた形でも立つ（bioshogi の 28 / 29 と同じ）', () => {
+      // ▲7六歩 △3四歩 ▲3六歩 △8四歩 ▲3七桂 △8五歩 ▲2九飛 △3二金 ▲4八玉
+      const ls = detectTactics([
+        '7g7f', '3c3d', '3g3f', '8c8d', '2i3g', '8d8e', '2h2i', '4a3b', '5i4h',
+      ]);
+      expect(names(ls)).toContain('sente:右玉');
+      expect(turnOf(ls, '右玉')).toBe(9);
+    });
+
+    it('美濃囲いの振り飛車は玉が右へ来ても右玉ではない（飛車が 2 筋に居ない）', () => {
+      // ▲7六歩 △3四歩 ▲6八飛 △8四歩 ▲4八玉 △8五歩 ▲3八玉 — 振り飛車の普通の駒組み。
+      // 同時条件なので、玉が右へ来た時点で飛車が左に居れば自然に落ちる
+      const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '5i4h', '8d8e', '4h3h']);
+      expect(names(ls)).toContain('sente:四間飛車');
+      expect(names(ls)).not.toContain('sente:右玉');
+    });
+
+    it('玉を先に左辺へ囲っていたら、あとで右へ回っても右玉ではない（判断5）', () => {
+      // ▲7六歩 △3四歩 ▲6八玉 △8四歩 ▲5九玉 △8五歩 ▲4八玉。
+      // 囲ったあと中盤に玉が右へ逃げる形を戦法として拾わないためのガード
+      const ls = detectTactics(['7g7f', '3c3d', '5i6h', '8c8d', '6h5i', '8d8e', '5i4h']);
+      expect(names(ls)).not.toContain('sente:右玉');
+    });
+
+    it('袖飛車（3八飛）で玉が右に居ても右玉ではない', () => {
+      // 飛車の条件を `_飛車右辺`（2〜4筋）にすると拾ってしまう形。bioshogi も 2八 / 2九 に限る
+      const ls = detectTactics(['7g7f', '3c3d', '2h3h', '8c8d', '5i4h']);
+      expect(names(ls)).toContain('sente:袖飛車');
+      expect(names(ls)).not.toContain('sente:右玉');
+    });
+
+    it('右玉は居飛車を含意しない（2六歩を突かない右玉が実在する）', () => {
+      // `リッチブリッジ.kif` は bioshogi 自身が「堅陣が特徴なので攻めの手は指さない。
+      // つまり26歩としない」と書いている形。飛車先を突かないので `居飛車` の証拠が揃わない
+      const ls = detectTactics(['7g7f', '3c3d', '5i4h', '8c8d', '4h3h']);
+      expect(names(ls)).toContain('sente:右玉');
+      expect(names(ls)).not.toContain('sente:居飛車');
+      // 表示の抑制でも畳まれない（`IMPLIES` に入れていない）
+      expect(names(suppressForDisplay(ls))).toContain('sente:右玉');
+    });
+  });
+
   describe('相掛かりと囲いは別の軸（prd/01 §6.3）', () => {
     it('相掛かりの出だしから雁木に組んでも相掛かりのまま', () => {
       // `ショーダンオリジナル.kif` の出だし。13〜15手目に飛車先を交換してから
@@ -163,6 +214,30 @@ describe('detectTactics', () => {
         '2e2d', '2c2d', '2h2d',
       ]);
       expect(names(ls)).toContain('both:相掛かり');
+    });
+  });
+
+  describe('横歩取りは「横歩を取った」ことまで見る', () => {
+    it('2四→3四と出て相手の 3四歩を取れば横歩取り', () => {
+      // ▲7六歩 △3四歩 ▲2六歩 △8四歩 ▲2五歩 △8五歩 ▲7八金 △3二金
+      // ▲2四歩 △同歩 ▲同飛 △8六歩 ▲同歩 △同飛 ▲3四飛（15手目に横歩を取る）
+      const ls = detectTactics([
+        '7g7f', '3c3d', '2g2f', '8c8d', '2f2e', '8d8e', '6i7h', '4a3b',
+        '2e2d', '2c2d', '2h2d', '8e8f', '8g8f', '8b8f', '2d3d',
+      ]);
+      expect(names(ls)).toContain('sente:横歩取り');
+      expect(turnOf(ls, '横歩取り')).toBe(15);
+    });
+
+    it('⚠ 相手の歩が 3五へ逃げた後の空き 3四に回るのは横歩取りではない', () => {
+      // ▲7六歩 △3四歩 ▲2六歩 **△3五歩**（3四を空ける） ▲2五歩 △8四歩
+      // ▲2四歩 △同歩 ▲同飛 △8五歩 ▲3四飛 — 歩は 1 枚も取っていない。
+      // 飛車の位置だけを見ていると、この中盤の飛車回りを横歩取りとして拾う
+      const ls = detectTactics([
+        '7g7f', '3c3d', '2g2f', '3d3e', '2f2e', '8c8d', '2e2d', '2c2d',
+        '2h2d', '8d8e', '2d3d',
+      ]);
+      expect(names(ls)).not.toContain('sente:横歩取り');
     });
   });
 

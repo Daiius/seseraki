@@ -31,7 +31,9 @@
   分析ページ（戦型別成績・取りこぼし・一覧へのドリルダウン。[09](./09-analytics.md)）/
   LLM 解説用 Markdown エクスポート / cookie セッション認証。
 - **無効化**: swars 一括取り込み（実装は残置・フロント/API 遮断。[04](./04-ingestion.md) §4）。
-- **計画中**: 局面単位の再解析 / LLM 解説の自動生成（commentator）。
+- **計画中**: 局面単位の再解析 / LLM 解説の自動生成（commentator）/
+  動画解析（録画から復元した棋譜の保存・局面索引・ツリー検索。[10](./10-video-analysis.md)）/
+  ユーザー（自分）の server 側への移行（[11](./11-users.md)）。
   詳細は [08-roadmap.md](./08-roadmap.md)。
 
 ## アーキ概観
@@ -76,3 +78,5 @@
 7. [07-auth-and-privacy.md](./07-auth-and-privacy.md) — 認証 / API_KEY / 公開配置
 8. [08-roadmap.md](./08-roadmap.md) — フェーズ分け / 未実装・計画中 / 確定事項
 9. [09-analytics.md](./09-analytics.md) — 分析ページ（戦型別成績 / 取りこぼし / 一覧へのドリルダウン）
+10. [10-video-analysis.md](./10-video-analysis.md) — 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索）
+11. [11-users.md](./11-users.md) — ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出

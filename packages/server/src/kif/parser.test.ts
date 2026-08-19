@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseKif, parseRank } from "./parser.js";
+import { detectLegacyUtcTimezone, parseKif, parseRank } from "./parser.js";
 
 /** ヘルパー: KIF テキストから USI 指し手列を取得 */
 function parseToUsi(kifText: string): string[] {
@@ -425,8 +425,9 @@ describe("parseKif", () => {
       expect(header.sourceTz).toBe("JST");
     });
 
-    it("UTC 署名（KIF形式コメント + 持ち時間）の開始日時は UTC として解釈する", () => {
-      // アプリ B は開始日時を UTC で書き出す。JST 決め打ちだと 9h ずれるため署名で判別。
+    it("旧 UTC 署名（KIF形式コメント + 持ち時間）でも取り込みは JST として解釈する", () => {
+      // App B は開始日時を JST で書くようになった。署名は変わらないので、署名で UTC と
+      // 判定し続けると playedAt が 9h 未来へずれる。自動判定は廃止し、既定を JST にした。
       const kif = `# ----  KIF形式  ----
 開始日時：2026/07/17 14:57:00
 手合割：平手
@@ -437,51 +438,18 @@ describe("parseKif", () => {
    2 投了
 `;
       const { header } = parseKif(kif);
-      expect(header.sourceTz).toBe("UTC");
-      // 14:57 UTC = 05:57Z（＝実際は 23:57 JST の対局）
-      expect(header.playedAt?.toISOString()).toBe("2026-07-17T14:57:00.000Z");
+      expect(header.sourceTz).toBe("JST");
+      // 14:57 JST = 05:57Z
+      expect(header.playedAt?.toISOString()).toBe("2026-07-17T05:57:00.000Z");
     });
 
-    it("持ち時間のみ / KIF形式コメントのみでは UTC と判定しない（既定 JST）", () => {
-      expect(
-        parseKif(`開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`).header.sourceTz,
-      ).toBe("JST");
-      expect(
-        parseKif(`# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n`).header.sourceTz,
-      ).toBe("JST");
-    });
-
-    it("終了日時/場所を持つ JST 系アプリは署名が一致しても UTC と判定しない", () => {
-      // KIF形式コメント + 持ち時間 が揃っていても、終了日時/場所があれば App B ではない
-      const withEnd = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
-終了日時：2026/07/17 15:10:00
-持ち時間：10分+30秒
-`;
-      expect(parseKif(withEnd).header.sourceTz).toBe("JST");
-      const withPlace = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
-場所：-
-持ち時間：10分+30秒
-`;
-      expect(parseKif(withPlace).header.sourceTz).toBe("JST");
-    });
-
-    it("KIF形式コメントが先頭行でない場合は UTC と判定しない", () => {
-      const notFirst = `開始日時：2026/07/17 14:57:00
-# ----  KIF形式  ----
-持ち時間：10分+30秒
-`;
-      expect(parseKif(notFirst).header.sourceTz).toBe("JST");
-    });
-
-    it("tzOverride を渡すと署名判定より優先する（投入時のユーザー選択）", () => {
-      // 署名上は JST の KIF でも、UTC 指定なら UTC 解釈（+9h ずれる）
+    it("tzOverride を渡すと既定の JST より優先する（投入時のユーザー選択）", () => {
+      // JST の KIF でも、UTC 指定なら UTC 解釈（+9h ずれる）
       const jstKif = `開始日時：2026/07/15 15:54:18\n`;
       const asUtc = parseKif(jstKif, "UTC").header;
       expect(asUtc.sourceTz).toBe("UTC");
       expect(asUtc.playedAt?.toISOString()).toBe("2026-07-15T15:54:18.000Z");
-      // 署名上は UTC の KIF でも、JST 指定なら JST 解釈
+      // 旧 UTC 署名の KIF でも、JST 指定なら JST 解釈
       const bKif = `# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`;
       const asJst = parseKif(bKif, "JST").header;
       expect(asJst.sourceTz).toBe("JST");
@@ -493,6 +461,50 @@ describe("parseKif", () => {
       expect(parseKif(`開始日時：2026/02/30 12:00:00\n`).header.playedAt).toBeNull();
       // 不正な時刻も同様
       expect(parseKif(`開始日時：2026/07/15 25:00:00\n`).header.playedAt).toBeNull();
+    });
+  });
+
+  // 取り込み経路からは外したが、切替前に書き出された過去の KIF を読み直す backfill が使う。
+  // 署名そのものが変わったわけではないので、指紋の絞り込みはそのまま検証しておく。
+  describe("旧 UTC 署名の判定（過去行の再導出専用）", () => {
+    it("3 条件が揃ったものだけ UTC とみなす", () => {
+      const bKif = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+持ち時間：10分+30秒
+`;
+      expect(detectLegacyUtcTimezone(bKif)).toBe("UTC");
+    });
+
+    it("持ち時間のみ / KIF形式コメントのみでは UTC とみなさない", () => {
+      expect(
+        detectLegacyUtcTimezone(`開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`),
+      ).toBe("JST");
+      expect(
+        detectLegacyUtcTimezone(`# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n`),
+      ).toBe("JST");
+    });
+
+    it("終了日時/場所を持つ JST 系アプリは署名が一致しても UTC とみなさない", () => {
+      const withEnd = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+終了日時：2026/07/17 15:10:00
+持ち時間：10分+30秒
+`;
+      expect(detectLegacyUtcTimezone(withEnd)).toBe("JST");
+      const withPlace = `# ----  KIF形式  ----
+開始日時：2026/07/17 14:57:00
+場所：-
+持ち時間：10分+30秒
+`;
+      expect(detectLegacyUtcTimezone(withPlace)).toBe("JST");
+    });
+
+    it("KIF形式コメントが先頭行でない場合は UTC とみなさない", () => {
+      const notFirst = `開始日時：2026/07/17 14:57:00
+# ----  KIF形式  ----
+持ち時間：10分+30秒
+`;
+      expect(detectLegacyUtcTimezone(notFirst)).toBe("JST");
     });
   });
 

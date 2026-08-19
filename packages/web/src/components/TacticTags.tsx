@@ -1,5 +1,6 @@
 import { attributionOf, suppressForDisplay, type TacticLabel } from 'shared';
-import type { UserSide } from '../lib/self';
+/** 主体の手番（prd/11 §4）。null は「自分の側が決まらない」 */
+export type UserSide = 'sente' | 'gote' | null;
 
 /**
  * 戦型ラベルのタグ表示（prd/03 §2.1.2）。
@@ -72,7 +73,7 @@ export function legendModeOf(
  * 判定できないときはタグが ▲△ を出すので凡例も ▲△ にする。
  *
  * ⚠ **どちらを出すかは「名前候補が設定されているか」では決まらない**（指摘 OCL-66ED0D3A）。
- * 色分けは `resolveUserSide` が**棋譜ごとに**解決するので、設定済みでも自分が参加していない
+ * 色分けは **server が導出した `subjectSide`**（prd/11 §4）で決まるので、設定済みでも自分が参加していない
  * 対局・対局者名の表記が違う対局・双方が候補に一致する対局は ▲△ 表示になる。
  * **ページに実際に出ている分け方だけを渡すこと**（{@link legendModeOf} で数える）。
  * 混在するなら両方出す（それが事実なので）。

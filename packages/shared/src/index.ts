@@ -2,3 +2,4 @@
 // web / server / worker のどこからでも使えるよう、環境依存を持ち込まない。
 export * from './board';
 export * from './tactics';
+export * from './position';

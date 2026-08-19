@@ -36,6 +36,11 @@ try {
   console.log('migrations applied (up to date)');
   process.exit(0);
 } catch (err) {
-  console.error(err instanceof Error ? err.message : String(err));
+  // ⚠ `err.message` だけを出さない。drizzle の DrizzleQueryError は message が
+  // 「Failed query: <SQL>」で、**本当の失敗理由（Access denied / 型不整合など）は
+  // `cause` に連なっている**。message だけだと失敗した SQL しか見えず、権限エラーと
+  // スキーマ不整合の区別すら付かない（2026-08-19 の本番適用で実際に踏んだ）。
+  // console.error は Error をそのまま渡すと cause 連鎖まで再帰的に印字する。
+  console.error(err);
   process.exit(1);
 }

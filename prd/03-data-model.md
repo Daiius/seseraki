@@ -19,10 +19,15 @@
 | `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く） |
 | `kifuTactics`（計画中） | 戦型ラベル（`kifus` に紐付く派生値。[01](./01-domain.md) §6） |
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
+| `videoKifuSources` | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
+| `kifuPositions` | 局面索引（`kifus` に紐付く派生値。[10](./10-video-analysis.md) §3.2） |
+| `users`（計画中） | 自分（将来は招待したユーザー。[11](./11-users.md) §2） |
+| `userAliases`（計画中） | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
 
 - リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
-- **単一ユーザー前提**のため owner 分離は持たない（[07](./07-auth-and-privacy.md)）。
+- **認証は単一アカウント**（[07](./07-auth-and-privacy.md)）だが、**データ側には所有者を持つ**
+  （`kifus.ownerId`。[11](./11-users.md) §3）。
 - 投入・API 境界の **runtime 検証は zod で行い、検証スキーマは `shared` に置く**（型共有だけでは動作時に
   不正データを弾けないため。[02](./02-architecture.md) §3.2 / [04](./04-ingestion.md)）。
 
@@ -41,11 +46,14 @@ kifus
 ├── result: varchar(50)?         -- 対局結果
 ├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
 ├── playedAt: timestamp?         -- 対局日時（sourceTz で解釈した絶対時刻）
-├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC"。署名判定。[04](./04-ingestion.md)）
+├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC" は投入時指定。[04](./04-ingestion.md)）
 ├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
+├── source: enum notNull default 'manual'  -- 出所（'manual' | 'swars' | 'video'。[10](./10-video-analysis.md) §2.1）
+├── ownerId: bigint → users.id          -- このデータを持っている人（対局者ではない。計画中。[11](./11-users.md) §3）
+├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。計画中。[11](./11-users.md) §4）
 ├── createdAt: timestamp
 └── updatedAt: timestamp
 ```
@@ -53,8 +61,12 @@ kifus
 - **`kifText` は原本**（KIF）。`usiMoves` は登録時に変換した派生物で、解析前でも盤面表示に使える（[05](./05-analysis.md)）。
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
+- **`source`**: 棋譜の出所。動画解析（`'video'`）は自分の対局ではないため、
+  🔒 **一覧・分析・統計のクエリは `source <> 'video'` を既定で強制する**（引数で外せる条件にしない。
+  [10](./10-video-analysis.md) §2.2）。棋譜ビューアは共用する。
 - **`sourceTz`**: `開始日時` にタイムゾーン欄が無い KIF を正しく並べるため、`playedAt` を解釈した TZ を記録する。
-  投入時にユーザーが選択（`auto`/`JST`/`UTC`。`auto` は署名から推定＝既定 JST）。UTC のときは +9h 補正した絶対時刻を保存。
+  投入時にユーザーが選択（`auto`/`JST`/`UTC`。**`auto` は JST**。署名からの UTC 推定は廃止＝[04](./04-ingestion.md)）。
+  UTC のときは +9h 補正した絶対時刻を保存。
   swars 経路は `gameKey` 由来で常に `"JST"`。reanalyze はこの値を維持する（[04](./04-ingestion.md)）。
 - **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。

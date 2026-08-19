@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { db } from './index.js';
-import { kifus } from './schema.js';
+import { kifus, users } from './schema.js';
 
 const sampleKifPath = process.argv[2];
 if (!sampleKifPath) {
@@ -23,7 +23,13 @@ const [existing] = await db
 if (existing) {
   console.log('Seed skipped: kifus table already has data');
 } else {
-  const [result] = await db.insert(kifus).values({ title, kifText }).$returningId();
+  // 所有者はマイグレーションが作った単一ユーザー（prd/11 §6.1）
+  const [owner] = await db.select({ id: users.id }).from(users).orderBy(users.id).limit(1);
+  if (!owner) throw new Error('users に行が無い。マイグレーションを先に流す');
+  const [result] = await db
+    .insert(kifus)
+    .values({ title, kifText, ownerId: owner.id })
+    .$returningId();
   console.log(`Seed inserted: id=${result.id} "${title}"`);
 }
 

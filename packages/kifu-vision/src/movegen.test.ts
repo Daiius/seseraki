@@ -118,6 +118,27 @@ describe('generateMoves', () => {
   });
 });
 
+  it('🔒 相手玉を取る手は候補に入れない', () => {
+    // 玉を取る手は将棋の合法手ではない。認識がずれた局面でこれを候補に入れると、
+    // 絵といちばん整合したときに採用され、通し再生も同じ生成器なので「合法」と数えてしまう。
+    const st = state([
+      ['5i', 'K', 'sente'],
+      ['5a', 'K', 'gote'],
+      ['5b', 'R', 'sente'],
+    ]);
+    const usis = generateMoves(st).map((m) => m.usi);
+    expect(usis).not.toContain('5b5a');
+    expect(usis).not.toContain('5b5a+');
+    // 玉以外は今までどおり取れる（門を締めすぎていないこと）
+    const st2 = state([
+      ['5i', 'K', 'sente'],
+      ['1a', 'K', 'gote'],
+      ['5b', 'R', 'sente'],
+      ['5a', 'G', 'gote'],
+    ]);
+    expect(generateMoves(st2).map((m) => m.usi)).toContain('5b5a');
+  });
+
 describe('isInCheck / 王手放置', () => {
   it('飛に睨まれていれば王手', () => {
     const s = state([['5i', 'K', 'sente'], ['5a', 'R', 'gote'], ['1a', 'K', 'gote']]);

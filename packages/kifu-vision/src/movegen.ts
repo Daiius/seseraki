@@ -147,6 +147,10 @@ export function generateMoves(state: BoardState, options: GenerateOptions = {}):
           if (!inBoard(tr, tc)) continue;
           const target = board[tr][tc];
           if (target && target.side === side) continue; // 自分の駒は取れない
+          // 🔒 **玉を取る手は合法手ではない。** ここを開けておくと、認識がずれた局面で
+          // 「相手玉を消す手」が候補に入り、絵といちばん整合すれば採用されてしまう。
+          // 通し再生も同じ生成器を使うので、その誤りを「合法」と数えてしまう。
+          if (target && target.kind === 'K') continue;
           const to = { row: tr, col: tc };
           if (!canMove(board, from, to, piece.kind, side)) continue;
 

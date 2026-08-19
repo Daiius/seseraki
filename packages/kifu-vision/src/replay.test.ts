@@ -72,3 +72,24 @@ describe('replayGame', () => {
     expect(r.legal).toBe(5);
   });
 });
+
+describe('玉を取る手', () => {
+  it('🔒 相手玉を取る手は合法として数えない', () => {
+    // 玉が取られる局面は正しい棋譜には現れない（取られる前に王手放置として現れる）。
+    // ここでは**認識がずれたときに起きる形**を作る——後手が王手を放置し、
+    // 次に先手が玉のマスへ動く。この最後の手を「合法」と数えてはいけない。
+    const usi = [
+      '5g5f', '5a5b', // 後手玉が 5b へ出る
+      '5f5e', '4a4b',
+      '5e5d', '4b4a',
+      '5d5c+',        // と金ができて 5b の玉に王手
+      '4a4b',         // 🔴 後手が王手を放置（認識ずれで起きる形）
+      '5c5b',         // 🔴 と金が玉を取る
+    ];
+    const r = replayGame(score(usi));
+    expect(r.legal).toBe(7);
+    const last = r.problems.find((p) => p.index === 9);
+    expect(last).toMatchObject({ usi: '5c5b' });
+    expect(last?.kind).not.toBe('left-in-check'); // 「王手放置」ではなく、手として成立しない
+  });
+});

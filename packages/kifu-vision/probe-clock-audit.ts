@@ -11,8 +11,20 @@
  * 🔒 認識の本線（extract-simple / scan-video）とは一切繋がっていない。
  */
 import { readFileSync } from 'node:fs';
-import { grabColorFrame, crop, type GrayImage } from './src/frame.ts';
+import { grabColorFrame, type GrayImage } from './src/frame.ts';
 import { ncc, shiftImage } from './src/template.ts';
+// 時計の座標・窓の切り出し・明るさの手番指標は本線（extract-simple）と共有する。
+// 定義の正典は src/clock.ts（このプローブから移設した）。
+import {
+  CLOCK_TOP,
+  CLOCK_BOTTOM,
+  digitImage,
+  stdev,
+  clockInk,
+  brightSide,
+  type ClockGeometry,
+} from './src/clock.ts';
+export { CLOCK_TOP, CLOCK_BOTTOM, digitImage, clockInk, brightSide, type ClockGeometry };
 
 // ─────────────────────────────────────────────────────────────────────
 // 座標（1080x1920・将棋ウォーズ縦画面）
@@ -30,17 +42,6 @@ import { ncc, shiftImage } from './src/template.ts';
 // ⚠ 上は左詰めなので **10:00（開始直後）だけ桁が右へ 1 つずれる**。
 //    その数フレームは「読めない」として捨てる（下は右詰めなのでずれない）。
 // ─────────────────────────────────────────────────────────────────────
-export interface ClockGeometry {
-  /** 分・秒十・秒一 の窓の左端 x */
-  digitX: [number, number, number];
-  y: number;
-  w: number;
-  h: number;
-}
-
-export const CLOCK_TOP: ClockGeometry = { digitX: [102, 182, 222], y: 214, w: 48, h: 80 };
-export const CLOCK_BOTTOM: ClockGeometry = { digitX: [910, 990, 1030], y: 1588, w: 48, h: 80 };
-
 const FRAME_W = 1080;
 const FRAME_H = 1920;
 
@@ -60,20 +61,6 @@ function grabValueFrame(video: string, seconds: number): GrayImage {
     data[i] = r > g ? (r > b ? r : b) : (g > b ? g : b);
   }
   return { width: FRAME_W, height: FRAME_H, data };
-}
-
-export function digitImage(frame: GrayImage, geo: ClockGeometry, index: 0 | 1 | 2): GrayImage {
-  return crop(frame, { x: geo.digitX[index], y: geo.y, w: geo.w, h: geo.h });
-}
-
-/** 画像の散らばり（字が写っていれば大きい）。真っ暗な窓を弾くのに使う。 */
-function stdev(img: GrayImage): number {
-  let s = 0;
-  for (const v of img.data) s += v;
-  const m = s / img.data.length;
-  let d = 0;
-  for (const v of img.data) d += (v - m) * (v - m);
-  return Math.sqrt(d / img.data.length);
 }
 
 function meanAbsDiff(a: GrayImage, b: GrayImage): number {
@@ -269,27 +256,8 @@ export function readDigit(img: GrayImage, t: DigitTemplates): DigitRead | null {
 
 export interface ClockRead { seconds: number; worst: number }
 
-/**
- * 「いま光っている方の時計」を返す（数字を読まない独立の指標）。
- *
- * 手番でない側の時計は暗く沈めて描かれる。窓の標準偏差（V）で実測すると
- * **手番側 65〜80 に対し非手番側 27〜33** とはっきり分かれた。
- * Δ時計と違って **1 フレームだけで手番が分かる**ので、手が密に並ぶ場所でも使える。
- */
-export function clockInk(frame: GrayImage, geo: ClockGeometry): number {
-  return (stdev(digitImage(frame, geo, 0)) + stdev(digitImage(frame, geo, 1)) + stdev(digitImage(frame, geo, 2))) / 3;
-}
-
-/** 明るさの比がこれ以上ならどちらが手番か決める */
-const INK_RATIO = Number(process.env.KIFU_VISION_CLOCK_INK_RATIO ?? 1.5);
-
-export function brightSide(frame: GrayImage): 'top' | 'bottom' | null {
-  const t = clockInk(frame, CLOCK_TOP);
-  const b = clockInk(frame, CLOCK_BOTTOM);
-  if (t > b * INK_RATIO) return 'top';
-  if (b > t * INK_RATIO) return 'bottom';
-  return null;
-}
+// clockInk / brightSide（明るさの手番指標）は src/clock.ts へ移した。
+// Δ時計と違って 1 フレームだけで手番が分かるので、本線の走査でも毎サンプル使う。
 
 export function readClock(frame: GrayImage, geo: ClockGeometry, t: DigitTemplates): ClockRead | null {
   const m = readDigit(digitImage(frame, geo, 0), t);

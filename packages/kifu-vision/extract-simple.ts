@@ -25,7 +25,7 @@ import { extractTemplates, cellImage, cellImageForSide, ncc, type Template } fro
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, asHoles, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, toUsiSquare, type InferFailure } from './src/moves.ts';
-import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
+import { pickCandidate, pickCandidatePair, type PairPickResult } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatchBoard } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
@@ -33,11 +33,12 @@ import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-sto
 import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
 import { AbsenceEvidence, shouldQuarantine } from './src/absence.ts';
+import { ClockTimeline, brightSideYuv, screenSideOf, rereadTimes } from './src/clock.ts';
 import { canPromote, canMove } from './src/legality.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
 import { replayGame, describeProblem } from './src/replay.ts';
-import { isFlipped, orient } from './src/orientation.ts';
+import { isFlipped, orient, flipSide } from './src/orientation.ts';
 import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
@@ -602,6 +603,40 @@ let gameIndex = 0;
 const MIN_MOVES_BEFORE_NEW_GAME = Number(process.env.KIFU_VISION_MIN_MOVES_NEW_GAME ?? 4);
 /** 対局中の盤が写っていないので読まなかった絵 */
 let offBoard = 0;
+
+// ─────────────────────────────────────────────────────────────────────
+// 時計の手番指標（盤と独立の拘束・追記 169〜170）
+//
+// 王手の演出は盤を覆うが、時計は画面の上下の帯にいて演出の外にある。
+// 毎サンプル「どちらの時計が光っているか」を記録しておき、
+//   ・追跡が切れた長い窓では、手番の**反転時刻**を狙って読み直す
+//     （一様な細かい読み直しは REFINE_MAX_GAP を超える窓に届かない）
+//   ・手番の交互が破れて手を**推測で挿し込む**前に、時計に「間に本当に
+//     1 手あったか」を聞く（無ければ挿し込まない・あれば反転時刻を刻む）
+//   ・2 手分解の説明が時計の手数と食い違えば退け、多ければ**正直な穴**として残す
+//
+// 🔒 時計が読めない素材ではタイムラインが何も主張しないので従来挙動と同じ。
+// KIFU_VISION_CLOCK=0 で機構ごと無効化できる（A/B 用）。
+// ─────────────────────────────────────────────────────────────────────
+const CLOCK_ENABLED = process.env.KIFU_VISION_CLOCK !== '0';
+const clock = new ClockTimeline();
+/** 時計を見たサンプル数と、手番が割れたサンプル数 */
+let clockSamples = 0;
+let clockDecided = 0;
+/** 反転時刻を狙った読み直し（窓の数と追加で読んだ絵） */
+let clockRereadWindows = 0;
+let clockRereadSamples = 0;
+/** 時計が「間に手は無い」と言ったので見送った挿し込み */
+let clockVetoedInsertions = 0;
+/** 時計が裏付けた（反転 1 回・側も一致）挿し込み */
+let clockConfirmedInsertions = 0;
+/** 時計と手数が合わないので退けた 2 手分解 */
+let clockVetoedPairs = 0;
+/** 一度狙って読み直した反転時刻（同じ場所を何度も掘らない） */
+const clockRefinedFlips = new Set<number>();
+/** 時計は k 手と言うのに n 手しか説明できなかった窓（正直な穴の記録） */
+const clockGaps: { game: number; from: number; to: number; clockMoves: number; recordedMoves: number }[] = [];
+const flipKey = (t: number) => Math.round(t * 2) / 2;
 let undroppableReread = 0;
 /** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
 let stuckKinds = 0;
@@ -720,6 +755,16 @@ for (let qi = 0; qi < queue.length; qi++) {
     if (VERBOSE && offBoard <= MAX_DETAIL) console.log(`  ▢ ${fmt(t)} 対局中の盤が写っていないので読まない`);
     continue;
   }
+  // 時計の手番指標を毎サンプル記録する（6 窓 ≈ 2.3 万画素の V 計算だけなので安い）。
+  // ⚠ 盤が写っている絵に限る（上の較正の門を通った後）。感想戦や広告の帯を
+  // 時計と読むと、反転でないものが反転に見える。
+  if (CLOCK_ENABLED) {
+    const side = brightSideYuv(colorFrame);
+    clock.record(t, side);
+    clockSamples++;
+    if (side) clockDecided++;
+  }
+
   const img = crop(frame, boardRect(geo));
   const recognized = recognizeBoard(img, templates, {
     colorBoard: cropYuv(colorFrame, boardRect(geo)),
@@ -1434,13 +1479,76 @@ for (let qi = 0; qi < queue.length; qi++) {
   // だけなので、当たっていなければ何も変わらない。
   const prevStep = steps.at(-1);
   if (result.move && prevStep && prevStep.side === result.move.side && state) {
+    // ⭐⏱ **挿し込む前に、時計に聞く。** 挿し込みは「間に相手の手が 1 手あった」
+    // という仮説であり、時計の反転はその仮説を盤と独立に検められる:
+    //   ・窓の中のサンプルが全部同じ側（短い紛れも無い・隙間なく見ていた）
+    //     → 間に手は無い。挿し込まない（交互の破れの原因は挿し込みでは直らない
+    //     別の場所にある。正直な穴として残す）。⚠ 1 秒未満の速い手は反転として
+    //     見えないので、「反転 0 回」ではなく「全サンプル同側」まで求める（judgeGap）
+    //   ・反転がちょうど 1 回で、指した側も一致 → まず**反転時刻の周辺を読み直す**。
+    //     本物の手が絵から拾えれば、推測の挿し込み自体が要らなくなる
+    //     （🔴 幻の B*2d はここで生まれた——盤は静止していたのに、110 秒前の
+    //     取りこぼしの帳尻として実在しない打ちが挿し込まれた。反転時刻を読めば
+    //     「その時刻に指された本物の手」を先に探せる）。
+    //     読み直しても拾えなければ従来どおり挿し込む（時刻は反転時刻を刻む）
+    //   ・それ以外（被覆が足りない・反転が多い）→ 従来どおり
+    let clockFlipTime: number | null = null;
+    let clockVetoed = false;
+    if (CLOCK_ENABLED) {
+      const judged = clock.judgeGap(
+        prevStep.time,
+        t,
+        screenSideOf(flipSide(result.move.side as Side)),
+      );
+      if (judged.verdict === 'veto') {
+        clockVetoedInsertions++;
+        clockVetoed = true;
+        if (VERBOSE) {
+          console.log(`  ⤺⏱ ${fmt(t)} 手番が飛んだが、時計は間に手が無いと言うので挿し込まない`);
+        }
+      } else if (judged.verdict === 'confirm' && judged.flipTime !== undefined) {
+        clockFlipTime = judged.flipTime;
+        if (!clockRefinedFlips.has(flipKey(judged.flipTime))) {
+          clockRefinedFlips.add(flipKey(judged.flipTime));
+          const times = rereadTimes(
+            [{ t: judged.flipTime }],
+            { from: prevStep.time, to: t },
+          ).filter((s) => !queued.has(s));
+          if (times.length > 0) {
+            clockRereadWindows++;
+            clockRereadSamples += times.length;
+            queue.splice(qi, 0, ...times);
+            for (const s of times) {
+              fineTimes.add(s);
+              queued.add(s);
+            }
+            qi--; // 直後の qi++ で挿し込んだ先頭に進む
+            samples--; // この絵はまだ数えない。読み直したときに数える
+            if (VERBOSE) {
+              console.log(
+                `  🔍⏱ ${fmt(t)} 時計の反転 ${fmt(judged.flipTime)} の周辺を先に読み直す（${times.length} 枚）`,
+              );
+            }
+            continue;
+          }
+        }
+      }
+    }
     const read = markUnknown(recognized.board, suspicious);
     // `state.sideToMove` は相手の手番になっているので、1 手目は相手の手が並ぶ。
-    const pair = pickCandidatePair(state, read, { maxConflicts: 1 });
+    // ⏱ 時計が「間に手は無い」と言った（veto）ときは挿し込みを試みない。
+    // 交互の破れは正直な穴として残り、読めた手そのものは下で普通に通る。
+    const pair: PairPickResult = clockVetoed
+      ? { moves: null, board: null, failure: null, tiedCount: 0, promotionUncertain: false }
+      : pickCandidatePair(state, read, { maxConflicts: 1 });
     // ⚠ 読めた手を置き換えはしない。**同じ手の前に相手の手が入る**ときだけ受ける。
     if (pair.moves && pair.board && pair.moves[1].usi === result.move.usi) {
-      for (const m of pair.moves) {
-        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+      if (clockFlipTime !== null) clockConfirmedInsertions++;
+      for (const [mi, m] of pair.moves.entries()) {
+        // ⏱ 挿し込む 1 手目の時刻は、時計が反転を見た時刻を刻む（分かるとき）。
+        // 「同時刻に 2 手」は追いつきの跡そのものなので、残さずに済むなら残さない。
+        const at = mi === 0 && clockFlipTime !== null ? Number(clockFlipTime.toFixed(3)) : t;
+        steps.push({ time: at, usi: m.usi, side: m.side, solved: true });
         history.reset(m.to.row, m.to.col);
         if (m.from) history.reset(m.from.row, m.from.col);
       }
@@ -1489,8 +1597,10 @@ for (let qi = 0; qi < queue.length; qi++) {
     // **盤に一度も現れない**ので、`P*3e` と `B*3e` が同点で並ぶ（どちらも持っていた）。
     // 🔒 当てずっぽうで決めない。**穴があることだけを残す。**
     // → 決めるには画面の持ち駒欄が要る（GOAL Phase F）。
-    unresolvedGaps++;
-    if (VERBOSE) {
+    // ⏱ 時計が退けた場合は「決められない」ではなく「間に手が無い」なので数えない
+    // （clockVetoedInsertions に別で数えてある）。
+    if (!clockVetoed) unresolvedGaps++;
+    if (VERBOSE && !clockVetoed) {
       console.log(
         `  ⤺? ${fmt(t)} 手番が飛んだ。${result.move.usi} の前に 1 手あるが決められない` +
           `（${pair.failure ?? '2 手目が読めた手と違う'}・同点 ${pair.tiedCount}）`,
@@ -1628,6 +1738,52 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // --- ⏱ 窓が REFINE_MAX_GAP を超えて長いなら、時計の反転時刻だけを狙って読み直す ---
+  //
+  // 一様な読み直しは「追跡が合っていた時刻から近いとき」しか効かない（上の ⚠）。
+  // 🔴 実測（3 本目 2 局目 1699.5〜1777）: 王手の演出で 156 サンプル連続
+  // 「盤面が成立せず捨てた」になり、78 秒の窓が空いた。窓が長すぎて一様な
+  // 読み直しは届かず、2 手分解が実際は 4〜6 手の応酬を 3 手に圧縮した——
+  // これが 110 秒後の幻の挿し込み（B*2d）の根になった。
+  //
+  // ⭐ **時計は演出に覆われない。** 窓の中の手番の反転は「このあたりで 1 手
+  // 指された」という盤と独立の証拠なので、その時刻の周辺だけを読みに行けば、
+  // 78 秒の窓でも挿し込む絵は反転あたり数枚で済む。手が指された直後は演出に
+  // 覆われやすいから、狙うのは**指す直前**と**演出が引いたあと**
+  // （CLOCK_REREAD_OFFSETS）。読めた絵はこのループ本体がそのまま処理する——
+  // 一様な読み直しと同じで、本線の救済（carryUnknowns / rescueVanished /
+  // 候補手・2 手分解）が全部効く。
+  if (
+    CLOCK_ENABLED &&
+    lastSyncTime !== null &&
+    t - lastSyncTime > REFINE_MAX_GAP
+  ) {
+    const flips = clock.flipsIn(lastSyncTime + 0.75, t - 0.75);
+    const fresh = flips.filter((f) => !clockRefinedFlips.has(flipKey(f.t)));
+    if (fresh.length > 0) {
+      for (const f of fresh) clockRefinedFlips.add(flipKey(f.t));
+      const times = rereadTimes(fresh, { from: lastSyncTime, to: t }).filter((s) => !queued.has(s));
+      if (times.length > 0) {
+        clockRereadWindows++;
+        clockRereadSamples += times.length;
+        queue.splice(qi, 0, ...times);
+        for (const s of times) {
+          fineTimes.add(s);
+          queued.add(s);
+        }
+        qi--; // 直後の qi++ で挿し込んだ先頭に進む
+        samples--; // この絵はまだ数えない。読み直したときに数える
+        if (VERBOSE) {
+          console.log(
+            `  🔍⏱ ${fmt(t)} ${fmt(lastSyncTime)}〜${fmt(t)} の時計の反転 ${fresh.length} 箇所を` +
+              `狙って読み直す（${times.length} 枚: ${fresh.map((f) => fmt(f.t)).join(' ')}）`,
+          );
+        }
+        continue;
+      }
+    }
+  }
+
   // --- 細かく読み直しても届かないなら、盤面の論理で 2 手に分解する ---
   //
   // 🔴 **映像を細かく探しても届かない場合がある。** 実測（13:06〜14:08）: 香が角を
@@ -1642,10 +1798,58 @@ for (let qi = 0; qi < queue.length; qi++) {
       maxConflicts: 1,
       anySide: handsAreGuessed(state),
     });
-    if (pair.moves && pair.board) {
+    // ⏱ 2 手分解は「窓の中に 2 手あった」という説明。時計の反転回数と突き合わせる:
+    //   ・窓の中のサンプルが**全部同じ側**（短い紛れも無い・隙間なく見ていた）
+    //     → その窓で手は 1 手も指されていない。2 手の説明は**退ける**
+    //     （盤の差分は読み違いかもしれない。当てずっぽうの 2 手より正直な穴）。
+    //     ⚠「反転 0〜1 回」で退けてはいけない——1 秒未満の速い手（打った駒が
+    //     その場で取られる形）は CLOCK_MIN_RUN 未満の連続にしかならず、
+    //     反転として数えられない。全サンプル同側だけが「無かった」の証拠になる
+    //   ・反転が 2 回 → 説明と一致。**手の時刻を反転時刻で刻む**
+    //     （同時刻の塊は追いつきの跡。残さずに済むなら残さない）
+    //   ・反転が 3 回以上 → 2 手では足りない。分解は受けるが（盤とは整合する）、
+    //     **時計が言う手数との差を正直な穴として記録する**（発明はしない——
+    //     何を指したかは盤にしか無く、盤は正味の差分しか見せていない）
+    let pairTimes: [number, number] = [t, t];
+    let pairVetoed = false;
+    if (pair.moves && pair.board && CLOCK_ENABLED && lastSyncTime !== null && t - lastSyncTime > 2) {
+      const flips = clock.flipsIn(lastSyncTime + 0.25, t + 0.25);
+      const inner = { from: lastSyncTime + 0.6, to: t - 0.6 };
+      if (
+        flips.length === 0 &&
+        clock.hasCoverage(inner.from, inner.to) &&
+        clock.constantSideIn(inner.from, inner.to) !== null
+      ) {
+        pairVetoed = true;
+        clockVetoedPairs++;
+        if (VERBOSE) {
+          console.log(
+            `  ⚖⚖⏱ ${fmt(t)} 2 手分解を退けた: 時計はこの窓で誰も指していないと言う` +
+              `（${pair.moves.map((m) => m.usi).join(' ')} は入れない）`,
+          );
+        }
+      } else if (flips.length === 2) {
+        pairTimes = [Number(flips[0].t.toFixed(3)), Number(flips[1].t.toFixed(3))];
+      } else if (flips.length > 2) {
+        clockGaps.push({
+          game: gameIndex,
+          from: lastSyncTime,
+          to: t,
+          clockMoves: flips.length,
+          recordedMoves: 2,
+        });
+        if (VERBOSE) {
+          console.log(
+            `  ⏱⚠ ${fmt(t)} 時計は ${fmt(lastSyncTime)}〜${fmt(t)} に ${flips.length} 手と言うが ` +
+              `2 手しか説明できない（正直な穴として記録）`,
+          );
+        }
+      }
+    }
+    if (pair.moves && pair.board && !pairVetoed) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
-      for (const m of pair.moves) {
-        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+      for (const [mi, m] of pair.moves.entries()) {
+        steps.push({ time: pairTimes[mi], usi: m.usi, side: m.side, solved: true });
         history.reset(m.to.row, m.to.col);
         if (m.from) history.reset(m.from.row, m.from.col);
       }
@@ -1744,6 +1948,22 @@ console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
 if (insertedMoves > 0) console.log(`  手番が飛んだので間に挿した手: ${insertedMoves}`);
 if (unresolvedGaps > 0) console.log(`  手番が飛んだが決められなかった穴: ${unresolvedGaps}`);
+if (CLOCK_ENABLED) {
+  console.log(
+    `  ⏱ 時計の手番指標: ${clockSamples} サンプル中 ${clockDecided} で手番が割れた` +
+      `（${clockSamples > 0 ? Math.round((clockDecided / clockSamples) * 100) : 0}%）`,
+  );
+  if (clockRereadWindows > 0)
+    console.log(`  ⏱ 時計の反転を狙った読み直し: ${clockRereadWindows} 窓（追加で読んだ絵: ${clockRereadSamples}）`);
+  if (clockConfirmedInsertions > 0) console.log(`  ⏱ 時計が裏付けた挿し込み: ${clockConfirmedInsertions}`);
+  if (clockVetoedInsertions > 0) console.log(`  ⏱ 時計が退けた挿し込み: ${clockVetoedInsertions}`);
+  if (clockVetoedPairs > 0) console.log(`  ⏱ 時計が退けた 2 手分解: ${clockVetoedPairs}`);
+  if (clockGaps.length > 0)
+    console.log(
+      `  ⏱🕳 時計が言う手数より説明が少なかった窓（正直な穴）: ${clockGaps.length} — ` +
+        clockGaps.map((g) => `${fmt(g.from)}〜${fmt(g.to)} 時計 ${g.clockMoves} 手/記録 ${g.recordedMoves} 手`).join(' / '),
+    );
+}
 console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);
 if (candidateFailures.size > 0) {
   console.log(
@@ -1866,6 +2086,18 @@ for (let g = 0; g <= gameIndex; g++) {
     game: g + 1,
     /** 画面の下の対局者が先手だったか。1 手目を指した側から決めた。 */
     bottomIsSente: !flipped,
+    /**
+     * ⏱ 時計は k 手と言うのに n 手しか説明できなかった窓（正直な穴）。
+     * 空でなければ、その区間の手は**数が足りていない**——通し再生が満点でも信じない。
+     * KIFU_VISION_CLOCK=0 のときはキー自体を出さない（従来の出力と一致させる）。
+     */
+    ...(CLOCK_ENABLED
+      ? {
+          clockGaps: clockGaps
+            .filter((x) => x.game === g)
+            .map(({ from, to, clockMoves, recordedMoves }) => ({ from, to, clockMoves, recordedMoves })),
+        }
+      : {}),
     runs: mine
       .map((r) => {
         let alt = 0;

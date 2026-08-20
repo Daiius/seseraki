@@ -32,6 +32,7 @@ import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
+import { AbsenceEvidence, shouldQuarantine } from './src/absence.ts';
 import { canPromote, canMove } from './src/legality.ts';
 import { rescueVanished } from './src/vanished.ts';
 import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
@@ -506,6 +507,14 @@ interface WatchedDrop {
   side: Side;
   steps: Step[];
   index: number;
+  /**
+   * 見張り先の消極的証拠（`piece` と言われない連続）。
+   *
+   * 🔴 読みの確定（`ReadingHistory`）だけに頼ると、盤背景の雲模様で
+   * `unknown` に居座るマスに飢えて永遠に決められない（幻の `B*2d` の実測:
+   * sd 12.4 が空しきい値 12 を 0.4 だけ超え続け、19 秒間一度も読めなかった）。
+   */
+  absence: AbsenceEvidence;
 }
 const watchedDrops = new Map<string, WatchedDrop>();
 
@@ -523,6 +532,8 @@ interface InsertedDrop {
   side: Side;
   steps: Step[];
   index: number;
+  /** 行き先の消極的証拠（`WatchedDrop` と同じ理由） */
+  absence: AbsenceEvidence;
 }
 const insertedDrops = new Map<string, InsertedDrop>();
 
@@ -545,6 +556,12 @@ let dropsWithSingleCarriedOrigin = 0;
 let dropsRewritten = 0;
 /** 推測で挿し込んだ打ちが誤りと分かって取り消した数 */
 let insertionsUndone = 0;
+/** うち、消極的証拠（`piece` と言われない連続）で取り消した数（絶食） */
+let insertionsUndoneByAbsence = 0;
+/** 出発点が消極的証拠で空とみなされ、打ち → 移動に書き換えた数（絶食） */
+let dropsRewrittenByAbsence = 0;
+/** 一度も駒として写らない挿し込み駒を動かす手を、行き先への打ちに読み替えた数（検疫） */
+let insertionsQuarantined = 0;
 /** 滑りの経由地を独立した 1 手と読んでいて、後から 1 手に併合した数 */
 let transitsMerged = 0;
 /** 📏 駒種まで読めたマスのうち、`presence` が `piece` と言ったもの（測定のみ） */
@@ -707,6 +724,9 @@ for (let qi = 0; qi < queue.length; qi++) {
   const recognized = recognizeBoard(img, templates, {
     colorBoard: cropYuv(colorFrame, boardRect(geo)),
   });
+  // 駒の有無の 3 値（empty / unclear / piece）。📏 の計測と、見張りの
+  // 消極的証拠（`AbsenceEvidence`）の両方が使うので、1 回だけ測る。
+  const where = presence(img);
 
   // 📏 測定のみ（判定は変えない）。**「駒があるとすら言えない薄いマス」に駒種の答えを
   // 出していないか**を数える（追記 163）。
@@ -718,8 +738,6 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 🔒 **締めてよいかは件数で決まる。** 少なければ安全に締められる。多ければ
   // **その多くは本物の駒が薄く写ったもの**なので、締めると手が落ちる。
   {
-    const where = presence(img);
-
     // 見張り中の「薄いマスに新出した駒」を、後から来た証拠で締める（追記 164）。
     // ⭐ 本物（20:58 の P*3e）は次のサンプルで駒として写り、スライド経由地
     // （26:16.5 の 3f ▽飛）は次のサンプルで空になる——はず。それを数える。
@@ -851,6 +869,16 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 読みを履歴に積む。**同じマスが何度も続けて同じ駒に読めたら確定**とみなす。
   history.observe(recognized.board);
 
+  // 見張り中のマスは presence（駒の有無の 3 値）も積む。
+  //
+  // 🔴 読みの確定だけでは飢えることがある（幻の `B*2d` の実測）: 空マスが盤背景の
+  // 雲模様で sd 12.4 と、空しきい値 12 を **0.4 だけ**超え続け、19 秒・約 38
+  // サンプルの間ほぼずっと `unknown` のまま。「空と 3 回連続」は一度も成立せず、
+  // `carryUnknowns` が追跡盤面（＝幻の駒）で埋めるので幻が自己保存した。
+  // ⭐ presence は「駒がある」とだけは言わない——それを消極的証拠として数える。
+  for (const w of insertedDrops.values()) w.absence.observe(where[w.row][w.col]);
+  for (const w of watchedDrops.values()) w.absence.observe(where[w.row][w.col]);
+
   // 推測で挿し込んだ打ちの行き先が読めたら、挿し込みが本物だったかを決める。
   for (const [key, watch] of [...insertedDrops]) {
     const held = current?.[watch.row][watch.col];
@@ -859,9 +887,12 @@ for (let qi = 0; qi < queue.length; qi++) {
       continue;
     }
     const c = history.confirmed(watch.row, watch.col);
-    if (!c) continue;
+    // ⭐ 読みが確定しなくても、`piece` と言われないまま ABSENT_AFTER 連続なら
+    // 「駒は無い」とみなす（覆いは数サンプルで退く。src/absence.ts の根拠を見ること）。
+    const starved = !c && watch.absence.starved();
+    if (!c && !starved) continue;
     insertedDrops.delete(key);
-    if (c.value) continue; // 駒のまま確定＝挿し込みは当たっていた
+    if (c?.value) continue; // 駒のまま確定＝挿し込みは当たっていた
 
     // 🔒 **空と確定した＝その駒は盤に無い。挿し込みは誤りだった。**
     const step = watch.steps[watch.index];
@@ -875,10 +906,14 @@ for (let qi = 0; qi < queue.length; qi++) {
     const hand = state?.hand[watch.side];
     if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
     history.reset(watch.row, watch.col);
-    insertionsUndone++;
+    if (starved) insertionsUndoneByAbsence++;
+    else insertionsUndone++;
     if (VERBOSE) {
+      const why = starved
+        ? `駒として写らないまま ${watch.absence.streak} サンプル`
+        : `空と確定（${c!.streak} 回連続）`;
       console.log(
-        `  ⤻ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+        `  ⤻ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} は ${why} → ` +
           `${fmt(step.time)} に挿し込んだ ${step.usi} を取り消した`,
       );
     }
@@ -893,9 +928,13 @@ for (let qi = 0; qi < queue.length; qi++) {
       continue;
     }
     const c = history.confirmed(watch.row, watch.col);
-    if (!c) continue;
+    // ⭐ 挿し込みの見張りと同じ消極的証拠。出発点が雲模様で `unknown` に居座ると
+    // 読みでは永遠に決められないが、本物の駒なら `piece` と言われ続けるので、
+    // 言われないまま ABSENT_AFTER 連続＝そこに駒は無い＝移動だった。
+    const starved = !c && watch.absence.starved();
+    if (!c && !starved) continue;
     watchedDrops.delete(key);
-    if (c.value) continue; // 駒のまま確定＝本物の打ちだった。触らない
+    if (c?.value) continue; // 駒のまま確定＝本物の打ちだった。触らない
 
     // 🔒 **空と確定した＝その駒はもう居ない。打ちではなく、そこからの移動だった。**
     const step = watch.steps[watch.index];
@@ -909,10 +948,14 @@ for (let qi = 0; qi < queue.length; qi++) {
     const hand = state?.hand[watch.side];
     if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
     history.reset(watch.row, watch.col);
-    dropsRewritten++;
+    if (starved) dropsRewrittenByAbsence++;
+    else dropsRewritten++;
     if (VERBOSE) {
+      const why = starved
+        ? `駒として写らないまま ${watch.absence.streak} サンプル`
+        : `空と確定（${c!.streak} 回連続）`;
       console.log(
-        `  ⇄ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+        `  ⇄ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} は ${why} → ` +
           `${fmt(step.time)} の ${wasDrop} は打ちではなく ${usi} だった`,
       );
     }
@@ -1321,6 +1364,64 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // --- 検疫: 一度も駒として写らない挿し込み駒を「動かす」手は、打ちに読み替える ---
+  //
+  // 🔴 実測（3 本目 31:32〜31:51・幻の `B*2d`）: 挿し込んだ角の行き先は雲模様で
+  // `unknown` に居座り（消極的証拠は溜まるが、絶食の熟成前に）、19 秒後に来た
+  // **本物の角打ち**が「幻の角の移動 `2d4f`」として完璧に説明されてしまった。
+  // 移動が受理されると見張りは「別の手が触った」で解除され、動いた後のマスは
+  // 正しく空なので、以後どの検算も沈黙する——幻が本物の手にロンダリングされる。
+  //
+  // ⭐ **挿し込みは推測であり、駒が本当に居た裏（`piece` が 3 サンプル連続）が
+  // 取れていないうちは、その駒を動かす解釈を信用しない。** 挿し込みを取り消して
+  // 持ち駒を戻し、手は「行き先への打ち」に読み替える。盤の結果はどちらの解釈でも
+  // 同じ（行き先に同じ駒）なので、読み替えで壊れるものは無い。
+  //
+  // ⚠ 門は狭く保つ: 成る手（打ちでは成れない）と取る手（打ちは空マスにしか
+  // 打てない）は読み替えられないので触らない。裏が取れた挿し込みも触らない。
+  if (result.move && result.move.type === 'move' && result.move.from && state) {
+    const fromKey = `${result.move.from.row},${result.move.from.col}`;
+    const ins = insertedDrops.get(fromKey);
+    if (ins && shouldQuarantine(ins.absence, result.move, ins)) {
+      const step = ins.steps[ins.index];
+      if (step && step.usi === `${ins.kind}*${toUsiSquare(ins.row, ins.col)}`) {
+        insertedDrops.delete(fromKey);
+        // 挿し込みの取り消し（行き先が空と確定した場合と同じ後始末）
+        ins.steps.splice(ins.index, 1);
+        for (const other of [...provisional.values(), ...watchedDrops.values(), ...insertedDrops.values()]) {
+          if (other.steps === ins.steps && other.index > ins.index) other.index--;
+        }
+        current[ins.row][ins.col] = null;
+        // ⚠ `board`（読めた側の盤面）にも幻が引き継がれていることがある。
+        // 残すと `verifyMove` が「移動元に駒が残っている」と見て打ちを弾く。
+        board[ins.row][ins.col] = null;
+        const hand = state.hand[ins.side];
+        hand[ins.kind] = (hand[ins.kind] ?? 0) + 1;
+        history.reset(ins.row, ins.col);
+        // 手を打ちに読み替える（動かした駒＝挿し込んだ駒なので、種は挿し込みから取る）
+        const to = result.move.to;
+        const wasMove = result.move.usi;
+        result = {
+          move: {
+            usi: `${ins.kind}*${toUsiSquare(to.row, to.col)}`,
+            type: 'drop',
+            side: ins.side,
+            to: { row: to.row, col: to.col },
+            promoted: false,
+          },
+          changedCells: result.changedCells,
+        };
+        insertionsQuarantined++;
+        if (VERBOSE) {
+          console.log(
+            `  🛃 ${fmt(t)} ${fmt(step.time)} に挿し込んだ ${step.usi} は一度も駒として写っていない → ` +
+              `挿し込みを取り消し、${wasMove} を ${result.move!.usi} に読み替えた`,
+          );
+        }
+      }
+    }
+  }
+
   // --- 同じ側が 2 回続けて指したなら、間の 1 手を取りこぼしている ---
   //
   // 🔴 実測（2 局目 20:56〜20:58）: 飛が 3f の歩を取り、後手が `P*3e` と打ち、
@@ -1374,6 +1475,7 @@ for (let qi = 0; qi < queue.length; qi++) {
           side: first.side as Side,
           steps,
           index: steps.length - 2, // 挿し込んだ 1 手目（2 手目は読めた手）
+          absence: new AbsenceEvidence(),
         });
         history.reset(first.to.row, first.to.col);
       }
@@ -1444,6 +1546,7 @@ for (let qi = 0; qi < queue.length; qi++) {
         side: result.move.side as Side,
         steps,
         index: steps.length - 1,
+        absence: new AbsenceEvidence(),
       });
       if (VERBOSE) {
         console.log(
@@ -1616,6 +1719,9 @@ if (dropsWithCarriedOrigin > 0) {
 }
 if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
 if (insertionsUndone > 0) console.log(`  行き先が空と確定したので取り消した挿し込み: ${insertionsUndone}`);
+if (dropsRewrittenByAbsence > 0) console.log(`  出発点が一度も駒として写らないので打ち → 移動に直した手（絶食）: ${dropsRewrittenByAbsence}`);
+if (insertionsUndoneByAbsence > 0) console.log(`  行き先が一度も駒として写らないので取り消した挿し込み（絶食）: ${insertionsUndoneByAbsence}`);
+if (insertionsQuarantined > 0) console.log(`  一度も写らない挿し込み駒を動かす手を、打ちに読み替えた（検疫）: ${insertionsQuarantined}`);
 if (transitsMerged > 0) console.log(`  滑りの経由地と分かって 1 手に併合した: ${transitsMerged}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(

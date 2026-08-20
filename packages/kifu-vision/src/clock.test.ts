@@ -213,8 +213,23 @@ describe('ClockTimeline.judgeGap', () => {
     expect(tl.judgeGap(0, 9.5, 'top').verdict).toBe('unknown');
   });
 
-  it('隙間なく見ていて反転 0 回 → veto（間に手は無い）', () => {
+  it('🔴 0.5 秒刻みで同じ側が並んでも veto は出さない（手番が隙間で完結しうる）', () => {
+    // 🔴 review bot OCL-69066369（High）: 相手の手番が 2 サンプルの間（<0.5 秒）で
+    // 終わると、時計には**痕跡が 1 つも残らない**。見えるのは「ずっと bottom」で
+    // `hasCoverage` も真になる。それでも間には 2 手ある（指して、即座に指し返した）。
+    // 🔒 **サンプリングの隙間を「無かった」の証拠に使わない。**
     const tl = gridTimeline(0, Array(21).fill('bottom') as ClockSide[]);
+    expect(tl.flipsIn(0, 10)).toHaveLength(0);
+    expect(tl.constantSideIn(0, 10)).toBe('bottom');
+    expect(tl.hasCoverage(0, 10)).toBe(true);
+    expect(tl.judgeGap(0, 10, 'top').verdict).toBe('unknown');
+  });
+
+  it('0.1 秒で読み直した窓で同じ側が並べば veto（隙間に手番が入る余地が無い）', () => {
+    // ⭐ 繋がらない窓は `FINE_STEP`（0.1 秒）で読み直される。**実際に細かく見た窓なら**
+    // 「間に手は無い」と言ってよい——見逃した手番があるとしても 0.1 秒未満になる。
+    const tl = new ClockTimeline();
+    for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), 'bottom');
     expect(tl.judgeGap(0, 10, 'top').verdict).toBe('veto');
   });
 
@@ -239,6 +254,22 @@ describe('ClockTimeline.judgeGap', () => {
     expect(tl.judgeGap(0, 10, 'top').verdict).toBe('unknown');
   });
 
+  it('粗い刻みで全サンプル同側なら unknown に coarse の印が付く（旧実装の veto 地点）', () => {
+    // 📏 弱めたことでどれだけ挿し込みが通るようになったかを走査ログで数えるための印。
+    const tl = gridTimeline(0, Array(21).fill('bottom') as ClockSide[]);
+    const j = tl.judgeGap(0, 10, 'top');
+    expect(j.verdict).toBe('unknown');
+    expect(j.coarse).toBe(true);
+  });
+
+  it('別の側が混じった unknown には coarse の印は付かない（同側ですらない）', () => {
+    const sides = Array(21).fill('bottom') as (ClockSide | null)[];
+    sides[15] = 'top';
+    const j = gridTimeline(0, sides).judgeGap(0, 10, 'top');
+    expect(j.verdict).toBe('unknown');
+    expect(j.coarse).toBeUndefined();
+  });
+
   it('反転が 2 回以上なら unknown（1 手挿しでは説明できない）', () => {
     const tl = gridTimeline(0, [
       ...Array(6).fill('bottom'),
@@ -252,6 +283,56 @@ describe('ClockTimeline.judgeGap', () => {
 // ─────────────────────────────────────────────────────────────────────
 // 読み直し時刻の生成
 // ─────────────────────────────────────────────────────────────────────
+
+describe('ClockTimeline.deniesMoveIn（「この窓で 1 手も指されていない」と言えるか）', () => {
+  /** 刻みを指定してタイムラインを作る */
+  function stepped(step: number, n: number, side: ClockSide | null = 'bottom'): ClockTimeline {
+    const tl = new ClockTimeline();
+    for (let i = 0; i <= n; i++) tl.record(Number((i * step).toFixed(3)), side);
+    return tl;
+  }
+
+  it('細かく見ていて全部同じ側なら言える', () => {
+    expect(stepped(0.1, 100).deniesMoveIn(0, 10)).toBe(true);
+  });
+
+  it('🔒 粗い刻み（0.5 秒）では言えない——手番が隙間で完結しうる', () => {
+    expect(stepped(0.5, 20).deniesMoveIn(0, 10)).toBe(false);
+  });
+
+  it('🔒 細かく見ていても、別の側が 1 サンプルでも混じれば言えない', () => {
+    const tl = new ClockTimeline();
+    for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), i === 55 ? 'top' : 'bottom');
+    expect(tl.deniesMoveIn(0, 10)).toBe(false);
+  });
+
+  it('🔒 細かく見ていても、割れない穴が空いていれば言えない', () => {
+    const tl = new ClockTimeline();
+    for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), i >= 50 && i <= 55 ? null : 'bottom');
+    expect(tl.deniesMoveIn(0, 10)).toBe(false);
+  });
+
+  it('サンプルが 1 つも無ければ言えない', () => {
+    expect(new ClockTimeline().deniesMoveIn(0, 10)).toBe(false);
+  });
+});
+
+describe('ClockTimeline.maxDecidedGap', () => {
+  it('窓の端との距離も含めて最大の隙間を返す', () => {
+    const tl = timeline([[2, 'bottom'], [2.5, 'bottom'], [4, 'bottom']]);
+    expect(tl.maxDecidedGap(1, 5)).toBeCloseTo(1.5, 5); // 2.5→4 の 1.5
+    expect(tl.maxDecidedGap(0, 4)).toBeCloseTo(2.0, 5); // 窓の頭 0→2 の 2.0
+  });
+
+  it('割れなかったサンプルは穴として数える', () => {
+    const tl = timeline([[1, 'bottom'], [1.5, null], [2, 'bottom']]);
+    expect(tl.maxDecidedGap(1, 2)).toBeCloseTo(1.0, 5);
+  });
+
+  it('サンプルが 1 つも無ければ null', () => {
+    expect(new ClockTimeline().maxDecidedGap(0, 10)).toBeNull();
+  });
+});
 
 describe('rereadTimes', () => {
   it('反転の前後（指す直前と演出が引いたあと）を狙い、窓の外は捨てる', () => {

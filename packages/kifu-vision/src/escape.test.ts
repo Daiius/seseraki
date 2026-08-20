@@ -57,7 +57,7 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
   it('時計が 1 手と言い、読みと一致する手が 1 つなら拾える', () => {
     const before = createInitialState();
     const read = asRead(after(before, '7g7f').board);
-    const pick = pickByRuleOnly(before, read, { clockMoves: 1 });
+    const pick = pickByRuleOnly(before, read, { clockFlips: 1 });
     expect(pick).not.toBeNull();
     expect(pick!.via).toBe('single');
     expect(pick!.moves.map((m) => m.usi)).toEqual(['7g7f']);
@@ -66,7 +66,7 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
   it('🔒 時計が「この窓で誰も指していない」と言うなら何も拾わない', () => {
     const before = createInitialState();
     const read = asRead(after(before, '7g7f').board);
-    expect(pickByRuleOnly(before, read, { clockMoves: 0 })).toBeNull();
+    expect(pickByRuleOnly(before, read, { clockFlips: 0 })).toBeNull();
   });
 
   it('🔒 行き先が絵に写っていなければ拾わない（既定）', () => {
@@ -75,13 +75,13 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
     // 霧の中の脱出ではそれを採らない。
     const before = createInitialState();
     const read = blank(asRead(after(before, '7g7f').board), ['7f']);
-    expect(pickByRuleOnly(before, read, { clockMoves: 1 })).toBeNull();
+    expect(pickByRuleOnly(before, read, { clockFlips: 1 })).toBeNull();
   });
 
   it('門を外せば同じ絵から拾える（`requireVisibleDestination: false`）', () => {
     const before = createInitialState();
     const read = blank(asRead(after(before, '7g7f').board), ['7f']);
-    const pick = pickByRuleOnly(before, read, { clockMoves: 1, requireVisibleDestination: false });
+    const pick = pickByRuleOnly(before, read, { clockFlips: 1, requireVisibleDestination: false });
     expect(pick!.moves.map((m) => m.usi)).toEqual(['7g7f']);
   });
 
@@ -89,7 +89,7 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
     let s = createInitialState();
     for (const usi of ['7g7f', '3c3d']) s = after(s, usi);
     const two = after(after(s, '8h2b+'), '3a2b');
-    const pick = pickByRuleOnly(s, asRead(two.board), { clockMoves: 2 });
+    const pick = pickByRuleOnly(s, asRead(two.board), { clockFlips: 2 });
     expect(pick).not.toBeNull();
     expect(pick!.via).toBe('pair');
     expect(pick!.moves.map((m) => m.usi)).toEqual(['8h2b', '3a2b']);
@@ -97,19 +97,33 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
     expect(pick!.promotionUncertain).toBe(true);
   });
 
-  it('🔒 時計が 1 手としか言わないなら、2 手の説明は作らない', () => {
+  it('🔴 反転 1 回でも 2 手の説明を作る（反転の数は手数の下限でしかない）', () => {
+    // 🔴 review bot OCL-69066369: 打った駒がその場で取られる形は、相手の手番が
+    // サンプルの隙間で終わるので **2 手で 1 反転（ときに 0 反転）**にしかならない。
+    // 「時計が 1 手と言うから 2 手は作らない」と頭打ちにすると、乱戦でいちばん
+    // 起きる形が丸ごと落ちる。発明を止めるのは食い違い・同点・行き先の門の方。
     let s = createInitialState();
     for (const usi of ['7g7f', '3c3d']) s = after(s, usi);
     const two = after(after(s, '8h2b+'), '3a2b');
-    expect(pickByRuleOnly(s, asRead(two.board), { clockMoves: 1 })).toBeNull();
+    const pick = pickByRuleOnly(s, asRead(two.board), { clockFlips: 1 });
+    expect(pick).not.toBeNull();
+    expect(pick!.via).toBe('pair');
+    expect(pick!.moves.map((m) => m.usi)).toEqual(['8h2b', '3a2b']);
   });
 
-  it('🔒 3 手ぶん進んでいたら（時計が 3 手と言っても）何も作らない', () => {
+  it('🔒 反転が 1 つも無ければ、1 手も 2 手も作らない（肯定の証拠が無い）', () => {
+    let s = createInitialState();
+    for (const usi of ['7g7f', '3c3d']) s = after(s, usi);
+    const two = after(after(s, '8h2b+'), '3a2b');
+    expect(pickByRuleOnly(s, asRead(two.board), { clockFlips: 0 })).toBeNull();
+  });
+
+  it('🔒 3 手ぶん進んでいたら、時計が何と言っても作らない（2 手の探索しか持たない）', () => {
     // 2 手では説明が付かず、3 手の探索は持っていない。**正直な穴として残す。**
     let s = createInitialState();
     let three = s;
     for (const usi of ['7g7f', '3c3d', '2g2f']) three = after(three, usi);
-    expect(pickByRuleOnly(s, asRead(three.board), { clockMoves: 3 })).toBeNull();
+    expect(pickByRuleOnly(s, asRead(three.board), { clockFlips: 3 })).toBeNull();
   });
 
   it('🔒 読みが追跡盤面と大きく食い違えば拾わない（食い違いの上限）', () => {
@@ -118,7 +132,7 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
     const read = asRead(before.board);
     read[4][4] = { kind: 'R', side: 'sente' }; // 5e に有り得ない飛車
     read[4][3] = { kind: 'B', side: 'gote' };
-    expect(pickByRuleOnly(before, read, { clockMoves: 1 })).toBeNull();
+    expect(pickByRuleOnly(before, read, { clockFlips: 1 })).toBeNull();
   });
 
   it('⭐ 覆われたマスがあっても、行き先さえ写っていれば拾える', () => {
@@ -126,7 +140,7 @@ describe('pickByRuleOnly（成立しない絵からの脱出）', () => {
     // 候補との突き合わせでは「情報が無い」として飛ばされるだけで済む。
     const before = createInitialState();
     const read = blank(asRead(after(before, '7g7f').board), ['1a', '9i', '5e']);
-    const pick = pickByRuleOnly(before, read, { clockMoves: 1 });
+    const pick = pickByRuleOnly(before, read, { clockFlips: 1 });
     expect(pick!.moves.map((m) => m.usi)).toEqual(['7g7f']);
   });
 });

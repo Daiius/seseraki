@@ -212,3 +212,85 @@ export function sameSideKindCells(tracked: Square[][], read: VisionSquare[][]): 
   }
   return out;
 }
+
+/**
+ * **読みそのもの**（未確定を含む）が将棋の盤面として成立しうるか。
+ *
+ * ⭐ `checkBoard` との違いは 1 点だけ——**未確定のマスを「何でもありうる」として
+ * 扱う**こと。見えている駒だけで矛盾していないかを見る。
+ *
+ * 🔴 **なぜ要るのか**（3 本目 2 局目 1708〜1777 の自己ロック・`HANDOFF-clock.md`
+ * の「構造的観察」）: 王手の応酬で 1 手見逃すと追跡盤面 `current` が古くなる。
+ * すると `carryUnknowns` が**古い駒**で未確定のマスを埋め、合成した盤が
+ * 「K が 3 枚」「先手の玉が 0 枚」のような成立しない形になる。絵ごと捨てられるので
+ * `current` は更新されず、次の絵でも同じことが起きる——**156 サンプル（78 秒）
+ * 連続で 1 手も読めなかった。**
+ *
+ * ⭐ **絵の責任か、引き継ぎの責任かは、ここで割れる。** 合成盤が成立せず、
+ * それでも**素の読みは自己矛盾していない**なら、壊したのは引き継いだ `current` の
+ * 方である（＝古い）。**絵は捨てるべきでない。**
+ *
+ * ⚠ **これは「成立する」という保証ではない。** 未確定のマスに何が入るかは
+ * 分からないので「見えている範囲では矛盾が無い」しか言えない。だからこの盤面を
+ * そのまま追跡に据えてはいけない。使えるのは**判断の材料**としてだけである
+ * （呼び出し側は、通ったときに規則の側から手を当てにいく）。
+ */
+export function checkRead(board: VisionSquare[][]): SanityResult {
+  const problems: string[] = [];
+  let unknowns = 0;
+
+  const counts = new Map<string, number>();
+  const kings = { sente: 0, gote: 0 };
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      const p = board[row][col];
+      if (!p) continue;
+      if (isUnknown(p)) {
+        unknowns++;
+        continue;
+      }
+      const base = baseKind(p.kind);
+      counts.set(base, (counts.get(base) ?? 0) + 1);
+      if (p.kind === 'K') kings[p.side]++;
+    }
+  }
+  // 見えているぶんだけで上限を超えたら、未確定に何が入っても救われない。
+  for (const [kind, n] of counts) {
+    const max = TOTAL_COUNT[kind];
+    if (max !== undefined && n > max) problems.push(`${kind} が ${n} 枚（上限 ${max}）`);
+  }
+
+  // 玉は各陣営 1 枚。2 枚見えていれば読み違いだが、**0 枚は未確定のマスに
+  // 隠れているだけ**でありうる（王手の演出はまさに玉の周りに出る）。
+  for (const side of ['sente', 'gote'] as const) {
+    if (kings[side] > 1) problems.push(`${side} の玉が ${kings[side]} 枚`);
+    else if (kings[side] === 0 && unknowns === 0) problems.push(`${side} の玉が 0 枚`);
+  }
+
+  // 二歩・行き所のない駒は、見えている駒だけで判定する（未確定は数えない）。
+  for (const side of ['sente', 'gote'] as const) {
+    for (let col = 0; col < 9; col++) {
+      let n = 0;
+      for (let row = 0; row < 9; row++) {
+        const p = board[row][col];
+        if (p && !isUnknown(p) && p.kind === 'P' && p.side === side) n++;
+      }
+      if (n > 1) problems.push(`${side} の歩が ${9 - col} 筋に ${n} 枚（二歩）`);
+    }
+  }
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      const p = board[row][col];
+      if (!p || isUnknown(p)) continue;
+      const fromEnemyEdge = p.side === 'sente' ? row : 8 - row;
+      if ((p.kind === 'P' || p.kind === 'L') && fromEnemyEdge === 0) {
+        problems.push(`${9 - col}${String.fromCharCode(97 + row)} に動けない ${p.kind}`);
+      }
+      if (p.kind === 'N' && fromEnemyEdge <= 1) {
+        problems.push(`${9 - col}${String.fromCharCode(97 + row)} に動けない桂`);
+      }
+    }
+  }
+
+  return { ok: problems.length === 0, problems };
+}

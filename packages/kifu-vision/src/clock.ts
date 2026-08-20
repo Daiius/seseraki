@@ -168,6 +168,25 @@ export const CLOCK_MIN_RUN = Number(process.env.KIFU_VISION_CLOCK_MIN_RUN ?? 2);
  */
 export const CLOCK_COVER_GAP = Number(process.env.KIFU_VISION_CLOCK_COVER_GAP ?? 1.6);
 
+/**
+ * 「この窓で 1 手も指されていない」と言い切るために許すサンプル間隔の上限（秒）。
+ *
+ * 🔴 **同じ側のサンプルが並ぶことは、その隙間に手番が無かった証拠にならない。**
+ * （review bot OCL-69066369・High）相手が 0.5 秒未満で指し返すと、手番は
+ * `bottom → top → bottom` と往復して**2 つのサンプルの隙間で完結する**。
+ * 時計には痕跡が 1 つも残らず、`hasCoverage` も真のまま——それでも間には 2 手ある。
+ * 乱戦の取り返しは実際にこの速さで起こる。
+ *
+ * 🔒 だから否定の主張は、**その窓を実際にどれだけ細かく見たか**でしか支えられない。
+ * 言えるのはいつでも「見逃した手番があるとすれば、いちばん広い隙間より短い」までで、
+ * その隙間が十分に狭いときだけ「無かった」と扱う。
+ *
+ * ⭐ 値は観測の側から決まる: 走査の格子は 0.5 秒なので**格子だけの窓では出さない**。
+ * 繋がらなかった窓は `FINE_STEP`（0.1 秒）で読み直され、その絵でも時計は記録される
+ * ので、**実際に細かく見た窓なら出せる**。0.35 はその 2 つの間に引いた線。
+ */
+export const CLOCK_VETO_MAX_GAP = Number(process.env.KIFU_VISION_CLOCK_VETO_GAP ?? 0.35);
+
 export type ClockSide = 'top' | 'bottom';
 
 export interface ClockFlip {
@@ -188,6 +207,14 @@ export interface GapJudgement {
   verdict: 'confirm' | 'veto' | 'unknown';
   /** confirm のとき、その反転の時刻 */
   flipTime?: number;
+  /**
+   * unknown のうち、「全サンプル同側だが**刻みが粗くて**否定できなかった」もの。
+   *
+   * ⭐ 旧実装ならここで veto を出していた（review bot OCL-69066369 で誤りと分かった
+   * 場所そのもの）。**弱めたことでどれだけ挿し込みが通るようになったか**を数えるために
+   * 印を返す。多いようなら、その窓を細かく読み直してから聞き直す価値がある。
+   */
+  coarse?: boolean;
 }
 
 interface Sample {
@@ -243,14 +270,53 @@ export class ClockTimeline {
    * 割れない瞬間にこそ反転が居るかもしれないから。
    */
   hasCoverage(from: number, to: number, maxGap = CLOCK_COVER_GAP): boolean {
-    if (to <= from) return false;
+    const gap = this.maxDecidedGap(from, to);
+    return gap !== null && gap <= maxGap;
+  }
+
+  /**
+   * 窓の中で、判定できたサンプルどうしの**いちばん広い隙間**（窓の端との距離も含む）。
+   *
+   * ⭐ これが「時計で何を否定できるか」の物差しになる。見逃した手番があるとしても、
+   * **この隙間より長くは続いていない**——言えるのはそこまでで、それ以上ではない。
+   * ⚠ null（割れなかった）サンプルは穴として数える（割れない瞬間にこそ反転が居うる）。
+   *
+   * @returns サンプルが 1 つも無ければ null（何も測れていない）
+   */
+  maxDecidedGap(from: number, to: number): number | null {
+    if (to <= from) return null;
     const decided = this.inWindow(from, to).filter((s) => s.side !== null);
+    if (decided.length === 0) return null;
+    let worst = 0;
     let prev = from;
     for (const s of decided) {
-      if (s.t - prev > maxGap) return false;
+      worst = Math.max(worst, s.t - prev);
       prev = s.t;
     }
-    return to - prev <= maxGap;
+    return Math.max(worst, to - prev);
+  }
+
+  /**
+   * 🔒 **この窓では 1 手も指されていない、と言い切れるか。**
+   *
+   * 3 つ揃って初めて言える:
+   *
+   *   1. 判定できたサンプルが**全部同じ側**（短い紛れも無い＝`constantSideIn`）
+   *   2. サンプルが 1 つ以上あり、いちばん広い隙間が `CLOCK_VETO_MAX_GAP` 以下
+   *      （＝**見えなかった手番があるとしても、それより短い**）
+   *   3. 窓に幅がある
+   *
+   * 🔴 1 だけで結論してはいけない（`CLOCK_VETO_MAX_GAP` の説明）。0.5 秒の格子では
+   * 相手の手番がまるごと隙間に収まりうるので、同じ側が並ぶことは何の否定にもならない。
+   *
+   * ⭐ **否定の主張はここ 1 か所に集めてある。** 挿し込みの検算（`judgeGap`）も
+   * 2 手分解の検算（`extract-simple.ts`）も同じ前提に立つので、片方だけ直すと
+   * 同じ誤りがもう片方に残る。
+   */
+  deniesMoveIn(from: number, to: number): boolean {
+    if (this.constantSideIn(from, to) === null) return false;
+    const gap = this.maxDecidedGap(from, to);
+    return gap !== null && gap <= CLOCK_VETO_MAX_GAP;
   }
 
   /**
@@ -311,8 +377,11 @@ export class ClockTimeline {
    * ⚠ `flipsIn` は `CLOCK_MIN_RUN` 未満の短い連続を紛れとして捨てるので、
    * 「反転 0 回」だけでは **1 秒未満の速い手**（打った駒がその場で取られる形）を
    * 見逃した場合と区別できない。こちらは短い連続も含めて 1 サンプルでも
-   * 別の側が写っていれば null を返す——「間に手は無かった」と言い切るための、
-   * より強い条件。
+   * 別の側が写っていれば null を返す——`flipsIn` より強い条件ではある。
+   *
+   * 🔴 **だがこれ単独では「間に手は無かった」の証拠にならない。** 手番が**サンプルの
+   * 隙間で完結する**（0.5 秒未満で指し返す）と、別の側は 1 サンプルにも写らない。
+   * 否定に使うときは必ず `deniesMoveIn` を通すこと（間隔の狭さまで見る）。
    */
   constantSideIn(from: number, to: number): ClockSide | null {
     const decided = this.inWindow(from, to).filter((s) => s.side !== null);
@@ -328,11 +397,18 @@ export class ClockTimeline {
    * `expectedMover` は挿し込もうとしている手の側（＝反転で指したはずの側）を
    * **画面の側**（top/bottom）で渡す。
    *
-   * veto（間に手は無い）は強い主張なので、条件も強く取る:
-   * 窓を隙間なく見ていて、**判定できた全サンプルが同じ側**（短い紛れも無い）。
-   * どちらの側であっても矛盾になる——挿し込む側なら「考え続けたまま一度も
-   * 指していない」し、反対側なら「挿し込む側に手番が回っていない」。
+   * veto（間に手は無い）は強い主張なので、条件も強く取る（`deniesMoveIn`）:
+   * **判定できた全サンプルが同じ側**（短い紛れも無い）で、しかも**その窓を
+   * 細かく見ていた**こと。どちらの側であっても矛盾になる——挿し込む側なら
+   * 「考え続けたまま一度も指していない」し、反対側なら「挿し込む側に手番が
+   * 回っていない」。
    * ⚠ 窓の両端は手そのものの反転が掛かるので、少し内側だけを見る。
+   *
+   * 🔴 **粗い刻みでは veto は出ない**（`CLOCK_VETO_MAX_GAP`）。0.5 秒の格子では
+   * 相手の手番がサンプルの隙間で完結しうるので、同じ側が並んでも否定にならない。
+   * その場合は unknown を返し、挿し込みは従来どおり行われる——**幻の挿し込みは
+   * 絶食・検疫（`src/absence.ts`）が後から取り消す**ので、ここで止め損ねても
+   * 最後の砦は残っている。
    */
   judgeGap(from: number, to: number, expectedMover: ClockSide): GapJudgement {
     if (to - from < 2) return { verdict: 'unknown' }; // 端を除くと何も残らない
@@ -341,12 +417,10 @@ export class ClockTimeline {
       return { verdict: 'confirm', flipTime: flips[0].t };
     }
     const inner = { from: from + 0.6, to: to - 0.6 };
-    if (
-      flips.length === 0 &&
-      this.hasCoverage(inner.from, inner.to) &&
-      this.constantSideIn(inner.from, inner.to) !== null
-    ) {
-      return { verdict: 'veto' };
+    if (flips.length === 0 && this.constantSideIn(inner.from, inner.to) !== null) {
+      if (this.deniesMoveIn(inner.from, inner.to)) return { verdict: 'veto' };
+      // 全サンプル同側ではあるが、刻みが粗い。**隙間に手番が収まりうるので否定しない。**
+      return { verdict: 'unknown', coarse: true };
     }
     return { verdict: 'unknown' };
   }

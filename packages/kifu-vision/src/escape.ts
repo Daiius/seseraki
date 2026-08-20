@@ -25,7 +25,10 @@
  * 持ち駒の信用も失う。ここでの脱出は `current` を 1〜2 手進めるだけで、
  * **断片は切れない**。
  *
- * 🔒 **発明しないための門を 3 つ持たせてある**（呼び出し側の時計拘束と合わせて 4 つ）:
+ * 🔒 **発明しないための門を 3 つ持たせてある**（呼び出し側の時計拘束と合わせて 4 つ）。
+ * ⚠ **時計は「手が指された」の肯定にだけ使う。** 反転の数は手数の下限でしかないので、
+ * 「時計が k 手と言うから k 手までしか説明しない」という頭打ちには使えない
+ * （`clockFlips` の説明・review bot OCL-69066369）:
  *
  *   - 手は `generateMoves` の産物なので、**規則上あり得ない手は原理的に出ない**
  *   - 食い違いの上限（既定 1）を超えたら選ばない・同点で並んだら選ばない
@@ -53,14 +56,21 @@ export interface RuleOnlyPick {
 
 export interface RuleOnlyOptions {
   /**
-   * **時計が言う手数**。これを超える説明はしない。
+   * 時計が**この窓で見た反転の数**。
    *
-   * 🔒 盤と独立な唯一の証拠なので、ここが上限になる。0 なら何も選ばない
-   * （「この窓で誰も指していない」と時計が言っているのに手を作る道理は無い）。
-   * ⚠ 1 秒未満の速い手は反転として見えないので、時計は**手数を少なめに言う**。
-   * 少なめに言われたぶんは正直な穴として残す——多めに採るより穴の方がよい。
+   * 🔒 **これは手数の下限であって、上限ではない。** 1 秒未満の速い手は
+   * `CLOCK_MIN_RUN` に満たない連続にしかならず反転として数えられないので、
+   * 実際の手数は必ずこれ以上になる（review bot OCL-69066369 と同じ前提）。
+   * ⚠ だから「時計が 1 手と言うから 2 手の説明はしない」とは**書けない**。
+   * 打った駒がその場で取られる形はまさに 2 手で 1 反転にしかならず、それを
+   * 退けると本物の応酬が落ちる。
+   *
+   * ⭐ ここで使うのは**手が指されたという肯定の証拠**としてだけ。0 なら何も
+   * 選ばない（盤と独立な裏付けが 1 つも無いところで規則だけを走らせない）。
+   * 発明を防ぐのは食い違いの上限・同点の退け・行き先が絵に写っていること
+   * （下の 3 つの門）であって、手数の頭打ちではない。
    */
-  clockMoves: number;
+  clockFlips: number;
   maxConflicts?: number;
   anySide?: boolean;
   /** 行き先が絵に写っていることを求めるか（既定 true）。 */
@@ -89,15 +99,17 @@ export function pickByRuleOnly(
   const maxConflicts = options.maxConflicts ?? 1;
   const anySide = options.anySide ?? false;
   const requireVisible = options.requireVisibleDestination ?? true;
-  if (options.clockMoves < 1) return null;
+  if (options.clockFlips < 1) return null;
 
   const single = pickCandidate(before, read, { maxConflicts, anySide });
   if (single.best && (!requireVisible || destinationVisible(read, single.best.move))) {
     return { moves: [single.best.move], board: single.best.board, promotionUncertain: false, via: 'single' };
   }
 
-  // 2 手は「時計が 2 回以上反転した」ときだけ。1 手ぶんの証拠で 2 手を作らない。
-  if (options.clockMoves < 2) return null;
+  // 1 手で説明が付かないなら 2 手で試す。
+  // ⚠ かつては「時計が 2 回以上反転したときだけ」に絞っていた。**それは誤り**——
+  // 反転の数は下限でしかなく、打った駒がその場で取られる形は 2 手で 1 反転
+  // （あるいは 0 反転）にしかならない。乱戦でいちばん起きる形を退けていた。
   const pair = pickCandidatePair(before, read, { maxConflicts, anySide });
   if (!pair.moves || !pair.board) return null;
   // ⚠ 見るのは**2 手目の行き先**。1 手目の行き先は 2 手目に上書きされることがあり

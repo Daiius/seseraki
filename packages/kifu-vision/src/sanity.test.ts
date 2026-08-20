@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, type Square } from 'shared';
-import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './sanity.ts';
+import { checkBoard, checkRead, pieceCount, overflowCells, sameSideKindCells } from './sanity.ts';
 import { UNKNOWN, type VisionSquare } from './uncertain.ts';
 
 function emptyBoard(): Square[][] {
@@ -204,5 +204,74 @@ describe('sameSideKindCells', () => {
     const read: VisionSquare[][] = board();
     read[5][1] = { kind: 'G', side: 'gote' };
     expect(sameSideKindCells(tracked, read)).toEqual([]);
+  });
+});
+
+describe('checkRead（未確定を含む読みが成立しうるか）', () => {
+  /** 未確定を混ぜた読みにする */
+  function asRead(b: Square[][], unknowns: string[] = []): VisionSquare[][] {
+    const out: VisionSquare[][] = b.map((r) => r.slice());
+    for (const usi of unknowns) out[usi.charCodeAt(1) - 97][9 - Number(usi[0])] = UNKNOWN;
+    return out;
+  }
+
+  it('平手初期配置は成立する', () => {
+    expect(checkRead(asRead(createInitialState().board)).ok).toBe(true);
+  });
+
+  it('⭐ 玉が見えなくても、未確定のマスがあれば成立しうる（王手の演出は玉の周りに出る）', () => {
+    const b = withKings();
+    const read = asRead(b, ['5i']);
+    expect(checkRead(read).ok).toBe(true);
+  });
+
+  it('🔒 未確定が 1 つも無いのに玉が見えなければ成立しない', () => {
+    const b = withKings();
+    b[8][4] = null; // 5i の玉を消す
+    expect(checkRead(asRead(b)).ok).toBe(false);
+  });
+
+  it('同じ側の玉が 2 枚見えていれば、未確定があっても成立しない', () => {
+    const b = withKings();
+    put(b, '4i', { kind: 'K', side: 'sente' });
+    expect(checkRead(asRead(b, ['1a'])).ok).toBe(false);
+  });
+
+  it('🔴 引き継ぎで玉が 3 枚になった合成盤は checkBoard に落ちるが、素の読みは通る', () => {
+    // これが 3 本目 2 局目の自己ロックの形（`HANDOFF-clock.md`）。
+    // 玉が 5i → 4i へ動き、移動元が演出で読めない。引き継ぎは 5i に古い玉を
+    // 置くので「K が 3 枚」になるが、**素の読みは 2 枚のままで矛盾していない**。
+    const moved = withKings();
+    moved[8][4] = null;
+    put(moved, '4i', { kind: 'K', side: 'sente' });
+    const read = asRead(moved, ['5i']);
+    expect(checkRead(read).ok).toBe(true);
+
+    const carried = moved.map((r) => r.slice());
+    put(carried, '5i', { kind: 'K', side: 'sente' }); // 引き継ぎが古い玉を戻す
+    const composed = checkBoard(carried);
+    expect(composed.ok).toBe(false);
+    expect(composed.problems.join()).toContain('K が 3 枚');
+  });
+
+  it('見えているぶんだけで駒数が上限を超えれば成立しない', () => {
+    const b = withKings();
+    for (const usi of ['9f', '8f', '7f']) put(b, usi, { kind: 'B', side: 'sente' });
+    expect(checkRead(asRead(b, ['1a'])).ok).toBe(false);
+  });
+
+  it('二歩は見えている歩だけで判定する', () => {
+    const b = withKings();
+    put(b, '7f', { kind: 'P', side: 'sente' });
+    put(b, '7d', { kind: 'P', side: 'sente' });
+    expect(checkRead(asRead(b)).problems.join()).toContain('二歩');
+    // 片方が未確定なら「歩かもしれない」だけなので責めない
+    expect(checkRead(asRead(b, ['7d'])).ok).toBe(true);
+  });
+
+  it('行き所のない駒は見えていれば弾く', () => {
+    const b = withKings();
+    put(b, '1a', { kind: 'P', side: 'sente' });
+    expect(checkRead(asRead(b)).ok).toBe(false);
   });
 });

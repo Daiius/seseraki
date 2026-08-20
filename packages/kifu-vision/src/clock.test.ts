@@ -263,6 +263,14 @@ describe('rereadTimes', () => {
     const times = rereadTimes([{ t: 10 }, { t: 13 }], { from: 0, to: 100 });
     expect(times).toEqual([9, 12, 13, 15, 16]);
   });
+
+  it('🔒 反転から +3 秒経つ前に掘ると、演出が引いたあとの絵が 1 枚も残らない', () => {
+    // ⚠ これが `extract-simple.ts` の `ESCAPE_REREAD_TAIL` の根拠。掘った反転は
+    // 二度と掘り直さないので、**いちばん読みたい絵（演出が引いたあと）を窓の外に
+    // 落としたまま印だけ付ける**のが最悪の形になる。まだ来ていない反転は残す。
+    expect(rereadTimes([{ t: 10 }], { from: 5, to: 11 })).toEqual([9]);
+    expect(rereadTimes([{ t: 10 }], { from: 5, to: 13.25 })).toEqual([9, 12, 13]);
+  });
 });
 
 describe('screenSideOf', () => {

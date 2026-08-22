@@ -25,18 +25,23 @@ import { extractTemplates, cellImage, cellImageForSide, ncc, type Template } fro
 import { recognizeBoard, boardsEqual, boardDiff, carryUnknowns } from './src/recognize.ts';
 import { settle, fillGuesses, unknownCells, markUnknown, isUnknown, asHoles, type VisionSquare } from './src/uncertain.ts';
 import { inferMove, verifyMove, opposite, toUsiSquare, type InferFailure } from './src/moves.ts';
-import { pickCandidate, pickCandidatePair } from './src/candidate.ts';
+import { pickCandidate, pickCandidatePair, type PairPickResult } from './src/candidate.ts';
 import { completeIfInitial, startFromBoard, handsAreGuessed, canPlay, handsMatchBoard } from './src/tracking.ts';
 import { solveUnknowns, type UnknownCell } from './src/solve.ts';
 import { findUndroppableDrop, readAsDroppable } from './src/droppable.ts';
 import { loadTemplates, saveTemplates, mergeTemplates } from './src/template-store.ts';
 import { calibrateFromFrames, calibrateGeometry, isCalibrationTrustworthy } from './src/calibrate.ts';
 import { ReadingHistory } from './src/confirm.ts';
+import { AbsenceEvidence, shouldQuarantine } from './src/absence.ts';
+import {
+  ClockTimeline, brightSideYuv, screenSideOf, rereadTimes, CLOCK_REREAD_OFFSETS, type ClockFlip,
+} from './src/clock.ts';
 import { canPromote, canMove } from './src/legality.ts';
 import { rescueVanished } from './src/vanished.ts';
-import { checkBoard, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
+import { checkBoard, checkRead, pieceCount, overflowCells, sameSideKindCells } from './src/sanity.ts';
+import { pickByRuleOnly, type RuleOnlyPick } from './src/escape.ts';
 import { replayGame, describeProblem } from './src/replay.ts';
-import { isFlipped, orient } from './src/orientation.ts';
+import { isFlipped, orient, flipSide } from './src/orientation.ts';
 import { applyMove, createInitialState, type BoardState, type PieceKind, type Side, type Square } from 'shared';
 
 const video = process.argv[2];
@@ -506,6 +511,14 @@ interface WatchedDrop {
   side: Side;
   steps: Step[];
   index: number;
+  /**
+   * 見張り先の消極的証拠（`piece` と言われない連続）。
+   *
+   * 🔴 読みの確定（`ReadingHistory`）だけに頼ると、盤背景の雲模様で
+   * `unknown` に居座るマスに飢えて永遠に決められない（幻の `B*2d` の実測:
+   * sd 12.4 が空しきい値 12 を 0.4 だけ超え続け、19 秒間一度も読めなかった）。
+   */
+  absence: AbsenceEvidence;
 }
 const watchedDrops = new Map<string, WatchedDrop>();
 
@@ -523,6 +536,8 @@ interface InsertedDrop {
   side: Side;
   steps: Step[];
   index: number;
+  /** 行き先の消極的証拠（`WatchedDrop` と同じ理由） */
+  absence: AbsenceEvidence;
 }
 const insertedDrops = new Map<string, InsertedDrop>();
 
@@ -545,6 +560,12 @@ let dropsWithSingleCarriedOrigin = 0;
 let dropsRewritten = 0;
 /** 推測で挿し込んだ打ちが誤りと分かって取り消した数 */
 let insertionsUndone = 0;
+/** うち、消極的証拠（`piece` と言われない連続）で取り消した数（絶食） */
+let insertionsUndoneByAbsence = 0;
+/** 出発点が消極的証拠で空とみなされ、打ち → 移動に書き換えた数（絶食） */
+let dropsRewrittenByAbsence = 0;
+/** 一度も駒として写らない挿し込み駒を動かす手を、行き先への打ちに読み替えた数（検疫） */
+let insertionsQuarantined = 0;
 /** 滑りの経由地を独立した 1 手と読んでいて、後から 1 手に併合した数 */
 let transitsMerged = 0;
 /** 📏 駒種まで読めたマスのうち、`presence` が `piece` と言ったもの（測定のみ） */
@@ -585,6 +606,98 @@ let gameIndex = 0;
 const MIN_MOVES_BEFORE_NEW_GAME = Number(process.env.KIFU_VISION_MIN_MOVES_NEW_GAME ?? 4);
 /** 対局中の盤が写っていないので読まなかった絵 */
 let offBoard = 0;
+
+// ─────────────────────────────────────────────────────────────────────
+// 時計の手番指標（盤と独立の拘束・追記 169〜170）
+//
+// 王手の演出は盤を覆うが、時計は画面の上下の帯にいて演出の外にある。
+// 毎サンプル「どちらの時計が光っているか」を記録しておき、
+//   ・追跡が切れた長い窓では、手番の**反転時刻**を狙って読み直す
+//     （一様な細かい読み直しは REFINE_MAX_GAP を超える窓に届かない）
+//   ・手番の交互が破れて手を**推測で挿し込む**前に、時計に「間に本当に
+//     1 手あったか」を聞く（無ければ挿し込まない・あれば反転時刻を刻む）
+//   ・2 手分解の説明が時計の手数と食い違えば退け、多ければ**正直な穴**として残す
+//
+// 🔒 時計が読めない素材ではタイムラインが何も主張しないので従来挙動と同じ。
+// KIFU_VISION_CLOCK=0 で機構ごと無効化できる（A/B 用）。
+// ─────────────────────────────────────────────────────────────────────
+const CLOCK_ENABLED = process.env.KIFU_VISION_CLOCK !== '0';
+const clock = new ClockTimeline();
+/** 時計を見たサンプル数と、手番が割れたサンプル数 */
+let clockSamples = 0;
+let clockDecided = 0;
+/** 反転時刻を狙った読み直し（窓の数と追加で読んだ絵） */
+let clockRereadWindows = 0;
+let clockRereadSamples = 0;
+/** 時計が裏付けた（反転 1 回・側も一致）挿し込み */
+let clockConfirmedInsertions = 0;
+/**
+ * 📏 判定できたサンプルが全部同じ側だった窓（`GapJudgement.constantSide`）。
+ *
+ * 🔴 **旧実装が veto を出していた場所そのもの**（review bot OCL-69066369）。
+ * いまは何も止めない——手番はサンプルの隙間で往復しうるので、同じ側が並ぶことは
+ * 「間に手が無い」の証拠にならない。**その推論にどれだけ頼っていたか**を残すために
+ * 数えるだけで、挿し込みは通り、幻は絶食・検疫が後から取り消す。
+ */
+let clockConstantSideGaps = 0;
+/** 一度狙って読み直した反転時刻（同じ場所を何度も掘らない） */
+const clockRefinedFlips = new Set<number>();
+/** 時計は k 手と言うのに n 手しか説明できなかった窓（正直な穴の記録） */
+const clockGaps: { game: number; from: number; to: number; clockMoves: number; recordedMoves: number }[] = [];
+const flipKey = (t: number) => Math.round(t * 2) / 2;
+
+// ─────────────────────────────────────────────────────────────────────
+// ⚕ 成立しない絵からの脱出（自己ロックの解消・`src/escape.ts` に根拠）
+//
+// 🔴 実測（3 本目 2 局目 1708〜1777）: 王手の応酬で 1 手見逃すと `current` が
+// 古くなり、`carryUnknowns` がその古い駒で未確定のマスを埋めて合成盤が
+// `checkBoard` に落ちる。絵ごと捨てるので `current` は更新されず、**156 サンプル
+// （78 秒）連続で 1 手も読めなかった**。時計は「5 手」と言っているのに 2 手しか
+// 復元できていない窓がこれ。
+//
+// ⭐ 捨てる前にもう一度だけ別の問いを立てる: **合成盤を作らず、追跡している
+// 局面から起こりうる手を並べて読めたマスとだけ突き合わせる**（`pickByRuleOnly`）。
+// 未確定のマスを飛ばせるので、合成盤が壊れていても答えられることがある。
+//
+// 🔒 **時計が「この窓で手が指された」と言うときに限る。** 盤と独立な証拠が無い
+// ところで規則だけを走らせると、霧の中で手を発明しかねない。`KIFU_VISION_CLOCK=0`
+// なら機構ごと止まる（A/B のとき従来と完全に同じ経路になる）。
+// ⚠ 使うのは**肯定の側だけ**。反転の数は手数の下限なので、説明できる手数の頭打ちには
+// 使わない（`src/escape.ts` の `clockFlips`）。
+// ─────────────────────────────────────────────────────────────────────
+const INSANE_ESCAPE = process.env.KIFU_VISION_INSANE_ESCAPE !== '0';
+/**
+ * 脱出を試すまでに「追跡が合わなくなってから」必要な時間（秒）。
+ *
+ * ⭐ 追跡が健全なら `lastSyncTime` は毎サンプル更新される（配置が変わらない絵でも
+ * 更新される）ので、**1.5 秒（0.5 秒刻みで 3 サンプル）空くのは本当に見失った証拠**。
+ * 手が指された直後の 1〜2 枚は演出で崩れるのが普通なので、そこでは動かさない。
+ * ⚠ 3 秒（`REFINE_MAX_GAP`）まで待つと、反転を狙った読み直し（反転 −1 / +2 / +3 秒）
+ * の隣り合う 2 枚が窓に入らなくなる。
+ */
+const INSANE_ESCAPE_GAP = Number(process.env.KIFU_VISION_INSANE_ESCAPE_GAP ?? 1.5);
+/** 行き先が絵に写っていることを求めるか（既定 true・`src/escape.ts` の 3 つめの門）。 */
+const INSANE_ESCAPE_STRICT = process.env.KIFU_VISION_INSANE_ESCAPE_STRICT !== '0';
+/**
+ * ロックの最中に反転を掘るとき、**反転からこれだけ経っていることを求める**（秒）。
+ *
+ * ⚠ `rereadTimes` は今読んでいる時刻より後ろを落とすので、直前の反転を掘ると
+ * 「演出が引いたあと」（+2 / +3 秒）が 1 枚も残らない。掘った印は残るから
+ * 後から掘り直せず、**いちばん読みたい絵を永久に失う**。まだ来ていない反転は
+ * 掘らずに残しておけば、数サンプル後に丸ごと掘れる。
+ */
+const ESCAPE_REREAD_TAIL = Math.max(...CLOCK_REREAD_OFFSETS) + 0.25;
+/** 成立しない絵のうち、素の読みは自己矛盾していなかった（＝引き継ぎの責任）数 */
+let insaneCarryBlamed = 0;
+/** 同じく、読みの側が矛盾していた（＝絵の責任。捨てるのが正しい）数 */
+let insaneReadBlamed = 0;
+/** ⚕ 素の読みだけで成立したので、引き継ぎを捨てて素の読みを採った絵 */
+let insanePlainUsed = 0;
+/** ⚕ 成立しない絵から規則の側だけで拾えた手（1 手ずつ / 2 手分解） */
+let insaneEscapedSingles = 0;
+let insaneEscapedPairs = 0;
+/** ⚕ 脱出できないまま、時計の反転を狙った読み直しを開いた窓 */
+let insaneRereadWindows = 0;
 let undroppableReread = 0;
 /** 同じ側の別の駒に化けて見えた絵（起こりえないので読み違い） */
 let stuckKinds = 0;
@@ -673,6 +786,34 @@ async function frameAt(t: number): Promise<YuvImage> {
 /** 待ち行列に入れたことのある時刻。同じ絵を二度読まないための控え。 */
 const queued = new Set<number>(queue);
 
+/**
+ * 窓の中の**まだ掘っていない反転**を取り、その周辺を読み直す時刻を作る。
+ *
+ * ⚠ 呼んだ時点で反転を「掘った」ものとして登録する（同じ場所を何度も掘らない）。
+ * 待ち行列への挿し込みは呼び出し側でやる——`qi` と `samples` の巻き戻しが要るため。
+ *
+ * ⚠ **後ろの余白（`tailMargin`）は掘る意味のある反転だけを選ぶための門でもある。**
+ * `rereadTimes` は窓の外に出た時刻を落とすので、`to` の直前の反転を掘っても
+ * **演出が引いたあと（反転 +2 / +3 秒）が窓に入らず、指す直前の 1 枚しか残らない**。
+ * しかも掘った印は残るので、後から掘り直せない。まだ +3 秒が過ぎていない反転は
+ * **掘らずに残す**（次のサンプルで掘れる）。
+ *
+ * ⭐ 2 か所から呼ぶ: ①長い窓に追いついたとき（従来）、②成立しない絵から
+ * 脱出できなかったとき（新）。②があると、**ロックの最中に**読み直しを開ける
+ * （従来は追いついた時刻まで 1 枚も挿せず、78 秒ぶんの反転をまとめて掘っていた）。
+ */
+function takeFreshClockRereads(
+  from: number,
+  to: number,
+  margin = 0.75,
+  tailMargin = margin,
+): { flips: ClockFlip[]; times: number[] } {
+  const fresh = clock.flipsIn(from + margin, to - tailMargin).filter((f) => !clockRefinedFlips.has(flipKey(f.t)));
+  if (fresh.length === 0) return { flips: [], times: [] };
+  for (const f of fresh) clockRefinedFlips.add(flipKey(f.t));
+  return { flips: fresh, times: rereadTimes(fresh, { from, to }).filter((s) => !queued.has(s)) };
+}
+
 for (let qi = 0; qi < queue.length; qi++) {
   const t = queue[qi];
   samples++;
@@ -703,10 +844,23 @@ for (let qi = 0; qi < queue.length; qi++) {
     if (VERBOSE && offBoard <= MAX_DETAIL) console.log(`  ▢ ${fmt(t)} 対局中の盤が写っていないので読まない`);
     continue;
   }
+  // 時計の手番指標を毎サンプル記録する（6 窓 ≈ 2.3 万画素の V 計算だけなので安い）。
+  // ⚠ 盤が写っている絵に限る（上の較正の門を通った後）。感想戦や広告の帯を
+  // 時計と読むと、反転でないものが反転に見える。
+  if (CLOCK_ENABLED) {
+    const side = brightSideYuv(colorFrame);
+    clock.record(t, side);
+    clockSamples++;
+    if (side) clockDecided++;
+  }
+
   const img = crop(frame, boardRect(geo));
   const recognized = recognizeBoard(img, templates, {
     colorBoard: cropYuv(colorFrame, boardRect(geo)),
   });
+  // 駒の有無の 3 値（empty / unclear / piece）。📏 の計測と、見張りの
+  // 消極的証拠（`AbsenceEvidence`）の両方が使うので、1 回だけ測る。
+  const where = presence(img);
 
   // 📏 測定のみ（判定は変えない）。**「駒があるとすら言えない薄いマス」に駒種の答えを
   // 出していないか**を数える（追記 163）。
@@ -718,8 +872,6 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 🔒 **締めてよいかは件数で決まる。** 少なければ安全に締められる。多ければ
   // **その多くは本物の駒が薄く写ったもの**なので、締めると手が落ちる。
   {
-    const where = presence(img);
-
     // 見張り中の「薄いマスに新出した駒」を、後から来た証拠で締める（追記 164）。
     // ⭐ 本物（20:58 の P*3e）は次のサンプルで駒として写り、スライド経由地
     // （26:16.5 の 3f ▽飛）は次のサンプルで空になる——はず。それを数える。
@@ -851,6 +1003,16 @@ for (let qi = 0; qi < queue.length; qi++) {
   // 読みを履歴に積む。**同じマスが何度も続けて同じ駒に読めたら確定**とみなす。
   history.observe(recognized.board);
 
+  // 見張り中のマスは presence（駒の有無の 3 値）も積む。
+  //
+  // 🔴 読みの確定だけでは飢えることがある（幻の `B*2d` の実測）: 空マスが盤背景の
+  // 雲模様で sd 12.4 と、空しきい値 12 を **0.4 だけ**超え続け、19 秒・約 38
+  // サンプルの間ほぼずっと `unknown` のまま。「空と 3 回連続」は一度も成立せず、
+  // `carryUnknowns` が追跡盤面（＝幻の駒）で埋めるので幻が自己保存した。
+  // ⭐ presence は「駒がある」とだけは言わない——それを消極的証拠として数える。
+  for (const w of insertedDrops.values()) w.absence.observe(where[w.row][w.col]);
+  for (const w of watchedDrops.values()) w.absence.observe(where[w.row][w.col]);
+
   // 推測で挿し込んだ打ちの行き先が読めたら、挿し込みが本物だったかを決める。
   for (const [key, watch] of [...insertedDrops]) {
     const held = current?.[watch.row][watch.col];
@@ -859,9 +1021,12 @@ for (let qi = 0; qi < queue.length; qi++) {
       continue;
     }
     const c = history.confirmed(watch.row, watch.col);
-    if (!c) continue;
+    // ⭐ 読みが確定しなくても、`piece` と言われないまま ABSENT_AFTER 連続なら
+    // 「駒は無い」とみなす（覆いは数サンプルで退く。src/absence.ts の根拠を見ること）。
+    const starved = !c && watch.absence.starved();
+    if (!c && !starved) continue;
     insertedDrops.delete(key);
-    if (c.value) continue; // 駒のまま確定＝挿し込みは当たっていた
+    if (c?.value) continue; // 駒のまま確定＝挿し込みは当たっていた
 
     // 🔒 **空と確定した＝その駒は盤に無い。挿し込みは誤りだった。**
     const step = watch.steps[watch.index];
@@ -875,10 +1040,14 @@ for (let qi = 0; qi < queue.length; qi++) {
     const hand = state?.hand[watch.side];
     if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
     history.reset(watch.row, watch.col);
-    insertionsUndone++;
+    if (starved) insertionsUndoneByAbsence++;
+    else insertionsUndone++;
     if (VERBOSE) {
+      const why = starved
+        ? `駒として写らないまま ${watch.absence.streak} サンプル`
+        : `空と確定（${c!.streak} 回連続）`;
       console.log(
-        `  ⤻ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+        `  ⤻ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} は ${why} → ` +
           `${fmt(step.time)} に挿し込んだ ${step.usi} を取り消した`,
       );
     }
@@ -893,9 +1062,13 @@ for (let qi = 0; qi < queue.length; qi++) {
       continue;
     }
     const c = history.confirmed(watch.row, watch.col);
-    if (!c) continue;
+    // ⭐ 挿し込みの見張りと同じ消極的証拠。出発点が雲模様で `unknown` に居座ると
+    // 読みでは永遠に決められないが、本物の駒なら `piece` と言われ続けるので、
+    // 言われないまま ABSENT_AFTER 連続＝そこに駒は無い＝移動だった。
+    const starved = !c && watch.absence.starved();
+    if (!c && !starved) continue;
     watchedDrops.delete(key);
-    if (c.value) continue; // 駒のまま確定＝本物の打ちだった。触らない
+    if (c?.value) continue; // 駒のまま確定＝本物の打ちだった。触らない
 
     // 🔒 **空と確定した＝その駒はもう居ない。打ちではなく、そこからの移動だった。**
     const step = watch.steps[watch.index];
@@ -909,10 +1082,14 @@ for (let qi = 0; qi < queue.length; qi++) {
     const hand = state?.hand[watch.side];
     if (hand) hand[watch.kind] = (hand[watch.kind] ?? 0) + 1;
     history.reset(watch.row, watch.col);
-    dropsRewritten++;
+    if (starved) dropsRewrittenByAbsence++;
+    else dropsRewritten++;
     if (VERBOSE) {
+      const why = starved
+        ? `駒として写らないまま ${watch.absence.streak} サンプル`
+        : `空と確定（${c!.streak} 回連続）`;
       console.log(
-        `  ⇄ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} が空と確定（${c.streak} 回連続）→ ` +
+        `  ⇄ ${fmt(t)} ${toUsiSquare(watch.row, watch.col)} は ${why} → ` +
           `${fmt(step.time)} の ${wasDrop} は打ちではなく ${usi} だった`,
       );
     }
@@ -1086,12 +1263,153 @@ for (let qi = 0; qi < queue.length; qi++) {
 
   // 成立するかは引き継いだ版で見る。当てずっぽうの版は偽の駒で崩れていることがあり、
   // それを理由に絵ごと捨てると、実際には読めるはずの手まで落としてしまう。
-  const primary: Square[][] = carried ?? settle(recognized.board)!;
-  const sane = checkBoard(primary);
+  let primary: Square[][] = carried ?? settle(recognized.board)!;
+  let sane = checkBoard(primary);
   if (!sane.ok) {
     insane++;
     if (VERBOSE && insane <= 3) console.log(`  ⚠ ${fmt(t)} 盤面が成立しない: ${sane.problems.slice(0, 3).join(' / ')}`);
-    continue;
+
+    // --- ⚕ 捨てる前にもう一度だけ考える（自己ロックの脱出・`src/escape.ts`）---
+    //
+    // 🔒 **捨てる動作そのものは正しい。** 王手の演出で駒が白抜きになった絵は本当に
+    // 読めない。壊れているのは「**捨て続けても脱出経路が無い**」ことだけである。
+    //
+    // ⭐ **見失っているときに限る。** 追跡が健全なら `lastSyncTime` は毎サンプル
+    // 更新される（配置が変わらない絵でも更新される）ので、`INSANE_ESCAPE_GAP` 空くのは
+    // 本当に見失った証拠。手が指された直後の 1〜2 枚が演出で崩れるのは普通なので、
+    // そこでは何も足さない（＝従来どおり捨てる）。
+    const lost = INSANE_ESCAPE && lastSyncTime !== null && t - lastSyncTime > INSANE_ESCAPE_GAP;
+
+    // ⚕① **素の読みだけで成立するなら、崩したのは引き継ぎ（古い `current`）である。**
+    // 引き継ぎを外して素の読みを採り、本線をそのまま続ける。
+    // ⚠ 未確定のマスが 1 つでも残れば `settle` は null を返すので、ここを通るのは
+    // 「読めてはいるが疑わしいマス（駒数超過・同じ側の別の駒）を引き継いだせいで
+    // 壊れた」形だけ。当てずっぽうで埋めた盤は採らない。
+    const plain = lost && carried ? settle(recognized.board) : null;
+    const plainSane = plain ? checkBoard(plain) : null;
+    if (plain && plainSane?.ok) {
+      primary = plain;
+      sane = plainSane;
+      insanePlainUsed++;
+      if (VERBOSE) {
+        console.log(`  ⚕ ${fmt(t)} 引き継ぎを外した素の読みなら成立する（崩していたのは古い追跡盤面）→ そちらで読む`);
+      }
+    } else if (lost && CLOCK_ENABLED && state && lastSyncTime !== null) {
+      // ⚕② **合成盤は捨てるが、規則の側にだけは聞く。**
+      //
+      // 読み（疑わしいマスを未確定に落としたもの）が自己矛盾していない（`checkRead`）なら、
+      // 成立しない形を作ったのは引き継いだ古い盤面である。合成盤を必要としない問い——
+      // **追跡している局面から起こりうる手を並べ、読めたマスとだけ突き合わせる**——なら
+      // 答えが出ることがある。
+      //
+      // ⭐ 検査する盤面と、突き合わせに使う盤面は**同じもの**にする。疑わしいマスは
+      // どのみち証拠から外れる（未確定は飛ばされる）ので、そこを含めて「矛盾している」と
+      // 断じるのは筋が通らない。
+      //
+      // 🔒 時計が「この窓で手が指された」と言うときだけ動く。反転が無ければ何もしない
+      // （証拠の無いところで規則だけを走らせない）。⚠ 逆向きには使わない——反転の数は
+      // 手数の**下限**なので、「時計が 1 手と言うから 2 手は作らない」は成り立たない
+      // （速い取り返しは 2 手で 1 反転にしかならない・review bot OCL-69066369）。
+      const read = markUnknown(recognized.board, suspicious);
+      if (!checkRead(read).ok) {
+        // 🔒 **絵の側が矛盾している＝本当に読めない絵。捨てるのが正しい。**
+        // ⭐ ここが多いまま乱戦が復元できないなら、詰まりは引き継ぎではなく認識にある
+        // （＝この脱出では届かない。演出そのものを読む別の一手が要る）。
+        insaneReadBlamed++;
+        continue;
+      }
+      insaneCarryBlamed++;
+      const flips = clock.flipsIn(lastSyncTime, t);
+      // ⚠ 型注釈が要る。`state` の再代入がこの `pick` を経由するので、注釈が無いと
+      // TypeScript が循環と見て `any` に落とす（このファイルは `state` で同じ形を
+      // 何度か踏んでいる——`nextState` の説明を見ること）。
+      const pick: RuleOnlyPick | null =
+        flips.length > 0
+          ? pickByRuleOnly(state, read, {
+              clockFlips: flips.length,
+              maxConflicts: 1,
+              anySide: handsAreGuessed(state),
+              requireVisibleDestination: INSANE_ESCAPE_STRICT,
+            })
+          : null;
+      if (pick) {
+        // ⚠ 打ちと決まっても出発点の見張り（`watchedDrops`）は付けない。候補側から
+        // 見ると「引き継ぎマスからの移動」は同点で並ぶので、**一意に決まった時点で
+        // 移動の線は既に消えている**（出発点が駒として写っていたか、写っていないなら
+        // 同点で退けられている）。本線の `inferMove` 経路とは事情が違う。
+        if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
+        // ⏱ 手の時刻は、時計の反転数と手数がちょうど一致するときだけ反転時刻を刻む。
+        // 合わないときは読んだ時刻のまま（当てずっぽうで時刻を作らない）。
+        const stampedByClock = flips.length === pick.moves.length;
+        for (const [mi, m] of pick.moves.entries()) {
+          steps.push({
+            time: stampedByClock ? Number(flips[mi].t.toFixed(3)) : t,
+            usi: m.usi,
+            side: m.side,
+            solved: true,
+          });
+          history.reset(m.to.row, m.to.col);
+          if (m.from) history.reset(m.from.row, m.from.col);
+        }
+        const last = pick.moves[pick.moves.length - 1];
+        if (pick.via === 'pair') {
+          // ⚠ 2 手ぶんの持ち駒は `nextState` では進められない（盤から測り直しになる）。
+          // **手番だけは分かっている**ので明示して合わせる（`⚖⚖` と同じ作法）。
+          handsTrusted = false;
+          state = {
+            ...nextState(state, pick.board, { usi: last.usi, side: last.side }),
+            sideToMove: last.side === 'sente' ? 'gote' : 'sente',
+          };
+          insaneEscapedPairs += 2;
+        } else {
+          state = nextState(state, pick.board, { usi: last.usi, side: last.side });
+          insaneEscapedSingles++;
+        }
+        current = state.board;
+        lastSyncTime = t;
+        consecutiveFailures = 0;
+        refusedDrop.count = 0;
+        if (VERBOSE) {
+          console.log(
+            `  ⚕⏱ ${fmt(t)} 盤面は成立しない（${sane.problems[0]}）が、規則の側から ` +
+              `${pick.moves.map((m) => m.usi).join(' ')} を拾った` +
+              `（時計は ${flips.length} 手${pick.promotionUncertain ? '・成りは原理的に決められない' : ''}）`,
+          );
+        }
+        continue;
+      }
+      // 拾えなかった。**ロックの最中でも反転を狙った読み直しはここから開ける。**
+      // ⚠ 従来はこの絵が捨てられるので、追いつくまで 1 枚も挿し込めず、78 秒ぶんの
+      // 反転をまとめて掘っていた（そのときには `current` が古すぎて手にならない）。
+      if (t - lastSyncTime > REFINE_MAX_GAP) {
+        const { flips: fresh, times } = takeFreshClockRereads(lastSyncTime, t, 0.75, ESCAPE_REREAD_TAIL);
+        if (times.length > 0) {
+          insaneRereadWindows++;
+          clockRereadSamples += times.length;
+          queue.splice(qi, 0, ...times);
+          for (const s of times) {
+            fineTimes.add(s);
+            queued.add(s);
+          }
+          qi--; // 直後の qi++ で挿し込んだ先頭に進む
+          // この絵はまだ数えない（あとでもう一度読む）。数えると読み直しのぶんだけ
+          // 水増しされて、集計から実態が読めなくなる。
+          samples--;
+          insane--;
+          insaneCarryBlamed--;
+          if (VERBOSE) {
+            console.log(
+              `  ⚕🔍 ${fmt(t)} 成立しない絵が続いている。${fmt(lastSyncTime)}〜${fmt(t)} の時計の反転 ` +
+                `${fresh.length} 箇所を狙って読み直す（${times.length} 枚: ${fresh.map((f) => fmt(f.t)).join(' ')}）`,
+            );
+          }
+          continue;
+        }
+      }
+      continue;
+    } else {
+      continue;
+    }
   }
 
   if (boardsEqual(primary, current)) {
@@ -1321,6 +1639,64 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // --- 検疫: 一度も駒として写らない挿し込み駒を「動かす」手は、打ちに読み替える ---
+  //
+  // 🔴 実測（3 本目 31:32〜31:51・幻の `B*2d`）: 挿し込んだ角の行き先は雲模様で
+  // `unknown` に居座り（消極的証拠は溜まるが、絶食の熟成前に）、19 秒後に来た
+  // **本物の角打ち**が「幻の角の移動 `2d4f`」として完璧に説明されてしまった。
+  // 移動が受理されると見張りは「別の手が触った」で解除され、動いた後のマスは
+  // 正しく空なので、以後どの検算も沈黙する——幻が本物の手にロンダリングされる。
+  //
+  // ⭐ **挿し込みは推測であり、駒が本当に居た裏（`piece` が 3 サンプル連続）が
+  // 取れていないうちは、その駒を動かす解釈を信用しない。** 挿し込みを取り消して
+  // 持ち駒を戻し、手は「行き先への打ち」に読み替える。盤の結果はどちらの解釈でも
+  // 同じ（行き先に同じ駒）なので、読み替えで壊れるものは無い。
+  //
+  // ⚠ 門は狭く保つ: 成る手（打ちでは成れない）と取る手（打ちは空マスにしか
+  // 打てない）は読み替えられないので触らない。裏が取れた挿し込みも触らない。
+  if (result.move && result.move.type === 'move' && result.move.from && state) {
+    const fromKey = `${result.move.from.row},${result.move.from.col}`;
+    const ins = insertedDrops.get(fromKey);
+    if (ins && shouldQuarantine(ins.absence, result.move, ins)) {
+      const step = ins.steps[ins.index];
+      if (step && step.usi === `${ins.kind}*${toUsiSquare(ins.row, ins.col)}`) {
+        insertedDrops.delete(fromKey);
+        // 挿し込みの取り消し（行き先が空と確定した場合と同じ後始末）
+        ins.steps.splice(ins.index, 1);
+        for (const other of [...provisional.values(), ...watchedDrops.values(), ...insertedDrops.values()]) {
+          if (other.steps === ins.steps && other.index > ins.index) other.index--;
+        }
+        current[ins.row][ins.col] = null;
+        // ⚠ `board`（読めた側の盤面）にも幻が引き継がれていることがある。
+        // 残すと `verifyMove` が「移動元に駒が残っている」と見て打ちを弾く。
+        board[ins.row][ins.col] = null;
+        const hand = state.hand[ins.side];
+        hand[ins.kind] = (hand[ins.kind] ?? 0) + 1;
+        history.reset(ins.row, ins.col);
+        // 手を打ちに読み替える（動かした駒＝挿し込んだ駒なので、種は挿し込みから取る）
+        const to = result.move.to;
+        const wasMove = result.move.usi;
+        result = {
+          move: {
+            usi: `${ins.kind}*${toUsiSquare(to.row, to.col)}`,
+            type: 'drop',
+            side: ins.side,
+            to: { row: to.row, col: to.col },
+            promoted: false,
+          },
+          changedCells: result.changedCells,
+        };
+        insertionsQuarantined++;
+        if (VERBOSE) {
+          console.log(
+            `  🛃 ${fmt(t)} ${fmt(step.time)} に挿し込んだ ${step.usi} は一度も駒として写っていない → ` +
+              `挿し込みを取り消し、${wasMove} を ${result.move!.usi} に読み替えた`,
+          );
+        }
+      }
+    }
+  }
+
   // --- 同じ側が 2 回続けて指したなら、間の 1 手を取りこぼしている ---
   //
   // 🔴 実測（2 局目 20:56〜20:58）: 飛が 3f の歩を取り、後手が `P*3e` と打ち、
@@ -1333,13 +1709,75 @@ for (let qi = 0; qi < queue.length; qi++) {
   // だけなので、当たっていなければ何も変わらない。
   const prevStep = steps.at(-1);
   if (result.move && prevStep && prevStep.side === result.move.side && state) {
+    // ⭐⏱ **挿し込む前に、時計に聞く。** 挿し込みは「間に相手の手が 1 手あった」
+    // という仮説であり、時計の反転はその仮説を盤と独立に検められる:
+    //   ・窓の中のサンプルが全部同じ側 → **何も結論しない**（`constantSide` の印を
+    //     数えるだけ）。⏹ かつてはここで挿し込みを止めていた（veto）が、それは
+    //     成り立たない——相手が即座に指し返すと手番は隙間で往復し、時計には
+    //     痕跡が残らない（review bot OCL-69066369）。サンプル間隔を詰めても
+    //     不在は示せないので、**否定の主張ごと取り下げた**。挿し込みは通り、
+    //     **幻は絶食・検疫が「行き先が一度も駒として写らない」という観測で取り消す**
+    //   ・反転がちょうど 1 回で、指した側も一致 → まず**反転時刻の周辺を読み直す**。
+    //     本物の手が絵から拾えれば、推測の挿し込み自体が要らなくなる
+    //     （🔴 幻の B*2d はここで生まれた——盤は静止していたのに、110 秒前の
+    //     取りこぼしの帳尻として実在しない打ちが挿し込まれた。反転時刻を読めば
+    //     「その時刻に指された本物の手」を先に探せる）。
+    //     読み直しても拾えなければ従来どおり挿し込む（時刻は反転時刻を刻む）
+    //   ・それ以外（被覆が足りない・反転が多い）→ 従来どおり
+    let clockFlipTime: number | null = null;
+    if (CLOCK_ENABLED) {
+      const judged = clock.judgeGap(
+        prevStep.time,
+        t,
+        screenSideOf(flipSide(result.move.side as Side)),
+      );
+      if (judged.constantSide) {
+        // 📏 旧実装ならここで veto を出していた場所。**否定はしない。**
+        clockConstantSideGaps++;
+        if (VERBOSE) {
+          console.log(
+            `  ⤺⏱? ${fmt(t)} 全サンプル同側だが、手番は隙間で往復しうるので否定しない`,
+          );
+        }
+      } else if (judged.verdict === 'confirm' && judged.flipTime !== undefined) {
+        clockFlipTime = judged.flipTime;
+        if (!clockRefinedFlips.has(flipKey(judged.flipTime))) {
+          clockRefinedFlips.add(flipKey(judged.flipTime));
+          const times = rereadTimes(
+            [{ t: judged.flipTime }],
+            { from: prevStep.time, to: t },
+          ).filter((s) => !queued.has(s));
+          if (times.length > 0) {
+            clockRereadWindows++;
+            clockRereadSamples += times.length;
+            queue.splice(qi, 0, ...times);
+            for (const s of times) {
+              fineTimes.add(s);
+              queued.add(s);
+            }
+            qi--; // 直後の qi++ で挿し込んだ先頭に進む
+            samples--; // この絵はまだ数えない。読み直したときに数える
+            if (VERBOSE) {
+              console.log(
+                `  🔍⏱ ${fmt(t)} 時計の反転 ${fmt(judged.flipTime)} の周辺を先に読み直す（${times.length} 枚）`,
+              );
+            }
+            continue;
+          }
+        }
+      }
+    }
     const read = markUnknown(recognized.board, suspicious);
     // `state.sideToMove` は相手の手番になっているので、1 手目は相手の手が並ぶ。
-    const pair = pickCandidatePair(state, read, { maxConflicts: 1 });
+    const pair: PairPickResult = pickCandidatePair(state, read, { maxConflicts: 1 });
     // ⚠ 読めた手を置き換えはしない。**同じ手の前に相手の手が入る**ときだけ受ける。
     if (pair.moves && pair.board && pair.moves[1].usi === result.move.usi) {
-      for (const m of pair.moves) {
-        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+      if (clockFlipTime !== null) clockConfirmedInsertions++;
+      for (const [mi, m] of pair.moves.entries()) {
+        // ⏱ 挿し込む 1 手目の時刻は、時計が反転を見た時刻を刻む（分かるとき）。
+        // 「同時刻に 2 手」は追いつきの跡そのものなので、残さずに済むなら残さない。
+        const at = mi === 0 && clockFlipTime !== null ? Number(clockFlipTime.toFixed(3)) : t;
+        steps.push({ time: at, usi: m.usi, side: m.side, solved: true });
         history.reset(m.to.row, m.to.col);
         if (m.from) history.reset(m.from.row, m.from.col);
       }
@@ -1374,6 +1812,7 @@ for (let qi = 0; qi < queue.length; qi++) {
           side: first.side as Side,
           steps,
           index: steps.length - 2, // 挿し込んだ 1 手目（2 手目は読めた手）
+          absence: new AbsenceEvidence(),
         });
         history.reset(first.to.row, first.to.col);
       }
@@ -1444,6 +1883,7 @@ for (let qi = 0; qi < queue.length; qi++) {
         side: result.move.side as Side,
         steps,
         index: steps.length - 1,
+        absence: new AbsenceEvidence(),
       });
       if (VERBOSE) {
         console.log(
@@ -1525,6 +1965,47 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
   }
 
+  // --- ⏱ 窓が REFINE_MAX_GAP を超えて長いなら、時計の反転時刻だけを狙って読み直す ---
+  //
+  // 一様な読み直しは「追跡が合っていた時刻から近いとき」しか効かない（上の ⚠）。
+  // 🔴 実測（3 本目 2 局目 1699.5〜1777）: 王手の演出で 156 サンプル連続
+  // 「盤面が成立せず捨てた」になり、78 秒の窓が空いた。窓が長すぎて一様な
+  // 読み直しは届かず、2 手分解が実際は 4〜6 手の応酬を 3 手に圧縮した——
+  // これが 110 秒後の幻の挿し込み（B*2d）の根になった。
+  //
+  // ⭐ **時計は演出に覆われない。** 窓の中の手番の反転は「このあたりで 1 手
+  // 指された」という盤と独立の証拠なので、その時刻の周辺だけを読みに行けば、
+  // 78 秒の窓でも挿し込む絵は反転あたり数枚で済む。手が指された直後は演出に
+  // 覆われやすいから、狙うのは**指す直前**と**演出が引いたあと**
+  // （CLOCK_REREAD_OFFSETS）。読めた絵はこのループ本体がそのまま処理する——
+  // 一様な読み直しと同じで、本線の救済（carryUnknowns / rescueVanished /
+  // 候補手・2 手分解）が全部効く。
+  if (
+    CLOCK_ENABLED &&
+    lastSyncTime !== null &&
+    t - lastSyncTime > REFINE_MAX_GAP
+  ) {
+    const { flips: fresh, times } = takeFreshClockRereads(lastSyncTime, t);
+    if (times.length > 0) {
+      clockRereadWindows++;
+      clockRereadSamples += times.length;
+      queue.splice(qi, 0, ...times);
+      for (const s of times) {
+        fineTimes.add(s);
+        queued.add(s);
+      }
+      qi--; // 直後の qi++ で挿し込んだ先頭に進む
+      samples--; // この絵はまだ数えない。読み直したときに数える
+      if (VERBOSE) {
+        console.log(
+          `  🔍⏱ ${fmt(t)} ${fmt(lastSyncTime)}〜${fmt(t)} の時計の反転 ${fresh.length} 箇所を` +
+            `狙って読み直す（${times.length} 枚: ${fresh.map((f) => fmt(f.t)).join(' ')}）`,
+        );
+      }
+      continue;
+    }
+  }
+
   // --- 細かく読み直しても届かないなら、盤面の論理で 2 手に分解する ---
   //
   // 🔴 **映像を細かく探しても届かない場合がある。** 実測（13:06〜14:08）: 香が角を
@@ -1539,10 +2020,44 @@ for (let qi = 0; qi < queue.length; qi++) {
       maxConflicts: 1,
       anySide: handsAreGuessed(state),
     });
+    // ⏱ 2 手分解は「窓の中に 2 手あった」という説明。時計の反転回数と突き合わせる:
+    //   ⏹ **時計で 2 手の説明を退けることはしない**（review bot OCL-69066369）。
+    //     かつては「この窓では誰も指していない」と言えるときに分解を退けていたが、
+    //     その否定は成り立たない——1 秒未満の速い手（打った駒がその場で取られる形）は
+    //     反転として見えず、手番がサンプルの隙間で往復すれば全サンプル同側にもなる。
+    //     **時計に言えるのは肯定だけ。** 見えないことは何の証拠でもない。
+    //   ・反転が 2 回 → 説明と一致。**手の時刻を反転時刻で刻む**
+    //     （同時刻の塊は追いつきの跡。残さずに済むなら残さない）
+    //   ・反転が 3 回以上 → 2 手では足りない。分解は受けるが（盤とは整合する）、
+    //     **時計が言う手数との差を正直な穴として記録する**（発明はしない——
+    //     何を指したかは盤にしか無く、盤は正味の差分しか見せていない）
+    //     ⚠ 反転の数は**下限**（速い手は見えない）。記録する穴も「少なくともこれだけ
+    //     足りない」の意味になる
+    let pairTimes: [number, number] = [t, t];
+    if (pair.moves && pair.board && CLOCK_ENABLED && lastSyncTime !== null && t - lastSyncTime > 2) {
+      const flips = clock.flipsIn(lastSyncTime + 0.25, t + 0.25);
+      if (flips.length === 2) {
+        pairTimes = [Number(flips[0].t.toFixed(3)), Number(flips[1].t.toFixed(3))];
+      } else if (flips.length > 2) {
+        clockGaps.push({
+          game: gameIndex,
+          from: lastSyncTime,
+          to: t,
+          clockMoves: flips.length,
+          recordedMoves: 2,
+        });
+        if (VERBOSE) {
+          console.log(
+            `  ⏱⚠ ${fmt(t)} 時計は ${fmt(lastSyncTime)}〜${fmt(t)} に ${flips.length} 手と言うが ` +
+              `2 手しか説明できない（正直な穴として記録）`,
+          );
+        }
+      }
+    }
     if (pair.moves && pair.board) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
-      for (const m of pair.moves) {
-        steps.push({ time: t, usi: m.usi, side: m.side, solved: true });
+      for (const [mi, m] of pair.moves.entries()) {
+        steps.push({ time: pairTimes[mi], usi: m.usi, side: m.side, solved: true });
         history.reset(m.to.row, m.to.col);
         if (m.from) history.reset(m.from.row, m.from.col);
       }
@@ -1616,6 +2131,9 @@ if (dropsWithCarriedOrigin > 0) {
 }
 if (dropsRewritten > 0) console.log(`  出発点が空と確定したので打ち → 移動に直した手: ${dropsRewritten}`);
 if (insertionsUndone > 0) console.log(`  行き先が空と確定したので取り消した挿し込み: ${insertionsUndone}`);
+if (dropsRewrittenByAbsence > 0) console.log(`  出発点が一度も駒として写らないので打ち → 移動に直した手（絶食）: ${dropsRewrittenByAbsence}`);
+if (insertionsUndoneByAbsence > 0) console.log(`  行き先が一度も駒として写らないので取り消した挿し込み（絶食）: ${insertionsUndoneByAbsence}`);
+if (insertionsQuarantined > 0) console.log(`  一度も写らない挿し込み駒を動かす手を、打ちに読み替えた（検疫）: ${insertionsQuarantined}`);
 if (transitsMerged > 0) console.log(`  滑りの経由地と分かって 1 手に併合した: ${transitsMerged}`);
 console.log(`  読めないマスを引き継いで通った: ${carriedUsed}`);
 console.log(
@@ -1638,6 +2156,25 @@ console.log(`  合法手の候補から決めた手: ${byCandidate}`);
 console.log(`  盤面の論理で 2 手に分解して拾えた手: ${pairedMoves}`);
 if (insertedMoves > 0) console.log(`  手番が飛んだので間に挿した手: ${insertedMoves}`);
 if (unresolvedGaps > 0) console.log(`  手番が飛んだが決められなかった穴: ${unresolvedGaps}`);
+if (CLOCK_ENABLED) {
+  console.log(
+    `  ⏱ 時計の手番指標: ${clockSamples} サンプル中 ${clockDecided} で手番が割れた` +
+      `（${clockSamples > 0 ? Math.round((clockDecided / clockSamples) * 100) : 0}%）`,
+  );
+  if (clockRereadWindows > 0)
+    console.log(`  ⏱ 時計の反転を狙った読み直し: ${clockRereadWindows} 窓（追加で読んだ絵: ${clockRereadSamples}）`);
+  if (clockConfirmedInsertions > 0) console.log(`  ⏱ 時計が裏付けた挿し込み: ${clockConfirmedInsertions}`);
+  if (clockConstantSideGaps > 0)
+    console.log(
+      `  ⏱📏 全サンプル同側だった窓: ${clockConstantSideGaps}` +
+        `（旧実装ならここで挿し込みを止めていた。いまは否定しない）`,
+    );
+  if (clockGaps.length > 0)
+    console.log(
+      `  ⏱🕳 時計が言う手数より説明が少なかった窓（正直な穴）: ${clockGaps.length} — ` +
+        clockGaps.map((g) => `${fmt(g.from)}〜${fmt(g.to)} 時計 ${g.clockMoves} 手/記録 ${g.recordedMoves} 手`).join(' / '),
+    );
+}
 console.log(`  持ち駒を信じられた区間で終わったか: ${handsTrusted ? 'はい' : 'いいえ（どこかで仕切り直した）'}`);
 if (candidateFailures.size > 0) {
   console.log(
@@ -1649,6 +2186,16 @@ console.log(`  成りを後から読み直して直した手: ${promotionsFixed}
 if (promotionsRejected) console.log(`  成れない位置なので読みの方を断った: ${promotionsRejected}`);
 console.log(`  駒数が規定を超えていた絵: ${overflowSeen}`);
 console.log(`  盤面が成立せず捨てた: ${insane}`);
+// ⚕ 自己ロックの脱出（`src/escape.ts`）。`insaneCarryBlamed` が大きいほど
+// 「絵は読めていたのに引き継ぎで壊していた」絵が多かったということ。
+if (insanePlainUsed > 0) console.log(`  ⚕ 引き継ぎを外した素の読みで成立した絵: ${insanePlainUsed}`);
+if (insaneCarryBlamed > 0 || insaneReadBlamed > 0) {
+  console.log(
+    `  ⚕ 見失っている最中の成立しない絵: 引き継ぎの責任 ${insaneCarryBlamed} / 絵の責任 ${insaneReadBlamed}` +
+      `（規則の側から拾えた手: 1 手 ${insaneEscapedSingles} / 2 手分解 ${insaneEscapedPairs}）`,
+  );
+}
+if (insaneRereadWindows > 0) console.log(`  ⚕ 成立しない絵の途中から開いた読み直し: ${insaneRereadWindows} 窓`);
 // ⚠ これが多いと「追跡を始められない」。起点は全マスが読めている絵しか採れないが、
 // ポインタは常に盤上のどこかにいるので、思ったより候補が少ない。
 if (unreadableStart > 0) console.log(`  起点にできなかった絵（未確定のマスが残る）: ${unreadableStart}`);
@@ -1760,6 +2307,18 @@ for (let g = 0; g <= gameIndex; g++) {
     game: g + 1,
     /** 画面の下の対局者が先手だったか。1 手目を指した側から決めた。 */
     bottomIsSente: !flipped,
+    /**
+     * ⏱ 時計は k 手と言うのに n 手しか説明できなかった窓（正直な穴）。
+     * 空でなければ、その区間の手は**数が足りていない**——通し再生が満点でも信じない。
+     * KIFU_VISION_CLOCK=0 のときはキー自体を出さない（従来の出力と一致させる）。
+     */
+    ...(CLOCK_ENABLED
+      ? {
+          clockGaps: clockGaps
+            .filter((x) => x.game === g)
+            .map(({ from, to, clockMoves, recordedMoves }) => ({ from, to, clockMoves, recordedMoves })),
+        }
+      : {}),
     runs: mine
       .map((r) => {
         let alt = 0;

@@ -629,19 +629,17 @@ let clockDecided = 0;
 /** 反転時刻を狙った読み直し（窓の数と追加で読んだ絵） */
 let clockRereadWindows = 0;
 let clockRereadSamples = 0;
-/** 時計が「間に手は無い」と言ったので見送った挿し込み */
-let clockVetoedInsertions = 0;
 /** 時計が裏付けた（反転 1 回・側も一致）挿し込み */
 let clockConfirmedInsertions = 0;
-/** 時計と手数が合わないので退けた 2 手分解 */
-let clockVetoedPairs = 0;
 /**
- * 📏 全サンプル同側だったが、刻みが粗いので否定しなかった窓（`GapJudgement.coarse`）。
+ * 📏 判定できたサンプルが全部同じ側だった窓（`GapJudgement.constantSide`）。
  *
- * 🔴 旧実装が veto を出していた場所そのもの（review bot OCL-69066369）。
- * ここが多いなら、その窓を細かく読み直してから時計に聞き直す余地がある。
+ * 🔴 **旧実装が veto を出していた場所そのもの**（review bot OCL-69066369）。
+ * いまは何も止めない——手番はサンプルの隙間で往復しうるので、同じ側が並ぶことは
+ * 「間に手が無い」の証拠にならない。**その推論にどれだけ頼っていたか**を残すために
+ * 数えるだけで、挿し込みは通り、幻は絶食・検疫が後から取り消す。
  */
-let clockCoarseGaps = 0;
+let clockConstantSideGaps = 0;
 /** 一度狙って読み直した反転時刻（同じ場所を何度も掘らない） */
 const clockRefinedFlips = new Set<number>();
 /** 時計は k 手と言うのに n 手しか説明できなかった窓（正直な穴の記録） */
@@ -1713,14 +1711,12 @@ for (let qi = 0; qi < queue.length; qi++) {
   if (result.move && prevStep && prevStep.side === result.move.side && state) {
     // ⭐⏱ **挿し込む前に、時計に聞く。** 挿し込みは「間に相手の手が 1 手あった」
     // という仮説であり、時計の反転はその仮説を盤と独立に検められる:
-    //   ・窓の中のサンプルが全部同じ側（短い紛れも無い・隙間なく見ていた）
-    //     → 間に手は無い。挿し込まない（交互の破れの原因は挿し込みでは直らない
-    //     別の場所にある。正直な穴として残す）。⚠ 1 秒未満の速い手は反転として
-    //     見えないので、「反転 0 回」ではなく「全サンプル同側」まで求める（judgeGap）
-    //     🔴 **さらに、その窓を細かく見ていたことまで求める**（review bot
-    //     OCL-69066369）。0.5 秒の格子では相手の手番が隙間で完結しうるので、
-    //     同じ側が並んでも否定にならない。粗い窓は unknown（`coarse`）になり、
-    //     挿し込みは従来どおり行われる——**幻は絶食・検疫が後から取り消す**
+    //   ・窓の中のサンプルが全部同じ側 → **何も結論しない**（`constantSide` の印を
+    //     数えるだけ）。⏹ かつてはここで挿し込みを止めていた（veto）が、それは
+    //     成り立たない——相手が即座に指し返すと手番は隙間で往復し、時計には
+    //     痕跡が残らない（review bot OCL-69066369）。サンプル間隔を詰めても
+    //     不在は示せないので、**否定の主張ごと取り下げた**。挿し込みは通り、
+    //     **幻は絶食・検疫が「行き先が一度も駒として写らない」という観測で取り消す**
     //   ・反転がちょうど 1 回で、指した側も一致 → まず**反転時刻の周辺を読み直す**。
     //     本物の手が絵から拾えれば、推測の挿し込み自体が要らなくなる
     //     （🔴 幻の B*2d はここで生まれた——盤は静止していたのに、110 秒前の
@@ -1729,26 +1725,18 @@ for (let qi = 0; qi < queue.length; qi++) {
     //     読み直しても拾えなければ従来どおり挿し込む（時刻は反転時刻を刻む）
     //   ・それ以外（被覆が足りない・反転が多い）→ 従来どおり
     let clockFlipTime: number | null = null;
-    let clockVetoed = false;
     if (CLOCK_ENABLED) {
       const judged = clock.judgeGap(
         prevStep.time,
         t,
         screenSideOf(flipSide(result.move.side as Side)),
       );
-      if (judged.verdict === 'veto') {
-        clockVetoedInsertions++;
-        clockVetoed = true;
-        if (VERBOSE) {
-          console.log(`  ⤺⏱ ${fmt(t)} 手番が飛んだが、時計は間に手が無いと言うので挿し込まない`);
-        }
-      } else if (judged.coarse) {
-        // 📏 旧実装ならここで veto を出していた場所（刻みが粗いので否定しない）。
-        // この数だけ「止めていた挿し込み」が通る。絶食・検疫が後から検める。
-        clockCoarseGaps++;
+      if (judged.constantSide) {
+        // 📏 旧実装ならここで veto を出していた場所。**否定はしない。**
+        clockConstantSideGaps++;
         if (VERBOSE) {
           console.log(
-            `  ⤺⏱? ${fmt(t)} 全サンプル同側だが刻みが粗い（手番が隙間で完結しうる）ので否定しない`,
+            `  ⤺⏱? ${fmt(t)} 全サンプル同側だが、手番は隙間で往復しうるので否定しない`,
           );
         }
       } else if (judged.verdict === 'confirm' && judged.flipTime !== undefined) {
@@ -1781,11 +1769,7 @@ for (let qi = 0; qi < queue.length; qi++) {
     }
     const read = markUnknown(recognized.board, suspicious);
     // `state.sideToMove` は相手の手番になっているので、1 手目は相手の手が並ぶ。
-    // ⏱ 時計が「間に手は無い」と言った（veto）ときは挿し込みを試みない。
-    // 交互の破れは正直な穴として残り、読めた手そのものは下で普通に通る。
-    const pair: PairPickResult = clockVetoed
-      ? { moves: null, board: null, failure: null, tiedCount: 0, promotionUncertain: false }
-      : pickCandidatePair(state, read, { maxConflicts: 1 });
+    const pair: PairPickResult = pickCandidatePair(state, read, { maxConflicts: 1 });
     // ⚠ 読めた手を置き換えはしない。**同じ手の前に相手の手が入る**ときだけ受ける。
     if (pair.moves && pair.board && pair.moves[1].usi === result.move.usi) {
       if (clockFlipTime !== null) clockConfirmedInsertions++;
@@ -1842,10 +1826,8 @@ for (let qi = 0; qi < queue.length; qi++) {
     // **盤に一度も現れない**ので、`P*3e` と `B*3e` が同点で並ぶ（どちらも持っていた）。
     // 🔒 当てずっぽうで決めない。**穴があることだけを残す。**
     // → 決めるには画面の持ち駒欄が要る（GOAL Phase F）。
-    // ⏱ 時計が退けた場合は「決められない」ではなく「間に手が無い」なので数えない
-    // （clockVetoedInsertions に別で数えてある）。
-    if (!clockVetoed) unresolvedGaps++;
-    if (VERBOSE && !clockVetoed) {
+    unresolvedGaps++;
+    if (VERBOSE) {
       console.log(
         `  ⤺? ${fmt(t)} 手番が飛んだ。${result.move.usi} の前に 1 手あるが決められない` +
           `（${pair.failure ?? '2 手目が読めた手と違う'}・同点 ${pair.tiedCount}）`,
@@ -2039,15 +2021,11 @@ for (let qi = 0; qi < queue.length; qi++) {
       anySide: handsAreGuessed(state),
     });
     // ⏱ 2 手分解は「窓の中に 2 手あった」という説明。時計の反転回数と突き合わせる:
-    //   ・**時計がこの窓で 1 手も指されていないと言い切れる**（`deniesMoveIn`）
-    //     → 2 手の説明は**退ける**（盤の差分は読み違いかもしれない。当てずっぽうの
-    //     2 手より正直な穴）。⚠「反転 0〜1 回」では退けない——1 秒未満の速い手
-    //     （打った駒がその場で取られる形）は CLOCK_MIN_RUN 未満の連続にしかならず、
-    //     反転として数えられないため
-    //     🔴 **全サンプル同側も、それだけでは証拠にならない**（review bot
-    //     OCL-69066369）。手番がサンプルの隙間（0.5 秒）で完結すると時計には
-    //     痕跡が残らない。細かく見た窓でしか否定は成り立たない——判断は
-    //     `ClockTimeline.deniesMoveIn` に一本化してある（挿し込みの検算と同じ前提）
+    //   ⏹ **時計で 2 手の説明を退けることはしない**（review bot OCL-69066369）。
+    //     かつては「この窓では誰も指していない」と言えるときに分解を退けていたが、
+    //     その否定は成り立たない——1 秒未満の速い手（打った駒がその場で取られる形）は
+    //     反転として見えず、手番がサンプルの隙間で往復すれば全サンプル同側にもなる。
+    //     **時計に言えるのは肯定だけ。** 見えないことは何の証拠でもない。
     //   ・反転が 2 回 → 説明と一致。**手の時刻を反転時刻で刻む**
     //     （同時刻の塊は追いつきの跡。残さずに済むなら残さない）
     //   ・反転が 3 回以上 → 2 手では足りない。分解は受けるが（盤とは整合する）、
@@ -2056,20 +2034,9 @@ for (let qi = 0; qi < queue.length; qi++) {
     //     ⚠ 反転の数は**下限**（速い手は見えない）。記録する穴も「少なくともこれだけ
     //     足りない」の意味になる
     let pairTimes: [number, number] = [t, t];
-    let pairVetoed = false;
     if (pair.moves && pair.board && CLOCK_ENABLED && lastSyncTime !== null && t - lastSyncTime > 2) {
       const flips = clock.flipsIn(lastSyncTime + 0.25, t + 0.25);
-      const inner = { from: lastSyncTime + 0.6, to: t - 0.6 };
-      if (flips.length === 0 && clock.deniesMoveIn(inner.from, inner.to)) {
-        pairVetoed = true;
-        clockVetoedPairs++;
-        if (VERBOSE) {
-          console.log(
-            `  ⚖⚖⏱ ${fmt(t)} 2 手分解を退けた: 時計はこの窓で誰も指していないと言う` +
-              `（${pair.moves.map((m) => m.usi).join(' ')} は入れない）`,
-          );
-        }
-      } else if (flips.length === 2) {
+      if (flips.length === 2) {
         pairTimes = [Number(flips[0].t.toFixed(3)), Number(flips[1].t.toFixed(3))];
       } else if (flips.length > 2) {
         clockGaps.push({
@@ -2087,7 +2054,7 @@ for (let qi = 0; qi < queue.length; qi++) {
         }
       }
     }
-    if (pair.moves && pair.board && !pairVetoed) {
+    if (pair.moves && pair.board) {
       if (steps.length === 0) runs.push({ steps, startedAt: t, game: gameIndex });
       for (const [mi, m] of pair.moves.entries()) {
         steps.push({ time: pairTimes[mi], usi: m.usi, side: m.side, solved: true });
@@ -2197,12 +2164,10 @@ if (CLOCK_ENABLED) {
   if (clockRereadWindows > 0)
     console.log(`  ⏱ 時計の反転を狙った読み直し: ${clockRereadWindows} 窓（追加で読んだ絵: ${clockRereadSamples}）`);
   if (clockConfirmedInsertions > 0) console.log(`  ⏱ 時計が裏付けた挿し込み: ${clockConfirmedInsertions}`);
-  if (clockVetoedInsertions > 0) console.log(`  ⏱ 時計が退けた挿し込み: ${clockVetoedInsertions}`);
-  if (clockVetoedPairs > 0) console.log(`  ⏱ 時計が退けた 2 手分解: ${clockVetoedPairs}`);
-  if (clockCoarseGaps > 0)
+  if (clockConstantSideGaps > 0)
     console.log(
-      `  ⏱📏 全サンプル同側だが刻みが粗いので否定しなかった窓: ${clockCoarseGaps}` +
-        `（旧実装ならここで挿し込みを止めていた）`,
+      `  ⏱📏 全サンプル同側だった窓: ${clockConstantSideGaps}` +
+        `（旧実装ならここで挿し込みを止めていた。いまは否定しない）`,
     );
   if (clockGaps.length > 0)
     console.log(

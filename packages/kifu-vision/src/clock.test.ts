@@ -225,12 +225,15 @@ describe('ClockTimeline.judgeGap', () => {
     expect(tl.judgeGap(0, 10, 'top').verdict).toBe('unknown');
   });
 
-  it('0.1 秒で読み直した窓で同じ側が並べば veto（隙間に手番が入る余地が無い）', () => {
-    // ⭐ 繋がらない窓は `FINE_STEP`（0.1 秒）で読み直される。**実際に細かく見た窓なら**
-    // 「間に手は無い」と言ってよい——見逃した手番があるとしても 0.1 秒未満になる。
+  it('🔒 0.1 秒で読み直した窓でも否定はしない（不在は有限のサンプリングでは示せない）', () => {
+    // ⏹ かつては「細かく見た窓なら間に手は無いと言ってよい」として veto を出していた。
+    // 撤回した——間隔をどれだけ詰めても「その隙間に往復が収まらない」ことは示せない。
+    // 閾値は起こりにくさの言い換えでしかなく、否定の根拠にならない。
     const tl = new ClockTimeline();
     for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), 'bottom');
-    expect(tl.judgeGap(0, 10, 'top').verdict).toBe('veto');
+    const j = tl.judgeGap(0, 10, 'top');
+    expect(j.verdict).toBe('unknown');
+    expect(j.constantSide).toBe(true);
   });
 
   it('反転 0 回でも被覆が足りなければ unknown（見逃しかもしれない）', () => {
@@ -254,20 +257,20 @@ describe('ClockTimeline.judgeGap', () => {
     expect(tl.judgeGap(0, 10, 'top').verdict).toBe('unknown');
   });
 
-  it('粗い刻みで全サンプル同側なら unknown に coarse の印が付く（旧実装の veto 地点）', () => {
-    // 📏 弱めたことでどれだけ挿し込みが通るようになったかを走査ログで数えるための印。
+  it('全サンプル同側なら unknown に constantSide の印が付く（旧実装の veto 地点）', () => {
+    // 📏 判定には使わない。**その推論にどれだけ頼っていたか**を走査ログで数える印。
     const tl = gridTimeline(0, Array(21).fill('bottom') as ClockSide[]);
     const j = tl.judgeGap(0, 10, 'top');
     expect(j.verdict).toBe('unknown');
-    expect(j.coarse).toBe(true);
+    expect(j.constantSide).toBe(true);
   });
 
-  it('別の側が混じった unknown には coarse の印は付かない（同側ですらない）', () => {
+  it('別の側が混じった unknown には constantSide の印は付かない（同側ですらない）', () => {
     const sides = Array(21).fill('bottom') as (ClockSide | null)[];
     sides[15] = 'top';
     const j = gridTimeline(0, sides).judgeGap(0, 10, 'top');
     expect(j.verdict).toBe('unknown');
-    expect(j.coarse).toBeUndefined();
+    expect(j.constantSide).toBeUndefined();
   });
 
   it('反転が 2 回以上なら unknown（1 手挿しでは説明できない）', () => {
@@ -284,7 +287,7 @@ describe('ClockTimeline.judgeGap', () => {
 // 読み直し時刻の生成
 // ─────────────────────────────────────────────────────────────────────
 
-describe('ClockTimeline.deniesMoveIn（「この窓で 1 手も指されていない」と言えるか）', () => {
+describe('🔒 時計は否定の主張をしない（review bot OCL-69066369）', () => {
   /** 刻みを指定してタイムラインを作る */
   function stepped(step: number, n: number, side: ClockSide | null = 'bottom'): ClockTimeline {
     const tl = new ClockTimeline();
@@ -292,28 +295,14 @@ describe('ClockTimeline.deniesMoveIn（「この窓で 1 手も指されてい�
     return tl;
   }
 
-  it('細かく見ていて全部同じ側なら言える', () => {
-    expect(stepped(0.1, 100).deniesMoveIn(0, 10)).toBe(true);
+  it('どれだけ細かく見て全部同じ側でも「間に手は無い」とは言わない', () => {
+    // 0.02 秒刻み（走査で到達しうるどの細かさより細かい）でも unknown のまま。
+    expect(stepped(0.02, 500).judgeGap(0, 10, 'top').verdict).toBe('unknown');
   });
 
-  it('🔒 粗い刻み（0.5 秒）では言えない——手番が隙間で完結しうる', () => {
-    expect(stepped(0.5, 20).deniesMoveIn(0, 10)).toBe(false);
-  });
-
-  it('🔒 細かく見ていても、別の側が 1 サンプルでも混じれば言えない', () => {
-    const tl = new ClockTimeline();
-    for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), i === 55 ? 'top' : 'bottom');
-    expect(tl.deniesMoveIn(0, 10)).toBe(false);
-  });
-
-  it('🔒 細かく見ていても、割れない穴が空いていれば言えない', () => {
-    const tl = new ClockTimeline();
-    for (let i = 0; i <= 100; i++) tl.record(Number((i * 0.1).toFixed(3)), i >= 50 && i <= 55 ? null : 'bottom');
-    expect(tl.deniesMoveIn(0, 10)).toBe(false);
-  });
-
-  it('サンプルが 1 つも無ければ言えない', () => {
-    expect(new ClockTimeline().deniesMoveIn(0, 10)).toBe(false);
+  it('否定用の API（deniesMoveIn）そのものが存在しない', () => {
+    // 🔒 「間に手は無い」を返す口を残すと、また誰かがそこに繋いでしまう。
+    expect((stepped(0.1, 100) as unknown as Record<string, unknown>).deniesMoveIn).toBeUndefined();
   });
 });
 

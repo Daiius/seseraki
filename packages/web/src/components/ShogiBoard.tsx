@@ -101,6 +101,12 @@ interface Props {
   subjectSide: 'sente' | 'gote' | null;
   /** 悪手判定の閾値（ページ側で localStorage から読み込んで配る） */
   thresholds: Thresholds;
+  /**
+   * 表示を開始する手数（既定 0 = 初期局面）。
+   * **DEV ギャラリーで表示状態を固定するための入口**（`/dev-gallery`）。通常の閲覧は
+   * 初期局面から始めるので渡さない。範囲外の値は端に丸める。
+   */
+  initialMoveIndex?: number;
 }
 
 export function HandDisplay({
@@ -202,13 +208,15 @@ export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; l
   );
 }
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0 }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
   const userSide = subjectSide ?? null;
 
   const totalMoves = positions.length - 1;
-  const [moveIndex, setMoveIndex] = useState(0);
+  const [moveIndex, setMoveIndex] = useState(
+    Math.min(Math.max(initialMoveIndex, 0), totalMoves),
+  );
   const [flipped, setFlipped] = useState(userSide === 'gote');
   const [branchRank, setBranchRank] = useState<number | null>(null);
   const [branchDepth, setBranchDepth] = useState(0);

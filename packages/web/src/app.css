@@ -1,6 +1,24 @@
 @import 'tailwindcss';
 @plugin 'daisyui';
 
+/*
+  操作系（棋譜を進める/戻る・情報行・分岐の送り）向けのタッチ手当て。
+  連打・ダブルタップで**テキスト選択 / 選択メニュー / 拡大 / タップハイライト**が
+  暴発しないようにする。
+  ⚠ **クラスで明示した要素だけに当てる**（KIF コピー用の <pre> など、選択させたい場所を
+  巻き込まないため、グローバルには敷かない）。
+  ⚠ Tailwind の `select-none` だけでは **iOS Safari の長押しメニュー（callout）が残る**ので
+  `-webkit-touch-callout` を併記する。`touch-action: manipulation` はダブルタップ拡大だけを
+  外す（パン・ピンチは残る）ので、md 以上のスライダー操作も阻害しない。
+*/
+@utility no-tap-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
 /* 候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示 */
 @media (min-width: 48rem) {
   details[name='candidates'] > summary {

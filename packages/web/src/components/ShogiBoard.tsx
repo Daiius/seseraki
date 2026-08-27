@@ -58,6 +58,11 @@ const IconChevronDoubleRight = () => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
   </svg>
 );
+const IconSearch = () => (
+  <svg {...ICON_PROPS} className="size-4 md:hidden">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m2.1-5.4a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z" />
+  </svg>
+);
 const IconFlip = () => (
   <svg {...ICON_PROPS}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
@@ -288,6 +293,12 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
 
   const lastMoveTo = displayedMove ? lastMoveDestination(displayedMove) : null;
 
+  // 情報行は 1 行に収める（下記）ので、長い符号は truncate される。
+  // 全文へ到達する手段として title に同じ文字列を渡すため、ここで 1 度だけ作る。
+  const displayedMoveText = displayedMove && displayedMovePreState
+    ? `${turnSymbol(displayedMoveNum)}${usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}`
+    : null;
+
   const posEvalText = branchActive && branchCandidate
     ? formatScore(branchCandidate.scoreType, branchCandidate.scoreValue, evalMoveNumber)
     : posEval;
@@ -378,7 +389,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
           左右は盤面反転に依らず**画面基準**（◀ が左・▶ が右というボタンの並びに合わせる）。
           タブ順からは外す（同じ操作はコントローラー行のボタンが担うため）。
         */}
-        <div className="relative w-fit select-none">
+        <div className="relative w-fit no-tap-select">
           <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
           <button
             type="button"
@@ -402,35 +413,53 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         />
       </div>
 
-      {/* コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ */}
-      <div className="flex items-baseline gap-x-3 gap-y-1 flex-wrap text-sm max-w-3xl">
-        {displayedMove && displayedMovePreState ? (
-          <span className="font-bold text-base whitespace-nowrap">
-            {turnSymbol(displayedMoveNum)}
-            {usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}
-          </span>
-        ) : (
-          <span className="text-base-content/40 whitespace-nowrap">初期局面</span>
-        )}
-        {posEvalText && (
-          <span
-            className={clsx(
-              'font-semibold whitespace-nowrap',
-              branchActive && 'text-base-content/50',
-            )}
-          >
-            {posEvalText}
-          </span>
-        )}
-        <div className="ml-auto flex items-baseline gap-2 whitespace-nowrap">
-          {/* 局面検索へ（prd/10 §6.3）。**表示中の局面**を鍵にして横断検索へ飛ぶ */}
+      {/*
+        コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ
+
+        🔒 **高さを内容で変えない。** 以前は `flex-wrap` だったため、符号や評価値
+        （「先手勝ち(15手詰)」など）が伸びると右ブロックが折り返して行が 2 行になり、
+        **下のコントローラー行が丸ごと下へずれた**。連打中にずれると、指の下に来た
+        「この局面を探す」を踏んで /positions へ飛ぶ。
+        対策は「折り返さない・はみ出しは truncate で吸収・高さは min-h-6 で固定」。
+        符号は棋譜を読むための情報なので、truncate しても title で全文へ到達できるようにする。
+      */}
+      <div className="flex items-center gap-x-3 min-h-6 text-sm max-w-3xl no-tap-select">
+        <div className="flex items-center gap-x-3 min-w-0">
+          {displayedMoveText ? (
+            <span className="font-bold text-base truncate" title={displayedMoveText}>
+              {displayedMoveText}
+            </span>
+          ) : (
+            <span className="text-base-content/40 whitespace-nowrap">初期局面</span>
+          )}
+          {posEvalText && (
+            // 幅が足りないときは符号より先に評価値を削る（符号を優先して読ませる）
+            <span
+              className={clsx(
+                'font-semibold truncate shrink-[3]',
+                branchActive && 'text-base-content/50',
+              )}
+              title={posEvalText}
+            >
+              {posEvalText}
+            </span>
+          )}
+        </div>
+        <div className="ml-auto shrink-0 flex items-center gap-2 whitespace-nowrap">
+          {/*
+            局面検索へ（prd/10 §6.3）。**表示中の局面**を鍵にして横断検索へ飛ぶ。
+            モバイルはラベルを畳んでアイコンだけにする（右ブロックを細くして、
+            符号・評価値に 1 行ぶんの幅を残すため）。
+          */}
           <Link
             to="/positions"
             search={{ pos: positionSfen(displayState) }}
             className="btn btn-ghost btn-xs"
+            aria-label="この局面を探す"
             title="この局面を通った他の棋譜と、そこからの分岐を見る"
           >
-            この局面を探す
+            <IconSearch />
+            <span className="hidden md:inline">この局面を探す</span>
           </Link>
           <span className="font-mono text-base-content/60">
             {moveIndex} / {totalMoves}
@@ -442,7 +471,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
       </div>
 
       {/* コントローラー行 */}
-      <div className="flex items-center gap-2 max-w-3xl">
+      <div className="flex items-center gap-2 max-w-3xl no-tap-select">
         <button
           className="btn btn-outline md:btn-sm"
           onClick={() => goToMain(0)}
@@ -671,7 +700,7 @@ function CandidateList({
                       return nodes;
                     })()}
                   </div>
-                  <div className="mt-2 flex items-center gap-2 pl-5">
+                  <div className="mt-2 flex items-center gap-2 pl-5 no-tap-select">
                     <button
                       className="btn btn-outline btn-sm"
                       onClick={() => onBranchBack(c.rank)}

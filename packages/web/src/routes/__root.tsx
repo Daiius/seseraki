@@ -150,39 +150,40 @@ function RootComponent() {
             <details ref={menuRef} className="dropdown dropdown-end group ms-3">
               <summary
                 className="btn btn-ghost btn-sm gap-1 px-2 list-none max-sm:h-11 max-[374px]:h-10 max-[374px]:px-1 group-open:btn-active [&::-webkit-details-marker]:hidden"
-                aria-haspopup="menu"
                 aria-label="メニュー"
               >
                 <Bars3Icon />
                 <ChevronDownIcon className="size-3 transition-transform group-open:rotate-180" />
               </summary>
               {/*
+                ARIA の menu ロールは付けない。中身はサイト内ナビゲーションの行き先で、
+                矢印キー移動・初期フォーカス・Home/End を伴う複合ウィジェットではない。
+                ロールだけ名乗ると支援技術に「menu」と通知される一方で期待した操作が動かず、
+                かえって不整合になる。通常のリスト + リンクとして公開し、開閉状態は
+                `<summary>` の aria-expanded（ブラウザが持つ）に任せる。
+
                 項目もヘッダーのボタンと同じ基準で 44px 高を確保する（Apple HIG 44pt /
                 WCAG 2.2 SC 2.5.5）。幅では出し分けない——メニューは開いている間だけ出る
                 一時的な面で、幅ごとに高さが変わると出現位置の見当が付けにくい。
                 項目間は 4px。Material の 8px はメニュー内では隙間が目立ちすぎ、44px の
                 高さが既に十分な当たり判定を与えているので、区切りが分かる最小限に留める
               */}
-              <ul
-                role="menu"
-                className="dropdown-content menu bg-base-100 rounded-box z-20 mt-1 w-48 gap-1 p-2 shadow"
-              >
+              <ul className="dropdown-content menu bg-base-100 rounded-box z-20 mt-1 w-48 gap-1 p-2 shadow">
                 {/* 項目を押しても dropdown は閉じないので、遷移・実行の前に明示的に閉じる */}
-                <li role="none">
-                  <Link role="menuitem" to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>
+                <li>
+                  <Link to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>
                     <VideoCameraIcon />
                     動画解析
                   </Link>
                 </li>
-                <li role="none">
-                  <Link role="menuitem" to="/settings" onClick={closeMenu} className={MENU_ITEM}>
+                <li>
+                  <Link to="/settings" onClick={closeMenu} className={MENU_ITEM}>
                     <CogIcon />
                     設定
                   </Link>
                 </li>
-                <li role="none">
+                <li>
                   <button
-                    role="menuitem"
                     type="button"
                     className={MENU_ITEM}
                     onClick={() => {

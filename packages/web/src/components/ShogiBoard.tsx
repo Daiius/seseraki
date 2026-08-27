@@ -8,7 +8,7 @@ import {
   type BoardState,
   type PieceKind,
 } from 'shared';
-import { turnSymbol, formatScore, toSenteEval } from '../lib/usi';
+import { turnSymbol, formatScore, formatScoreShort, toSenteEval } from '../lib/usi';
 import {
   computeMoveLosses,
   formatLoss,
@@ -253,9 +253,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     (a) => a.moveNumber === moveIndex,
   );
   const currentBest = currentAnalysis?.candidates.find((c) => c.rank === 1);
-  const posEval = currentBest
-    ? formatScore(currentBest.scoreType, currentBest.scoreValue, moveIndex)
-    : null;
 
   const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
 
@@ -307,9 +304,19 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     ? `${turnSymbol(displayedMoveNum)}${usiToJapaneseWithPiece(displayedMovePreState, displayedMove)}`
     : null;
 
-  const posEvalText = branchActive && branchCandidate
-    ? formatScore(branchCandidate.scoreType, branchCandidate.scoreValue, evalMoveNumber)
-    : posEval;
+  // 情報行に出す局面評価値。分岐を辿っている間は分岐先の値、それ以外は現在局面の最善値。
+  // 同じ値を 2 つの形で出す: 広い画面は形勢の言葉つき、狭い画面は短い形（§2.1 / usi.ts）。
+  const shownScore = branchActive && branchCandidate
+    ? { type: branchCandidate.scoreType, value: branchCandidate.scoreValue, at: evalMoveNumber }
+    : currentBest
+      ? { type: currentBest.scoreType, value: currentBest.scoreValue, at: moveIndex }
+      : null;
+  const posEvalText = shownScore
+    ? formatScore(shownScore.type, shownScore.value, shownScore.at)
+    : null;
+  const posEvalShortText = shownScore
+    ? formatScoreShort(shownScore.type, shownScore.value, shownScore.at)
+    : null;
 
   const onBranchForward = (rank: number, pv: string[]) => {
     if (branchRank === rank) {
@@ -454,7 +461,9 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
               )}
               title={posEvalText}
             >
-              {posEvalText}
+              {/* 狭い画面は短い形。勝者（cp は符号 / mate は ▲△）は落とさない */}
+              <span className="md:hidden">{posEvalShortText}</span>
+              <span className="hidden md:inline">{posEvalText}</span>
             </span>
           )}
         </div>

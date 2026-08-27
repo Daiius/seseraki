@@ -33,6 +33,9 @@ import {
  */
 const ICON_BTN = 'btn btn-ghost btn-sm btn-square max-sm:size-11 max-[374px]:size-10';
 
+/** メニュー項目。ヘッダーのボタンと同じ 44px の当たり判定を持たせる */
+const MENU_ITEM = 'min-h-11 gap-3';
+
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     if (location.pathname === '/login') return;
@@ -153,20 +156,27 @@ function RootComponent() {
                 <Bars3Icon />
                 <ChevronDownIcon className="size-3 transition-transform group-open:rotate-180" />
               </summary>
+              {/*
+                項目もヘッダーのボタンと同じ基準で 44px 高を確保する（Apple HIG 44pt /
+                WCAG 2.2 SC 2.5.5）。幅では出し分けない——メニューは開いている間だけ出る
+                一時的な面で、幅ごとに高さが変わると出現位置の見当が付けにくい。
+                項目間は 4px。Material の 8px はメニュー内では隙間が目立ちすぎ、44px の
+                高さが既に十分な当たり判定を与えているので、区切りが分かる最小限に留める
+              */}
               <ul
                 role="menu"
-                className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-44 p-1 shadow"
+                className="dropdown-content menu bg-base-100 rounded-box z-20 mt-1 w-48 gap-1 p-2 shadow"
               >
                 {/* 項目を押しても dropdown は閉じないので、遷移・実行の前に明示的に閉じる */}
                 <li role="none">
-                  <Link role="menuitem" to="/video-analysis" onClick={closeMenu}>
-                    <VideoCameraIcon className="size-4" />
+                  <Link role="menuitem" to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>
+                    <VideoCameraIcon />
                     動画解析
                   </Link>
                 </li>
                 <li role="none">
-                  <Link role="menuitem" to="/settings" onClick={closeMenu}>
-                    <CogIcon className="size-4" />
+                  <Link role="menuitem" to="/settings" onClick={closeMenu} className={MENU_ITEM}>
+                    <CogIcon />
                     設定
                   </Link>
                 </li>
@@ -174,12 +184,13 @@ function RootComponent() {
                   <button
                     role="menuitem"
                     type="button"
+                    className={MENU_ITEM}
                     onClick={() => {
                       closeMenu();
                       void handleLogout();
                     }}
                   >
-                    <LogoutIcon className="size-4" />
+                    <LogoutIcon />
                     ログアウト
                   </button>
                 </li>

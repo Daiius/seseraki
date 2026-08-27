@@ -65,9 +65,24 @@ function analysisAt(
   };
 }
 
-/** ケースを 390px（iPhone 14 の論理幅）の枠に入れる。ギャラリーはデスクトップ幅で開くため */
+/**
+ * ケースを 390px（iPhone 14 の論理幅）の枠に入れる。ギャラリーはデスクトップ幅で開くため。
+ *
+ * ⚠ **この枠は「デスクトップ幅で並べて眺める」ためのもので、実画面の再現ではない。**
+ * 中身の `md:` はビューポート幅で効くので、デスクトップ幅で開くと
+ * **`md:` の見た目に 390px の幅制約だけが乗った実在しない状態**になる（盤面もクリップされる）。
+ * 折り返し・truncate を確かめるときは**ブラウザの幅そのものを 390px にする**。
+ */
 function Phone({ children }: { children: ReactNode }) {
-  return <div className="max-w-[390px] overflow-hidden">{children}</div>;
+  return (
+    <div>
+      <p className="mb-2 text-xs text-base-content/60">
+        ⚠ ブラウザ幅を 390px にして見ること。デスクトップ幅のままだと、md 以上の見た目に
+        390px の幅制約だけが乗った実在しない状態になる（実画面の再現にならない）。
+      </p>
+      <div className="max-w-[390px] overflow-hidden">{children}</div>
+    </div>
+  );
 }
 
 function KifuCase({

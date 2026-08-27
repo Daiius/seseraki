@@ -441,11 +441,16 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
             <span className="text-base-content/40 whitespace-nowrap">初期局面</span>
           )}
           {posEvalText && (
-            // 幅が足りないときは符号より先に評価値を削る（符号を優先して読ませる）
+            // 幅が足りないときは符号より先に評価値を削る（符号を優先して読ませる）。
+            // ⚠ 分岐を辿っている間は md 未満で**評価値そのものを隠す**——分岐バッジが
+            //   加わると 390px では符号と評価値が両方 truncate され、ホバーの無い
+            //   モバイルでは title からも全文に届かなくなるため。分岐中の評価値は
+            //   候補手の行にも出ている重複情報なので、符号の方を残す。
+            //   幅の足りる md 以上は従来どおり出す。
             <span
               className={clsx(
                 'font-semibold truncate shrink-[3]',
-                branchActive && 'text-base-content/50',
+                branchActive && 'text-base-content/50 hidden md:block',
               )}
               title={posEvalText}
             >

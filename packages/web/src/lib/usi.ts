@@ -122,3 +122,38 @@ export function formatScore(
   const sign = senteValue > 0 ? '+' : '';
   return `${sign}${senteValue} (${label})`;
 }
+
+/**
+ * 狭い画面向けの短い評価値表示（prd/05-analysis.md §2.1）。
+ *
+ * 情報行は折り返せない（折り返すと下の操作ボタンがずれる）ため、幅が足りないときは符号か評価値を
+ * 削ることになる。削って読めなくするより**そもそも削らずに済む情報量にする**方を採り、
+ * 形勢判断の言葉（`(先手有利)` など）を落とす。
+ *
+ * 🔒 **どちらが勝つかは落とさない。**
+ * - **cp は符号が勝者を担う**ので、言葉を落としても情報は減らない（`+120`）。
+ * - **mate は言葉だけが勝者を担う**（`先手勝ち(13手詰)` と `後手勝ち(13手詰)` は語しか違わない）。
+ *   手数だけにすると**頓死の前後で数字が変わるだけになり、勝敗が入れ替わったことが出ない**ので、
+ *   手番記号に揃えた 1 文字（▲ / △ = 詰ます側）を残す。
+ *
+ * ⚠ **`formatScore`（広い画面・候補手の行で使う既定の形）は変えない。** 呼び分けは表示側で行う。
+ */
+export function formatScoreShort(
+  scoreType: string,
+  scoreValue: number,
+  moveNumber: number,
+): string {
+  // 後手番（奇数手目）のスコアは反転して先手視点にする（`formatScore` と同じ）
+  const senteValue = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
+
+  if (scoreType === 'mate') {
+    // ▲ / △ は「詰ます側」。0 手詰（既に詰んでいる）と値が壊れている場合は
+    // `formatScore` と同じく勝者を名乗らない
+    if (senteValue > 0) return `▲${senteValue}手詰`;
+    if (senteValue < 0) return `△${-senteValue}手詰`;
+    return '詰み';
+  }
+
+  const sign = senteValue > 0 ? '+' : '';
+  return `${sign}${senteValue}`;
+}

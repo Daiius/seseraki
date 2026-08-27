@@ -4,6 +4,16 @@
  * アイコン用の依存を足さず、必要な数個だけ heroicons のパスをインライン化する（既存の
  * 三点メニュー等と同じ流儀）。`currentColor` 追従・`className` で寸法を渡す（既定 `size-5`）。
  * 装飾目的なので `aria-hidden`——意味はボタン側の `aria-label` に持たせる。
+ *
+ * 🔴 **`width` / `height` 属性を必ず持たせる。** `className` は既定引数なので、呼び出し側が
+ * 寸法クラスを含まない値を渡すと既定の `size-5` が消える。**寸法を持たない SVG の auto
+ * サイズ解決は Chromium と WebKit で違い**、Chromium は親いっぱいに伸ばすのに対し
+ * WebKit（iOS の Chrome を含む）では潰れて見えなくなる。実際に踏んだ
+ * （ヘッダーの `<PlusIcon className="sm:hidden" />` が iPhone で消えた）。
+ * 属性は presentation attribute なので CSS の `size-*` に負ける——**渡した寸法クラスは
+ * 今までどおり効き、クラスが無いときだけ 24px で描かれる**。呼び出し側の書き方を縛らずに
+ * 済むこの形を採った（既定寸法をクラスへ前置する案は、`size-4` を渡している既存の呼び出しと
+ * `size-*` 同士で衝突して CSS 順序次第になるため見送った）。
  */
 type IconProps = { className?: string };
 
@@ -14,6 +24,8 @@ export function ClipboardDocumentIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={1.5}
       stroke="currentColor"
       aria-hidden="true"
@@ -35,6 +47,8 @@ export function CheckIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={1.5}
       stroke="currentColor"
       aria-hidden="true"
@@ -52,6 +66,8 @@ export function ClipboardIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={1.5}
       stroke="currentColor"
       aria-hidden="true"
@@ -78,6 +94,8 @@ export function ListBulletIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -95,6 +113,8 @@ export function PlusIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -112,6 +132,8 @@ export function ChartBarIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -129,6 +151,8 @@ export function MagnifyingGlassIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -146,6 +170,8 @@ export function VideoCameraIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -163,6 +189,8 @@ export function CogIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -181,6 +209,8 @@ export function LogoutIcon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -198,6 +228,8 @@ export function Bars3Icon({ className = 'size-5' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2}
       stroke="currentColor"
       aria-hidden="true"
@@ -215,6 +247,8 @@ export function ChevronDownIcon({ className = 'size-3' }: IconProps) {
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
+      width="24"
+      height="24"
       strokeWidth={2.5}
       stroke="currentColor"
       aria-hidden="true"

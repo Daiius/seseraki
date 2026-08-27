@@ -115,7 +115,7 @@ function RootComponent() {
               className="btn btn-primary btn-sm max-sm:btn-square max-sm:size-11 max-[374px]:size-10"
               aria-label="棋譜を登録"
             >
-              <PlusIcon className="sm:hidden" />
+              <PlusIcon className="size-5 sm:hidden" />
               <span className="max-sm:hidden">棋譜を登録</span>
             </Link>
             <Link to="/" className={ICON_BTN} aria-label="棋譜一覧">

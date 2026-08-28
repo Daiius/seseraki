@@ -636,13 +636,6 @@ export function StudyBoard({
             </button>
           </div>
 
-          <EvalResultView
-            evalState={evalState}
-            replay={replay}
-            onReplay={setReplay}
-            thresholds={thresholds}
-          />
-
         </div>
       )}
     </>
@@ -651,6 +644,27 @@ export function StudyBoard({
   return (
     <>
       {groupClassName ? <div className={groupClassName}>{group}</div> : group}
+      {/*
+        🔴 **評価結果は sticky グループの外**（prd/12 §3.1・決定 2026-08-29）。
+        結果まで固定すると、390×900 の実測で**グループの高さが 1077px**（ビューポート 900px）に
+        なり、**下端が画面に入らない＝その下の評価値グラフに事実上たどり着けない**。
+        固定する価値があるのは**盤と、盤を動かす操作**であって、結果の読み物ではない。
+        外へ出すと「盤を上端に見ながらスクロールして読み筋を再生する」使い方はむしろ成立しやすい。
+
+        🔒 これで**結果の高さが変わっても盤・コントローラー行・操作ボタン行は動かない**
+        （prd/05 §2.1）。`stale` / `loading` / `invalid` / `busy` も同じ場所に出る。
+        ⚠ `idle`（まだ一度も評価していない）のときは器ごと出さない（余白を作らない）。
+      */}
+      {studying && evalState.kind !== 'idle' && (
+        <div className="max-w-3xl pt-3 no-tap-select">
+          <EvalResultView
+            evalState={evalState}
+            replay={replay}
+            onReplay={setReplay}
+            thresholds={thresholds}
+          />
+        </div>
+      )}
       {footer?.(controls)}
     </>
   );
@@ -759,14 +773,40 @@ function EvalResultView({
       {candidates.length === 0 && (
         <p className="text-base-content/60">候補手が返らなかった（詰みなど）</p>
       )}
+      {/*
+        候補手 1 本。🔴 **棋譜側の候補手一覧（`ShogiBoard` の `CandidateList`）と同じ形に畳む**
+        （prd/12 §3.2・決定 2026-08-29。ユーザ要望「通常の解析画面の候補手表示の様に」）。
+        独自の見せ方を作らず、**同じ `details` + `summary`** に揃える:
+
+        - **md 未満は畳む**（既定は閉じる）。`summary` の右端に `PV{n} ▼` の手がかりを出す
+        - **md 以上は常時展開**（`app.css` の `details[name='study-candidates']` の規則。
+          棋譜側の `candidates` と同じ 1 か所にまとめてある）
+        - `name` を持たせて**排他アコーディオン**にする（1 本開くと他が閉じる）。
+          棋譜側とは別の名前にして、開閉の単位を混ぜない
+
+        ⚠ **咎め筋の再生（読み専用の一時状態。§3.2）が畳んだ中に入る。**
+        閉じたまま再生中だと、**盤が読み専用のまま操作子だけ画面から消える**——
+        戻る手段が無くなる。そこで **`details` が閉じたら再生を解除する**（`onToggle`）。
+        排他アコーディオンで他の候補を開いたときも同じ経路で解除される。
+      */}
       {candidates.map((c, i) => {
         // 再生中の候補だけ非 null。**`replay?.candidate === i` だと TS が絞れない**ので
         // 絞り込んだ値そのものを持つ
         const active = replay !== null && replay.candidate === i ? replay : null;
         const pvLen = c.pv.length;
         return (
-          <div key={c.rank} className={clsx('rounded-lg p-2', active !== null && 'bg-base-200')}>
-            <div className="flex items-center gap-2 flex-wrap">
+          <details
+            name="study-candidates"
+            key={c.rank}
+            className={clsx('group rounded-lg p-2', active !== null && 'bg-base-200')}
+            onToggle={(e) => {
+              // 🔒 閉じたら再生を解除する（上記のコメントの理由）。
+              //    md 以上は CSS で常時展開だが、`open` 属性自体は動くので同じ経路を通る
+              //    ——盤が検討局面へ戻るだけで、読めなくなるものは無い
+              if (!e.currentTarget.open && active !== null) onReplay(null);
+            }}
+          >
+            <summary className="flex items-center gap-2 list-none cursor-pointer md:cursor-default [&::-webkit-details-marker]:hidden">
               <span className="font-mono text-base-content/50">{c.rank}</span>
               <span className="font-bold">
                 {symbolAt(side, 0)}
@@ -776,10 +816,16 @@ function EvalResultView({
                 {formatTurnScore(c.scoreType, c.scoreValue, side)}
               </span>
               <span className="text-xs text-base-content/40">d{c.depth}</span>
-            </div>
+              {pvLen > 0 && (
+                <span className="ml-auto text-xs text-base-content/40 md:hidden">
+                  PV{pvLen}{' '}
+                  <span className="inline-block transition-transform group-open:rotate-180">▼</span>
+                </span>
+              )}
+            </summary>
             {pvLen > 0 && (
               <>
-                <div className="mt-1 font-mono text-xs text-base-content/60">
+                <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
                   {(() => {
                     let st = base;
                     const nodes: string[] = [];
@@ -791,7 +837,7 @@ function EvalResultView({
                   })()}
                 </div>
                 {/* 咎め筋の再生は**読み専用の一時状態**。「戻る」で検討局面へ帰る */}
-                <div className="mt-2 flex items-center gap-2">
+                <div className="mt-2 flex items-center gap-2 pl-5">
                   <button
                     type="button"
                     className={clsx(TOUCH_BTN, 'btn-outline')}
@@ -833,7 +879,7 @@ function EvalResultView({
                 </div>
               </>
             )}
-          </div>
+          </details>
         );
       })}
     </div>

@@ -126,22 +126,32 @@
   line-height: 1;
 }
 
-/* 候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示 */
+/*
+  候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示。
+
+  ⚠ **検討盤の候補手（`study-candidates`）も同じ規則に乗せる**（prd/12 §3.2・決定 2026-08-29）。
+  「通常の解析画面の候補手表示と同じ形」にするのが要件なので、**別の見せ方を作らない**。
+  名前を分けているのは排他アコーディオンの単位を分けるためで、見せ方は共通。
+*/
 @media (min-width: 48rem) {
-  details[name='candidates'] > summary {
+  details[name='candidates'] > summary,
+  details[name='study-candidates'] > summary {
     list-style: none;
     cursor: default;
   }
-  details[name='candidates'] > summary::-webkit-details-marker {
+  details[name='candidates'] > summary::-webkit-details-marker,
+  details[name='study-candidates'] > summary::-webkit-details-marker {
     display: none;
   }
   /* Chrome 131+ / Firefox 137+: 折りたたみは ::details-content 疑似要素で表現される */
-  details[name='candidates']::details-content {
+  details[name='candidates']::details-content,
+  details[name='study-candidates']::details-content {
     display: block;
     content-visibility: visible;
   }
   /* 旧仕様（Safari など）向けフォールバック */
-  details[name='candidates']:not([open]) > *:not(summary) {
+  details[name='candidates']:not([open]) > *:not(summary),
+  details[name='study-candidates']:not([open]) > *:not(summary) {
     display: block;
   }
 }

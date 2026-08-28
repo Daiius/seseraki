@@ -1,6 +1,7 @@
 import { hc } from "hono/client";
 import type { AppType } from "server";
 import type { MoveAnalysis } from "../kifu-analysis.js";
+import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
 
 export function createClient(baseUrl: string, apiKey: string) {
   // server は basePath('/api') 配下。worker は server を直叩きするので baseUrl は
@@ -64,6 +65,48 @@ export function createClient(baseUrl: string, apiKey: string) {
         json: { kifuId, revision, analyzed, total },
       });
       if (!res.ok) throw new Error(`Failed to report progress: ${res.status}`);
+      return await res.json();
+    },
+
+    /**
+     * 検討局面の評価ジョブを 1 件取る（無ければ null。prd/12 §2.1）。
+     * 棋譜解析の局面境界と、棋譜が無いときの poll から叩く。
+     */
+    async claimPositionJob(): Promise<PositionEvalJob | null> {
+      const res = await client.api.worker["position-jobs"].$get();
+      if (!res.ok) throw new Error(`Failed to claim position job: ${res.status}`);
+      return await res.json();
+    },
+
+    /**
+     * 評価結果 or 失敗を報告する（**失敗も完了**。待っている long-poll を起こす）。
+     * 🔒 棋譜の analysisError / analysisRevision には触れない（prd/12 §2.5）。
+     */
+    async reportPositionResult(
+      id: string,
+      report: PositionEvalResult | { error: string },
+    ) {
+      const json =
+        "error" in report
+          ? { error: report.error }
+          : {
+              fallback: report.fallback,
+              candidates: report.candidates.map((c) => ({
+                rank: c.rank,
+                move: c.move,
+                scoreType: c.score.type,
+                scoreValue: c.score.value,
+                pv: c.pv,
+                depth: c.depth,
+              })),
+            };
+      const res = await client.api.worker["position-jobs"][":id"].result.$post({
+        param: { id },
+        json,
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to report position result: ${res.status}`);
+      }
       return await res.json();
     },
 

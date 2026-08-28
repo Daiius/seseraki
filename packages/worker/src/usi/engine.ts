@@ -12,6 +12,12 @@ export class UsiEngine {
   /** プロセス死（close/error）で解決を待っている呼び出しを起こすためのハンドラ */
   private deathHandlers: ((err: Error) => void)[] = [];
   private dead = false;
+  /**
+   * `setOption` で送った値を覚えておく（USI にオプション値を問い合わせる術はない）。
+   * 一時的に値を変えて戻したい呼び出し（検討局面の評価が MultiPV を上げる。prd/12 §2.2）が
+   * 「元の値」を知るために使う。
+   */
+  private options = new Map<string, string>();
 
   constructor(
     private readonly enginePath: string,
@@ -20,6 +26,8 @@ export class UsiEngine {
 
   async start(): Promise<void> {
     this.dead = false;
+    // 新しいプロセスはオプション未設定の状態から始まる（呼び出し側が setOption を再適用する）
+    this.options.clear();
     const proc = spawn(this.enginePath, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -82,7 +90,16 @@ export class UsiEngine {
   }
 
   setOption(name: string, value: string): void {
+    this.options.set(name, value);
     this.sendCommand(`setoption name ${name} value ${value}`);
+  }
+
+  /**
+   * `setOption` で設定した値。**まだ設定していなければ undefined**
+   * （＝エンジンの既定値のまま。呼び出し側が既定を補う）。
+   */
+  getOption(name: string): string | undefined {
+    return this.options.get(name);
   }
 
   async analyze(

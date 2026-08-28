@@ -138,7 +138,9 @@ async function main() {
     /** 待っている評価ジョブを捌く。エンジンが落ちたら再起動し、捌けなかったことを返す */
     const drainPositionJobs = async (): Promise<boolean> => {
       try {
-        await drainEvaluationJobs(engine, positionJobs, goCommand);
+        await drainEvaluationJobs(engine, positionJobs, goCommand, {
+          multiPv: config.engineMultiPv,
+        });
         return true;
       } catch (err) {
         if (!(err instanceof InteractiveEngineError)) throw err;
@@ -205,7 +207,9 @@ async function main() {
             // 1 局面ごとに検討局面の評価を差し込む（prd/12 §2.1）。
             // 最大待ちは「現局面の解析残り時間 + ポーリング間隔」に収まる
             onPositionBoundary: async () => {
-              await drainEvaluationJobs(engine, positionJobs, goCommand);
+              await drainEvaluationJobs(engine, positionJobs, goCommand, {
+                multiPv: config.engineMultiPv,
+              });
             },
             // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
             // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）

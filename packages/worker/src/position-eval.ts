@@ -7,15 +7,25 @@
  * 置換表の共有は許容する（検討局面は閲覧中の棋譜の派生局面で、むしろ共有できる側）。
  *
  * **パラメータは棋譜解析と同一**（`ENGINE_MOVETIME` / `ENGINE_DEPTH`・MultiPV 3）。
- * MultiPV は `analyzeKifu` が設定した値をそのまま使い、ここでは触らない
- * （途中で変えると解析中の棋譜の候補手数が静かに変わる）。
+ *
+ * 🔴 **局面評価は MultiPV を自分で設定してから探索する。** `analyzeKifu` は解析の
+ * 終わりに MultiPV を 1 へ戻すため、エンジンの設定に乗るだけだと**同じ要求が
+ * 「棋譜解析の最中なら 3 本・アイドルなら 1 本」と worker の状態で揺れる**
+ * （2026-08-28 に dev で実測。prd/12 §2.2 は 3 本と定めている）。
+ * 設定した値は探索後に**元へ戻す**ので、割り込まれた棋譜解析の候補手数は変わらない。
  */
 import { extractMultiPvResults, type CandidateMove } from "./kifu-analysis.js";
 import type { UsiEngine } from "./usi/engine.js";
 import type { UsiScore } from "./usi/types.js";
 
 /** `evaluateJob` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る） */
-export type EvalEngine = Pick<UsiEngine, "analyze">;
+export type EvalEngine = Pick<UsiEngine, "analyze" | "setOption" | "getOption">;
+
+/** USI の MultiPV 既定値。`setOption` を送っていないエンジンはこの値で動いている */
+const USI_DEFAULT_MULTI_PV = "1";
+
+/** 局面評価の既定の候補手数（prd/12 §2.2） */
+export const DEFAULT_EVAL_MULTI_PV = 3;
 
 /** server から受け取る評価ジョブ */
 export interface PositionEvalJob {
@@ -66,6 +76,37 @@ export class InteractiveEngineError extends Error {
  */
 const MAX_JOBS_PER_DRAIN = 8;
 
+/** {@link drainEvaluationJobs} の調整つまみ */
+export interface DrainOptions {
+  /** 局面評価の候補手数（既定 {@link DEFAULT_EVAL_MULTI_PV}） */
+  multiPv?: number;
+  /** 1 回で処理するジョブ数の上限（既定 {@link MAX_JOBS_PER_DRAIN}） */
+  maxJobs?: number;
+}
+
+/**
+ * MultiPV を一時的に `multiPv` にして `run` を実行し、**終わったら元の値へ戻す**。
+ * 元の値はエンジンが覚えている（`setOption` を送っていなければ USI 既定の 1）。
+ * 既に同じ値なら `setoption` を 1 度も送らない——棋譜解析の割り込み（既に 3）で
+ * 余計なコマンドを挟まないため。
+ */
+async function withMultiPv<T>(
+  engine: EvalEngine,
+  multiPv: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  const desired = String(multiPv);
+  const previous = engine.getOption("MultiPV") ?? USI_DEFAULT_MULTI_PV;
+  if (previous === desired) return run();
+
+  engine.setOption("MultiPV", desired);
+  try {
+    return await run();
+  } finally {
+    engine.setOption("MultiPV", previous);
+  }
+}
+
 /**
  * やねうら王が `go searchmoves` を解釈したか。
  *
@@ -101,19 +142,23 @@ function positionCommand(sfen: string, moves: string[] = []): string {
 /**
  * 評価ジョブを 1 件処理する。
  *
- * - 局面評価: `go`（MultiPV は棋譜解析の設定のまま）→ 候補手とスコア
+ * - 局面評価: `go`（MultiPV を `multiPv` にしてから探索し、終わったら戻す）→ 候補手とスコア
  * - 名指し評価: `go searchmoves <手>` → **その手の**スコアと読み筋（相手の咎め筋）
- *   非対応なら「手を適用した局面を評価して符号反転」のフォールバックで**同じ契約**を守る
+ *   非対応なら「手を適用した局面を評価して符号反転」のフォールバックで**同じ契約**を守る。
+ *   どちらも**その手 1 本**しか返さないので MultiPV は触らない
  */
 export async function evaluateJob(
   engine: EvalEngine,
   job: PositionEvalJob,
   goCommand: string,
+  multiPv: number = DEFAULT_EVAL_MULTI_PV,
 ): Promise<PositionEvalResult> {
   const position = positionCommand(job.sfen);
 
   if (job.move === null) {
-    const result = await engine.analyze(position, goCommand);
+    const result = await withMultiPv(engine, multiPv, () =>
+      engine.analyze(position, goCommand),
+    );
     return { candidates: extractMultiPvResults(result.infoLines), fallback: false };
   }
 
@@ -173,8 +218,9 @@ export async function drainEvaluationJobs(
   engine: EvalEngine,
   source: PositionJobSource,
   goCommand: string,
-  maxJobs: number = MAX_JOBS_PER_DRAIN,
+  options: DrainOptions = {},
 ): Promise<number> {
+  const { multiPv = DEFAULT_EVAL_MULTI_PV, maxJobs = MAX_JOBS_PER_DRAIN } = options;
   let processed = 0;
   while (processed < maxJobs) {
     let job: PositionEvalJob | null;
@@ -188,7 +234,7 @@ export async function drainEvaluationJobs(
 
     let result: PositionEvalResult;
     try {
-      result = await evaluateJob(engine, job, goCommand);
+      result = await evaluateJob(engine, job, goCommand, multiPv);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[PositionEval] Evaluation failed (${job.id}):`, reason);

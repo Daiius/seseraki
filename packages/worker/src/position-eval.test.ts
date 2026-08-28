@@ -28,18 +28,34 @@ function searchResult(infoLines: UsiInfo[]): UsiSearchResult {
   };
 }
 
-/** 呼び出しを記録し、用意した応答を順に返すエンジン */
-function createStubEngine(responses: UsiSearchResult[]) {
+/**
+ * 呼び出しを記録し、用意した応答を順に返すエンジン。
+ * `setOption` の送信も記録し、実機と同じく「送った値を覚えて返す」ようにする
+ * （検討局面の評価が MultiPV を一時的に変えて戻すため）。
+ */
+function createStubEngine(
+  responses: UsiSearchResult[],
+  initialOptions: Record<string, string> = {},
+) {
   const calls: { position: string; go: string }[] = [];
+  /** setoption の送信履歴（`MultiPV=3` のような文字列）。**探索との前後関係も見たい** */
+  const optionCalls: string[] = [];
+  const options = new Map(Object.entries(initialOptions));
   const engine: EvalEngine = {
     analyze: async (position: string, go: string) => {
       calls.push({ position, go });
+      optionCalls.push("(go)");
       const next = responses.shift();
       if (!next) throw new Error("no canned response left");
       return next;
     },
+    setOption: (name: string, value: string) => {
+      options.set(name, value);
+      optionCalls.push(`${name}=${value}`);
+    },
+    getOption: (name: string) => options.get(name),
   };
-  return { engine, calls };
+  return { engine, calls, optionCalls };
 }
 
 beforeEach(() => {
@@ -80,6 +96,41 @@ describe("evaluateJob（局面評価）", () => {
     expect(result.candidates[0].score).toEqual({ type: "cp", value: 50 });
   });
 
+  // 🔴 dev 実測（2026-08-28）: `analyzeKifu` が解析の終わりに MultiPV を 1 へ戻すため、
+  // エンジンの設定に乗るだけだと候補手が「解析中なら 3 本・アイドルなら 1 本」と揺れた。
+  // 局面評価は自分で設定し、終わったら元へ戻す（prd/12 §2.2）
+  it("MultiPV を指定値にしてから探索し、探索後に元の値へ戻す", async () => {
+    const { engine, optionCalls } = createStubEngine([
+      searchResult([info(1, ["7g7f"], 50)]),
+    ]);
+
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+
+    // 設定 → 探索 → 復元の順であること（探索中に値が変わっていないこと）
+    expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
+  it("棋譜解析が既に同じ値にしているなら setoption を送らない", async () => {
+    const { engine, optionCalls } = createStubEngine(
+      [searchResult([info(1, ["7g7f"], 50)])],
+      { MultiPV: "3" },
+    );
+
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+
+    expect(optionCalls).toEqual(["(go)"]);
+  });
+
+  it("探索が失敗しても MultiPV を元へ戻す（解析中の棋譜の候補手数を変えない）", async () => {
+    const { engine, optionCalls } = createStubEngine([], { MultiPV: "1" });
+
+    await expect(
+      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3),
+    ).rejects.toThrow();
+
+    expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
   it("手数付き（4 フィールド）の SFEN はそのまま渡す", async () => {
     const { engine, calls } = createStubEngine([
       searchResult([info(1, ["7g7f"], 50)]),
@@ -115,6 +166,16 @@ describe("evaluateJob（名指し評価）", () => {
         depth: 12,
       },
     ]);
+  });
+
+  it("MultiPV は触らない（返すのはその手 1 本だけ）", async () => {
+    const { engine, optionCalls } = createStubEngine([
+      searchResult([info(1, ["9g9f", "3c3d"], -20)]),
+    ]);
+
+    await evaluateJob(engine, job, GO, 3);
+
+    expect(optionCalls).toEqual(["(go)"]);
   });
 
   it("searchmoves が無視されたら、手を適用した局面を評価して符号を反転する", async () => {
@@ -220,7 +281,9 @@ describe("drainEvaluationJobs", () => {
       job("eval-3"),
     ]);
 
-    const processed = await drainEvaluationJobs(engine, source, GO, 2);
+    const processed = await drainEvaluationJobs(engine, source, GO, {
+      maxJobs: 2,
+    });
 
     expect(processed).toBe(2);
     expect(reports).toHaveLength(2);
@@ -231,6 +294,8 @@ describe("drainEvaluationJobs", () => {
       analyze: async () => {
         throw new Error("[USI] Engine process exited (code 1)");
       },
+      setOption: () => {},
+      getOption: () => undefined,
     };
     const { source, reports } = createStubSource([job("eval-1")]);
 

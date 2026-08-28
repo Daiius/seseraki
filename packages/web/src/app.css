@@ -29,8 +29,12 @@
   - **幅**: ページは `max-w-3xl mx-auto p-4`（コンテナ 48rem・左右 1rem ずつ）。
     盤は「9 マス + 段番号列（マスの 0.6 倍）」なので、使える幅を 9.6 で割る。
   - **高さ**: 横画面のように高さが足りないときは、盤と操作行が画面に収まる方を優先する
-    （盤だけが縦に溢れて操作行が画面外に出ると連打しづらい）。上下の持ち駒行・情報行・
-    コントローラー行ぶんを引いてから、盤の 9 段 + 筋番号行（0.5 倍）= 9.5 で割る。
+    （盤だけが縦に溢れて操作行が画面外に出ると連打しづらい）。
+    🔴 **持ち駒も 1 マスと同じ寸法**（prd/12 §3.2）なので、縦に積むのは
+    **盤 9 段 + 筋番号行 0.5 + 上下の持ち駒 2 行 = 11.5 マス**。`--sq-reserved` は
+    そこに含まれない残り（情報行・コントローラー行・行間）の見積もり。
+    ⚠ **持ち駒の寸法を変えたらこの割り算も直す。** 見積もりが古いと横画面で
+    盤と操作行が画面に収まらなくなる。
   - **上限**: モバイル / md = 2.5rem(40px) / lg = 3rem(48px) / xl = 3.5rem(56px)。
     ⚠ **モバイルの 40px は旧 32px からの意図的な拡大**で、md 以上は従来どおり。
     上限を外すと大画面で盤が今より小さくなる劣化になる。
@@ -41,33 +45,39 @@
   盤の寸法が動く**（スクロール中に盤が伸び縮みする）。`vh` は逆にアドレスバーぶんを
   無視するので、盤 + 操作行が画面に収まる保証にならない。
   ⚠ **同じプロパティを 2 度書くフォールバックは効かない**（ビルドの最適化が後勝ちで畳む）。
+
+  🔒 **変数は `:root` に置く。** 盤（`.shogi-board`）だけでなく**持ち駒の行も同じ寸法**を
+  使うため、盤の要素にぶら下げると持ち駒側から参照できない。
 */
-.shogi-board {
+:root {
   --sq-cap: 2.5rem;
-  --sq-reserved: 10rem;
+  --sq-reserved: 7.5rem;
   --sq: clamp(
     1.25rem,
     min(
       calc((min(100vw, 48rem) - 2rem) / 9.6),
-      calc((100svh - var(--sq-reserved)) / 9.5)
+      calc((100svh - var(--sq-reserved)) / 11.5)
     ),
     var(--sq-cap)
   );
-  display: inline-grid;
-  grid-template-columns: repeat(9, var(--sq)) calc(var(--sq) * 0.6);
-  grid-template-rows: calc(var(--sq) * 0.5) repeat(9, var(--sq));
 }
 
 @media (min-width: 64rem) {
-  .shogi-board {
+  :root {
     --sq-cap: 3rem;
   }
 }
 
 @media (min-width: 80rem) {
-  .shogi-board {
+  :root {
     --sq-cap: 3.5rem;
   }
+}
+
+.shogi-board {
+  display: inline-grid;
+  grid-template-columns: repeat(9, var(--sq)) calc(var(--sq) * 0.6);
+  grid-template-rows: calc(var(--sq) * 0.5) repeat(9, var(--sq));
 }
 
 /* 筋段のラベル・駒文字はマスと同じ比率で揃える（prd/05 §2.1） */
@@ -79,6 +89,30 @@
 
 .shogi-label {
   font-size: calc(var(--sq) * 0.29);
+}
+
+/*
+  持ち駒（prd/12 §3.2）。**盤のマスと同じ寸法**にして、そのままタップして打てるようにする。
+
+  🔒 **行の高さは中身によらず 1 マスぶんで固定する。** 持ち駒が増減したり「なし」に
+  変わったりするたびに行の高さが動くと、**盤ごと下の操作ボタンがずれる**
+  （prd/05 §2.1・連打中に指の下の要素が入れ替わらない）。
+  🔒 **検討中かどうかで寸法を変えない**（同じ理由。検討を始めた瞬間に盤が動く）。
+*/
+.shogi-hand-row {
+  min-height: var(--sq);
+}
+
+.shogi-hand-piece {
+  width: var(--sq);
+  height: var(--sq);
+  font-size: calc(var(--sq) * 0.42);
+}
+
+/* 枚数は駒の右上に上付きで重ねる（1 枚のときは出さない） */
+.shogi-hand-count {
+  font-size: calc(var(--sq) * 0.3);
+  line-height: 1;
 }
 
 /* 候補手アコーディオン: md 以上では中身を常時展開、summary の disclosure marker を非表示 */

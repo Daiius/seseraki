@@ -13,6 +13,7 @@ import {
   applyStudyMoves,
   createStudySession,
   squareOfUsi,
+  tapHand,
   tapSquare,
 } from '../lib/study';
 
@@ -245,6 +246,16 @@ function Gallery() {
         {/* 7七の歩を選んだ状態。**動かすまでは今までの画面と同じ**＝パネルが無い */}
         <StudyCase
           session={tapSquare(createStudySession(KIFU_POSITIONS[0]), squareOfUsi('7g'))}
+        />
+      </Case>
+
+      <Case title="検討・持ち駒を選択中（盤のマスを叩くと打てる）">
+        {/*
+          持ち駒は**盤のマスと同じ寸法**で並び、枚数は右上に上付きで出る（prd/12 §3.2）。
+          ▲８八角で２二の角を取り、その角を選んだ状態。選択の見せ方は盤の選択マスと同じ。
+        */}
+        <StudyCase
+          session={tapHand(applyStudyMoves(KIFU_POSITIONS[0], ['8h2b']), 'sente', 'B')}
         />
       </Case>
 

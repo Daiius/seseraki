@@ -263,13 +263,34 @@ export function StudyBoard({
     ? undefined
     : (square: SquareRef) => edit(tapSquare(session, square));
 
+  /**
+   * 持ち駒を叩く口（prd/12 §3.2）。**盤上の駒と同じ 2 段選択**に揃える——
+   * 持ち駒を選んでから盤のマスを叩けば打てる（`tapSquare` が `dropFromHand` を通す）。
+   * 先手・後手どちらの持ち駒からも打てる（フル編集）が、**手番側の駒を打ったときだけ
+   * 手番が進む**（盤上の駒を動かしたときと同じ規則。`study.ts` の `advanceTurn`）。
+   *
+   * ⚠ 再生中は読み専用なので渡さない（渡さなければ表示専用に戻る）。
+   */
+  const handClick = replaying
+    ? undefined
+    : (side: Side) => (kind: HandPieceKind) => edit(tapHand(session, side, kind));
+  /** その側の持ち駒のうち選択中のもの（盤の選択マスと同じ見せ方で強調する） */
+  const handSelection = (side: Side) =>
+    selection?.kind === 'hand' && selection.side === side ? selection.piece : null;
+
+  const topSide: Side = flipped ? 'sente' : 'gote';
+  const bottomSide: Side = flipped ? 'gote' : 'sente';
+
   return (
     <>
       <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
         <HandDisplay
-          hand={flipped ? displayState.hand.sente : displayState.hand.gote}
-          side={flipped ? 'sente' : 'gote'}
-          name={flipped ? sente : gote}
+          hand={displayState.hand[topSide]}
+          side={topSide}
+          name={topSide === 'sente' ? sente : gote}
+          flipped={flipped}
+          onPieceClick={handClick?.(topSide)}
+          selected={handSelection(topSide)}
         />
         <div className="w-fit no-tap-select">
           <BoardGrid
@@ -281,9 +302,12 @@ export function StudyBoard({
           />
         </div>
         <HandDisplay
-          hand={flipped ? displayState.hand.gote : displayState.hand.sente}
-          side={flipped ? 'gote' : 'sente'}
-          name={flipped ? gote : sente}
+          hand={displayState.hand[bottomSide]}
+          side={bottomSide}
+          name={bottomSide === 'sente' ? sente : gote}
+          flipped={flipped}
+          onPieceClick={handClick?.(bottomSide)}
+          selected={handSelection(bottomSide)}
         />
       </div>
 

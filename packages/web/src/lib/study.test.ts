@@ -179,6 +179,30 @@ describe('持ち駒と駒箱', () => {
     expect(lastMove(s)).toBe('P*5e');
     expect(pieceAt(currentState(s), sq('5e'))).toEqual({ kind: 'P', side: 'sente' });
     expect(handCount(currentState(s), 'sente', 'P')).toBe(0);
+    // 手番側の駒を打ったので手番が進む（盤上の駒を動かしたときと同じ規則）
+    expect(currentState(s).sideToMove).toBe('gote');
+    // 打った手はそのまま名指し評価にかけられる
+    expect(namedEvalTarget(s)?.move).toBe('P*5e');
+  });
+
+  it('相手側の持ち駒を打っても手番は進まない（指し手ではなく編集）', () => {
+    // 先手が角を取ると手番は後手へ。そこで**先手の**持ち駒を打つのは編集
+    let s = applyStudyMoves(initial, ['8h2b']);
+    expect(currentState(s).sideToMove).toBe('gote');
+    s = tapHand(s, 'sente', 'B');
+    s = tapSquare(s, sq('5e'));
+    expect(lastMove(s)).toBe('B*5e');
+    expect(pieceAt(currentState(s), sq('5e'))).toEqual({ kind: 'B', side: 'sente' });
+    expect(currentState(s).sideToMove).toBe('gote');
+  });
+
+  it('持ち駒はもう一度叩けば選択解除、別の駒種を叩けば選び直し', () => {
+    let s = applyStudyMoves(initial, ['8h2b']);
+    s = tapHand(s, 'sente', 'B');
+    expect(s.selection).toEqual({ kind: 'hand', side: 'sente', piece: 'B' });
+    expect(tapHand(s, 'sente', 'B').selection).toBeNull();
+    // 持っていない駒種へは移らない（選択が外れるだけ）
+    expect(tapHand(s, 'sente', 'R').selection).toBeNull();
   });
 
   it('駒箱を選んで持ち駒を叩くと 1 枚増える', () => {

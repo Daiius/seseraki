@@ -13,6 +13,7 @@ import { BoardGrid, HandDisplay } from './BoardGrid';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import { formatTurnScore, moveDestination } from '../lib/usi';
 import {
+  canPutSelectionOnHand,
   canRedo,
   canTogglePromotion,
   canUndo,
@@ -389,9 +390,13 @@ export function StudyBoard({
    * 盤から抜いた駒の**退避先でしかない**。駒台がその役を兼ねれば UI に出す理由が無くなる
    * ——駒の総数は元から変えられないので、失われる機能もない。
    * 先手・後手どちらの駒台にも置ける（相手の持ち駒にできる。フル編集）。
+   *
+   * 🔴 **玉を選んでいるときは出さない**（`canPutSelectionOnHand`）。玉は持ち駒に
+   * できず、駒箱を廃止した今は**盤へ戻す手段が undo しか無い**（レビュー指摘
+   * `OCL-3528F9AD`）。見えることと押せることは今までどおりこの 1 本で決まる。
    */
   const trayClick = (side: Side) =>
-    !replaying && selection?.kind === 'square'
+    !replaying && canPutSelectionOnHand(session)
       ? () => edit(tapHand(session, side))
       : undefined;
 

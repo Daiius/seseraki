@@ -228,6 +228,9 @@ export function tapSquare(session: StudySession, square: SquareRef): StudySessio
  * ⚠ 選択中のものがあるときは**叩いた駒種ではなく選択中の駒**が動く（行き先として
  * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ——**受け皿を叩いても
  * 何も起きない**（そこから選択が始まったりはしない）。
+ *
+ * 🔴 **玉は駒台へ移せない**（{@link canPutSelectionOnHand}）。受け皿の出る条件と
+ * ここの両方で止める。
  */
 export function tapHand(
   session: StudySession,
@@ -243,8 +246,8 @@ export function tapHand(
   }
 
   if (sel.kind === 'square') {
-    // 盤の駒を駒台へ。⚠ **玉は持ち駒にできない**ので盤から消えるだけになる
-    //（`moveToHand` の仕様）
+    // 🔴 玉は移せない（下記の理由）。**局面を変えずに**選択だけ解く
+    if (!canPutSelectionOnHand(session)) return { ...session, selection: null };
     return push(session, moveToHand(state, sel.square, side), null);
   }
 
@@ -255,6 +258,31 @@ export function tapHand(
   return piece && handCount(state, side, piece) > 0
     ? { ...session, selection: { kind: 'hand', side, piece } }
     : { ...session, selection: null };
+}
+
+/**
+ * 選択中の盤の駒を駒台へ移せるか（＝受け皿の「+」を出してよいか）。
+ *
+ * 🔴 **玉は移せない**（決定・2026-08-28。レビュー指摘 `OCL-3528F9AD`）。
+ * `moveToHand` は**玉だけ持ち駒に入れずに盤から消す**（玉は持ち駒になりえないため）。
+ * 駒箱 UI を廃止した今、消えた玉を盤へ戻す手段は undo しか無く、undo 後に別の編集を
+ * すれば redo 分が捨てられて**セッション内で玉が永久に失われる**——駒箱廃止の根拠
+ * （「駒の総数は元から変えられない」prd/12 §3.2）と矛盾する。
+ *
+ * 止めてよい理由:
+ * - 玉の無い局面は **prd/12 §2.5 の検証（両玉の存在）で弾かれ、そもそも評価できない**。
+ *   消せても行き先が無い操作。
+ * - 玉を別のマスへ動かしたいだけなら**盤上の移動で足りる**（駒台を経由する必要がない）。
+ * - 駒箱を廃止した以上、**戻せない操作を UI に残さない**。
+ *
+ * ⚠ **玉以外に「駒台へ移すと戻せない駒」は無い。** `moveToHand` が持ち駒に入れないのは
+ * `unpromoted(kind) === 'K'` のときだけで、成駒を含む他の駒種はすべて生駒として並ぶ。
+ */
+export function canPutSelectionOnHand(session: StudySession): boolean {
+  const sel = session.selection;
+  if (sel?.kind !== 'square') return false;
+  const piece = pieceAt(currentState(session), sel.square);
+  return piece !== null && unpromoted(piece.kind) !== 'K';
 }
 
 /* ---------- パネルの操作 ---------- */

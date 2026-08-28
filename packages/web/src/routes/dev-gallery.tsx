@@ -266,6 +266,7 @@ function Gallery() {
           （prd/12 §3.2・駒箱の代わり）。押せばその側の持ち駒になる。
           ⚠ 選んでいないときは「+」が出ないこと（他のケースと見比べる）。
           ⚠ 「+」は駒の並びの**左端**に出るので、既に並んでいる駒は動かない。
+          ⚠ 玉を選んだときは「+」が出ない（駒台へ移すと戻せなくなるため。prd/12 §3.2）。
         */}
         <StudyCase
           session={tapSquare(createStudySession(KIFU_POSITIONS[0]), squareOfUsi('7g'))}

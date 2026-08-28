@@ -8,6 +8,7 @@ import {
 import {
   applyStudyMoves,
   baseState,
+  canPutSelectionOnHand,
   canRedo,
   canTogglePromotion,
   canUndo,
@@ -183,11 +184,42 @@ describe('駒台での受け渡し', () => {
     expect(pieceAt(currentState(s), sq('2b'))).toBeNull();
   });
 
-  it('⚠ 玉は持ち駒にできないので、駒台へ移すと盤から消えるだけになる', () => {
-    let s = tapSquare(createStudySession(initial), sq('5i'));
-    s = tapHand(s, 'sente');
-    expect(pieceAt(currentState(s), sq('5i'))).toBeNull();
-    expect(currentState(s).hand.sente.K).toBeUndefined();
+  /**
+   * 🔴 回帰（レビュー指摘 `OCL-3528F9AD`）。玉は持ち駒にできないので、駒台へ移すと
+   * **盤から消えるだけ**になる。駒箱 UI を廃止した今、消えた玉を盤へ戻す手段は undo しか
+   * 無く、undo 後に別の編集をすれば redo 分が捨てられて**セッション内で永久に失われる**。
+   * 駒箱廃止の根拠（駒の総数は変わらない）と矛盾するので、**移せないようにする**。
+   */
+  it('🔴 玉は駒台へ移せない（受け皿が出ず、叩いても局面が変わらない）', () => {
+    const picked = tapSquare(createStudySession(initial), sq('5i'));
+    expect(picked.selection).toEqual({ kind: 'square', square: sq('5i') });
+    // 受け皿（「+」）の出る条件が false になる
+    expect(canPutSelectionOnHand(picked)).toBe(false);
+
+    // 万一叩かれても局面は変わらない（選択が解けるだけ・段も積まれない）
+    const after = tapHand(picked, 'sente');
+    expect(currentState(after)).toBe(currentState(picked));
+    expect(after.steps.length).toBe(1);
+    expect(after.selection).toBeNull();
+    expect(pieceAt(currentState(after), sq('5i'))).toEqual({ kind: 'K', side: 'sente' });
+  });
+
+  it('玉以外は駒台へ移せる（成駒も生駒として戻せる）', () => {
+    // ⚠ `moveToHand` が持ち駒に入れないのは玉だけ。他に戻せない駒種は無い
+    for (const usi of ['7g', '8h', '2h', '1a', '4a']) {
+      const picked = tapSquare(createStudySession(initial), sq(usi));
+      expect(canPutSelectionOnHand(picked)).toBe(true);
+    }
+    // 成駒（と金）も生駒として駒台へ入る
+    const promoted = togglePromotion(applyStudyMoves(initial, ['8h2b']));
+    expect(canPutSelectionOnHand(tapSquare(promoted, sq('2b')))).toBe(true);
+  });
+
+  it('駒を選んでいなければ受け皿は出ない', () => {
+    expect(canPutSelectionOnHand(createStudySession(initial))).toBe(false);
+    // 駒台の駒を選んでいるときも出ない（行き先は盤のマス）
+    const s = tapHand(applyStudyMoves(initial, ['8h2b']), 'sente', 'B');
+    expect(canPutSelectionOnHand(s)).toBe(false);
   });
 
   it('駒を選んでいなければ、空き部分を叩いても何も起きない', () => {

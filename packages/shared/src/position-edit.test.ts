@@ -426,3 +426,54 @@ describe('編集の組み合わせ（M2b が組む形）', () => {
     expect(edited.sideToMove).toBe('gote');
   });
 });
+
+// レビュー指摘 `OCL-F71E8296`: 数値を受け取る口に非有限値が入っても state を壊さない
+describe('非有限・非整数の入力（回帰）', () => {
+  const NON_FINITE = [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+  it('setHandCount は非有限な枚数を受け取らない', () => {
+    const state = addToHand(createEmptyState(), 'sente', 'P', 2);
+    for (const value of NON_FINITE) {
+      expect(setHandCount(state, 'sente', 'P', value)).toBe(state);
+    }
+  });
+
+  it('addToHand は非有限な delta を受け取らない', () => {
+    const state = addToHand(createEmptyState(), 'gote', 'R', 1);
+    for (const value of NON_FINITE) {
+      expect(addToHand(state, 'gote', 'R', value)).toBe(state);
+    }
+  });
+
+  it('非有限な枚数が持ち駒に入らない（SFEN が壊れない）', () => {
+    const state = setHandCount(createEmptyState(), 'sente', 'P', Number.NaN);
+    expect(state.hand.sente).toEqual({});
+    const inf = addToHand(createEmptyState(), 'sente', 'P', Number.POSITIVE_INFINITY);
+    expect(inf.hand.sente).toEqual({});
+  });
+
+  it('マスの添字が非有限・非整数なら盤に触らない', () => {
+    const state = createInitialState();
+    const broken: SquareRef[] = [
+      { row: Number.NaN, col: 0 },
+      { row: 0, col: Number.POSITIVE_INFINITY },
+      { row: 1.5, col: 2 },
+    ];
+    for (const square of broken) {
+      expect(pieceAt(state, square)).toBeNull();
+      expect(removePiece(state, square)).toBe(state);
+      expect(moveToHand(state, square)).toBe(state);
+      expect(setPromoted(state, square, true)).toBe(state);
+      expect(flipPieceSide(state, square)).toBe(state);
+      expect(placePiece(state, square, { kind: 'P', side: 'sente' })).toBe(state);
+      expect(movePiece(state, P77, square)).toBe(state);
+      expect(movePiece(state, square, P76)).toBe(state);
+    }
+  });
+
+  it('持ち駒の打ち込みも盤外・非有限なら持ち駒を減らさない', () => {
+    const state = addToHand(createEmptyState(), 'sente', 'P', 1);
+    expect(dropFromHand(state, 'sente', 'P', { row: Number.NaN, col: 0 })).toBe(state);
+    expect(handCount(state, 'sente', 'P')).toBe(1);
+  });
+});

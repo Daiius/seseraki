@@ -72,6 +72,11 @@ const BASE_KINDS: readonly BasePieceKind[] = [
   'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
 ];
 
+/**
+ * 盤内のマスか。
+ * ⚠ `Number.isInteger` が **`NaN` / `Infinity` / 小数を弾く**ので、マスを受け取る関数は
+ * ここを通すだけで非有限値から守られる（持ち駒の枚数は `setHandCount` が自前で見る）。
+ */
 function inBoard(square: SquareRef): boolean {
   const { row, col } = square;
   return (
@@ -123,6 +128,10 @@ export function setHandCount(
   kind: HandPieceKind,
   count: number,
 ): BoardState {
+  // 🔒 **非有限値は受け取らない**（レビュー指摘 `OCL-F71E8296`）。`Math.max` / `Math.trunc` は
+  // `NaN` / `Infinity` をそのまま通すので、持ち駒に入ると `positionSfen` が
+  // `InfinityP` のような読めない SFEN を書き出す。不正な入力は state をそのまま返す。
+  if (!Number.isFinite(count)) return state;
   const current = handCount(state, side, kind);
   const next = Math.max(0, Math.trunc(count));
   if (next === current) return state;
@@ -139,6 +148,9 @@ export function addToHand(
   kind: HandPieceKind,
   delta = 1,
 ): BoardState {
+  // `delta` が非有限なら足し算の結果も非有限になる。`setHandCount` でも止まるが、
+  // 「不正な入力はここで断つ」ことを呼び出し口で示しておく
+  if (!Number.isFinite(delta)) return state;
   return setHandCount(state, side, kind, handCount(state, side, kind) + delta);
 }
 

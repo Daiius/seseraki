@@ -3,7 +3,7 @@ import type { InferResponseType } from 'hono/client';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { stateFromBytes, usiToJapaneseWithPiece } from 'shared';
 import { client } from '../lib/honoClient';
-import { BoardGrid, HandDisplay } from '../components/ShogiBoard';
+import { BoardGrid, HandDisplay } from '../components/BoardGrid';
 
 /**
  * 局面検索（prd/10 §6.2）。**自分の対局と動画解析を横断して**、同じ局面を通った

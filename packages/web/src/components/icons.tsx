@@ -258,3 +258,141 @@ export function ChevronDownIcon({ className = 'size-3' }: IconProps) {
     </svg>
   );
 }
+
+/** 前へ（chevron-left）。検討盤の読み筋送りで使う */
+export function ChevronLeftIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+    </svg>
+  );
+}
+
+/** 次へ（chevron-right）。検討盤の読み筋送りで使う */
+export function ChevronRightIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+    </svg>
+  );
+}
+
+/** 最初へ（chevron-double-left）。棋譜のコントローラー行で使う */
+export function ChevronDoubleLeftIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+    </svg>
+  );
+}
+
+/** 最後へ（chevron-double-right）。棋譜のコントローラー行で使う */
+export function ChevronDoubleRightIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
+    </svg>
+  );
+}
+
+/** 盤面反転（上下の矢印） */
+export function FlipIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
+    </svg>
+  );
+}
+
+/*
+ * 以下は検討盤の操作パネル用（prd/12 §3.2・決定 2026-08-29）。**4 つのボタンを 1 行に
+ * 収める**ためにアイコン化した。線の太さは 2（コントローラー行の chevron と並ぶため）。
+ */
+
+/** 棋譜に戻る（arrow-uturn-left）。検討を捨てて棋譜の局面へ帰る */
+export function ArrowUturnLeftIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3" />
+    </svg>
+  );
+}
+
+/** 手番を入れ替える（arrows-right-left） */
+export function ArrowsRightLeftIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+    </svg>
+  );
+}

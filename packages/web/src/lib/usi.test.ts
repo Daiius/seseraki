@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatScore, formatScoreShort } from './usi';
+import { formatScore, formatScoreShort, formatTurnScore, moveDestination } from './usi';
 
 /**
  * 情報行の評価値表示（prd/05-analysis.md §2.1 / decisions.md 2026-08-27）。
@@ -81,5 +81,49 @@ describe('formatScore（既定の形は変えない）', () => {
     ['mate', -15, 0, '後手勝ち(15手詰)'],
   ])('%s %i (move %i) → %s', (type, value, move, expected) => {
     expect(formatScore(type as string, value as number, move as number)).toBe(expected);
+  });
+});
+
+/**
+ * 検討盤の評価値は**手番側から見た値**（prd/12 §2.3）。
+ * 🔴 棋譜側の `formatScore` は手数の parity で先手視点へ直すので使えない
+ * （検討局面は手数を持たず、手番トグルで手番だけ変えられる）。
+ */
+describe('formatTurnScore', () => {
+  it.each([
+    ['cp', 120, 'sente', '+120 (先手有利)'],
+    // 同じ生の値でも、手番が後手なら「後手が +120 有利」＝先手視点では -120
+    ['cp', 120, 'gote', '-120 (後手有利)'],
+    ['cp', 0, 'sente', '0 (互角)'],
+    ['mate', 15, 'sente', '先手勝ち(15手詰)'],
+    ['mate', 15, 'gote', '後手勝ち(15手詰)'],
+    ['mate', -15, 'gote', '先手勝ち(15手詰)'],
+  ])('%s %i (%s 番) → %s', (type, value, side, expected) => {
+    expect(
+      formatTurnScore(type as string, value as number, side as 'sente' | 'gote'),
+    ).toBe(expected);
+  });
+
+  it('手数に依存しない（同じ値なら手番だけで決まる）', () => {
+    // formatScore は moveNumber の偶奇で結果が変わるが、こちらは変わりようがない
+    expect(formatTurnScore('cp', 300, 'sente')).toBe(formatTurnScore('cp', 300, 'sente'));
+    expect(formatScore('cp', 300, 0)).not.toBe(formatScore('cp', 300, 1));
+  });
+});
+
+describe('moveDestination', () => {
+  it.each([
+    ['7g7f', [5, 2]],
+    ['7g7f+', [5, 2]],
+    ['B*5c', [2, 4]],
+    ['1a1a', [0, 8]],
+  ])('%s → %j', (move, expected) => {
+    expect(moveDestination(move as string)).toEqual(expected);
+  });
+
+  it('読めない手は null', () => {
+    expect(moveDestination('')).toBeNull();
+    expect(moveDestination('resign')).toBeNull();
+    expect(moveDestination('K*5e')).toBeNull();
   });
 });

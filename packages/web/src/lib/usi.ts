@@ -95,17 +95,10 @@ export function turnSymbol(moveNumber: number): string {
 }
 
 /**
- * 評価値を人間が読みやすい形式にフォーマット
- * 常に先手視点で表示（後手番のスコアは符号反転）
+ * **先手視点に直したあとの値**を読みやすい文字列にする。
+ * 視点をどう作るかは呼び出し側の責務（棋譜は手数の parity・検討盤は手番）。
  */
-export function formatScore(
-  scoreType: string,
-  scoreValue: number,
-  moveNumber: number,
-): string {
-  // 後手番（奇数手目）のスコアは反転して先手視点にする
-  const senteValue = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
-
+function describeSenteScore(scoreType: string, senteValue: number): string {
   if (scoreType === 'mate') {
     if (senteValue > 0) return `先手勝ち(${senteValue}手詰)`;
     if (senteValue < 0) return `後手勝ち(${-senteValue}手詰)`;
@@ -121,6 +114,65 @@ export function formatScore(
 
   const sign = senteValue > 0 ? '+' : '';
   return `${sign}${senteValue} (${label})`;
+}
+
+/**
+ * 評価値を人間が読みやすい形式にフォーマット
+ * 常に先手視点で表示（後手番のスコアは符号反転）
+ */
+export function formatScore(
+  scoreType: string,
+  scoreValue: number,
+  moveNumber: number,
+): string {
+  // 後手番（奇数手目）のスコアは反転して先手視点にする
+  return describeSenteScore(scoreType, moveNumber % 2 === 1 ? -scoreValue : scoreValue);
+}
+
+/**
+ * **手番側から見た**評価値の整形（prd/12 §2.3）。検討盤で使う。
+ *
+ * 🔴 **`formatScore` / `toSenteEval` は使えない。** あちらは棋譜の手数の parity
+ * （`moveNumber % 2`）で先手視点へ正規化するが、検討盤の局面は棋譜から派生した
+ * 任意局面で**手数を持たない**（手番トグルで手番だけ変えることもできる）。
+ * 視点の情報は `sideToMove` から取る。
+ *
+ * 表示の文言は `formatScore` と揃える（同じ画面に両方が出るため）。返す値は
+ * 常に先手視点の言葉（`+120 (先手有利)`）で、**「手番側が +」という生の符号を
+ * そのまま出さない**——検討盤は手番を自由に変えられるので、どちら側の話かを
+ * 言葉で書かないと読み違える。
+ */
+export function formatTurnScore(
+  scoreType: string,
+  scoreValue: number,
+  sideToMove: 'sente' | 'gote',
+): string {
+  return describeSenteScore(
+    scoreType,
+    sideToMove === 'gote' ? -scoreValue : scoreValue,
+  );
+}
+
+/**
+ * USI の手から移動先の `[row, col]`（`BoardState.board` の添字）を取る。
+ * 駒打ち（`B*5c`）も移動（`7g7f` / `7g7f+`）も受ける。読めなければ null。
+ */
+export function moveDestination(usiMove: string): [number, number] | null {
+  // 駒打ち: "B*5c" → "5c"
+  const dropMatch = usiMove.match(/^[PLNSGBR]\*(\d[a-i])$/);
+  if (dropMatch) {
+    const col = 9 - Number(dropMatch[1][0]);
+    const row = dropMatch[1].charCodeAt(1) - 97;
+    return [row, col];
+  }
+  // 通常の移動: "7g7f" or "7g7f+" → "7f"
+  const moveMatch = usiMove.match(/^\d[a-i](\d[a-i])\+?$/);
+  if (moveMatch) {
+    const col = 9 - Number(moveMatch[1][0]);
+    const row = moveMatch[1].charCodeAt(1) - 97;
+    return [row, col];
+  }
+  return null;
 }
 
 /**

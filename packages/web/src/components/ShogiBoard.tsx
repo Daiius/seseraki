@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 import {
@@ -6,9 +6,18 @@ import {
   positionSfen,
   usiToJapaneseWithPiece,
   type BoardState,
-  type PieceKind,
 } from 'shared';
-import { turnSymbol, formatScore, formatScoreShort, toSenteEval } from '../lib/usi';
+import {
+  turnSymbol,
+  formatScore,
+  formatScoreShort,
+  moveDestination,
+  toSenteEval,
+} from '../lib/usi';
+import { StudyBoard } from './StudyBoard';
+import type { StudySession } from '../lib/study';
+import { BoardControls } from './BoardControls';
+import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import {
   computeMoveLosses,
   formatLoss,
@@ -20,15 +29,6 @@ import {
 } from '../lib/cpl';
 import { EvalGraph } from './EvalGraph';
 
-const PIECE_DISPLAY: Record<PieceKind, string> = {
-  P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
-  '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
-};
-
-const HAND_ORDER: PieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
-const COL_LABELS = [9, 8, 7, 6, 5, 4, 3, 2, 1];
-const ROW_LABELS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
-
 const ICON_PROPS = {
   xmlns: 'http://www.w3.org/2000/svg',
   fill: 'none',
@@ -38,34 +38,9 @@ const ICON_PROPS = {
   className: 'size-5',
 } as const;
 
-const IconChevronDoubleLeft = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
-  </svg>
-);
-const IconChevronLeft = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-  </svg>
-);
-const IconChevronRight = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-  </svg>
-);
-const IconChevronDoubleRight = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
-  </svg>
-);
 const IconSearch = () => (
   <svg {...ICON_PROPS} className="size-4 md:hidden">
     <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m2.1-5.4a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z" />
-  </svg>
-);
-const IconFlip = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
   </svg>
 );
 
@@ -107,108 +82,16 @@ interface Props {
    * 初期局面から始めるので渡さない。範囲外の値は端に丸める。
    */
   initialMoveIndex?: number;
+  /**
+   * 検討セッションの初期状態。**DEV ギャラリー用**（`initialMoveIndex` と同じ趣旨）。
+   * 検討中の見え方——候補手を出さない・評価値グラフから手送りできない
+   * （prd/12 §3.1・決定 2026-08-29）——を実物のまま並べるための入口で、通常は渡さない。
+   */
+  initialStudySession?: StudySession;
 }
 
-export function HandDisplay({
-  hand,
-  side,
-  name,
-}: {
-  hand: Partial<Record<PieceKind, number>>;
-  side: 'sente' | 'gote';
-  name?: string | null;
-}) {
-  const pieces = HAND_ORDER.flatMap((kind) => {
-    const count = hand[kind];
-    if (!count) return [];
-    return [`${PIECE_DISPLAY[kind]}${count > 1 ? count : ''}`];
-  });
-  const symbol = side === 'sente' ? '☗' : '☖';
-  const label = name ?? (side === 'sente' ? '先手' : '後手');
-  return (
-    <div className="text-sm lg:text-base flex items-center">
-      <span className="font-semibold">{symbol}{label}</span>
-      <span className="ml-auto">{pieces.length > 0 ? pieces.join(' ') : 'なし'}</span>
-    </div>
-  );
-}
 
-/** USI の手から移動先の [row, col] を取得 */
-function lastMoveDestination(usiMove: string): [number, number] | null {
-  // 駒打ち: "B*5c" → "5c"
-  const dropMatch = usiMove.match(/^[PLNSGBR]\*(\d[a-i])$/);
-  if (dropMatch) {
-    const col = 9 - Number(dropMatch[1][0]);
-    const row = dropMatch[1].charCodeAt(1) - 97;
-    return [row, col];
-  }
-  // 通常の移動: "7g7f" or "7g7f+" → "7f"
-  const moveMatch = usiMove.match(/^\d[a-i](\d[a-i])\+?$/);
-  if (moveMatch) {
-    const col = 9 - Number(moveMatch[1][0]);
-    const row = moveMatch[1].charCodeAt(1) - 97;
-    return [row, col];
-  }
-  return null;
-}
-
-// 局面検索（/positions）でも使うので export する（盤の見た目を 1 箇所に保つ）
-export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
-  const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
-  const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
-  const rowOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
-  const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
-
-  return (
-    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.25rem] grid-rows-[1rem_repeat(9,2rem)] md:grid-cols-[repeat(9,2.5rem)_1.5rem] md:grid-rows-[1.25rem_repeat(9,2.5rem)] lg:grid-cols-[repeat(9,3rem)_1.75rem] lg:grid-rows-[1.5rem_repeat(9,3rem)] xl:grid-cols-[repeat(9,3.5rem)_2rem] xl:grid-rows-[1.75rem_repeat(9,3.5rem)]">
-      {/* 筋番号（1行目） */}
-      {colLabels.map((col) => (
-        <div
-          key={`col-${col}`}
-          className="flex items-end justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
-        >
-          {col}
-        </div>
-      ))}
-      <div />
-      {/* 盤面 9x9 + 段番号 */}
-      {rowOrder.flatMap((rowIdx, ri) => [
-        ...colOrder.map((colIdx) => {
-          const sq = state.board[rowIdx][colIdx];
-          const isLastMove = lastMoveTo !== null && lastMoveTo[0] === rowIdx && lastMoveTo[1] === colIdx;
-          return (
-            <div
-              key={`${rowIdx}-${colIdx}`}
-              className={clsx(
-                'size-8 md:size-10 lg:size-12 xl:size-14 border border-base-300 flex items-center justify-center text-sm md:text-base lg:text-lg xl:text-xl font-bold',
-                isLastMove && 'bg-primary/15',
-              )}
-            >
-              {sq && (
-                <span
-                  className={clsx(
-                    'inline-block',
-                    (flipped ? sq.side === 'sente' : sq.side === 'gote') && 'rotate-180 text-error',
-                  )}
-                >
-                  {PIECE_DISPLAY[sq.kind]}
-                </span>
-              )}
-            </div>
-          );
-        }),
-        <div
-          key={`row-${ri}`}
-          className="flex items-center justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
-        >
-          {rowLabels[ri]}
-        </div>,
-      ])}
-    </div>
-  );
-}
-
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0 }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0, initialStudySession }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
   const userSide = subjectSide ?? null;
@@ -296,7 +179,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     }
   }
 
-  const lastMoveTo = displayedMove ? lastMoveDestination(displayedMove) : null;
+  const lastMoveTo = displayedMove ? moveDestination(displayedMove) : null;
 
   // 情報行は 1 行に収める（下記）ので、長い符号は truncate される。
   // 全文へ到達する手段として title に同じ文字列を渡すため、ここで 1 度だけ作る。
@@ -338,95 +221,135 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     }
   };
 
-  // キーボード操作: ←→ で 1 手戻る/進む、Home/End で最初/最後へ。
-  // 分岐中の ←→ は分岐内を移動し、先頭で戻ると本筋へ復帰する（Home/End は常に本筋）。
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      // 入力欄（スライダー含む）にフォーカスがあるときはブラウザ既定の操作に任せる
-      const target = e.target;
-      if (
-        target instanceof HTMLElement
-        && (target.isContentEditable
-          || target.tagName === 'INPUT'
-          || target.tagName === 'TEXTAREA'
-          || target.tagName === 'SELECT')
-      ) return;
-
-      switch (e.key) {
-        case 'ArrowLeft':
-          if (branchActive && branchRank !== null) onBranchBack(branchRank);
-          else navigateMain(Math.max(0, moveIndex - 1));
-          break;
-        case 'ArrowRight':
-          if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
-          else navigateMain(Math.min(totalMoves, moveIndex + 1));
-          break;
-        case 'Home':
-          navigateMain(0);
-          break;
-        case 'End':
-          navigateMain(totalMoves);
-          break;
-        default:
-          return;
-      }
-      // ページのスクロールを起こさない
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    moveIndex,
-    totalMoves,
-    branchActive,
-    branchRank,
-    branchPv,
-    navigateMain,
-    onBranchForward,
-    onBranchBack,
-  ]);
+  /**
+   * キーボードでの棋譜の手送り（prd/05 §2.1）。`←` `→` で 1 手戻る / 進む、
+   * `Home` `End` で最初 / 最後へ。分岐中の `←` `→` は分岐内を移動し、
+   * 先頭で戻ると本筋へ復帰する（`Home` `End` は常に本筋）。
+   *
+   * 🔴 **window のリスナは `StudyBoard` が 1 本だけ張る**（prd/12 §3.1・決定 2026-08-28）。
+   * 検討中は同じキーが undo / redo になるため、切り替えは検討状態を持つ側に置く。
+   * ここは「検討していないときに何をするか」だけを渡す。
+   */
+  const keyboardNav = {
+    back: () => {
+      if (branchActive && branchRank !== null) onBranchBack(branchRank);
+      else navigateMain(Math.max(0, moveIndex - 1));
+    },
+    forward: () => {
+      if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
+      else navigateMain(Math.min(totalMoves, moveIndex + 1));
+    },
+    first: () => navigateMain(0),
+    last: () => navigateMain(totalMoves),
+  };
 
   return (
     <div className="flex flex-col">
-      {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
-      <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
-      {/* 盤面 */}
-      <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
-        <HandDisplay
-          hand={flipped ? displayState.hand.sente : displayState.hand.gote}
-          side={flipped ? 'sente' : 'gote'}
-          name={flipped ? sente : gote}
-        />
-        {/*
-          盤面の左右タップで手を送る（モバイル用）。挙動は下の ◀ ▶ ボタンと機械的に同じで、
-          分岐中にタップすると本筋へ復帰する（キーボードの ←→ は分岐内を移動するので非対称）。
-          左右は盤面反転に依らず**画面基準**（◀ が左・▶ が右というボタンの並びに合わせる）。
-          タブ順からは外す（同じ操作はコントローラー行のボタンが担うため）。
-        */}
-        <div className="relative w-fit no-tap-select">
-          <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="1手戻る"
-            className="absolute inset-y-0 left-0 w-1/2 touch-manipulation"
-            onClick={() => navigateMain(Math.max(0, moveIndex - 1))}
-          />
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="1手進む"
-            className="absolute inset-y-0 right-0 w-1/2 touch-manipulation"
-            onClick={() => navigateMain(Math.min(totalMoves, moveIndex + 1))}
-          />
-        </div>
-        <HandDisplay
-          hand={flipped ? displayState.hand.gote : displayState.hand.sente}
-          side={flipped ? 'gote' : 'sente'}
-          name={flipped ? gote : sente}
-        />
-      </div>
+      {/*
+        盤面 + 検討盤（prd/12 §3）。**盤のタップは駒の選択**なので、
+        🔴 かつてここにあった「盤面の左右半分タップで 1 手送り」は廃止した
+        （決定・2026-08-28。prd/05 §2.1 / prd/12 §3.1）。手送りは下のコントローラー行と
+        キーボードに一本化してある。
+
+        検討中の状態は `StudyBoard` が持つ。情報行とコントローラー行を `children` として
+        渡し、操作パネルが**それより下**に出るようにしている（パネルが現れても ◀ ▶ の
+        位置が動かない。prd/05 §2.1）。
+        🔴 **検討中はコントローラー行が検討の操作になる**（◀ ▶ = undo / redo・
+        ≪ ≫ = 起点 / 最後へ・スライダーは無効。prd/12 §3.1・決定 2026-08-28）。
+        割り当ての切り替えに使う `study` は `StudyBoard` から受け取る。
+      */}
+      <StudyBoard
+        baseState={displayState}
+        // 「今どこを見ているか」。分岐中の局面はレンダーごとに作り直されるので、
+        // 局面オブジェクトの同一性ではなくこの鍵で作り直しを判定させる
+        baseKey={`${moveIndex}:${branchRank ?? '-'}:${branchDepth}`}
+        baseLastMoveTo={lastMoveTo}
+        flipped={flipped}
+        sente={sente}
+        gote={gote}
+        keyboardNav={keyboardNav}
+        // 🔒 直前の手の採点の色分けは**棋譜側の悪手マーカーと同じ閾値**で判定する
+        //    （prd/12 §3.2・決定 2026-08-29。1 つの画面に基準を 2 つ持たない）
+        thresholds={thresholds}
+        // スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー + 操作パネル
+        initialSession={initialStudySession}
+        groupClassName="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2"
+        /*
+          スクロール領域: 候補手 + 評価値グラフ。
+          🔴 **検討中かどうかで出し分けるのでここに渡す**（prd/12 §3.1・決定 2026-08-29）。
+          検討状態は `StudyBoard` が持つので、`study.studying` を受け取って判断する
+          ——`ShogiBoard` に同じ状態をもう 1 つ持たせない。
+        */
+        footer={(study) => (
+          <div className="flex flex-col gap-3 pt-3">
+            {/*
+              候補手一覧（読み筋付き）。
+              🔴 **検討中は出さない**（決定・2026-08-29）。この一覧は棋譜側の `moveIndex` に
+              紐づいており、**検討で駒を動かしても一切変わらない**。盤の局面と対応しない
+              候補手を同じ画面に置くと、どの局面の話なのか読めなくなる。
+              🔒 さらに、ここの「分岐を進む」は `branchRank` / `branchDepth` を動かす
+              ＝ `StudyBoard` の `baseKey` を変えるので、**検討セッションが黙って捨てられる**。
+              prd/12 §3.1 の「検討を抜けるのは『棋譜に戻る』だけ」に反する出口だった。
+            */}
+            {!study.studying && prevAnalysis && prevAnalysis.candidates.length > 0 && (
+              <div className="max-w-3xl">
+                <CandidateList
+                  ref={candidateListRef}
+                  candidates={prevAnalysis.candidates}
+                  played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
+                  evalMoveNumber={evalMoveNumber}
+                  positions={positions}
+                  moveIndex={moveIndex}
+                  loss={currentLoss}
+                  label={currentLoss ? labelOf(currentLoss, thresholds) : null}
+                  branchRank={branchRank}
+                  branchDepth={branchDepth}
+                  onBranchForward={onBranchForward}
+                  onBranchBack={onBranchBack}
+                />
+              </div>
+            )}
+
+            {/*
+              評価値グラフ。
+              🔴 **検討中も出したまま**（決定・2026-08-29）。グラフは「棋譜全体の評価値の推移」で
+              あって現在局面に紐づく主張が弱く、検討しながら見る価値がある。
+              🔒 ただし**クリックによる手送りは無効にする**——`goToMain` は `moveIndex` を
+              動かす＝検討を黙って捨てるので、候補手と同じ「余計な出口」になる。
+              `onClickMove` を渡さなければクリック層そのものが描かれない。
+              ⚠ 現在位置マーカーは棋譜側の `moveIndex`（＝検討の起点）を指したままでよい。
+              ⚠ 押せないことは**薄さで示すに留める**（目立たせすぎない）。
+            */}
+            <div
+              className={clsx(study.studying && 'opacity-60')}
+              title={study.studying ? '検討中はグラフから手送りできない（棋譜に戻ると押せる）' : undefined}
+            >
+              <EvalGraph
+                analyses={sortedAnalyses}
+                currentMove={moveIndex}
+                onClickMove={study.studying ? undefined : goToMain}
+                losses={losses}
+                thresholds={thresholds}
+                userSide={userSide}
+                branch={
+                  branchActive && branchCandidate
+                    ? {
+                        moveNumber: evalMoveNumber + 1,
+                        value: toSenteEval(
+                          branchCandidate.scoreType,
+                          branchCandidate.scoreValue,
+                          evalMoveNumber,
+                        ),
+                      }
+                    : null
+                }
+              />
+            </div>
+          </div>
+        )}
+      >
+      {(study) => (
+      <>
 
       {/*
         コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ
@@ -492,102 +415,17 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         </div>
       </div>
 
-      {/* コントローラー行 */}
-      <div className="flex items-center gap-2 max-w-3xl no-tap-select">
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => goToMain(0)}
-          disabled={!branchActive && moveIndex === 0}
-          title="最初へ (Home)"
-        >
-          <IconChevronDoubleLeft />
-        </button>
-        <button
-          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
-          onClick={() => goToMain(Math.max(0, moveIndex - 1))}
-          disabled={!branchActive && moveIndex === 0}
-          title="戻る (←)"
-        >
-          <IconChevronLeft />
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={totalMoves}
-          value={moveIndex}
-          onChange={(e) => goToMain(Number(e.target.value))}
-          className="range range-sm flex-1 hidden md:block"
-        />
-        <button
-          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
-          onClick={() => goToMain(Math.min(totalMoves, moveIndex + 1))}
-          disabled={!branchActive && moveIndex === totalMoves}
-          title="進む (→)"
-        >
-          <IconChevronRight />
-        </button>
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => goToMain(totalMoves)}
-          disabled={!branchActive && moveIndex === totalMoves}
-          title="最後へ (End)"
-        >
-          <IconChevronDoubleRight />
-        </button>
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => setFlipped(!flipped)}
-          title="盤面反転"
-        >
-          <IconFlip />
-        </button>
-      </div>
-      </div>
-
-      {/* スクロール領域: 候補手 + 評価値グラフ */}
-      <div className="flex flex-col gap-3 pt-3">
-        {/* 候補手一覧（読み筋付き） */}
-        {prevAnalysis && prevAnalysis.candidates.length > 0 && (
-          <div className="max-w-3xl">
-            <CandidateList
-              ref={candidateListRef}
-              candidates={prevAnalysis.candidates}
-              played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
-              evalMoveNumber={evalMoveNumber}
-              positions={positions}
-              moveIndex={moveIndex}
-              loss={currentLoss}
-              label={currentLoss ? labelOf(currentLoss, thresholds) : null}
-              branchRank={branchRank}
-              branchDepth={branchDepth}
-              onBranchForward={onBranchForward}
-              onBranchBack={onBranchBack}
-            />
-          </div>
-        )}
-
-        {/* 評価値グラフ */}
-        <EvalGraph
-          analyses={sortedAnalyses}
-          currentMove={moveIndex}
-          onClickMove={goToMain}
-          losses={losses}
-          thresholds={thresholds}
-          userSide={userSide}
-          branch={
-            branchActive && branchCandidate
-              ? {
-                  moveNumber: evalMoveNumber + 1,
-                  value: toSenteEval(
-                    branchCandidate.scoreType,
-                    branchCandidate.scoreValue,
-                    evalMoveNumber,
-                  ),
-                }
-              : null
-          }
-        />
-      </div>
+      <BoardControls
+        study={study}
+        moveIndex={moveIndex}
+        totalMoves={totalMoves}
+        branchActive={branchActive}
+        onGoTo={goToMain}
+        onFlip={() => setFlipped(!flipped)}
+      />
+      </>
+      )}
+      </StudyBoard>
     </div>
   );
 }
@@ -729,7 +567,7 @@ function CandidateList({
                       disabled={!isActiveBranch}
                       title="分岐を戻る"
                     >
-                      <IconChevronLeft />
+                      <ChevronLeftIcon />
                     </button>
                     <span className="text-sm font-mono text-base-content/60 w-12 text-center">
                       {isActiveBranch ? branchDepth : 0}/{pvLen}
@@ -740,7 +578,7 @@ function CandidateList({
                       disabled={isActiveBranch && branchDepth >= pvLen}
                       title="分岐を進む"
                     >
-                      <IconChevronRight />
+                      <ChevronRightIcon />
                     </button>
                   </div>
                 </>

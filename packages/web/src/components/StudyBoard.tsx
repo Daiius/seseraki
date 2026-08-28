@@ -2,17 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   applyMove,
-  handCount,
-  pieceBox,
   usiToJapaneseWithPiece,
-  type BasePieceKind,
   type BoardState,
   type HandPieceKind,
   type PieceKind,
   type Side,
   type SquareRef,
 } from 'shared';
-import { BoardGrid, HandDisplay, PIECE_DISPLAY } from './BoardGrid';
+import { BoardGrid, HandDisplay } from './BoardGrid';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import { formatTurnScore, moveDestination } from '../lib/usi';
 import {
@@ -28,7 +25,6 @@ import {
   redo,
   redoAll,
   resetStudy,
-  tapBox,
   tapHand,
   tapSquare,
   togglePromotion,
@@ -152,10 +148,7 @@ interface Replay {
 
 /** 操作系のボタン。モバイル 44px（375px 未満は 40px）・デスクトップは小さく */
 const TOUCH_BTN = 'btn max-md:h-11 max-md:min-h-11 max-[374px]:h-10 max-[374px]:min-h-10 md:btn-sm';
-const CHIP_BTN = 'btn btn-square max-md:size-11 max-[374px]:size-10 md:btn-sm md:size-8';
 
-const BOX_ORDER: BasePieceKind[] = ['K', 'R', 'B', 'G', 'S', 'N', 'L', 'P'];
-const HAND_KINDS: HandPieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
 
 /** 手番側から数えて i 手目の手番記号 */
 function symbolAt(sideToMove: Side, i: number): string {
@@ -229,7 +222,6 @@ export function StudyBoard({
   }
 
   const named = namedEvalTarget(session);
-  const box = pieceBox(state);
   const selection = session.selection;
 
   const run = async (mode: EvalMode) => {
@@ -389,6 +381,19 @@ export function StudyBoard({
   const handSelection = (side: Side) =>
     selection?.kind === 'hand' && selection.side === side ? selection.piece : null;
 
+  /**
+   * 駒台の空き部分（受け皿）。**盤の駒を選んでいる間だけ**渡す（prd/12 §3.2）。
+   *
+   * 🔴 **これが駒箱の代わり。** 駒箱は「盤にも持ち駒にもない駒」の置き場だが、実際には
+   * 盤から抜いた駒の**退避先でしかない**。駒台がその役を兼ねれば UI に出す理由が無くなる
+   * ——駒の総数は元から変えられないので、失われる機能もない。
+   * 先手・後手どちらの駒台にも置ける（相手の持ち駒にできる。フル編集）。
+   */
+  const trayClick = (side: Side) =>
+    !replaying && selection?.kind === 'square'
+      ? () => edit(tapHand(session, side))
+      : undefined;
+
   const topSide: Side = flipped ? 'sente' : 'gote';
   const bottomSide: Side = flipped ? 'gote' : 'sente';
 
@@ -402,6 +407,7 @@ export function StudyBoard({
           flipped={flipped}
           onPieceClick={handClick?.(topSide)}
           selected={handSelection(topSide)}
+          onTrayClick={trayClick(topSide)}
         />
         <div className="w-fit no-tap-select">
           <BoardGrid
@@ -419,6 +425,7 @@ export function StudyBoard({
           flipped={flipped}
           onPieceClick={handClick?.(bottomSide)}
           selected={handSelection(bottomSide)}
+          onTrayClick={trayClick(bottomSide)}
         />
       </div>
 
@@ -498,77 +505,6 @@ export function StudyBoard({
             onReplay={setReplay}
           />
 
-          {!replaying && (
-          <details className="text-sm">
-            <summary className="cursor-pointer text-base-content/70">
-              駒を出し入れする（持ち駒 / 駒箱）
-            </summary>
-            <div className="mt-2 flex flex-col gap-2">
-              <p className="text-xs text-base-content/60">
-                盤の駒を選んでから持ち駒 / 駒箱を叩くと移せる。持ち駒 / 駒箱を選んでから
-                盤のマスを叩くと置ける。
-              </p>
-              {(['sente', 'gote'] as const).map((side) => (
-                <div key={`hand-${side}`} className="flex items-center gap-1 flex-wrap">
-                  <button
-                    type="button"
-                    className={clsx(CHIP_BTN, 'btn-ghost')}
-                    onClick={() => edit(tapHand(session, side))}
-                    title={`${side === 'sente' ? '先手' : '後手'}の持ち駒へ`}
-                  >
-                    {side === 'sente' ? '☗' : '☖'}
-                  </button>
-                  {HAND_KINDS.map((kind) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      className={clsx(
-                        CHIP_BTN,
-                        selection?.kind === 'hand'
-                          && selection.side === side
-                          && selection.piece === kind
-                          ? 'btn-secondary'
-                          : 'btn-outline',
-                      )}
-                      onClick={() => edit(tapHand(session, side, kind))}
-                    >
-                      {PIECE_DISPLAY[kind as PieceKind]}
-                      <span className="font-mono text-xs opacity-70">
-                        {handCount(state, side, kind)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-              {(['sente', 'gote'] as const).map((side) => (
-                <div key={`box-${side}`} className="flex items-center gap-1 flex-wrap">
-                  <span className="text-xs text-base-content/60 w-10">
-                    箱{side === 'sente' ? '☗' : '☖'}
-                  </span>
-                  {BOX_ORDER.map((kind) => (
-                    <button
-                      key={kind}
-                      type="button"
-                      className={clsx(
-                        CHIP_BTN,
-                        selection?.kind === 'box'
-                          && selection.side === side
-                          && selection.piece === kind
-                          ? 'btn-secondary'
-                          : 'btn-outline',
-                      )}
-                      onClick={() => edit(tapBox(session, side, kind))}
-                      disabled={box[kind] === 0 && selection === null}
-                    >
-                      {PIECE_DISPLAY[kind as PieceKind]}
-                      <span className="font-mono text-xs opacity-70">{box[kind]}</span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
-          </details>
-          )}
         </div>
       )}
     </>

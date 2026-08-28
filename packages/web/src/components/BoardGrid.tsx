@@ -32,6 +32,7 @@ export function HandDisplay({
   flipped = false,
   onPieceClick,
   selected,
+  onTrayClick,
 }: {
   hand: Partial<Record<PieceKind, number>>;
   side: 'sente' | 'gote';
@@ -46,6 +47,14 @@ export function HandDisplay({
   onPieceClick?: (kind: HandPieceKind) => void;
   /** 選択中の持ち駒。盤の選択マスと同じ見せ方で強調する */
   selected?: HandPieceKind | null;
+  /**
+   * 駒台の**空き部分**（受け皿）を叩いたときに呼ぶ。盤の駒を選んでいる間だけ渡す想定で、
+   * **渡したときだけ受け皿として光る**（prd/12 §3.2）。
+   *
+   * 🔒 選んでいないときは渡さない——余計な装飾を出さないため、また空き部分を叩いても
+   * 何も起きないため（そこから選択が始まったりはしない）。
+   */
+  onTrayClick?: () => void;
 }) {
   const pieces = HAND_ORDER.flatMap((kind) => {
     const count = hand[kind];
@@ -56,52 +65,74 @@ export function HandDisplay({
   // 盤の駒と同じ規則: 相手側（反転中は先手側）の駒を 180 度回して赤くする
   const rotate = flipped ? side === 'sente' : side === 'gote';
 
+  /*
+    🔒 **行の高さは中身によらず 1 マスぶん**（`.shogi-hand-row`）。受け皿は名前と駒の間の
+    空き部分を占め、`self-stretch` で行いっぱいに伸ばすだけなので、**足しても行の高さは
+    変わらない**（prd/05 §2.1・盤ごと下の操作ボタンがずれない）。
+    持ち駒が無いときの「なし」もこの中に置く——**そこが一番自然な着地点**だから。
+  */
+  const trayClass = clsx(
+    'flex-1 self-stretch flex items-center justify-end rounded px-1',
+    onTrayClick && 'bg-secondary/20 ring-1 ring-secondary/60 ring-inset',
+  );
+  const trayContent =
+    pieces.length === 0 ? <span className="text-base-content/50">なし</span> : null;
+
   return (
     <div className="shogi-hand-row text-sm lg:text-base flex items-center gap-1 no-tap-select">
       <span className="font-semibold whitespace-nowrap">{symbol}{label}</span>
-      <div className="ml-auto flex items-center">
-        {pieces.length === 0 ? (
-          <span className="text-base-content/50">なし</span>
-        ) : (
-          pieces.map(({ kind, count }) => {
-            const isSelected = selected === kind;
-            const className = clsx(
-              'shogi-hand-piece relative flex items-center justify-center font-bold rounded',
-              isSelected && 'bg-secondary/40 ring-2 ring-secondary ring-inset',
-            );
-            const content = (
-              <>
-                <span className={clsx('inline-block', rotate && 'rotate-180 text-error')}>
-                  {PIECE_DISPLAY[kind]}
+      {onTrayClick ? (
+        <button
+          type="button"
+          className={trayClass}
+          aria-label={`${label}の駒台へ置く`}
+          title="選んでいる駒をこの駒台へ移す"
+          onClick={onTrayClick}
+        >
+          {trayContent}
+        </button>
+      ) : (
+        <div className={trayClass}>{trayContent}</div>
+      )}
+      <div className="flex items-center">
+        {pieces.map(({ kind, count }) => {
+          const isSelected = selected === kind;
+          const className = clsx(
+            'shogi-hand-piece relative flex items-center justify-center font-bold rounded',
+            isSelected && 'bg-secondary/40 ring-2 ring-secondary ring-inset',
+          );
+          const content = (
+            <>
+              <span className={clsx('inline-block', rotate && 'rotate-180 text-error')}>
+                {PIECE_DISPLAY[kind]}
+              </span>
+              {/* 枚数は右上に上付きで重ねる。1 枚なら出さない（盤の駒と同じ密度に保つ） */}
+              {count > 1 && (
+                <span className="shogi-hand-count absolute right-0 top-0 font-mono text-base-content/70">
+                  {count}
                 </span>
-                {/* 枚数は右上に上付きで重ねる。1 枚なら出さない（盤の駒と同じ密度に保つ） */}
-                {count > 1 && (
-                  <span className="shogi-hand-count absolute right-0 top-0 font-mono text-base-content/70">
-                    {count}
-                  </span>
-                )}
-              </>
-            );
-            if (!onPieceClick) {
-              return (
-                <div key={kind} className={className}>
-                  {content}
-                </div>
-              );
-            }
+              )}
+            </>
+          );
+          if (!onPieceClick) {
             return (
-              <button
-                type="button"
-                key={kind}
-                className={className}
-                aria-label={`${label}の持ち駒 ${PIECE_DISPLAY[kind]}${count}枚`}
-                onClick={() => onPieceClick(kind)}
-              >
+              <div key={kind} className={className}>
                 {content}
-              </button>
+              </div>
             );
-          })
-        )}
+          }
+          return (
+            <button
+              type="button"
+              key={kind}
+              className={className}
+              aria-label={`${label}の持ち駒 ${PIECE_DISPLAY[kind]}${count}枚`}
+              onClick={() => onPieceClick(kind)}
+            >
+              {content}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

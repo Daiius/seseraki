@@ -315,6 +315,10 @@ function countHand(
  *
  * ⚠ **0 で下限を打つ。** 駒が多すぎる局面（歩 19 枚など）は「箱の中がマイナス」ではなく
  * `validatePositionForEngine` の `piece_count_exceeded` が見る違反で、駒箱の責務ではない。
+ *
+ * ⚠ **web の検討盤はもう使わない**（prd/12 §3.2・決定 2026-08-28）。駒台が盤から抜いた駒の
+ * 受け皿を兼ねるようになり、駒箱を UI に出す理由が無くなったため。ここに残してあるのは
+ * 環境非依存の純関数で、server / MCP（prd/12 §4）が局面の内訳を説明するのに使えるから。
  */
 export function pieceBox(state: BoardState): PieceBox {
   const used: Record<BasePieceKind, number> = {

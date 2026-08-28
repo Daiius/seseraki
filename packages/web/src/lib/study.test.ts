@@ -4,7 +4,6 @@ import {
   pieceAt,
   positionSfen,
   handCount,
-  pieceBox,
 } from 'shared';
 import {
   applyStudyMoves,
@@ -22,7 +21,6 @@ import {
   redoAll,
   resetStudy,
   squareOfUsi,
-  tapBox,
   tapHand,
   tapSquare,
   togglePromotion,
@@ -150,35 +148,58 @@ describe('駒を取る / 成る', () => {
   });
 });
 
-describe('持ち駒と駒箱', () => {
-  it('盤の駒を選んで持ち駒を叩くと、その側の持ち駒になる', () => {
+/**
+ * 駒台での受け渡し（prd/12 §3.2・決定 2026-08-28）。
+ *
+ * 🔴 **駒箱は持たない。** 駒箱は「盤にも持ち駒にもない駒」の置き場だが、実際には
+ * 盤から抜いた駒の**退避先でしかない**ので、駒台がその役を兼ねれば要らなくなる。
+ * 駒の総数は元から変えられないので、失われる機能もない。
+ */
+describe('駒台での受け渡し', () => {
+  it('盤の駒を選んで駒台の空き部分を叩くと、その側の持ち駒になる', () => {
     let s = tapSquare(createStudySession(initial), sq('7g'));
-    s = tapHand(s, 'gote');
+    s = tapHand(s, 'gote'); // 受け皿（駒種を指さない）
     expect(handCount(currentState(s), 'gote', 'P')).toBe(1);
     expect(pieceAt(currentState(s), sq('7g'))).toBeNull();
+    // 編集なので指し手ではない（名指し評価の対象にならない）
     expect(lastMove(s)).toBeNull();
   });
 
-  it('盤の駒を選んで駒箱を叩くと盤から消える（持ち駒には行かない）', () => {
-    let s = tapSquare(createStudySession(initial), sq('7g'));
-    s = tapBox(s, 'sente', 'P');
-    expect(pieceAt(currentState(s), sq('7g'))).toBeNull();
-    expect(handCount(currentState(s), 'sente', 'P')).toBe(0);
-    expect(pieceBox(currentState(s)).P).toBe(1);
+  it('相手の駒台にも入れられる（フル編集）', () => {
+    // 後手の歩を先手の駒台へ
+    let s = tapSquare(createStudySession(initial), sq('3c'));
+    s = tapHand(s, 'sente');
+    expect(handCount(currentState(s), 'sente', 'P')).toBe(1);
+    expect(handCount(currentState(s), 'gote', 'P')).toBe(0);
   });
 
-  it('駒箱を選んで盤を叩くと置ける（手番は動かない＝編集）', () => {
-    let s = tapSquare(createStudySession(initial), sq('7g'));
-    s = tapBox(s, 'sente', 'P'); // 7g の歩を箱へ
-    s = tapBox(s, 'gote', 'P'); // 箱の歩（後手）を選ぶ
-    s = tapSquare(s, sq('5e'));
-    expect(pieceAt(currentState(s), sq('5e'))).toEqual({ kind: 'P', side: 'gote' });
-    expect(currentState(s).sideToMove).toBe('sente');
+  it('成駒は生駒に戻って駒台へ入る', () => {
+    // ▲８八角で２二の角を取り、成にしてから駒台へ移す
+    let s = togglePromotion(applyStudyMoves(initial, ['8h2b']));
+    expect(pieceAt(currentState(s), sq('2b'))).toEqual({ kind: '+B', side: 'sente' });
+    s = tapSquare(s, sq('2b'));
+    s = tapHand(s, 'sente');
+    expect(handCount(currentState(s), 'sente', 'B')).toBe(2);
+    expect(pieceAt(currentState(s), sq('2b'))).toBeNull();
   });
 
-  it('持ち駒を選んで盤を叩くと打てる（USI は駒打ちの形）', () => {
+  it('⚠ 玉は持ち駒にできないので、駒台へ移すと盤から消えるだけになる', () => {
+    let s = tapSquare(createStudySession(initial), sq('5i'));
+    s = tapHand(s, 'sente');
+    expect(pieceAt(currentState(s), sq('5i'))).toBeNull();
+    expect(currentState(s).hand.sente.K).toBeUndefined();
+  });
+
+  it('駒を選んでいなければ、空き部分を叩いても何も起きない', () => {
+    const s = createStudySession(initial);
+    // 選択も始まらないし、段も積まれない
+    expect(tapHand(s, 'sente')).toBe(s);
+    expect(tapHand(s, 'gote')).toBe(s);
+  });
+
+  it('駒台の駒を選んで盤を叩くと打てる（USI は駒打ちの形）', () => {
     let s = tapSquare(createStudySession(initial), sq('7g'));
-    s = tapHand(s, 'sente'); // 先手の持ち駒へ
+    s = tapHand(s, 'sente'); // 受け皿へ移す
     s = tapHand(s, 'sente', 'P'); // その歩を選ぶ
     s = tapSquare(s, sq('5e'));
     expect(lastMove(s)).toBe('P*5e');
@@ -201,28 +222,13 @@ describe('持ち駒と駒箱', () => {
     expect(currentState(s).sideToMove).toBe('gote');
   });
 
-  it('持ち駒はもう一度叩けば選択解除、別の駒種を叩けば選び直し', () => {
+  it('駒台の駒はもう一度叩けば選択解除、別の駒種を叩けば選び直し', () => {
     let s = applyStudyMoves(initial, ['8h2b']);
     s = tapHand(s, 'sente', 'B');
     expect(s.selection).toEqual({ kind: 'hand', side: 'sente', piece: 'B' });
     expect(tapHand(s, 'sente', 'B').selection).toBeNull();
     // 持っていない駒種へは移らない（選択が外れるだけ）
     expect(tapHand(s, 'sente', 'R').selection).toBeNull();
-  });
-
-  it('駒箱を選んで持ち駒を叩くと 1 枚増える', () => {
-    let s = tapSquare(createStudySession(initial), sq('7g'));
-    s = tapBox(s, 'sente', 'P'); // 箱へ戻す
-    s = tapBox(s, 'sente', 'P'); // 箱の歩を選ぶ
-    s = tapHand(s, 'sente', 'P');
-    expect(handCount(currentState(s), 'sente', 'P')).toBe(1);
-  });
-
-  it('持ち駒を選んで駒箱を叩くと 1 枚減る', () => {
-    let s = applyStudyMoves(initial, ['8h2b']); // 角を取って持ち駒に
-    s = tapHand(s, 'sente', 'B');
-    s = tapBox(s, 'sente', 'B');
-    expect(handCount(currentState(s), 'sente', 'B')).toBe(0);
   });
 
   it('持っていない駒は選べない', () => {

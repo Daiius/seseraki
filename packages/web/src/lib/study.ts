@@ -14,38 +14,33 @@
  *
  * ## 操作モデル: 選択 → 対象 の 2 段（prd/12 §3.1）
  *
- * 選べるものは 3 種類（盤のマス / 持ち駒 / 駒箱）で、**選んだ状態で別の場所を叩くと
+ * 選べるものは 2 種類（盤のマス / 駒台の駒）で、**選んだ状態で別の場所を叩くと
  * そこが行き先になる**。ドラッグ&ドロップは採らない。
  *
  * | 選択 → 叩いた先 | 起きること |
  * |---|---|
  * | マス → マス | `movePiece`（重ねた駒は動かした側の持ち駒へ） |
- * | マス → 持ち駒 | `moveToHand`（その側の持ち駒になる） |
- * | マス → 駒箱 | `removePiece`（盤から取り除く） |
- * | 持ち駒 → マス | `dropFromHand`（打つ） |
- * | 持ち駒 → 駒箱 | 持ち駒を 1 枚減らす（＝駒箱へ戻る） |
- * | 駒箱 → マス | `placePiece`（その側の駒として置く） |
- * | 駒箱 → 持ち駒 | `addToHand`（その側の持ち駒に 1 枚足す） |
+ * | マス → 駒台 | `moveToHand`（その側の持ち駒になる） |
+ * | 駒台の駒 → マス | `dropFromHand`（打つ） |
  *
  * 同じものをもう一度叩けば選択解除。**行き先を選ぶ前なら選び直せる**ので、盤マスが
  * 44px 基準を下回る例外（prd/12 §3.3）をこの 2 段が支えている。
+ *
+ * 🔴 **駒箱は持たない**（prd/12 §3.2・決定 2026-08-28）。駒箱は「盤にも持ち駒にもない駒」の
+ * 置き場だが、実際には**盤から抜いた駒の退避先でしかない**——駒台がその役を兼ねられる。
+ * 駒の総数は元から変えられないので、失われる機能もない。
+ * ⚠ `shared` の `pieceBox` は残っているが、**web からはもう使わない**（server / MCP 向け）。
  */
 import {
-  addToHand,
   canPromote,
   dropFromHand,
   handCount,
   movePiece,
   moveToHand,
   pieceAt,
-  pieceBox,
-  placePiece,
   positionSfen,
-  removePiece,
-  setHandCount,
   toggleSideToMove,
   unpromoted,
-  type BasePieceKind,
   type BoardState,
   type HandPieceKind,
   type PieceKind,
@@ -56,8 +51,7 @@ import {
 /** 選択中のもの。行き先を叩くまで保持する */
 export type StudySelection =
   | { kind: 'square'; square: SquareRef }
-  | { kind: 'hand'; side: Side; piece: HandPieceKind }
-  | { kind: 'box'; side: Side; piece: BasePieceKind };
+  | { kind: 'hand'; side: Side; piece: HandPieceKind };
 
 /** 手順 1 段。`steps[0]` は起点（棋譜の局面）で `move` は常に null */
 export interface StudyStep {
@@ -213,28 +207,27 @@ export function tapSquare(session: StudySession, square: SquareRef): StudySessio
     );
   }
 
-  if (sel.kind === 'hand') {
-    const dropped = dropFromHand(state, sel.side, sel.piece, square);
-    return push(
-      session,
-      advanceTurn(dropped, sel.side, state),
-      usiDropOf(sel.piece, square),
-    );
-  }
-
-  // 駒箱から置く。**編集**なので手番は動かさない（指し手ではない）
-  const placed = placePiece(state, square, {
-    kind: sel.piece as PieceKind,
-    side: sel.side,
-  });
-  return push(session, placed, null);
+  // 持ち駒から打つ
+  const dropped = dropFromHand(state, sel.side, sel.piece, square);
+  return push(
+    session,
+    advanceTurn(dropped, sel.side, state),
+    usiDropOf(sel.piece, square),
+  );
 }
 
 /**
- * 持ち駒を叩いた。`piece` を省くと「その側の持ち駒置き場」を叩いた扱い（行き先専用）。
+ * 駒台を叩いた。`piece` を省くと**空き部分（受け皿）**を叩いた扱い。
+ *
+ * 🔴 **これが駒箱の代わり**（prd/12 §3.2・決定 2026-08-28）。盤の駒を選んだ状態で
+ * 駒台を叩けば、その駒はその側の持ち駒になる（成駒は生駒に戻る）。駒箱は
+ * 「盤にも持ち駒にもない駒」の置き場だが、実際には**盤から抜いた駒の退避先でしかない**
+ * ので、駒台がその役を兼ねれば UI に出す理由が無くなる。駒の総数は元から変えられない
+ * ので、失われる機能もない。
  *
  * ⚠ 選択中のものがあるときは**叩いた駒種ではなく選択中の駒**が動く（行き先として
- * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ。
+ * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ——**空き部分を叩いても
+ * 何も起きない**（そこから選択が始まったりはしない）。
  */
 export function tapHand(
   session: StudySession,
@@ -250,62 +243,17 @@ export function tapHand(
   }
 
   if (sel.kind === 'square') {
-    // 盤の駒を持ち駒へ（玉は持てないので駒箱へ戻る＝`moveToHand` の仕様）
+    // 盤の駒を駒台へ。⚠ **玉は持ち駒にできない**ので盤から消えるだけになる
+    //（`moveToHand` の仕様）
     return push(session, moveToHand(state, sel.square, side), null);
   }
 
-  if (sel.kind === 'hand') {
-    if (sel.side === side && sel.piece === piece) {
-      return { ...session, selection: null };
-    }
-    // 別の持ち駒を叩いたら選び直し（持ち駒同士の受け渡しは用途が無い）
-    return piece && handCount(state, side, piece) > 0
-      ? { ...session, selection: { kind: 'hand', side, piece } }
-      : { ...session, selection: null };
+  if (sel.side === side && sel.piece === piece) {
+    return { ...session, selection: null };
   }
-
-  // 駒箱 → 持ち駒。玉は持ち駒にできない
-  if (sel.piece === 'K') return { ...session, selection: null };
-  return push(session, addToHand(state, side, sel.piece, 1), null);
-}
-
-/** 駒箱を叩いた */
-export function tapBox(
-  session: StudySession,
-  side: Side,
-  piece: BasePieceKind,
-): StudySession {
-  const state = currentState(session);
-  const sel = session.selection;
-
-  if (sel === null) {
-    return pieceBox(state)[piece] > 0
-      ? { ...session, selection: { kind: 'box', side, piece } }
-      : session;
-  }
-
-  if (sel.kind === 'square') {
-    // 盤から取り除く＝駒箱へ戻す
-    return push(session, removePiece(state, sel.square), null);
-  }
-
-  if (sel.kind === 'hand') {
-    // 持ち駒を 1 枚減らす＝駒箱へ戻す
-    return push(
-      session,
-      setHandCount(
-        state,
-        sel.side,
-        sel.piece,
-        handCount(state, sel.side, sel.piece) - 1,
-      ),
-      null,
-    );
-  }
-
-  if (sel.side === side && sel.piece === piece) return { ...session, selection: null };
-  return pieceBox(state)[piece] > 0
-    ? { ...session, selection: { kind: 'box', side, piece } }
+  // 別の持ち駒を叩いたら選び直し（持ち駒同士の受け渡しは用途が無い）
+  return piece && handCount(state, side, piece) > 0
+    ? { ...session, selection: { kind: 'hand', side, piece } }
     : { ...session, selection: null };
 }
 

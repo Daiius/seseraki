@@ -324,9 +324,16 @@ export function StudyBoard({
     //    なる。副次はキュー待ち・長い探索で主より大きく遅れうるので、
     //    「副次が失敗・busy・中断でも主は必ず出す」という要求を満たせない（永久に出ない場合すらある）。
     //    → **主が返った時点で表示し、採点は後から追記する。**
+    //
+    // 🔴 **発行の順は「主 → 副次」**（レビュー指摘 `OCL-17AFF653`）。`requestPositionEval` は
+    //    最初の await まで同期に走る＝**呼んだ順に POST が出る**ので、副次を先に呼ぶと
+    //    **server の評価キュー（有限）の最後の 1 枠を副次が取り、主が 503 になる**。
+    //    「採点は進んでいるのに主は『キューが一杯』」という優先順位の逆転が起きるため、
+    //    **枠の取り合いでは主を先に通す。** ⚠ 同時実行は保つ（await は下でまとめて行う）。
+    const resultPromise = requestPositionEval(target, signal);
     const gradePromise = grading ? requestPositionEval(grading.target, signal) : null;
 
-    const result = await requestPositionEval(target, signal);
+    const result = await resultPromise;
     // 🔒 待っている間に局面が変わっていたら**この結果は今の盤のものではない**
     if (!trackerRef.current.accepts(token)) return;
     switch (result.kind) {

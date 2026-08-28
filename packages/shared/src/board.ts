@@ -30,13 +30,16 @@ const USI_DROP_PIECE: Record<string, PieceKind> = {
   P: 'P', L: 'L', N: 'N', S: 'S', G: 'G', B: 'B', R: 'R',
 };
 
-// 成り: 生駒 → 成駒
-const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
+/**
+ * 成り: 生駒 → 成駒。
+ * 盤面編集（`position-edit.ts`）も同じ対応表を使うので export する。
+ */
+export const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
   P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
 };
 
-// 成駒 → 生駒（持ち駒にするとき）
-const UNPROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
+/** 成駒 → 生駒（持ち駒にするとき）。盤面編集からも使う */
+export const UNPROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
   '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',
 };
 
@@ -113,7 +116,7 @@ export function createInitialState(): BoardState {
  * 指定マスだけを差し替えた board を返す（変化のない行は元の配列をそのまま共有する）。
  * updates は先頭から順に適用する（同じマスを 2 度指定した場合は後勝ち）。
  */
-function withSquares(
+export function withSquares(
   board: Square[][],
   updates: [row: number, col: number, square: Square][],
 ): Square[][] {
@@ -128,7 +131,7 @@ function withSquares(
 /**
  * 片側の持ち駒だけを差し替えた hand を返す
  */
-function withHand(
+export function withHand(
   hand: Hand,
   side: Side,
   pieces: Partial<Record<PieceKind, number>>,

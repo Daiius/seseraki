@@ -5,3 +5,4 @@ export * from './tactics';
 export * from './position';
 export * from './sfen';
 export * from './position-validation';
+export * from './position-edit';

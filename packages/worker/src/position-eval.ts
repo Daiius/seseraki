@@ -47,7 +47,7 @@ export interface PositionEvalResult {
 export interface PositionJobSource {
   /** 待っているジョブを 1 件取る（無ければ null） */
   claim(): Promise<PositionEvalJob | null>;
-  /** 結果 or 失敗を報告する。**失敗も完了**（待っている long-poll を起こす） */
+  /** 結果 or 失敗を報告する。**失敗も完了**（要求側が取りに来る結果になる） */
   report(
     id: string,
     report: PositionEvalResult | { error: string },
@@ -188,7 +188,7 @@ export async function evaluateJob(
   const [best] = extractMultiPvResults(result.infoLines);
   if (!best) {
     // 相手に指す手が無い（詰み/入玉図など）ときは候補が空になる。
-    // 数字を捏造せず、候補なしとして返す（server はそのまま long-poll に返す）
+    // 数字を捏造せず、候補なしとして返す（server はそのまま結果として保持する）
     return { candidates: [], fallback: true };
   }
   return {
@@ -242,7 +242,7 @@ export async function drainEvaluationJobs(
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[PositionEval] Evaluation failed (${job.id}):`, reason);
-      // 待っている long-poll を**エラーで起こしてから**エンジンの再起動へ回す
+      // **エラーを報告してから**エンジンの再起動へ回す（結果もエラーも出ないまま宙に浮かせない）
       try {
         await source.report(job.id, { error: reason });
       } catch (reportErr) {

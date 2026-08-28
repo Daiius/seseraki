@@ -5,15 +5,19 @@ import {
   evalStateAfterPositionChange,
   gradeLastMove,
   headlineCandidate,
+  requestPositionEvalWith,
   scoreLoss,
   type EvalCandidateView,
+  type EvalHttp,
+  type EvalHttpResponse,
   type EvalState,
 } from './positionEval';
+import type { EvalTarget } from './study';
 
 /**
  * 評価要求の採否（レビュー指摘 `OCL-AED22F46` の回帰テスト）。
  *
- * 🔴 **踏んだ不具合**: 評価は long-poll で数秒〜十数秒かかる。その間に駒を動かしても
+ * 🔴 **踏んだ不具合**: 評価は数秒〜十数秒かかる（今はポーリングで待つ）。その間に駒を動かしても
  * 走っている要求が捨てられていなかったため、**旧局面の応答が編集後の盤の評価として
  * 表示された**。検討ツールとしては値の意味が壊れる。
  */
@@ -57,7 +61,7 @@ describe('EvalRequestTracker', () => {
     const tracker = new EvalRequestTracker();
     let shown: string | null = null;
 
-    // 旧局面の評価を要求する（long-poll: まだ返らない）
+    // 旧局面の評価を要求する（まだ返らない）
     const { token } = tracker.begin();
     let settle: (value: string) => void = () => {};
     const inFlight = new Promise<string>((resolve) => {
@@ -337,5 +341,299 @@ describe('scoreLoss', () => {
   it('別々の探索なので負にもなりうる（丸めずそのまま返す）', () => {
     expect(scoreLoss({ scoreType: 'cp', scoreValue: 40 }, { scoreType: 'cp', scoreValue: 46 }))
       .toBe(-6);
+  });
+});
+
+/**
+ * 評価の要求と結果の取得（**非同期**。決定 2026-08-29 で long-poll をやめた。prd/12 §2.4）。
+ *
+ * 🔴 **本番で踏んだ**: 前段（リバースプロキシ / Cloudflare）のタイムアウトが server の期限
+ * よりずっと短く、エンジン評価が終わる前に 504 が返っていた。**成功しているのに失敗して
+ * 見える**（押し直すと server のキャッシュから即答が出る）。しかも `await res.json()` が
+ * ステータス判定より前にあったため、504 の HTML でパースが落ちて `catch` に入り、
+ * **文言まで「サーバーに接続できません」と嘘をついていた**。
+ */
+describe('requestPositionEvalWith', () => {
+  const target: EvalTarget = {
+    sfen: 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -',
+    move: null,
+    from: createInitialState(),
+  };
+
+  /** 応答 1 本のふり。`json` が投げるものも作れる（前段の HTML ページ） */
+  const respond = (status: number, body: unknown): EvalHttpResponse => ({
+    status,
+    ok: status >= 200 && status < 300,
+    json: () =>
+      body instanceof Error ? Promise.reject(body) : Promise.resolve(body),
+  });
+
+  const html = new SyntaxError('Unexpected token < in JSON at position 0');
+
+  const DONE = {
+    status: 'done',
+    candidates: [
+      { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 42, pv: ['7g7f'], depth: 12 },
+    ],
+    source: 'engine',
+    fallback: false,
+    evaluatedAt: '2026-08-29T00:00:00.000Z',
+  };
+
+  /** 手順を並べた偽 HTTP。呼ばれた順に台本を消費し、記録を残す */
+  const scripted = (script: {
+    post: (EvalHttpResponse | Error)[];
+    get?: (EvalHttpResponse | Error)[];
+  }) => {
+    const calls: string[] = [];
+    const take = (queue: (EvalHttpResponse | Error)[], what: string) => {
+      calls.push(what);
+      const next = queue.shift();
+      if (next === undefined) throw new Error(`台本が尽きた: ${what}`);
+      if (next instanceof Error) return Promise.reject(next);
+      return Promise.resolve(next);
+    };
+    return {
+      calls,
+      http: {
+        post: () => take(script.post, 'post'),
+        get: (jobId: string) => take(script.get ?? [], `get:${jobId}`),
+      } satisfies EvalHttp,
+    };
+  };
+
+  /** 実時間を使わない待ち（ポーリングをテストで回すため） */
+  const noSleep = () => Promise.resolve();
+
+  it('前段の 504（本文は HTML）は「サーバーエラー (504)」になる', async () => {
+    const { http } = scripted({ post: [respond(504, html)] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    // 🔒 ここが嘘をついていた。**通信できなかったのではない**
+    expect(result).toEqual({ kind: 'failed', message: 'サーバーエラー (504)' });
+  });
+
+  it('400 は違反の一覧をそのまま返す', async () => {
+    const { http } = scripted({
+      post: [respond(400, { violations: [{ kind: 'noKing', side: 'black' }] })],
+    });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({
+      kind: 'invalid',
+      violations: [{ kind: 'noKing', side: 'black' }],
+    });
+  });
+
+  it('400 の本文が読めなくても落ちない（違反は空で返す）', async () => {
+    const { http } = scripted({ post: [respond(400, html)] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({ kind: 'invalid', violations: [] });
+  });
+
+  it('503 はキュー満杯として扱う', async () => {
+    const { http } = scripted({ post: [respond(503, { error: '評価キューが一杯です' })] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({ kind: 'busy' });
+  });
+
+  it('200 なのに本文を読めなければ、通信断ではなくその旨を返す', async () => {
+    const { http } = scripted({ post: [respond(200, html)] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({ kind: 'failed', message: '応答を読み取れませんでした' });
+  });
+
+  it('キャッシュ命中は POST 1 往復で結果まで返る（ポーリングしない）', async () => {
+    const { http, calls } = scripted({ post: [respond(200, { ...DONE, source: 'kifu' })] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result.kind).toBe('done');
+    if (result.kind === 'done') expect(result.source).toBe('kifu');
+    expect(calls).toEqual(['post']);
+  });
+
+  /** 🔴 本命。**POST は待たず、結果は別リクエストで取りに行く** */
+  it('202 なら jobId で取りに行き、出るまで繰り返す', async () => {
+    const { http, calls } = scripted({
+      post: [respond(202, { status: 'pending', jobId: 'eval-7' })],
+      get: [
+        respond(200, { status: 'pending', jobId: 'eval-7' }),
+        respond(200, { status: 'pending', jobId: 'eval-7' }),
+        respond(200, DONE),
+      ],
+    });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result.kind).toBe('done');
+    // POST は 1 回だけ。エンジンの仕事は二重にならない
+    expect(calls).toEqual(['post', 'get:eval-7', 'get:eval-7', 'get:eval-7']);
+  });
+
+  it('ジョブの失敗はそのまま失敗として出す', async () => {
+    const { http } = scripted({
+      post: [respond(202, { status: 'pending', jobId: 'eval-1' })],
+      get: [respond(200, { status: 'failed', error: 'engine died' })],
+    });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({ kind: 'failed', message: 'engine died' });
+  });
+
+  /**
+   * ⚠ server のジョブとキャッシュはプロセスのメモリにある（prd/12 §2.4）。
+   * 再起動・TTL 切れで消えたら、**取りに行く先を失っただけ**なので投げ直す。
+   */
+  it('ポーリング中に 404（ジョブが消えた）なら投げ直す', async () => {
+    const { http, calls } = scripted({
+      post: [
+        respond(202, { status: 'pending', jobId: 'eval-1' }),
+        respond(200, DONE),
+      ],
+      get: [respond(404, { error: '評価ジョブが見つかりません' })],
+    });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result.kind).toBe('done');
+    expect(calls).toEqual(['post', 'get:eval-1', 'post']);
+  });
+
+  it('総予算を過ぎたら諦めて素直に失敗を出す', async () => {
+    let clock = 0;
+    const { http } = scripted({
+      post: [respond(202, { status: 'pending', jobId: 'eval-1' })],
+      get: Array.from({ length: 10 }, () =>
+        respond(200, { status: 'pending', jobId: 'eval-1' }),
+      ),
+    });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      {
+        totalBudgetMs: 300,
+        now: () => clock,
+        sleep: async () => {
+          clock += 100;
+        },
+      },
+    );
+    expect(result).toEqual({
+      kind: 'failed',
+      message: '評価が時間内に終わりませんでした',
+    });
+  });
+
+  /**
+   * 🔴 **「自分が打ち切った」と「本物の通信断」「呼び出し側の abort」を取り違えない。**
+   * `AbortError` かどうかだけでは区別できない（自分の打ち切りも `AbortError` になる）。
+   */
+  it('呼び出し側が abort したら、投げ直さずに aborted を返す', async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const http: EvalHttp = {
+      post: (_t, signal) => {
+        calls.push('post');
+        controller.abort();
+        return Promise.reject(
+          Object.assign(new Error('aborted'), { name: 'AbortError' }),
+        );
+      },
+      get: () => {
+        calls.push('get');
+        return Promise.reject(new Error('呼ばれないはず'));
+      },
+    };
+    const result = await requestPositionEvalWith(http, target, controller.signal, {
+      sleep: noSleep,
+    });
+    expect(result).toEqual({ kind: 'aborted' });
+    expect(calls).toEqual(['post']);
+  });
+
+  it('本物の通信断のときだけ「サーバーに接続できません」と言う', async () => {
+    const { http } = scripted({ post: [new TypeError('Failed to fetch')] });
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      { sleep: noSleep },
+    );
+    expect(result).toEqual({ kind: 'failed', message: 'サーバーに接続できません' });
+  });
+
+  it('固まった 1 本は自前の期限で畳んで投げ直す（通信断にしない）', async () => {
+    const calls: string[] = [];
+    const http: EvalHttp = {
+      post: (_t, signal) =>
+        new Promise((_resolve, reject) => {
+          calls.push('post');
+          if (calls.length >= 2) {
+            reject(new Error('2 本目は台本外'));
+            return;
+          }
+          // 返らない 1 本。自前の期限（requestTimeoutMs）で abort される
+          signal.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+      get: () => Promise.reject(new Error('呼ばれないはず')),
+    };
+    let clock = 0;
+    const result = await requestPositionEvalWith(
+      http,
+      target,
+      new AbortController().signal,
+      {
+        requestTimeoutMs: 1,
+        totalBudgetMs: 5,
+        now: () => (clock += 4),
+        sleep: noSleep,
+      },
+    );
+    // 打ち切りは「通信できない」でも「呼び出し側の中断」でもない。総予算で諦める
+    expect(result).toEqual({
+      kind: 'failed',
+      message: '評価が時間内に終わりませんでした',
+    });
+    expect(calls).toEqual(['post']);
   });
 });

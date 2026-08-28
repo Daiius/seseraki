@@ -75,7 +75,8 @@ import {
   claimEvaluationJob,
   completeEvaluationJob,
   EvaluationQueueFullError,
-  requestEvaluation,
+  getEvaluationResult,
+  startEvaluation,
 } from './position-eval.js';
 import { lookupKifuEvaluation } from './position-kifu-reuse.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
@@ -854,7 +855,11 @@ const route = app
       });
     },
   )
-  // 検討局面の評価（prd/12 §2）。**結果が出るまで待って返す**（long-poll）。
+  // 検討局面の評価（prd/12 §2）。**受け付けて即座に返す**（決定 2026-08-29）。
+  // キャッシュ・棋譜解析から引ければその場で結果まで返り（1 往復）、エンジンに回すときは
+  // `status: 'pending'` と `jobId` を返す。要求側は GET /positions/evaluate/:jobId で取りに来る。
+  // 🔴 long-poll をやめたのは、前段にタイムアウトを持つ層があり、その期限が server の期限より
+  //    ずっと短いため。**成功しているのに失敗して見える**事故が本番で起きた（prd/12 §2.4）。
   // `move` を付けると名指し評価（`go searchmoves`。その手のスコアと咎め筋）になる。
   // 🔒 評価は**手番側から見た値**（検討モードでは自分。prd/12 §2.3）。
   .post(
@@ -911,8 +916,25 @@ const route = app
       }
 
       try {
-        const outcome = await requestEvaluation({ sfen: normalized, move });
-        return c.json({ sfen: normalized, move, source: 'engine' as const, ...outcome });
+        const started = startEvaluation({ sfen: normalized, move });
+        if (started.state === 'settled') {
+          return c.json({
+            sfen: normalized,
+            move,
+            source: 'engine' as const,
+            ...started.outcome,
+          });
+        }
+        // ⚠ 202 は「受け付けた・結果はまだ」。要求側はこの `jobId` で取りに来る
+        return c.json(
+          {
+            sfen: normalized,
+            move,
+            status: 'pending' as const,
+            jobId: started.jobId,
+          },
+          202,
+        );
       } catch (err) {
         if (err instanceof EvaluationQueueFullError) {
           // worker が止まっている疑い。積み上げずにその場で断る
@@ -920,6 +942,25 @@ const route = app
         }
         throw err;
       }
+    },
+  )
+  // 評価結果の取得（prd/12 §2.4）。**ポーリングされる前提の軽い口**。
+  // 🔒 `pending`（まだ出ていない）と 404（もう取れない）を混ぜない。404 は TTL 切れか
+  //    server の再起動で、要求側は**同じ body を投げ直す**（キャッシュにあれば即答）。
+  .get(
+    '/positions/evaluate/:jobId',
+    sessionRequired,
+    zv('param', z.object({ jobId: z.string().min(1).max(64) })),
+    (c) => {
+      const { jobId } = c.req.valid('param');
+      const poll = getEvaluationResult(jobId);
+      if (poll.state === 'unknown') {
+        return c.json({ error: '評価ジョブが見つかりません' } as const, 404);
+      }
+      if (poll.state === 'pending') {
+        return c.json({ status: 'pending' as const, jobId });
+      }
+      return c.json({ jobId, source: 'engine' as const, ...poll.outcome });
     },
   )
   // --- 動画解析（prd/10）---
@@ -1328,8 +1369,8 @@ const route = app
   .get('/worker/position-jobs', apiKeyRequired, (c) => {
     return c.json(claimEvaluationJob());
   })
-  // 評価結果の報告。**失敗も完了**として扱い、待っている long-poll をエラーで起こす
-  // （結果もエラーも返さないまま待たせ続けない。prd/12 §2.4）。
+  // 評価結果の報告。**失敗も完了**として扱う（結果もエラーも出ないまま宙に浮かせない。
+  // prd/12 §2.4）。報告された結果は jobId で取りに来られるよう保持される。
   // 🔒 ここは棋譜の `analysisError` / `analysisRevision` に触れない——interactive な
   // ジョブには対応する棋譜も世代も無い（prd/12 §2.5）
   .post(

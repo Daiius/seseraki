@@ -250,7 +250,7 @@ export function StudyBoard({
     trackerRef.current.cancel();
   }
 
-  // アンマウントでも走っている long-poll を捨てる（起点の変化は上で処理済み）
+  // アンマウントでも走っている評価要求（ポーリング）を捨てる（起点の変化は上で処理済み）
   useEffect(() => () => trackerRef.current.cancel(), []);
 
   const studying = isStudying(session);

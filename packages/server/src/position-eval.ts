@@ -6,10 +6,17 @@
  * 「解析来歴は持たない」方針とも整合する）。単一プロセス前提でモジュールスコープに状態を
  * 持つ流儀は `analysis-progress.ts` / `swars/job-store.ts` と同じ（prd/02 §1 / prd/07）。
  *
- * 流れ:
- * 1. web / LLM が評価を要求する → キャッシュにあれば即答、無ければジョブを作って**待つ**（long-poll）
+ * 流れ（**非同期。決定 2026-08-29 で long-poll をやめた**。prd/12 §2.4）:
+ * 1. web / LLM が評価を要求する → キャッシュにあれば即答、無ければジョブを作って
+ *    **その場で jobId を返す**（HTTP は数十 ms で終わる）
  * 2. worker が棋譜解析の局面境界で claim する（prd/12 §2.1）
- * 3. worker が結果 or 失敗を報告する → 待っている要求が全部起きる
+ * 3. worker が結果 or 失敗を報告する → 結果は `results` に置かれ、成功は `cache` にも載る
+ * 4. 要求側は jobId で**取りに来る**（{@link getEvaluationResult}）
+ *
+ * 🔴 **long-poll をやめた理由**: 本番は server の前段にタイムアウトを持つ層があり、
+ * その期限は server の期限よりずっと短い。**エンジン評価が終わる前に前段が切って
+ * しまい、成功しているのに画面はエラーになった**。前段の設定値は server 側から
+ * 確かめられず将来も変わりうるので、**そこに依存しない形にした**。
  *
  * 🔒 **待たせ続けない。** worker が取りに来ない・報告しないまま期限が来たジョブは
  * `failed` として完了させる（prd/12 §2.4）。失敗はキャッシュに載せない（次の要求で再試行できる）。
@@ -93,13 +100,26 @@ export class EvaluationQueueFullError extends Error {
   }
 }
 
+/**
+ * 完了した結果を jobId で取りに来られる期間（ミリ秒）。
+ *
+ * 🔴 **「結果を取りに行く前に消える」と、永久に取れない要求が生まれる。** 非同期化で
+ * 待っている HTTP 要求が無くなったぶん、**完了とポーリングの間に隙間ができる**ので、
+ * 完了後もしばらく jobId で引けるようにする。クライアントのポーリング間隔（1 秒前後）と、
+ * タブが背面に回って間隔が絞られる場合を見込んで 5 分。
+ *
+ * ⚠ 成功した結果はキー側の `cache` にも載るので、TTL が切れても**同じ body を投げ直せば
+ * 即答が返る**（失われるのは失敗の理由だけ）。
+ */
+const RESULT_TTL_MS = 300_000;
+
+/** 保持する完了結果の件数の上限。超えたら古い順に捨てる（Map は挿入順を保つ） */
+const RESULT_LIMIT = 200;
+
 interface Job extends EvalRequest {
   id: string;
   key: string;
   status: 'queued' | 'running';
-  /** 待っている要求は**全部この 1 本の promise を待つ**（待機者の配列を持たなくてよい） */
-  promise: Promise<EvalOutcome>;
-  settle: (outcome: EvalOutcome) => void;
   timer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -109,6 +129,8 @@ const jobs = new Map<string, Job>();
 const byKey = new Map<string, Job>();
 /** キー → 成功した評価。失敗は載せない（次の要求で再試行できるように） */
 const cache = new Map<string, Extract<EvalOutcome, { status: 'done' }>>();
+/** jobId → 完了した結果（失敗も含む）。{@link RESULT_TTL_MS} で消える */
+const results = new Map<string, { outcome: EvalOutcome; expiresAt: number }>();
 
 let sequence = 0;
 
@@ -134,7 +156,22 @@ function settleJob(job: Job, outcome: EvalOutcome): void {
       cache.delete(oldest.value);
     }
   }
-  job.settle(outcome);
+  retainResult(job.id, outcome);
+}
+
+/** 完了した結果を jobId で引けるように置く（TTL と件数で掃除する） */
+function retainResult(id: string, outcome: EvalOutcome): void {
+  const now = Date.now();
+  for (const [key, entry] of results) {
+    if (entry.expiresAt > now) break; // 挿入順 = 期限順（TTL は一定）
+    results.delete(key);
+  }
+  results.set(id, { outcome, expiresAt: now + RESULT_TTL_MS });
+  while (results.size > RESULT_LIMIT) {
+    const oldest = results.keys().next();
+    if (oldest.done) break;
+    results.delete(oldest.value);
+  }
 }
 
 function armTimer(job: Job, ms: number, error: string): void {
@@ -147,35 +184,48 @@ function armTimer(job: Job, ms: number, error: string): void {
   job.timer = timer;
 }
 
+/** {@link startEvaluation} の返り */
+export type EvalStart =
+  /** その場で結果が出た（キャッシュ命中）。**1 往復で終わる** */
+  | { state: 'settled'; outcome: EvalOutcome }
+  /** 受け付けた。`jobId` で取りに来る */
+  | { state: 'pending'; jobId: string };
+
+/** {@link getEvaluationResult} の返り */
+export type EvalPoll =
+  | { state: 'pending' }
+  | { state: 'settled'; outcome: EvalOutcome }
+  /**
+   * その jobId を知らない。**まだ出ていない**のではなく**もう取れない**
+   * （TTL 切れ / server 再起動でメモリごと消えた）。
+   * 要求側は**同じ body を投げ直す**（キャッシュにあれば即答、無ければ改めてジョブになる）。
+   */
+  | { state: 'unknown' };
+
 /**
- * 評価を要求し、**結果（失敗を含む）が出るまで待つ**（long-poll。prd/12 §2.4）。
+ * 評価を要求する。**待たない**（決定 2026-08-29。prd/12 §2.4）。
  *
- * - キャッシュにあれば即座に返す
- * - 同じキーのジョブが既にあれば**相乗りする**（同じ局面を二重にエンジンへ流さない）
+ * - キャッシュにあれば即座に結果を返す（**棋譜をなぞっている間は 1 往復のまま**）
+ * - 同じキーのジョブが既にあれば**相乗りする**（同じ局面を二重にエンジンへ流さない）。
+ *   このとき返るのは**既存ジョブの id** なので、要求を投げ直しても仕事は増えない
  */
-export function requestEvaluation(request: EvalRequest): Promise<EvalOutcome> {
+export function startEvaluation(request: EvalRequest): EvalStart {
   const key = evaluationKey(request);
 
   const cached = cache.get(key);
-  if (cached) return Promise.resolve(cached);
+  if (cached) return { state: 'settled', outcome: cached };
 
   const existing = byKey.get(key);
-  if (existing) return existing.promise;
+  if (existing) return { state: 'pending', jobId: existing.id };
 
   if (jobs.size >= MAX_JOBS) throw new EvaluationQueueFullError();
 
-  let settle!: (outcome: EvalOutcome) => void;
-  const promise = new Promise<EvalOutcome>((resolve) => {
-    settle = resolve;
-  });
   const job: Job = {
     id: `eval-${++sequence}`,
     key,
     sfen: request.sfen,
     move: request.move,
     status: 'queued',
-    promise,
-    settle,
     // 期限は armTimer で入れる（queued と running で長さが違う）
     timer: null,
   };
@@ -186,7 +236,23 @@ export function requestEvaluation(request: EvalRequest): Promise<EvalOutcome> {
     envMs('POSITION_EVAL_QUEUE_TIMEOUT_MS', DEFAULT_QUEUE_TIMEOUT_MS),
     'worker が評価を取りに来ませんでした',
   );
-  return promise;
+  return { state: 'pending', jobId: job.id };
+}
+
+/**
+ * jobId で結果を取りに来る。
+ *
+ * 🔒 **`unknown` と `pending` を混ぜない。** 取り違えると、クライアントは永久に
+ * 出ない結果を待ち続ける（または、出ている結果を捨てて最初からやり直す）。
+ */
+export function getEvaluationResult(id: string): EvalPoll {
+  const done = results.get(id);
+  if (done) {
+    if (done.expiresAt > Date.now()) return { state: 'settled', outcome: done.outcome };
+    results.delete(id);
+    return { state: 'unknown' };
+  }
+  return jobs.has(id) ? { state: 'pending' } : { state: 'unknown' };
 }
 
 /**
@@ -209,6 +275,9 @@ export function claimEvaluationJob(): ClaimedEvalJob | null {
 
 /**
  * worker からの報告でジョブを完了させる（**失敗も完了**。prd/12 §2.4）。
+ *
+ * ⚠ 完了しても待っている HTTP 要求はいない。結果は `results` に置かれ、
+ * 要求側が jobId で取りに来る（{@link getEvaluationResult}）。
  *
  * @returns 反映したか（期限切れで既に落ちたジョブなら false）
  */
@@ -244,7 +313,7 @@ export function evaluationStats(): {
   return { queued, running, cached: cache.size };
 }
 
-/** テスト用。プロセス状態をリセットする（待っている要求は失敗で起こす） */
+/** テスト用。プロセス状態をリセットする（走っているジョブのタイマーも落とす） */
 export function resetEvaluations(): void {
   for (const job of [...jobs.values()]) {
     settleJob(job, { status: 'failed', error: 'reset' });
@@ -252,5 +321,6 @@ export function resetEvaluations(): void {
   jobs.clear();
   byKey.clear();
   cache.clear();
+  results.clear();
   sequence = 0;
 }

@@ -1,10 +1,12 @@
 /**
  * 検討局面の評価要求（prd/12 §2）。`POST /api/positions/evaluate` を叩く。
  *
- * 🔴 **結果が出るまで待つ long-poll**（既存解析にあれば数十 ms、エンジンなら数秒〜十数秒。
- * prd/12 §2.4）。押しっぱなしで待たせる以上、**中断できることが要件**なので
- * `AbortSignal` を必ず受ける。押し直したら前の要求を abort する（二重送信の抑止は
- * 呼び出し側の状態機械が持つ。前例は `routes/positions.tsx` の 4 状態）。
+ * 🔴 **POST は受け付けて即座に返り、結果は別のリクエストで取りに行く**（決定 2026-08-29。
+ * prd/12 §2.4）。既存解析・キャッシュにあれば POST の 1 往復で結果まで返る（数十 ms）。
+ * エンジンに回るときは `jobId` が返り、以後はポーリングで待つ（数秒〜十数秒）。
+ * 待たせる以上 **中断できることが要件**なので `AbortSignal` を必ず受ける。押し直したら
+ * 前の要求を abort する（二重送信の抑止は呼び出し側の状態機械が持つ。
+ * 前例は `routes/positions.tsx` の 4 状態）。
  *
  * 🔒 **既存解析の再利用判定（prd/12 §2.6）は server の 1 か所にある。**
  * ここに同じ判定を持たせない。web は応答の `source` を**そのまま出す**だけ
@@ -234,7 +236,9 @@ export function validateEvalTarget(
 
 /** 応答の形（Hono RPC の union をここで 1 度だけ受け止める） */
 interface EvaluateResponse {
-  status?: 'done' | 'failed';
+  status?: 'done' | 'failed' | 'pending';
+  /** `status: 'pending'` のとき、結果を取りに行くための ID */
+  jobId?: string;
   candidates?: EvalCandidateView[];
   source?: EvalSource;
   fallback?: boolean;
@@ -243,50 +247,288 @@ interface EvaluateResponse {
   violations?: PositionViolation[];
 }
 
-/** 評価を要求して結果を待つ。**例外は投げない**（すべて `EvalResult` に畳む） */
-export async function requestPositionEval(
+/**
+ * 結果を取りに行く間隔（ミリ秒）。
+ *
+ * エンジン評価は数秒〜十数秒かかる（prd/12 §2.4）。1 秒なら**表示の遅れが体感に乗らず**、
+ * 総予算いっぱい待っても要求は 240 本程度で済む。GET 側は server のメモリを引くだけなので、
+ * この頻度で叩いても仕事は増えない。⚠ これより短くしても**エンジンは速くならない**。
+ */
+export const EVAL_POLL_INTERVAL_MS = 1_000;
+
+/**
+ * 評価 1 回（＝ユーザーの 1 押し）に許す総時間（ミリ秒）。
+ *
+ * 🔒 **server 側の期限に合わせる**（`DEFAULT_QUEUE_TIMEOUT_MS` 120 秒 +
+ * `DEFAULT_RUN_TIMEOUT_MS` 120 秒 = 最大 240 秒）。server が諦めた後まで取りに行っても
+ * 意味が無いので、ここで切って素直に失敗を出す。
+ */
+export const EVAL_TOTAL_BUDGET_MS = 240_000;
+
+/**
+ * HTTP 1 本に許す時間（ミリ秒）。
+ *
+ * 🔴 **これは long-poll の待ち時間ではない。** POST も GET も server 側は即答するので、
+ * ここに引っかかるのは**通信が固まったとき**だけ。前段（リバースプロキシ / Cloudflare）の
+ * タイムアウトより十分短くしてあるが、**そもそも前段の期限に依存しない形にした**のが
+ * 非同期化の目的で、この値は固まった 1 本を捨てて次へ進むための保険。
+ */
+export const EVAL_REQUEST_TIMEOUT_MS = 20_000;
+
+/** `requestPositionEval` が使う HTTP の口（テストで差し替えられるように切り出す） */
+export interface EvalHttpResponse {
+  status: number;
+  ok: boolean;
+  json(): Promise<unknown>;
+}
+export interface EvalHttp {
+  /** 評価を要求する。結果が出ていれば結果、出ていなければ `pending` + `jobId` */
+  post(target: EvalTarget, signal: AbortSignal): Promise<EvalHttpResponse>;
+  /** `jobId` で結果を取りに行く */
+  get(jobId: string, signal: AbortSignal): Promise<EvalHttpResponse>;
+}
+
+/**
+ * 本文を JSON として読む。**読めなければ null**（例外にしない）。
+ *
+ * 🔴 **実機で踏んだ**: 前段が返すエラーページ（504 の HTML）で `res.json()` が落ちて
+ * `catch` に入り、**すべて「サーバーに接続できません」**になっていた。ステータスに応じた
+ * 文言（`サーバーエラー (504)`）が出ず、**原因が画面から分からなかった**。
+ * 非同期化で 504 の経路は細くなるが、前段が HTML を返すこと自体は無くならない。
+ *
+ * ⚠ **abort だけは投げ直す。** 本文の受信中に中断されたときまで「読み取れなかった」に
+ * 畳むと、呼び出し側の中断・自前の打ち切りと区別できなくなる。
+ */
+async function readEvalBody(res: EvalHttpResponse): Promise<EvaluateResponse | null> {
+  try {
+    return (await res.json()) as EvaluateResponse;
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    return null;
+  }
+}
+
+/** 応答 1 本の読み取り結果。`EvalResult` に畳めないものだけ別の形にする */
+type EvalStep =
+  | EvalResult
+  /** 受け付けられた（結果はまだ）。`jobId` で取りに行く */
+  | { kind: 'pending'; jobId: string | null }
+  /** その `jobId` はもう取れない（TTL 切れ / server 再起動）。**投げ直す** */
+  | { kind: 'gone' };
+
+/**
+ * 応答 1 本を読む。**本文のパースはステータス判定より後ろ**（上記の 504）。
+ *
+ * @param polling ポーリング（GET）の応答か。404 の意味が POST とは違う
+ */
+async function interpretEvalResponse(
+  res: EvalHttpResponse,
+  polling: boolean,
+): Promise<EvalStep> {
+  if (res.status === 400) {
+    const body = await readEvalBody(res);
+    return { kind: 'invalid', violations: body?.violations ?? [] };
+  }
+  if (res.status === 503) return { kind: 'busy' };
+  // 🔒 ポーリング中の 404 は「まだ出ていない」ではなく「**もう取れない**」。投げ直す
+  if (polling && res.status === 404) return { kind: 'gone' };
+  if (!res.ok && res.status !== 202) {
+    return { kind: 'failed', message: `サーバーエラー (${res.status})` };
+  }
+  const body = await readEvalBody(res);
+  if (body === null) {
+    return { kind: 'failed', message: '応答を読み取れませんでした' };
+  }
+  if (body.status === 'pending') {
+    return { kind: 'pending', jobId: body.jobId ?? null };
+  }
+  if (body.status === 'failed') {
+    return { kind: 'failed', message: body.error ?? '評価に失敗しました' };
+  }
+  return {
+    kind: 'done',
+    candidates: body.candidates ?? [],
+    source: body.source ?? 'engine',
+    fallback: body.fallback ?? false,
+    evaluatedAt: body.evaluatedAt ?? '',
+  };
+}
+
+/** HTTP 1 本の顛末。**「自分で打ち切った」を型で分ける** */
+type Attempt =
+  | { kind: 'step'; step: EvalStep }
+  /** 自前の期限で畳んだ（固まった 1 本） */
+  | { kind: 'cut-off' }
+  /** 呼び出し側が中断した */
+  | { kind: 'aborted' }
+  | { kind: 'network-error' };
+
+/**
+ * HTTP を 1 本投げて読む。
+ *
+ * 🔴 **`AbortError` かどうかで「誰が止めたか」を判断しない。** 自前の打ち切りも
+ * 呼び出し側の中断も本物の通信断も、区別できない形で例外になる（⚠ `AbortSignal.timeout()`
+ * に至っては `TimeoutError` を投げるので、素朴に使うと「サーバーに接続できません」になる）。
+ * **打ち切ったことをフラグで持つ**。
+ *
+ * 🔴 **`EvalRequestTracker.begin()` はここでは呼ばない。** `begin()` は `cancel()` 経由で
+ * 世代を進めるので、ポーリングのたびに呼ぶと**同時に走っている採点用の副次要求を自分で
+ * 捨ててしまう**。per-attempt の `AbortController` を内部に持ち、外から渡される `signal` は
+ * 「呼び出し側による中断」の伝播だけに使う。
+ */
+async function sendEval(
+  call: (signal: AbortSignal) => Promise<EvalHttpResponse>,
+  outer: AbortSignal,
+  polling: boolean,
+  timeoutMs: number,
+): Promise<Attempt> {
+  const controller = new AbortController();
+  /** **自分で打ち切ったか。** `AbortError` では区別できない */
+  let cutOff = false;
+  const forward = () => controller.abort();
+  outer.addEventListener('abort', forward, { once: true });
+  const timer = setTimeout(() => {
+    cutOff = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const res = await call(controller.signal);
+    return { kind: 'step', step: await interpretEvalResponse(res, polling) };
+  } catch (err) {
+    // 呼び出し側の中断が最優先。**画面にエラーを出さない**合図
+    if (outer.aborted) return { kind: 'aborted' };
+    if (cutOff) return { kind: 'cut-off' };
+    if (err instanceof Error && err.name === 'AbortError') return { kind: 'aborted' };
+    // ここまで来たものだけが**本物の通信断**
+    return { kind: 'network-error' };
+  } finally {
+    clearTimeout(timer);
+    outer.removeEventListener('abort', forward);
+  }
+}
+
+/** 中断できる待ち（abort されたら即座に起きる） */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * 評価を要求して結果を取りに行く。**例外は投げない**（すべて `EvalResult` に畳む）。
+ *
+ * 🔴 **POST は待たない**（決定 2026-08-29。prd/12 §2.4）。server はキャッシュ・棋譜解析から
+ * 引ければその場で結果を返し（**棋譜をなぞっている間は 1 往復のまま**）、エンジンに回すときは
+ * `jobId` だけを返す。以後は {@link EVAL_POLL_INTERVAL_MS} ごとに取りに行く。
+ * long-poll をやめたのは、**前段（リバースプロキシ / Cloudflare）のタイムアウトが server の
+ * 期限よりずっと短く、成功しているのに失敗して見える**事故が本番で起きたため。
+ * 前段の設定値は分からず将来も変わるので、**そこに依存しない形にした**。
+ *
+ * 🔒 **状態は `loading` のまま。** ポーリングは呼び出し側から見えない（返るのは最終結果
+ * だけ）ので、「評価しています」の表示は途切れない。
+ *
+ * ⚠ **ジョブが消えていたら（`gone`）投げ直す。** server のジョブとキャッシュはプロセスの
+ * メモリにあり、再起動・TTL 切れで消える（prd/12 §2.4）。投げ直せばキャッシュ命中なら即答、
+ * 無ければ改めてジョブになる——クライアントから見ると待ちが続くだけ。
+ */
+export async function requestPositionEvalWith(
+  http: EvalHttp,
   target: EvalTarget,
   signal: AbortSignal,
+  options: {
+    pollIntervalMs?: number;
+    totalBudgetMs?: number;
+    requestTimeoutMs?: number;
+    now?: () => number;
+    sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  } = {},
 ): Promise<EvalResult> {
-  try {
+  const pollIntervalMs = options.pollIntervalMs ?? EVAL_POLL_INTERVAL_MS;
+  const totalBudgetMs = options.totalBudgetMs ?? EVAL_TOTAL_BUDGET_MS;
+  const requestTimeoutMs = options.requestTimeoutMs ?? EVAL_REQUEST_TIMEOUT_MS;
+  const now = options.now ?? (() => Date.now());
+  const sleep = options.sleep ?? delay;
+  const startedAt = now();
+
+  /** null の間は POST（受け付けてもらう）、決まったら GET（取りに行く） */
+  let jobId: string | null = null;
+
+  for (;;) {
+    if (signal.aborted) return { kind: 'aborted' };
+    if (now() - startedAt >= totalBudgetMs) {
+      return { kind: 'failed', message: '評価が時間内に終わりませんでした' };
+    }
+
+    const id: string | null = jobId;
+    const attempt: Attempt =
+      id === null
+        ? await sendEval((s) => http.post(target, s), signal, false, requestTimeoutMs)
+        : await sendEval((s) => http.get(id, s), signal, true, requestTimeoutMs);
+
+    if (attempt.kind === 'aborted') return { kind: 'aborted' };
+    if (attempt.kind === 'network-error') {
+      return { kind: 'failed', message: 'サーバーに接続できません' };
+    }
+    if (attempt.kind === 'cut-off') {
+      // 固まった 1 本を捨てただけ。総予算が残っていればそのまま続ける
+      continue;
+    }
+
+    const step: EvalStep = attempt.step;
+    if (step.kind === 'gone') {
+      // ジョブが消えていた。**投げ直す**（キャッシュにあれば即答が返る）
+      jobId = null;
+      continue;
+    }
+    if (step.kind === 'pending') {
+      if (step.jobId === null && jobId === null) {
+        // 受け付けたと言われたのに取りに行く先が無い（server との食い違い）
+        return { kind: 'failed', message: '評価の受付 ID が返りませんでした' };
+      }
+      jobId = step.jobId ?? jobId;
+      await sleep(pollIntervalMs, signal);
+      continue;
+    }
+    return step;
+  }
+}
+
+const evalHttp: EvalHttp = {
+  post: async (target, signal) => {
     const res = await client.api.positions.evaluate.$post(
       { json: { sfen: target.sfen, move: target.move } },
       { init: { signal } },
     );
-    const body = (await res.json()) as unknown as EvaluateResponse;
+    return { status: res.status, ok: res.ok, json: () => res.json() as Promise<unknown> };
+  },
+  get: async (jobId, signal) => {
+    const res = await client.api.positions.evaluate[':jobId'].$get(
+      { param: { jobId } },
+      { init: { signal } },
+    );
+    return { status: res.status, ok: res.ok, json: () => res.json() as Promise<unknown> };
+  },
+};
 
-    if (res.status === 400) {
-      return { kind: 'invalid', violations: body.violations ?? [] };
-    }
-    if (res.status === 503) return { kind: 'busy' };
-    if (!res.ok) {
-      return { kind: 'failed', message: `サーバーエラー (${res.status})` };
-    }
-    if (body.status === 'failed') {
-      return { kind: 'failed', message: body.error ?? '評価に失敗しました' };
-    }
-    return {
-      kind: 'done',
-      candidates: body.candidates ?? [],
-      source: body.source ?? 'engine',
-      fallback: body.fallback ?? false,
-      evaluatedAt: body.evaluatedAt ?? '',
-    };
-  } catch (err) {
-    // abort は呼び出し側が意図して止めた合図。**画面にエラーを出さない**ので、
-    // 呼び出し側が捨てられるように専用の形で返す
-    if (err instanceof Error && err.name === 'AbortError') {
-      return { kind: 'aborted' };
-    }
-    return { kind: 'failed', message: 'サーバーに接続できません' };
-  }
+/** 評価を要求して結果を待つ。**例外は投げない**（すべて `EvalResult` に畳む） */
+export function requestPositionEval(
+  target: EvalTarget,
+  signal: AbortSignal,
+): Promise<EvalResult> {
+  return requestPositionEvalWith(evalHttp, target, signal);
 }
 
 /**
  * 走っている評価要求の**採否を決める**小さな番人。
  *
- * 🔴 **踏んだ不具合**（レビュー指摘 `OCL-AED22F46`）: 評価は long-poll で数秒〜十数秒
- * かかる（既存解析に無い局面は必ずエンジン経由）。その間に駒を動かすのはごく自然な操作だが、
+ * 🔴 **踏んだ不具合**（レビュー指摘 `OCL-AED22F46`）: 評価は数秒〜十数秒かかる
+ * （既存解析に無い局面は必ずエンジン経由。今はポーリングで待つ）。その間に駒を動かすのはごく自然な操作だが、
  * 要求を捨てていなかったため**旧局面の応答が、編集後の盤の評価として表示された**。
  * 検討ツールとしては値の意味が壊れる。クライアント検証で弾いた警告を、後から届いた
  * 旧要求の結果が上書きする経路もあった。

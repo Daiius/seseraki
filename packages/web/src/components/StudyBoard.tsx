@@ -16,13 +16,17 @@ import { BoardGrid, HandDisplay, PIECE_DISPLAY } from './BoardGrid';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import { formatTurnScore, moveDestination } from '../lib/usi';
 import {
+  canRedo,
   canTogglePromotion,
+  canUndo,
   createStudySession,
   currentState,
   isStudying,
   lastMove,
   namedEvalTarget,
   positionEvalTarget,
+  redo,
+  redoAll,
   resetStudy,
   tapBox,
   tapHand,
@@ -30,6 +34,7 @@ import {
   togglePromotion,
   toggleTurn,
   undo,
+  undoAll,
   type StudySession,
 } from '../lib/study';
 import {
@@ -52,19 +57,21 @@ import {
  *
  * 棋譜側の手数（`moveIndex`）は `ShogiBoard` の内部 state のまま**動かさない**。
  * ここが受け取るのは「棋譜側が今表示している局面」（`baseState`）だけで、
- * **それが変わったら検討を捨てて作り直す**。こうした理由:
+ * **それが変わったら検討を作り直す**。`moveIndex` を持ち上げると `ShogiBoard` の
+ * 分岐再生・グラフ連動まで一緒に動かすことになり、範囲が UI 全体の作り直しになるため。
  *
- * - prd/12 §3.1 が「検討中に手送りしたら検討を破棄して棋譜に戻る」と決めている。
- *   `baseState` の変化 = 手送り（◀ ▶ / スライダー / `←` `→` / 分岐の再生）なので、
- *   **破棄の条件が「起点が変わったか」の 1 つに畳まれる**。手送りの経路が増えても
- *   ここに手を入れずに済む。
- * - `moveIndex` を持ち上げると `ShogiBoard` の分岐再生・キーボード・グラフ連動まで
- *   一緒に動かすことになり、M2b の範囲が UI 全体の作り直しになる。
+ * ## 検討中はコントローラー行が検討の操作になる（決定・2026-08-28）
  *
- * ⚠ **キーボードの `←` `→` は `ShogiBoard` の window リスナが握ったまま**にする。
- * 押せば手送りが起き、`baseState` が変わり、上の規則で検討が捨てられる——これは
- * prd/12 §3.1 の定めどおりの挙動なので、ここで奪い返さない（奪うと「検討中は
- * キーボードで手送りできない」という書かれていない仕様になる）。
+ * 🔴 **かつての「検討中に手送りしたら検討を破棄する」は撤回された**（prd/12 §3.1）。
+ * 検討中は ◀ ▶ が undo / redo、≪ ≫ が起点 / 最後へ、スライダーは無効になる。
+ * 検討を抜けるのは「棋譜に戻る」を押したときだけ。
+ *
+ * そのため**コントローラー行の意味を切り替えるのはここ**（検討状態を持つ側）にある:
+ *
+ * - 情報行・コントローラー行は `children` を**関数**で受け取り（`StudyControls` を渡す）、
+ *   `ShogiBoard` 側がボタンの割り当てを切り替える。
+ * - キーボードの `←` `→` `Home` `End` も**この 1 か所**で受ける（`keyboardNav`）。
+ *   window のリスナを 2 つに割ると、どちらが先に走るかで挙動が決まってしまう。
  *
  * ## レイアウトを動かさないための構造（prd/05 §2.1 / PR #105 の教訓）
  *
@@ -72,11 +79,43 @@ import {
  * ◀ ▶ が下へずれて**連打中に指の下の要素が入れ替わる**。そのため情報行・コントローラー行を
  * `children` として受け取り、盤とパネルの間に挟んで描く。
  */
+
+/**
+ * 検討中にコントローラー行（◀ ▶ ≪ ≫ / スライダー）へ割り当てる操作。
+ * `studying` が false のときは棋譜の手送りのまま——切り替えは呼び出し側が行う。
+ */
+export interface StudyControls {
+  /** 検討中か（バッジと、コントローラー行の意味の切り替え） */
+  studying: boolean;
+  /** ◀ を押せるか（起点まで戻していれば false） */
+  canUndo: boolean;
+  /** ▶ を押せるか（最後まで進んでいれば false） */
+  canRedo: boolean;
+  /** ◀ 1 手戻す */
+  undo: () => void;
+  /** ▶ 戻したのをやり直す */
+  redo: () => void;
+  /** ≪ 検討の起点まで戻す（検討からは抜けない） */
+  undoAll: () => void;
+  /** ≫ 検討の最後まで進める */
+  redoAll: () => void;
+}
+
+/** 検討していないときのキーボード手送り（分岐移動を含む。`ShogiBoard` が渡す） */
+export interface KeyboardNav {
+  back: () => void;
+  forward: () => void;
+  first: () => void;
+  last: () => void;
+}
 export interface StudyBoardProps {
   /** 棋譜側が表示している局面 */
   baseState: BoardState;
   /**
-   * 棋譜側の表示局面を表す鍵。**これが変わったら検討を破棄する**（prd/12 §3.1）。
+   * 棋譜側の表示局面を表す鍵。**これが変わったら検討を作り直す**。
+   *
+   * ⚠ 検討中は手送りができない（コントローラーは undo / redo になる）ので、
+   * 通常これが変わるのは検討を始める前だけ。棋譜そのものが差し替わったときの保険でもある。
    *
    * 🔴 **`baseState` の同一性では判定できない。** 分岐（読み筋）を辿っている間の局面は
    * `applyMove` でレンダーごとに作り直されるため、参照比較だと**毎レンダー破棄**になり
@@ -88,8 +127,14 @@ export interface StudyBoardProps {
   flipped: boolean;
   sente?: string | null;
   gote?: string | null;
-  /** 情報行 + コントローラー行（盤とパネルの間に置く） */
-  children?: ReactNode;
+  /**
+   * 情報行 + コントローラー行（盤とパネルの間に置く）。
+   * **検討の操作（`StudyControls`）を受け取る関数**にしてある——検討中は
+   * コントローラー行の意味が undo / redo に変わるため（prd/12 §3.1）。
+   */
+  children?: (controls: StudyControls) => ReactNode;
+  /** 検討していないときのキーボード手送り。省略するとキーボードは何もしない */
+  keyboardNav?: KeyboardNav;
   /**
    * DEV ギャラリー用の初期状態（`/dev-gallery`）。通常の閲覧では渡さない。
    * 表示を固定して幅ごとの見え方を撮るための入口で、`ShogiBoard` の
@@ -126,6 +171,7 @@ export function StudyBoard({
   sente,
   gote,
   children,
+  keyboardNav,
   initialSession,
   initialEval,
 }: StudyBoardProps) {
@@ -244,7 +290,9 @@ export function StudyBoard({
    */
   const edit = (next: StudySession) => {
     setSession(next);
-    if (next.steps !== session.steps) {
+    // ⚠ **局面が変わったか**で見る。undo / redo は `steps` を作り直さず `cursor` だけ
+    //    動かすので、配列の同一性で見ると評価結果が古い局面のまま残る
+    if (currentState(next) !== currentState(session)) {
       trackerRef.current.cancel();
       // 🔴 **黙って消さない。** 一度でも評価に触れていれば `stale` にして
       //    「盤が変わった / もう一度評価できる」ことを言う（実機で「もう評価
@@ -272,6 +320,66 @@ export function StudyBoard({
    *
    * ⚠ 再生中は読み専用なので渡さない（渡さなければ表示専用に戻る）。
    */
+  /**
+   * コントローラー行（◀ ▶ ≪ ≫）へ渡す検討の操作（prd/12 §3.1・決定 2026-08-28）。
+   * ⚠ 咎め筋の再生中は読み専用なので、押せない状態にして手順を動かさせない。
+   */
+  const controls: StudyControls = {
+    studying,
+    canUndo: studying && !replaying && canUndo(session),
+    canRedo: studying && !replaying && canRedo(session),
+    undo: () => edit(undo(session)),
+    redo: () => edit(redo(session)),
+    undoAll: () => edit(undoAll(session)),
+    redoAll: () => edit(redoAll(session)),
+  };
+
+  /**
+   * キーボード操作（prd/05 §2.1 / prd/12 §3.1）。🔒 **window のリスナはここ 1 本に集める。**
+   * 2 つに割ると、検討中にどちらが先に走るかで挙動が決まってしまう。
+   *
+   * - 検討中: `←` `→` が undo / redo、`Home` `End` が検討の起点 / 最後へ
+   *   （コントローラー行の ◀ ▶ ≪ ≫ と同じ割り当て）
+   * - それ以外: 棋譜の手送りへ流す（分岐内の移動も `keyboardNav` が持つ）
+   *
+   * ⚠ 入力欄（スライダー・メモ等）にフォーカスがある間と修飾キー併用時はブラウザ既定に譲る。
+   */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement
+        && (target.isContentEditable
+          || target.tagName === 'INPUT'
+          || target.tagName === 'TEXTAREA'
+          || target.tagName === 'SELECT')
+      ) return;
+
+      const nav: KeyboardNav | null = controls.studying
+        ? {
+            back: () => { if (controls.canUndo) controls.undo(); },
+            forward: () => { if (controls.canRedo) controls.redo(); },
+            first: () => { if (controls.canUndo) controls.undoAll(); },
+            last: () => { if (controls.canRedo) controls.redoAll(); },
+          }
+        : keyboardNav ?? null;
+      if (nav === null) return;
+
+      switch (e.key) {
+        case 'ArrowLeft': nav.back(); break;
+        case 'ArrowRight': nav.forward(); break;
+        case 'Home': nav.first(); break;
+        case 'End': nav.last(); break;
+        default: return;
+      }
+      // ページのスクロールを起こさない
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [controls, keyboardNav]);
+
   const handClick = replaying
     ? undefined
     : (side: Side) => (kind: HandPieceKind) => edit(tapHand(session, side, kind));
@@ -312,7 +420,7 @@ export function StudyBoard({
         />
       </div>
 
-      {children}
+      {children?.(controls)}
 
       {/*
         操作パネル（段階的開示）。**駒を動かすまで出さない**ので、それまでの画面は
@@ -324,14 +432,11 @@ export function StudyBoard({
             <span className="badge badge-primary badge-sm">
               {replaying ? '読み筋を再生中' : '検討中'}
             </span>
-            <button
-              type="button"
-              className={clsx(TOUCH_BTN, 'btn-outline')}
-              onClick={() => edit(undo(session))}
-              disabled={replaying}
-            >
-              1手戻す
-            </button>
+            {/*
+              🔴 「1手戻す」ボタンは置かない。**◀ が undo を担う**（prd/12 §3.1・
+              決定 2026-08-28）。「検討中」バッジが出ていれば棋譜と違う状態にいることは
+              分かるので、専用ボタンを増やすより既存の操作子に意味を持たせる。
+            */}
             <button
               type="button"
               className={clsx(TOUCH_BTN, 'btn-ghost')}

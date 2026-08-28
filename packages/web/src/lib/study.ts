@@ -70,22 +70,29 @@ export interface StudyStep {
 }
 
 /**
- * 検討セッション。**一本道 + undo**（prd/12 §3.2。分岐ツリーは持たない）。
+ * 検討セッション。**一本道 + undo / redo**（prd/12 §3.2。分岐ツリーは持たない）。
  * セッション内限定で保存しない。
+ *
+ * 🔴 **undo スタックではなく「手順の配列 + 現在位置」で持つ**（決定・2026-08-28）。
+ * 検討中は ◀ ▶ が undo / redo に変わる（prd/12 §3.1）ので、**戻した先から
+ * やり直せる**必要がある。捨ててしまう undo スタックでは redo が作れない。
  */
 export interface StudySession {
+  /** 手順の全体。`steps[0]` が起点で、`cursor` より後ろは「戻したぶん」 */
   steps: StudyStep[];
+  /** 今どこを見ているか（0 = 起点）。`steps.length - 1` 未満なら redo できる */
+  cursor: number;
   selection: StudySelection | null;
 }
 
 /** 棋譜の局面を起点にセッションを作る */
 export function createStudySession(base: BoardState): StudySession {
-  return { steps: [{ state: base, move: null }], selection: null };
+  return { steps: [{ state: base, move: null }], cursor: 0, selection: null };
 }
 
 /** 現在の検討局面 */
 export function currentState(session: StudySession): BoardState {
-  return session.steps[session.steps.length - 1].state;
+  return session.steps[session.cursor].state;
 }
 
 /** 起点（棋譜の局面） */
@@ -96,14 +103,29 @@ export function baseState(session: StudySession): BoardState {
 /**
  * 検討が始まっているか（＝1 段でも進めたか）。
  * **これが true になって初めて操作パネルを出す**（段階的開示。prd/12 §3.1）。
+ *
+ * 🔴 **`cursor` では判定しない。** 起点まで戻しても検討からは抜けない
+ * （prd/12 §3.1・決定 2026-08-28）——抜けると同じ ◀ が 1 回のタップで
+ * 「undo」から「棋譜の手送り」へ意味を変えることになり分かりにくい。
+ * 抜けるのは明示的に「棋譜に戻る」を押したときだけ。
  */
 export function isStudying(session: StudySession): boolean {
   return session.steps.length > 1;
 }
 
-/** 直前の段の盤上の手（無ければ null） */
+/** 現在位置の段に至った盤上の手（無ければ null） */
 export function lastMove(session: StudySession): string | null {
-  return session.steps[session.steps.length - 1].move;
+  return session.steps[session.cursor].move;
+}
+
+/** 1 手戻せるか（◀ の有効・無効） */
+export function canUndo(session: StudySession): boolean {
+  return session.cursor > 0;
+}
+
+/** やり直せるか（▶ の有効・無効） */
+export function canRedo(session: StudySession): boolean {
+  return session.cursor < session.steps.length - 1;
 }
 
 /* ---------- USI 座標 ---------- */
@@ -137,6 +159,9 @@ function sameSquare(a: SquareRef, b: SquareRef): boolean {
 /**
  * 1 段進める。**局面が変わらなかったら段を積まない**（`position-edit` の関数は
  * 不正な入力で state をそのまま返すので、同一性で「効かなかった」を判定できる）。
+ *
+ * 🔴 **戻した先で新しい手を指したら、その先の redo 分は捨てる**（prd/12 §3.2）。
+ * 手順は一本道のままにする——残すと分岐ツリーになり、後続候補に回した話に踏み込む。
  */
 function push(
   session: StudySession,
@@ -144,7 +169,9 @@ function push(
   move: string | null,
 ): StudySession {
   if (state === currentState(session)) return { ...session, selection: null };
-  return { steps: [...session.steps, { state, move }], selection: null };
+  const steps = session.steps.slice(0, session.cursor + 1);
+  steps.push({ state, move });
+  return { steps, cursor: steps.length - 1, selection: null };
 }
 
 /**
@@ -289,10 +316,34 @@ export function toggleTurn(session: StudySession): StudySession {
   return push(session, toggleSideToMove(currentState(session)), null);
 }
 
-/** 1 段戻す。起点までしか戻らない（起点で押しても何も起きない） */
+/**
+ * 1 段戻す（◀）。**起点までしか戻らない**（起点で押しても何も起きない）。
+ * ⚠ 手順そのものは捨てない——戻したぶんは `redo` でやり直せる。
+ */
 export function undo(session: StudySession): StudySession {
-  if (session.steps.length <= 1) return { ...session, selection: null };
-  return { steps: session.steps.slice(0, -1), selection: null };
+  if (!canUndo(session)) return { ...session, selection: null };
+  return { ...session, cursor: session.cursor - 1, selection: null };
+}
+
+/** 戻したぶんを 1 段やり直す（▶） */
+export function redo(session: StudySession): StudySession {
+  if (!canRedo(session)) return { ...session, selection: null };
+  return { ...session, cursor: session.cursor + 1, selection: null };
+}
+
+/**
+ * 検討の起点まで戻す（≪）。**検討からは抜けない**（手順は残り、▶ でやり直せる）。
+ * 棋譜へ戻るのは `resetStudy`（「棋譜に戻る」ボタン）だけ。
+ */
+export function undoAll(session: StudySession): StudySession {
+  if (!canUndo(session)) return { ...session, selection: null };
+  return { ...session, cursor: 0, selection: null };
+}
+
+/** 検討の最後まで進める（≫） */
+export function redoAll(session: StudySession): StudySession {
+  if (!canRedo(session)) return { ...session, selection: null };
+  return { ...session, cursor: session.steps.length - 1, selection: null };
 }
 
 /** 棋譜の局面へ戻す（検討を捨てる） */
@@ -315,17 +366,18 @@ export function canTogglePromotion(session: StudySession): boolean {
 export function togglePromotion(session: StudySession): StudySession {
   const retry = promotionRetry(session);
   if (!retry) return session;
-  const steps = session.steps.slice(0, -1);
+  // 現在位置の段を差し替える。⚠ その先の redo 分は元の手から続いていたので捨てる
+  const steps = session.steps.slice(0, session.cursor);
   steps.push({ state: retry.state, move: retry.move });
-  return { steps, selection: null };
+  return { steps, cursor: steps.length - 1, selection: null };
 }
 
 function promotionRetry(
   session: StudySession,
 ): { state: BoardState; move: string } | null {
-  if (session.steps.length < 2) return null;
-  const last = session.steps[session.steps.length - 1];
-  const prevStep = session.steps[session.steps.length - 2];
+  if (session.cursor < 1) return null;
+  const last = session.steps[session.cursor];
+  const prevStep = session.steps[session.cursor - 1];
   const move = last.move;
   // 駒打ちは成って打てない（`P*5e` に `+` は付かない）
   if (!move || !/^[1-9][a-i][1-9][a-i]\+?$/.test(move)) return null;
@@ -394,8 +446,8 @@ export function positionEvalTarget(session: StudySession): EvalTarget {
  * 直前の段が編集（駒箱・持ち駒・手番）なら名指しできないので null を返す。
  */
 export function namedEvalTarget(session: StudySession): EvalTarget | null {
-  if (session.steps.length < 2) return null;
+  if (session.cursor < 1) return null;
   const move = lastMove(session);
   if (!move) return null;
-  return { sfen: positionSfen(session.steps[session.steps.length - 2].state), move };
+  return { sfen: positionSfen(session.steps[session.cursor - 1].state), move };
 }

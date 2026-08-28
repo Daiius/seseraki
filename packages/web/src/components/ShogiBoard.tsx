@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useRef, useState, type ReactNode, type Ref } from 'react';
 import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 import {
@@ -15,6 +15,8 @@ import {
   toSenteEval,
 } from '../lib/usi';
 import { StudyBoard } from './StudyBoard';
+import { BoardControls } from './BoardControls';
+import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import {
   computeMoveLosses,
   formatLoss,
@@ -35,34 +37,9 @@ const ICON_PROPS = {
   className: 'size-5',
 } as const;
 
-const IconChevronDoubleLeft = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
-  </svg>
-);
-const IconChevronLeft = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-  </svg>
-);
-const IconChevronRight = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-  </svg>
-);
-const IconChevronDoubleRight = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
-  </svg>
-);
 const IconSearch = () => (
   <svg {...ICON_PROPS} className="size-4 md:hidden">
     <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m2.1-5.4a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z" />
-  </svg>
-);
-const IconFlip = () => (
-  <svg {...ICON_PROPS}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
   </svg>
 );
 
@@ -237,54 +214,27 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     }
   };
 
-  // キーボード操作: ←→ で 1 手戻る/進む、Home/End で最初/最後へ。
-  // 分岐中の ←→ は分岐内を移動し、先頭で戻ると本筋へ復帰する（Home/End は常に本筋）。
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      // 入力欄（スライダー含む）にフォーカスがあるときはブラウザ既定の操作に任せる
-      const target = e.target;
-      if (
-        target instanceof HTMLElement
-        && (target.isContentEditable
-          || target.tagName === 'INPUT'
-          || target.tagName === 'TEXTAREA'
-          || target.tagName === 'SELECT')
-      ) return;
-
-      switch (e.key) {
-        case 'ArrowLeft':
-          if (branchActive && branchRank !== null) onBranchBack(branchRank);
-          else navigateMain(Math.max(0, moveIndex - 1));
-          break;
-        case 'ArrowRight':
-          if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
-          else navigateMain(Math.min(totalMoves, moveIndex + 1));
-          break;
-        case 'Home':
-          navigateMain(0);
-          break;
-        case 'End':
-          navigateMain(totalMoves);
-          break;
-        default:
-          return;
-      }
-      // ページのスクロールを起こさない
-      e.preventDefault();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    moveIndex,
-    totalMoves,
-    branchActive,
-    branchRank,
-    branchPv,
-    navigateMain,
-    onBranchForward,
-    onBranchBack,
-  ]);
+  /**
+   * キーボードでの棋譜の手送り（prd/05 §2.1）。`←` `→` で 1 手戻る / 進む、
+   * `Home` `End` で最初 / 最後へ。分岐中の `←` `→` は分岐内を移動し、
+   * 先頭で戻ると本筋へ復帰する（`Home` `End` は常に本筋）。
+   *
+   * 🔴 **window のリスナは `StudyBoard` が 1 本だけ張る**（prd/12 §3.1・決定 2026-08-28）。
+   * 検討中は同じキーが undo / redo になるため、切り替えは検討状態を持つ側に置く。
+   * ここは「検討していないときに何をするか」だけを渡す。
+   */
+  const keyboardNav = {
+    back: () => {
+      if (branchActive && branchRank !== null) onBranchBack(branchRank);
+      else navigateMain(Math.max(0, moveIndex - 1));
+    },
+    forward: () => {
+      if (branchActive && branchRank !== null && branchPv) onBranchForward(branchRank, branchPv);
+      else navigateMain(Math.min(totalMoves, moveIndex + 1));
+    },
+    first: () => navigateMain(0),
+    last: () => navigateMain(totalMoves),
+  };
 
   return (
     <div className="flex flex-col">
@@ -296,21 +246,26 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         （決定・2026-08-28。prd/05 §2.1 / prd/12 §3.1）。手送りは下のコントローラー行と
         キーボードに一本化してある。
 
-        検討中の状態は `StudyBoard` が持つ。**表示局面（`displayState`）が変われば
-        検討は捨てられる**ので、手送りとの関係はここに書かずに済む。
-        情報行とコントローラー行を `children` として渡し、操作パネルが**それより下**に
-        出るようにしている（パネルが現れても ◀ ▶ の位置が動かない。prd/05 §2.1）。
+        検討中の状態は `StudyBoard` が持つ。情報行とコントローラー行を `children` として
+        渡し、操作パネルが**それより下**に出るようにしている（パネルが現れても ◀ ▶ の
+        位置が動かない。prd/05 §2.1）。
+        🔴 **検討中はコントローラー行が検討の操作になる**（◀ ▶ = undo / redo・
+        ≪ ≫ = 起点 / 最後へ・スライダーは無効。prd/12 §3.1・決定 2026-08-28）。
+        割り当ての切り替えに使う `study` は `StudyBoard` から受け取る。
       */}
       <StudyBoard
         baseState={displayState}
         // 「今どこを見ているか」。分岐中の局面はレンダーごとに作り直されるので、
-        // 局面オブジェクトの同一性ではなくこの鍵で破棄を判定させる
+        // 局面オブジェクトの同一性ではなくこの鍵で作り直しを判定させる
         baseKey={`${moveIndex}:${branchRank ?? '-'}:${branchDepth}`}
         baseLastMoveTo={lastMoveTo}
         flipped={flipped}
         sente={sente}
         gote={gote}
+        keyboardNav={keyboardNav}
       >
+      {(study) => (
+      <>
 
       {/*
         コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ
@@ -376,56 +331,16 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         </div>
       </div>
 
-      {/* コントローラー行 */}
-      <div className="flex items-center gap-2 max-w-3xl no-tap-select">
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => goToMain(0)}
-          disabled={!branchActive && moveIndex === 0}
-          title="最初へ (Home)"
-        >
-          <IconChevronDoubleLeft />
-        </button>
-        <button
-          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
-          onClick={() => goToMain(Math.max(0, moveIndex - 1))}
-          disabled={!branchActive && moveIndex === 0}
-          title="戻る (←)"
-        >
-          <IconChevronLeft />
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={totalMoves}
-          value={moveIndex}
-          onChange={(e) => goToMain(Number(e.target.value))}
-          className="range range-sm flex-1 hidden md:block"
-        />
-        <button
-          className="btn btn-outline flex-1 md:btn-sm md:flex-none"
-          onClick={() => goToMain(Math.min(totalMoves, moveIndex + 1))}
-          disabled={!branchActive && moveIndex === totalMoves}
-          title="進む (→)"
-        >
-          <IconChevronRight />
-        </button>
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => goToMain(totalMoves)}
-          disabled={!branchActive && moveIndex === totalMoves}
-          title="最後へ (End)"
-        >
-          <IconChevronDoubleRight />
-        </button>
-        <button
-          className="btn btn-outline md:btn-sm"
-          onClick={() => setFlipped(!flipped)}
-          title="盤面反転"
-        >
-          <IconFlip />
-        </button>
-      </div>
+      <BoardControls
+        study={study}
+        moveIndex={moveIndex}
+        totalMoves={totalMoves}
+        branchActive={branchActive}
+        onGoTo={goToMain}
+        onFlip={() => setFlipped(!flipped)}
+      />
+      </>
+      )}
       </StudyBoard>
       </div>
 
@@ -614,7 +529,7 @@ function CandidateList({
                       disabled={!isActiveBranch}
                       title="分岐を戻る"
                     >
-                      <IconChevronLeft />
+                      <ChevronLeftIcon />
                     </button>
                     <span className="text-sm font-mono text-base-content/60 w-12 text-center">
                       {isActiveBranch ? branchDepth : 0}/{pvLen}
@@ -625,7 +540,7 @@ function CandidateList({
                       disabled={isActiveBranch && branchDepth >= pvLen}
                       title="分岐を進む"
                     >
-                      <IconChevronRight />
+                      <ChevronRightIcon />
                     </button>
                   </div>
                 </>

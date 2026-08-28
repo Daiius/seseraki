@@ -296,3 +296,60 @@ export function ChevronRightIcon({ className = 'size-5' }: IconProps) {
     </svg>
   );
 }
+
+/** 最初へ（chevron-double-left）。棋譜のコントローラー行で使う */
+export function ChevronDoubleLeftIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+    </svg>
+  );
+}
+
+/** 最後へ（chevron-double-right）。棋譜のコントローラー行で使う */
+export function ChevronDoubleRightIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 4.5l7.5 7.5-7.5 7.5m-6-15l7.5 7.5-7.5 7.5" />
+    </svg>
+  );
+}
+
+/** 盤面反転（上下の矢印） */
+export function FlipIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
+    </svg>
+  );
+}

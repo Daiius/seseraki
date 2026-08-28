@@ -9,13 +9,17 @@ import {
 import {
   applyStudyMoves,
   baseState,
+  canRedo,
   canTogglePromotion,
+  canUndo,
   createStudySession,
   currentState,
   isStudying,
   lastMove,
   namedEvalTarget,
   positionEvalTarget,
+  redo,
+  redoAll,
   resetStudy,
   squareOfUsi,
   tapBox,
@@ -24,6 +28,7 @@ import {
   togglePromotion,
   toggleTurn,
   undo,
+  undoAll,
   usiDropOf,
   usiMoveOf,
   usiSquare,
@@ -226,20 +231,84 @@ describe('持ち駒と駒箱', () => {
   });
 });
 
-describe('undo と破棄', () => {
+/**
+ * undo / redo（prd/12 §3.1・決定 2026-08-28）。
+ *
+ * 🔴 検討中は既存のコントローラー行（◀ ▶ ≪ ≫）が検討の操作になる。**専用ボタンを
+ * 増やすより既存の操作子に意味を持たせる**というユーザ判断で、
+ * 「検討中に手送りしたら検討を破棄する」は撤回された。
+ */
+describe('undo と redo', () => {
   it('1 段ずつ戻り、起点より手前へは行かない', () => {
     const s = applyStudyMoves(initial, ['7g7f', '3c3d']);
-    expect(s.steps.length).toBe(3);
+    expect(s.cursor).toBe(2);
     const back = undo(undo(undo(s)));
-    expect(back.steps.length).toBe(1);
-    expect(isStudying(back)).toBe(false);
+    expect(back.cursor).toBe(0);
     expect(positionSfen(currentState(back))).toBe(positionSfen(initial));
   });
 
-  it('「棋譜に戻る」で起点まで一息に戻る', () => {
+  it('🔴 起点まで戻しても検討からは抜けない（◀ が無効になるだけ）', () => {
+    // 抜けると同じ ◀ が 1 回のタップで「undo」から「棋譜の手送り」へ意味を変える
+    const back = undoAll(applyStudyMoves(initial, ['7g7f', '3c3d']));
+    expect(back.cursor).toBe(0);
+    expect(isStudying(back)).toBe(true);
+    expect(canUndo(back)).toBe(false);
+    expect(canRedo(back)).toBe(true);
+  });
+
+  it('戻したぶんは redo でやり直せる（手順は捨てない）', () => {
+    const s = applyStudyMoves(initial, ['7g7f', '3c3d']);
+    const back = undo(undo(s));
+    expect(canRedo(back)).toBe(true);
+    const again = redo(redo(back));
+    expect(again.cursor).toBe(2);
+    expect(positionSfen(currentState(again))).toBe(positionSfen(currentState(s)));
+    expect(canRedo(again)).toBe(false);
+  });
+
+  it('≪ ≫ は起点と最後へ一息に動く', () => {
+    const s = applyStudyMoves(initial, ['7g7f', '3c3d', '2g2f']);
+    expect(undoAll(s).cursor).toBe(0);
+    expect(redoAll(undoAll(s)).cursor).toBe(3);
+    // 端で押しても何も起きない（局面は動かない）
+    expect(currentState(redoAll(s))).toBe(currentState(s));
+    expect(currentState(undoAll(undoAll(s)))).toBe(currentState(undoAll(s)));
+  });
+
+  it('🔴 戻した先で新しい手を指すと、その先の redo 分は捨てる（一本道を保つ）', () => {
+    const s = applyStudyMoves(initial, ['7g7f', '3c3d']);
+    let back = undo(s); // ▲７六歩まで戻す
+    expect(canRedo(back)).toBe(true);
+    back = tapSquare(back, sq('8c')); // 別の手を指す
+    back = tapSquare(back, sq('8d'));
+    expect(lastMove(back)).toBe('8c8d');
+    expect(back.steps.length).toBe(3);
+    expect(back.cursor).toBe(2);
+    // △３四歩は消えた（分岐ツリーにはしない。prd/12 §3.2）
+    expect(canRedo(back)).toBe(false);
+  });
+
+  it('成 / 不成の指し直しも、その先の redo 分を捨てる', () => {
+    const s = applyStudyMoves(initial, ['8h2b', '3a2b']);
+    const back = togglePromotion(undo(s));
+    expect(lastMove(back)).toBe('8h2b+');
+    expect(canRedo(back)).toBe(false);
+    expect(back.steps.length).toBe(2);
+  });
+
+  it('「棋譜に戻る」だけが検討の出口', () => {
     const s = resetStudy(applyStudyMoves(initial, ['7g7f', '3c3d', '2g2f']));
     expect(isStudying(s)).toBe(false);
     expect(currentState(s)).toBe(initial);
+  });
+
+  it('戻した位置から評価できる（名指しは戻した先の手が対象）', () => {
+    const s = undo(applyStudyMoves(initial, ['7g7f', '3c3d']));
+    expect(namedEvalTarget(s)).toEqual({
+      sfen: positionSfen(initial),
+      move: '7g7f',
+    });
+    expect(positionEvalTarget(s).sfen).toBe(positionSfen(currentState(s)));
   });
 });
 

@@ -7,6 +7,7 @@ import { CopyButton } from '../components/CopyButton';
 import { ClipboardIcon } from '../components/icons';
 import { ShogiBoard } from '../components/ShogiBoard';
 import { StudyBoard } from '../components/StudyBoard';
+import { BoardControls } from '../components/BoardControls';
 import type { EvalState } from '../lib/positionEval';
 import { DEFAULT_THRESHOLDS } from '../lib/cpl';
 import {
@@ -15,6 +16,8 @@ import {
   squareOfUsi,
   tapHand,
   tapSquare,
+  undo,
+  undoAll,
 } from '../lib/study';
 
 /**
@@ -123,6 +126,9 @@ function KifuCase({
  * 盤面はここでもハードコードせず、`buildPositions` で作った局面に**実際のタップと同じ経路**
  * （`applyStudyMoves` / `tapSquare`）を通して状態を作る。操作モデルを変えたらここも
  * 一緒に壊れるので、ギャラリーが嘘をつかない。
+ *
+ * コントローラー行も**実物と同じ `BoardControls`** を出す（prd/12 §3.1 で検討中は
+ * ◀ ▶ が undo / redo になるので、押せる・押せないの見え方をここで確かめる）。
  */
 function StudyCase({
   session,
@@ -142,7 +148,18 @@ function StudyCase({
         gote="後手"
         initialSession={session}
         initialEval={evalState}
-      />
+      >
+        {(study) => (
+          <BoardControls
+            study={study}
+            moveIndex={0}
+            totalMoves={KIFU_MOVES.length}
+            branchActive={false}
+            onGoTo={() => {}}
+            onFlip={() => {}}
+          />
+        )}
+      </StudyBoard>
     </Phone>
   );
 }
@@ -246,6 +263,24 @@ function Gallery() {
         {/* 7七の歩を選んだ状態。**動かすまでは今までの画面と同じ**＝パネルが無い */}
         <StudyCase
           session={tapSquare(createStudySession(KIFU_POSITIONS[0]), squareOfUsi('7g'))}
+        />
+      </Case>
+
+      {/*
+        🔴 検討中はコントローラー行が検討の操作になる（prd/12 §3.1・決定 2026-08-28）。
+        ◀ ▶ = undo / redo、≪ ≫ = 検討の起点 / 最後へ、スライダーは無効。
+        3 手進めて 1 手戻した状態なので、**◀ も ▶ も押せる**（両端でないこと）を見る。
+      */}
+      <Case title="検討・一部 undo した状態（◀ ▶ が undo / redo）">
+        <StudyCase
+          session={undo(applyStudyMoves(KIFU_POSITIONS[0], ['2g2f', '8c8d', '2f2e']))}
+        />
+      </Case>
+
+      <Case title="検討・起点まで戻した状態（◀ は無効・検討は続く）">
+        {/* 起点まで戻しても検討からは抜けない（「検討中」バッジは出たまま） */}
+        <StudyCase
+          session={undoAll(applyStudyMoves(KIFU_POSITIONS[0], ['2g2f', '8c8d']))}
         />
       </Case>
 

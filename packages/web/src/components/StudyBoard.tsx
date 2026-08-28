@@ -319,10 +319,14 @@ export function StudyBoard({
         ? gradeTarget
         : null;
 
-    const [result, gradeResult] = await Promise.all([
-      requestPositionEval(target, signal),
-      grading ? requestPositionEval(grading.target, signal) : Promise.resolve(null),
-    ]);
+    // 🔴 **2 本は同時に投げるが、待ち方は分ける**（レビュー指摘 `OCL-BE4CEA52`）。
+    //    `Promise.all` で揃えて待つと、**主が返っていても副次が返るまで画面が `loading` のまま**に
+    //    なる。副次はキュー待ち・長い探索で主より大きく遅れうるので、
+    //    「副次が失敗・busy・中断でも主は必ず出す」という要求を満たせない（永久に出ない場合すらある）。
+    //    → **主が返った時点で表示し、採点は後から追記する。**
+    const gradePromise = grading ? requestPositionEval(grading.target, signal) : null;
+
+    const result = await requestPositionEval(target, signal);
     // 🔒 待っている間に局面が変わっていたら**この結果は今の盤のものではない**
     if (!trackerRef.current.accepts(token)) return;
     switch (result.kind) {
@@ -338,24 +342,32 @@ export function StudyBoard({
         setEvalState({ kind: 'error', message: result.message });
         return;
       case 'done':
-        setEvalState({
-          kind: 'done',
-          base: from,
-          candidates: result.candidates,
-          source: result.source,
-          // ⚠ 採点は**取れたときだけ**。1 手前が失敗・busy・abort なら null
-          grade:
-            grading !== null && gradeResult?.kind === 'done'
-              ? gradeLastMove({
-                  from: grading.target.from,
-                  move: grading.move,
-                  current: headlineCandidate(result.candidates),
-                  previousCandidates: gradeResult.candidates,
-                  previousSource: gradeResult.source,
-                })
-              : null,
-        });
+        break;
     }
+
+    // 主の結果はここで出す（採点はまだ無い）
+    setEvalState({
+      kind: 'done',
+      base: from,
+      candidates: result.candidates,
+      source: result.source,
+      grade: null,
+    });
+
+    if (grading === null || gradePromise === null) return;
+    const gradeResult = await gradePromise;
+    // ⚠ 採点は**取れたときだけ**。1 手前が失敗・busy・abort なら主の結果を出したまま何もしない
+    if (!trackerRef.current.accepts(token) || gradeResult.kind !== 'done') return;
+    const grade = gradeLastMove({
+      from: grading.target.from,
+      move: grading.move,
+      current: headlineCandidate(result.candidates),
+      previousCandidates: gradeResult.candidates,
+      previousSource: gradeResult.source,
+    });
+    // 🔒 **今出ている主の結果に足すだけ**にする。`kind` を見て、待っている間に別の状態
+    //    （`stale` / 新しい評価）へ移っていたら触らない——token の判定と二重の守り
+    setEvalState((prev) => (prev.kind === 'done' ? { ...prev, grade } : prev));
   };
 
   /**

@@ -6,7 +6,8 @@ import { AnalyzingAlert } from '../components/AnalyzingAlert';
 import { CopyButton } from '../components/CopyButton';
 import { ClipboardIcon } from '../components/icons';
 import { ShogiBoard } from '../components/ShogiBoard';
-import { StudyBoard, type EvalState } from '../components/StudyBoard';
+import { StudyBoard } from '../components/StudyBoard';
+import type { EvalState } from '../lib/positionEval';
 import { DEFAULT_THRESHOLDS } from '../lib/cpl';
 import {
   applyStudyMoves,
@@ -286,6 +287,19 @@ function Gallery() {
             source: 'kifu',
             fallback: true,
           }}
+        />
+      </Case>
+
+      <Case title="検討・評価後に局面を変えた（値は消し、手がかりだけ残す）">
+        {/*
+          🔴 実機で分かりにくかった状態。評価結果が出ている盤で駒を動かすと、
+          以前は結果ブロックが**黙って消える**だけで「もう評価できないのか」と読めた。
+          値そのものは出さず（別の局面の値を混ぜない。prd/12 §2.6）、
+          「もう一度評価できる」ことだけを結果ブロックのあった場所に出す。
+        */}
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f', '8c8d'])}
+          evalState={{ kind: 'stale' }}
         />
       </Case>
 

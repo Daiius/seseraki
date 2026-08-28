@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { EvalRequestTracker } from './positionEval';
+import { createInitialState } from 'shared';
+import {
+  EvalRequestTracker,
+  evalStateAfterPositionChange,
+  type EvalState,
+} from './positionEval';
 
 /**
  * 評価要求の採否（レビュー指摘 `OCL-AED22F46` の回帰テスト）。
@@ -88,5 +93,55 @@ describe('EvalRequestTracker', () => {
     await inFlight;
 
     expect(shown).toBe('この局面はエンジンに渡せない');
+  });
+});
+
+/**
+ * 評価後に局面が変わったときの見え方。
+ *
+ * 🔴 **実機で踏んだ分かりにくさ**: 評価結果が出ている盤で駒を動かすと、結果ブロックが
+ * 黙って消えるだけだった。機能としては押し直せるのに、**次に何ができるのかの手がかりが
+ * 無く**「もう評価できないのか」と読めてしまった。
+ *
+ * 🔒 値そのものは残さない（別の局面の値を画面に置くのは prd/12 §2.6 に反する）。
+ * 残すのは「もう一度評価できる」という手がかりだけなので、状態としては
+ * `idle`（まだ何もしていない）と `stale`（評価したが盤が変わった）を分ける。
+ */
+describe('evalStateAfterPositionChange', () => {
+  it('評価結果が出ていたら stale になる（値は消える・手がかりは残る）', () => {
+    const done: EvalState = {
+      kind: 'done',
+      mode: 'position',
+      base: createInitialState(),
+      candidates: [
+        { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 42, pv: ['7g7f'], depth: 20 },
+      ],
+      source: 'engine',
+      fallback: false,
+    };
+    const next = evalStateAfterPositionChange(done);
+    expect(next).toEqual({ kind: 'stale' });
+    // 🔒 スコア・候補手・読み筋は一切引き継がない
+    expect(next).not.toHaveProperty('candidates');
+  });
+
+  it('まだ一度も評価していなければ何も出さないまま（idle のまま）', () => {
+    const idle: EvalState = { kind: 'idle' };
+    // 同じオブジェクトを返す（無駄な再描画を作らない）
+    expect(evalStateAfterPositionChange(idle)).toBe(idle);
+  });
+
+  it('stale のまま局面を変え続けても stale（同じオブジェクトを返す）', () => {
+    const stale: EvalState = { kind: 'stale' };
+    expect(evalStateAfterPositionChange(stale)).toBe(stale);
+  });
+
+  it.each<[string, EvalState]>([
+    ['loading', { kind: 'loading', mode: 'move' }],
+    ['invalid', { kind: 'invalid', violations: [] }],
+    ['busy', { kind: 'busy' }],
+    ['error', { kind: 'error', message: 'サーバーに接続できません' }],
+  ])('%s も「評価しようとした」状態なので stale になる', (_label, state) => {
+    expect(evalStateAfterPositionChange(state)).toEqual({ kind: 'stale' });
   });
 });

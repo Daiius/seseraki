@@ -9,7 +9,6 @@ import {
   type BoardState,
   type HandPieceKind,
   type PieceKind,
-  type PositionViolation,
   type Side,
   type SquareRef,
 } from 'shared';
@@ -35,10 +34,11 @@ import {
 } from '../lib/study';
 import {
   EvalRequestTracker,
+  evalStateAfterPositionChange,
   requestPositionEval,
   validateEvalTarget,
-  type EvalCandidateView,
-  type EvalSource,
+  type EvalMode,
+  type EvalState,
 } from '../lib/positionEval';
 
 /**
@@ -97,25 +97,6 @@ export interface StudyBoardProps {
   initialSession?: StudySession;
   initialEval?: EvalState;
 }
-
-/** 評価要求の状態。押されたときだけ動く 4 状態（前例: `routes/positions.tsx`） */
-export type EvalState =
-  | { kind: 'idle' }
-  | { kind: 'loading'; mode: EvalMode }
-  | {
-      kind: 'done';
-      mode: EvalMode;
-      /** 評価した局面（名指し評価では**その手を指す前**の局面） */
-      base: BoardState;
-      candidates: EvalCandidateView[];
-      source: EvalSource;
-      fallback: boolean;
-    }
-  | { kind: 'invalid'; violations: PositionViolation[] }
-  | { kind: 'busy' }
-  | { kind: 'error'; message: string };
-
-type EvalMode = 'position' | 'move';
 
 /** 咎め筋（PV）の再生位置。**読み専用の一時状態**（prd/12 §3.2） */
 interface Replay {
@@ -264,7 +245,10 @@ export function StudyBoard({
     setSession(next);
     if (next.steps !== session.steps) {
       trackerRef.current.cancel();
-      setEvalState({ kind: 'idle' });
+      // 🔴 **黙って消さない。** 一度でも評価に触れていれば `stale` にして
+      //    「盤が変わった / もう一度評価できる」ことを言う（実機で「もう評価
+      //    できないのか」と読めてしまった。値そのものは残さない）
+      setEvalState(evalStateAfterPositionChange(evalState));
       setReplay(null);
     }
   };
@@ -475,7 +459,21 @@ function EvalResultView({
   replay: Replay | null;
   onReplay: (replay: Replay | null) => void;
 }) {
+  // まだ一度も評価していない（`idle`）なら何も出さない
   if (evalState.kind === 'idle') return null;
+
+  /*
+    評価した後で局面が変わった状態（`stale`）。**値は消すが、手がかりは残す。**
+    結果ブロックがあった場所にそのまま出すので、上の操作パネル・コントローラー行の
+    位置は動かない（prd/05 §2.1）。
+  */
+  if (evalState.kind === 'stale') {
+    return (
+      <p className="text-sm text-base-content/60">
+        盤が変わったので前の評価は消した。もう一度評価できる
+      </p>
+    );
+  }
 
   if (evalState.kind === 'loading') {
     return (

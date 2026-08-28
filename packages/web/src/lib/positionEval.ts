@@ -15,6 +15,58 @@ import { validateMoveOnPosition, validatePositionForEngine } from 'shared';
 import { client } from './honoClient';
 import type { EvalTarget } from './study';
 
+/** 評価の種別。局面評価 / 名指し評価（prd/12 §2.2） */
+export type EvalMode = 'position' | 'move';
+
+/**
+ * 評価要求の画面上の状態。**押されたときだけ動く**（前例: `routes/positions.tsx`）。
+ *
+ * 🔴 **`idle` と `stale` を分ける。** どちらも「評価値を出していない」状態だが、
+ * ユーザから見た意味が違う:
+ *
+ * - `idle`: **まだ一度も評価していない**。手がかりは要らない（何も出さない）。
+ * - `stale`: **評価したが、その後で局面が変わった**。値は消すが、
+ *   「もう一度評価できる」ことを言う必要がある。
+ *
+ * 実機で踏んだ: 評価結果が出ている状態で駒を動かすと結果ブロックが**黙って消え**、
+ * 「もう評価できないのか」と読めてしまった（機能としては押せる）。2 つを `idle` に
+ * 畳んでいたのが原因。
+ *
+ * ⚠ **古い評価値そのもの（スコア・候補手・読み筋）は残さない。** グレーアウトして
+ * 残す案も採らない——別の局面の値を画面に置くのは prd/12 §2.6 の
+ * 「値の出所を黙って混ぜない」に反する。出すのは手がかりだけ。
+ */
+export type EvalState =
+  | { kind: 'idle' }
+  | { kind: 'stale' }
+  | { kind: 'loading'; mode: EvalMode }
+  | {
+      kind: 'done';
+      mode: EvalMode;
+      /** 評価した局面（名指し評価では**その手を指す前**の局面） */
+      base: BoardState;
+      candidates: EvalCandidateView[];
+      source: EvalSource;
+      fallback: boolean;
+    }
+  | { kind: 'invalid'; violations: PositionViolation[] }
+  | { kind: 'busy' }
+  | { kind: 'error'; message: string };
+
+/**
+ * 局面が変わったときの遷移。
+ *
+ * **一度でも評価に触れていれば `stale`**（結果・検証エラー・キュー満杯・失敗・待ち中の
+ * いずれも「評価しようとした」状態なので、盤が変わったことを言う値がある）。
+ * まだ何もしていない `idle` はそのまま。
+ *
+ * ⚠ 変化が無いときは**同じオブジェクトを返す**（無駄な再描画を作らない）。
+ */
+export function evalStateAfterPositionChange(prev: EvalState): EvalState {
+  if (prev.kind === 'idle' || prev.kind === 'stale') return prev;
+  return { kind: 'stale' };
+}
+
 /** 候補手 1 本（server の `EvalCandidate`。スコアは**手番側から見た値**） */
 export interface EvalCandidateView {
   rank: number;

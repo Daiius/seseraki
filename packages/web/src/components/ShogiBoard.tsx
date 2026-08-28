@@ -263,6 +263,9 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         sente={sente}
         gote={gote}
         keyboardNav={keyboardNav}
+        // 🔒 直前の手の採点の色分けは**棋譜側の悪手マーカーと同じ閾値**で判定する
+        //    （prd/12 §3.2・決定 2026-08-29。1 つの画面に基準を 2 つ持たない）
+        thresholds={thresholds}
       >
       {(study) => (
       <>

@@ -12,6 +12,7 @@ import {
 import { BoardGrid, HandDisplay } from './BoardGrid';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import { formatTurnScore, moveDestination } from '../lib/usi';
+import { DEFAULT_THRESHOLDS, lossLabel, type Thresholds } from '../lib/cpl';
 import {
   canPutSelectionOnHand,
   canRedo,
@@ -135,6 +136,15 @@ export interface StudyBoardProps {
   /** 検討していないときのキーボード手送り。省略するとキーボードは何もしない */
   keyboardNav?: KeyboardNav;
   /**
+   * 悪手判定の閾値（prd/05 §2.5）。**直前の手の採点の色分けに使う**（prd/12 §3.2）。
+   *
+   * 🔒 **棋譜側の悪手マーカーと同じ供給元を使う**（`useThresholds` → `ShogiBoard` → ここ）。
+   * 1 つの画面に「損失」の基準が 2 つあると、棋譜のグラフでは無印の損失が検討盤では
+   * 警告色になる、という食い違いが起きる。
+   * ⚠ 省略時は既定値（`/dev-gallery` のように供給元が無い文脈でも壊れず動く）。
+   */
+  thresholds?: Thresholds;
+  /**
    * DEV ギャラリー用の初期状態（`/dev-gallery`）。通常の閲覧では渡さない。
    * 表示を固定して幅ごとの見え方を撮るための入口で、`ShogiBoard` の
    * `initialMoveIndex` と同じ趣旨。
@@ -168,6 +178,7 @@ export function StudyBoard({
   gote,
   children,
   keyboardNav,
+  thresholds = DEFAULT_THRESHOLDS,
   initialSession,
   initialEval,
 }: StudyBoardProps) {
@@ -540,6 +551,7 @@ export function StudyBoard({
             evalState={evalState}
             replay={replay}
             onReplay={setReplay}
+            thresholds={thresholds}
           />
 
         </div>
@@ -559,10 +571,12 @@ function EvalResultView({
   evalState,
   replay,
   onReplay,
+  thresholds,
 }: {
   evalState: EvalState;
   replay: Replay | null;
   onReplay: (replay: Replay | null) => void;
+  thresholds: Thresholds;
 }) {
   // まだ一度も評価していない（`idle`）なら何も出さない
   if (evalState.kind === 'idle') return null;
@@ -645,7 +659,7 @@ function EvalResultView({
         {/* 🔒 どこから来た値かを出す（prd/12 §2.6） */}
         <SourceBadge source={source} />
       </div>
-      {grade && <MoveGradeView grade={grade} />}
+      {grade && <MoveGradeView grade={grade} thresholds={thresholds} />}
       {candidates.length === 0 && (
         <p className="text-base-content/60">候補手が返らなかった（詰みなど）</p>
       )}
@@ -760,11 +774,29 @@ function SourceBadge({ source }: { source: EvalSource }) {
  * ので、上の評価値の行とは符号が逆に見える——だから**「直前の手」と明示した別ブロック**に置く。
  * ⚠ **損失の数値は両方 `cp` のときだけ**（`mate` の引き算は意味を持たない。{@link scoreLoss}）。
  */
-function MoveGradeView({ grade }: { grade: MoveGrade }) {
+function MoveGradeView({
+  grade,
+  thresholds,
+}: {
+  grade: MoveGrade;
+  thresholds: Thresholds;
+}) {
   const side = grade.from.sideToMove;
   const symbol = symbolAt(side, 0);
+  /*
+    🔒 **色は棋譜側の悪手マーカーと同じ閾値・同じ判定**（`cpl.ts` の `lossLabel`）。
+    実機で「損失 5」が警告色になり、探索誤差を咎めているように見えた——同じ画面に
+    「損失」の基準が 2 つあってはいけない（決定 2026-08-29）。閾値は設定から来る（§2.5）。
+  */
+  const label = lossLabel(grade.loss, thresholds);
   return (
     <div className="rounded-lg bg-base-200 p-2 flex flex-col gap-1">
+      {/*
+        🔴 **この行に出所バッジを出さない**（決定 2026-08-29）。ここの評価値は
+        **主の局面評価の符号反転**で得た値なので、出所は結果ヘッダーのバッジと同じ。
+        並べると「この数字は 1 手前の評価から来た」と読めてしまい、prd/12 §2.6 の
+        「値の出所を黙って混ぜない」に反する（実機で実際にそう読めた）。
+      */}
       <div className="flex items-baseline gap-2 flex-wrap">
         <span className="text-base-content/60 whitespace-nowrap">直前の手</span>
         <span className="font-bold whitespace-nowrap">
@@ -774,11 +806,19 @@ function MoveGradeView({ grade }: { grade: MoveGrade }) {
         <span className="whitespace-nowrap">
           {formatTurnScore(grade.playedScoreType, grade.playedScoreValue, side)}
         </span>
-        <SourceBadge source={grade.source} />
       </div>
+      {/*
+        🔒 **出所バッジはこちら**（= 1 手前の局面の評価から来た値）。主の評価とは別の要求なので、
+        片方だけ既存解析ということが起きる（prd/12 §2.6）。
+        ⚠ **最善手だったときも出す。** 「最善手」という結論そのものが 1 手前の評価から
+        導かれているので、出所を言う相手はこの行しかない。
+      */}
       {grade.isBest ? (
         /* 指した手が 1 手前の rank 1 そのもの。**損失は出さない**（数字より結論が要る） */
-        <div className="font-semibold text-success">最善手</div>
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="font-semibold text-success">最善手</span>
+          <SourceBadge source={grade.source} />
+        </div>
       ) : (
         <div className="flex items-baseline gap-2 flex-wrap">
           <span className="text-base-content/60 whitespace-nowrap">最善</span>
@@ -789,6 +829,7 @@ function MoveGradeView({ grade }: { grade: MoveGrade }) {
           <span className="whitespace-nowrap">
             {formatTurnScore(grade.best.scoreType, grade.best.scoreValue, side)}
           </span>
+          <SourceBadge source={grade.source} />
           {grade.loss === null ? (
             /* 🔒 `mate` が絡むときは**両者を並べるに留める**（引き算に意味が無い） */
             <span className="text-base-content/60 whitespace-nowrap">
@@ -798,7 +839,8 @@ function MoveGradeView({ grade }: { grade: MoveGrade }) {
             <span
               className={clsx(
                 'whitespace-nowrap font-semibold',
-                grade.loss > 0 && 'text-warning',
+                label === 'dubious' && 'text-warning',
+                label === 'blunder' && 'text-error',
               )}
             >
               損失 {grade.loss}

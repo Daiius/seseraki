@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_THRESHOLDS,
+  lossLabel,
   computeMoveLosses,
   formatLoss,
   labelOf,
@@ -294,5 +295,39 @@ describe('applyThresholdInput', () => {
       dubious: 300,
       decided: 2000,
     });
+  });
+});
+
+/**
+ * 検討盤の採点の色分け（prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 🔒 **棋譜側の悪手マーカーと同じ閾値・同じ判定**を使う（`labelOf` に委ねる）。
+ * 実機で「損失 5」が警告色になり、探索誤差を咎めているように見えたのが起点。
+ */
+describe('lossLabel', () => {
+  it('閾値の境界（既定 dubious 300 / blunder 600）', () => {
+    expect(lossLabel(299, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(lossLabel(300, DEFAULT_THRESHOLDS)).toBe('dubious');
+    expect(lossLabel(599, DEFAULT_THRESHOLDS)).toBe('dubious');
+    expect(lossLabel(600, DEFAULT_THRESHOLDS)).toBe('blunder');
+  });
+
+  it('小さい損失・負の損失・mate（null）は色を付けない', () => {
+    expect(lossLabel(0, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(lossLabel(5, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(lossLabel(-6, DEFAULT_THRESHOLDS)).toBeNull();
+    expect(lossLabel(null, DEFAULT_THRESHOLDS)).toBeNull();
+  });
+
+  it('閾値は設定に従う（ハードコードしない）', () => {
+    const strict = { ...DEFAULT_THRESHOLDS, dubious: 50, blunder: 100 };
+    expect(lossLabel(49, strict)).toBeNull();
+    expect(lossLabel(50, strict)).toBe('dubious');
+    expect(lossLabel(100, strict)).toBe('blunder');
+  });
+
+  /** ⚠ 決着閾値は掛からない（検討局面は棋譜の一手ではない） */
+  it('大きな損失は評価値の大小によらず blunder のまま', () => {
+    expect(lossLabel(5000, DEFAULT_THRESHOLDS)).toBe('blunder');
   });
 });

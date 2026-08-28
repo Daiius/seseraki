@@ -364,16 +364,30 @@ function Gallery() {
       {/*
         🔴 **直前の手の採点**（決定 2026-08-29）。「評価する」を 1 回押すと、現在の局面と
         **1 手前の局面**の両方を評価し、最善との差を出す。
-        ⚠ 採点ブロックの視点は**指した側**なので、上の評価値の行とは符号が逆に見える。
-        3 通り（最善手だった / 損した / 詰みが絡む）を並べて、色と文言の出方を見る。
+
+        🔒 **`candidates` と `grade` の数字は必ず噛み合う。** 実装は
+        「指した手の評価値 = 現局面の rank 1 の**符号反転**」なので、ここでも
+        `playedScoreValue === -candidates[rank1].scoreValue` を守る（`base` は後手番なので、
+        現局面の +42 は先手から見て −42）。ギャラリーは実装の見え方の正典なので嘘を置かない。
+
+        🔒 **出所バッジは「最善」の行**（= 1 手前の評価から来た値）。「直前の手」の行の値は
+        主の評価の符号反転なので、出所は結果ヘッダーのバッジと同じ（二重に出さない）。
+
+        色は棋譜側の悪手マーカーと**同じ閾値**（`cpl.ts`・既定 300 / 600）。
+        以下の 4 ケースで**無色 / warning / error** の 3 段階と「最善手」が揃う。
       */}
       <Case title="検討・直前の手の採点（最善手だった）">
+        {/* 指した手が 1 手前の rank 1 そのもの。損失の数字は出さず「最善手」と結論を出す。
+            ⚠ このときも出所バッジは出す（「最善手」という結論が 1 手前の評価から来ている） */}
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
           evalState={{
             kind: 'done',
             base: KIFU_POSITIONS[1],
-            candidates: STUDY_CANDIDATES,
+            candidates: [
+              { rank: 1, move: '3c3d', scoreType: 'cp', scoreValue: -42, pv: ['3c3d', '7g7f'], depth: 22 },
+              { rank: 2, move: '8c8d', scoreType: 'cp', scoreValue: -55, pv: ['8c8d'], depth: 22 },
+            ],
             source: 'engine',
             grade: {
               from: KIFU_POSITIONS[0],
@@ -381,14 +395,7 @@ function Gallery() {
               // 現局面（後手番）の rank 1 が −42 → 先手から見て +42
               playedScoreType: 'cp',
               playedScoreValue: 42,
-              best: {
-                rank: 1,
-                move: '2g2f',
-                scoreType: 'cp',
-                scoreValue: 42,
-                pv: ['2g2f'],
-                depth: 22,
-              },
+              best: { rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 42, pv: ['2g2f'], depth: 22 },
               isBest: true,
               loss: 0,
               source: 'engine',
@@ -397,30 +404,82 @@ function Gallery() {
         />
       </Case>
 
-      <Case title="検討・直前の手の採点（最善を外して損した）">
+      <Case title="検討・直前の手の採点（損失 5 = 閾値未満なので無色）">
+        {/*
+          🔴 これが色分けを閾値に揃えた理由のケース（実機で踏んだ）。5cp は探索誤差の範囲で
+          咎めるべき手ではないのに、以前は「損失 > 0」で警告色になっていた。
+          出所が主（エンジン）と採点（既存解析）で**分かれている**見え方もここで見る。
+        */}
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
           evalState={{
             kind: 'done',
             base: KIFU_POSITIONS[1],
-            candidates: STUDY_CANDIDATES,
+            candidates: [
+              { rank: 1, move: '8c8d', scoreType: 'cp', scoreValue: -5, pv: ['8c8d', '7g7f'], depth: 22 },
+              { rank: 2, move: '3c3d', scoreType: 'cp', scoreValue: -18, pv: ['3c3d'], depth: 22 },
+            ],
             source: 'engine',
             grade: {
               from: KIFU_POSITIONS[0],
               move: '2g2f',
               playedScoreType: 'cp',
-              playedScoreValue: 12,
-              best: {
-                rank: 1,
-                move: '7g7f',
-                scoreType: 'cp',
-                scoreValue: 45,
-                pv: ['7g7f', '3c3d', '2g2f'],
-                depth: 22,
-              },
+              playedScoreValue: 5,
+              best: { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 10, pv: ['7g7f', '3c3d'], depth: 22 },
               isBest: false,
-              loss: 33,
+              loss: 5,
               source: 'kifu',
+            },
+          }}
+        />
+      </Case>
+
+      <Case title="検討・直前の手の採点（損失 350 = 疑問手の閾値以上・warning）">
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            base: KIFU_POSITIONS[1],
+            candidates: [
+              { rank: 1, move: '8c8d', scoreType: 'cp', scoreValue: -5, pv: ['8c8d', '7g7f'], depth: 22 },
+              { rank: 2, move: '3c3d', scoreType: 'cp', scoreValue: -40, pv: ['3c3d'], depth: 22 },
+            ],
+            source: 'engine',
+            grade: {
+              from: KIFU_POSITIONS[0],
+              move: '2g2f',
+              playedScoreType: 'cp',
+              playedScoreValue: 5,
+              best: { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 355, pv: ['7g7f', '3c3d', '2g2f'], depth: 22 },
+              isBest: false,
+              loss: 350,
+              source: 'engine',
+            },
+          }}
+        />
+      </Case>
+
+      <Case title="検討・直前の手の採点（損失 700 = 悪手の閾値以上・error）">
+        {/* 現局面の rank 1 が +300（後手番視点）→ 先手から見て −300。指した後は形勢が反転している */}
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            base: KIFU_POSITIONS[1],
+            candidates: [
+              { rank: 1, move: '8c8d', scoreType: 'cp', scoreValue: 300, pv: ['8c8d', '7g7f'], depth: 22 },
+              { rank: 2, move: '3c3d', scoreType: 'cp', scoreValue: 240, pv: ['3c3d'], depth: 22 },
+            ],
+            source: 'engine',
+            grade: {
+              from: KIFU_POSITIONS[0],
+              move: '2g2f',
+              playedScoreType: 'cp',
+              playedScoreValue: -300,
+              best: { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 400, pv: ['7g7f', '3c3d'], depth: 22 },
+              isBest: false,
+              loss: 700,
+              source: 'engine',
             },
           }}
         />
@@ -429,8 +488,8 @@ function Gallery() {
       <Case title="検討・直前の手の採点（詰みが絡む = 損失を出さない）">
         {/*
           🔒 `mate` は「詰みまでの手数」で `cp` と単位が違い、`mate` 同士でも引き算に意味が
-          無い。**数値は出さず両者を並べる**（`scoreLoss` が null を返すケース）。
-          評価値の最長形（`先手勝ち(15手詰)`）が折り返しても、結果ブロックの中に収まって
+          無い。**数値は出さず両者を並べる**（`scoreLoss` が null を返すケース）。色も付けない。
+          評価値の最長形（`後手勝ち(15手詰)`）が折り返しても、結果ブロックの中に収まって
           上の操作パネル・コントローラー行が動かないことも合わせて見る。
         */}
         <StudyCase
@@ -439,14 +498,7 @@ function Gallery() {
             kind: 'done',
             base: KIFU_POSITIONS[1],
             candidates: [
-              {
-                rank: 1,
-                move: '3c3d',
-                scoreType: 'mate',
-                scoreValue: 15,
-                pv: ['3c3d'],
-                depth: 30,
-              },
+              { rank: 1, move: '3c3d', scoreType: 'mate', scoreValue: 15, pv: ['3c3d'], depth: 30 },
             ],
             source: 'engine',
             grade: {
@@ -455,14 +507,7 @@ function Gallery() {
               // 現局面が「後手の 15 手詰」→ 先手から見れば mate −15
               playedScoreType: 'mate',
               playedScoreValue: -15,
-              best: {
-                rank: 1,
-                move: '7g7f',
-                scoreType: 'cp',
-                scoreValue: 45,
-                pv: ['7g7f'],
-                depth: 22,
-              },
+              best: { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 45, pv: ['7g7f'], depth: 22 },
               isBest: false,
               loss: null,
               source: 'engine',

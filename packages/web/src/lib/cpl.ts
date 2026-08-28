@@ -167,6 +167,25 @@ export function labelOf(l: MoveLoss, thresholds: Thresholds): MoveLabel {
   return null;
 }
 
+/**
+ * **損失（cp）だけ**から段階ラベルを付ける（検討盤の採点。prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 🔴 **判定は再実装せず {@link labelOf} に委ねる。** 検討盤の採点と棋譜側の悪手マーカーが
+ * 同じ画面に並ぶ以上、**「損失」の基準が 2 つあってはいけない**（実機で「損失 5」が
+ * 警告色になり、探索誤差を咎めているように見えた）。閾値も同じ {@link Thresholds} を使う。
+ *
+ * ⚠ **決着判定（`decided`）は掛からない**（`bestCp: null` で渡す）。検討局面は棋譜の一手では
+ * ないので「勝負が決した局面のぬるい手を平均から除く」という決着閾値の動機が当てはまらず、
+ * ユーザが自分で並べた局面の採点を黙って消す方が分かりにくい。
+ * ⚠ 損失が null（`mate` が絡む）/ 負（2 回の探索は深さが別）のときは null（＝色を付けない）。
+ */
+export function lossLabel(loss: number | null, thresholds: Thresholds): MoveLabel {
+  return labelOf(
+    { moveNumber: 0, bestCp: null, loss, approximate: false, mate: null },
+    thresholds,
+  );
+}
+
 /** バッジ等に出す短いラベル名。ラベルが無ければ null */
 export function labelText(l: MoveLoss, label: MoveLabel): string | null {
   if (label === 'mate') {

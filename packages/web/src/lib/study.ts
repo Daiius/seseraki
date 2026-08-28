@@ -39,6 +39,7 @@ import {
   moveToHand,
   pieceAt,
   positionSfen,
+  setPromoted,
   toggleSideToMove,
   unpromoted,
   type BoardState,
@@ -58,9 +59,28 @@ export interface StudyStep {
   state: BoardState;
   /**
    * この局面に至った**盤上の手**（USI）。持ち駒・手番の編集で進んだ段は null。
-   * 直前の手の採点（{@link lastMoveGradeTarget}）はこれが非 null のときだけ出せる。
+   *
+   * この 1 本に **3 つの用途**がぶら下がっている:
+   * 1. 盤の**直前手の強調**（移動先を取る）
+   * 2. **成 / 不成の指し直し**（{@link togglePromotion}）
+   * 3. **直前の手の採点**（{@link lastMoveGradeTarget}）
    */
   move: string | null;
+  /**
+   * `move` を 1 つ前の局面へ適用した結果が、この段の局面と**一致するか**。
+   *
+   * 🔴 **一致しない段がある**（決定・2026-08-29）: **打った駒を後から成らせた段**。
+   * USI に「成って打つ」表記は無い（`P*5e+` は書けない）ので `move` は `P*5e` のままだが、
+   * 局面には成駒が乗っている。検討盤は合法性を問わないフル編集（prd/12 §2.5 / §3.2）なので
+   * 局面としては正当だが、**`move` を適用した局面とは別物**になる。
+   *
+   * 🔒 **3 つの用途のうち、これで分かれるのは採点だけ。** 強調（移動先は同じ）と
+   * 成 / 不成の切り替え（むしろこの段が対象）は `move` だけで足りる。
+   * 採点は「1 手前の局面の最善」と「その手を指した結果」を突き合わせるので、
+   * **局面が `move` の結果と一致しないと比較そのものが嘘になる**。
+   * → **state を増やさずフラグ 1 つ**で、採点の可否だけを分ける。
+   */
+  faithful: boolean;
 }
 
 /**
@@ -81,7 +101,11 @@ export interface StudySession {
 
 /** 棋譜の局面を起点にセッションを作る */
 export function createStudySession(base: BoardState): StudySession {
-  return { steps: [{ state: base, move: null }], cursor: 0, selection: null };
+  return {
+    steps: [{ state: base, move: null, faithful: true }],
+    cursor: 0,
+    selection: null,
+  };
 }
 
 /** 現在の検討局面 */
@@ -161,10 +185,11 @@ function push(
   session: StudySession,
   state: BoardState,
   move: string | null,
+  faithful = true,
 ): StudySession {
   if (state === currentState(session)) return { ...session, selection: null };
   const steps = session.steps.slice(0, session.cursor + 1);
-  steps.push({ state, move });
+  steps.push({ state, move, faithful });
   return { steps, cursor: steps.length - 1, selection: null };
 }
 
@@ -327,36 +352,76 @@ export function resetStudy(session: StudySession): StudySession {
   return createStudySession(baseState(session));
 }
 
-/** 直前の盤上の手を、成 / 不成で指し直せるか */
+/**
+ * 直前の手を成 / 不成で指し直せるか（ボタンの有効・無効）。
+ * ⚠ **駒打ちの直後も true**（決定・2026-08-29。{@link togglePromotion}）。
+ * false になるのは「検討していない / 直前が編集 / 成れない駒（金・玉）/
+ * 元から成っている駒を動かした手」。
+ */
 export function canTogglePromotion(session: StudySession): boolean {
   return promotionRetry(session) !== null;
 }
 
 /**
- * 直前の盤上の手の成り / 不成を切り替える（指し直す）。
+ * 直前の手の成り / 不成を切り替える（指し直す）。
  *
  * タップ 2 段では成りを聞かないので、**指した後にここで切り替える**。
  * 段を積み増さず**直前の段を差し替える**（成 / 不成は 1 つの手の 2 つの形なので、
  * undo 2 回で元へ戻る形にすると手順の意味がずれる）。
+ *
+ * 🔴 **駒打ちの直後も切り替えられる**（決定・2026-08-29）。USI に「成って打つ」表記が
+ * 無いのは事実だが、検討盤は**合法性を問わないフル編集**（prd/12 §2.5 / §3.2）で、
+ * 「５五に成銀がある局面」はエンジンにも渡せる正当な局面。**打った駒を成らせるのは
+ * 局面編集として筋が通る**ので、表記の都合で禁じない。⚠ その段は `faithful: false` に
+ * なり、**採点の対象から外れる**（{@link StudyStep.faithful}）。
  */
 export function togglePromotion(session: StudySession): StudySession {
   const retry = promotionRetry(session);
   if (!retry) return session;
   // 現在位置の段を差し替える。⚠ その先の redo 分は元の手から続いていたので捨てる
   const steps = session.steps.slice(0, session.cursor);
-  steps.push({ state: retry.state, move: retry.move });
+  steps.push({ state: retry.state, move: retry.move, faithful: retry.faithful });
   return { steps, cursor: steps.length - 1, selection: null };
+}
+
+/** 直前の手が今「成った形」になっているか（ボタンの文言に使う） */
+export function isLastMovePromoted(session: StudySession): boolean {
+  const move = lastMove(session);
+  if (!move) return false;
+  const drop = move.match(/^[PLNSGBR]\*([1-9][a-i])$/);
+  if (drop) {
+    // 駒打ちは USI に成りが書けないので、**盤の駒そのもの**を見る
+    const piece = pieceAt(currentState(session), squareOfUsi(drop[1]));
+    return piece !== null && unpromoted(piece.kind) !== piece.kind;
+  }
+  return move.endsWith('+');
 }
 
 function promotionRetry(
   session: StudySession,
-): { state: BoardState; move: string } | null {
+): { state: BoardState; move: string; faithful: boolean } | null {
   if (session.cursor < 1) return null;
   const last = session.steps[session.cursor];
   const prevStep = session.steps[session.cursor - 1];
   const move = last.move;
-  // 駒打ちは成って打てない（`P*5e` に `+` は付かない）
-  if (!move || !/^[1-9][a-i][1-9][a-i]\+?$/.test(move)) return null;
+  if (!move) return null;
+
+  // 駒打ち（`P*5e`）: 前の局面から作り直さず、**盤に乗っている駒の成りを反転する**。
+  // ⚠ 打ち直しではないので持ち駒の増減は起きない（局面編集としての成り変え）
+  const drop = move.match(/^([PLNSGBR])\*([1-9][a-i])$/);
+  if (drop) {
+    const to = squareOfUsi(drop[2]);
+    const piece = pieceAt(last.state, to);
+    if (!piece) return null;
+    const nowPromoted = unpromoted(piece.kind) !== piece.kind;
+    const next = setPromoted(last.state, to, !nowPromoted);
+    // 成れない駒（金）は `setPromoted` が何もしないので、同一性で弾ける
+    if (next === last.state) return null;
+    // 成らせた段は `move` の適用結果と一致しない → 採点の対象外。戻せば一致に戻る
+    return { state: next, move, faithful: nowPromoted };
+  }
+
+  if (!/^[1-9][a-i][1-9][a-i]\+?$/.test(move)) return null;
 
   const promoted = move.endsWith('+');
   const from = squareOfUsi(move.slice(0, 2));
@@ -371,6 +436,7 @@ function promotionRetry(
   return {
     state: advanceTurn(moved, piece.side, prevStep.state),
     move: usiMoveOf(from, to, !promoted),
+    faithful: true,
   };
 }
 
@@ -447,6 +513,9 @@ export function lastMoveGradeTarget(session: StudySession): LastMoveGradeTarget 
   if (session.cursor < 1) return null;
   const move = lastMove(session);
   if (!move) return null;
+  // 🔒 **`move` の適用結果と局面が一致する段だけ採点する**（{@link StudyStep.faithful}）。
+  //    打った駒を成らせた段は一致しないので、最善との比較が嘘になる
+  if (!session.steps[session.cursor].faithful) return null;
   const from = session.steps[session.cursor - 1].state;
   return { target: { sfen: positionSfen(from), move: null, from }, move };
 }

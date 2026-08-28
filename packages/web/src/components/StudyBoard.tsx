@@ -25,6 +25,7 @@ import {
   canUndo,
   createStudySession,
   currentState,
+  isLastMovePromoted,
   isStudying,
   lastMove,
   lastMoveGradeTarget,
@@ -589,22 +590,34 @@ export function StudyBoard({
               「成」「不成」の字にしたのは、成 / 不成という将棋の概念に対応する図像が
               無く、字の方が短く読めるため。
             */}
-            {canTogglePromotion(session) && (
-              <button
-                type="button"
-                className={clsx(GLYPH_BTN, 'btn-outline')}
-                onClick={() => edit(togglePromotion(session))}
-                disabled={replaying}
-                aria-label={
-                  lastMove(session)?.endsWith('+')
-                    ? '直前の手を不成で指し直す'
-                    : '直前の手を成で指し直す'
-                }
-                title="直前の手を成 / 不成で指し直す"
-              >
-                {lastMove(session)?.endsWith('+') ? '不成' : '成'}
-              </button>
-            )}
+            {/*
+              🔴 **出し入れせず、押せないときは無効にする**（決定 2026-08-29）。
+              条件付きで消していたので、**成れる手かどうかで操作行の幅が変わり
+              他のボタンの位置がズレた**（prd/05 §2.1 の「位置を動かさない」に反する）。
+              ⚠ アイコンではなく「成」「不成」の字にしたのは、成 / 不成という将棋の概念に
+              対応する図像が無く、字の方が短く読めるため。
+              🔴 **駒打ちの直後も押せる**（決定 2026-08-29）——検討盤は合法性を問わない
+              フル編集なので、打った駒を成らせるのは局面編集として筋が通る。
+              ⚠ その段は採点の対象から外れる（`study.ts` の `StudyStep.faithful`）。
+            */}
+            <button
+              type="button"
+              className={clsx(GLYPH_BTN, 'btn-outline')}
+              onClick={() => edit(togglePromotion(session))}
+              disabled={replaying || !canTogglePromotion(session)}
+              aria-label={
+                isLastMovePromoted(session)
+                  ? '直前の手を不成で指し直す'
+                  : '直前の手を成で指し直す'
+              }
+              title={
+                canTogglePromotion(session)
+                  ? '直前の手を成 / 不成で指し直す'
+                  : '直前が盤上の手・駒打ちで、成れる駒のときだけ切り替えられる'
+              }
+            >
+              {isLastMovePromoted(session) ? '不成' : '成'}
+            </button>
             {/*
               🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。かつての
               「この手を読む」（名指し評価）は返る数字が局面評価と同じで符号だけ反転して

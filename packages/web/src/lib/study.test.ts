@@ -14,6 +14,7 @@ import {
   canUndo,
   createStudySession,
   currentState,
+  isLastMovePromoted,
   isStudying,
   lastMove,
   lastMoveGradeTarget,
@@ -146,6 +147,78 @@ describe('駒を取る / 成る', () => {
   it('編集で進んだ段は切り替えの対象にならない', () => {
     const s = toggleTurn(createStudySession(initial));
     expect(canTogglePromotion(s)).toBe(false);
+  });
+
+  /**
+   * 🔴 **打った駒も成らせられる**（決定・2026-08-29）。USI に「成って打つ」表記は無いが、
+   * 検討盤は合法性を問わないフル編集（prd/12 §2.5 / §3.2）で、「５五に成銀がある局面」は
+   * エンジンにも渡せる正当な局面。**表記の都合で編集を禁じない。**
+   *
+   * 🔒 ただしその段は `move`（`B*5e`）を適用した局面と**一致しない**ので、
+   * **直前の手の採点からは外す**（最善との比較が嘘になる）。
+   */
+  describe('打った駒の成り', () => {
+    /** ▲８八角×２二 で角を持ち駒にし、その角を５五へ打った状態 */
+    const dropped = () =>
+      tapSquare(tapHand(applyStudyMoves(initial, ['8h2b']), 'sente', 'B'), sq('5e'));
+
+    it('駒打ちの直後も成らせられ、もう一度押せば戻る', () => {
+      const s = dropped();
+      expect(lastMove(s)).toBe('B*5e');
+      expect(canTogglePromotion(s)).toBe(true);
+      expect(isLastMovePromoted(s)).toBe(false);
+
+      const promoted = togglePromotion(s);
+      expect(pieceAt(currentState(promoted), sq('5e'))).toEqual({
+        kind: '+B',
+        side: 'sente',
+      });
+      // ⚠ USI は打った手のまま（`B*5e+` とは書けない）。段も増えない
+      expect(lastMove(promoted)).toBe('B*5e');
+      expect(isLastMovePromoted(promoted)).toBe(true);
+      expect(promoted.steps.length).toBe(s.steps.length);
+      // 持ち駒は増減しない（打ち直しではなく成りの変更）
+      expect(handCount(currentState(promoted), 'sente', 'B')).toBe(0);
+
+      const back = togglePromotion(promoted);
+      expect(pieceAt(currentState(back), sq('5e'))).toEqual({
+        kind: 'B',
+        side: 'sente',
+      });
+      expect(isLastMovePromoted(back)).toBe(false);
+    });
+
+    it('🔒 成らせた段は採点の対象外（戻せばまた対象になる）', () => {
+      const s = dropped();
+      expect(lastMoveGradeTarget(s)?.move).toBe('B*5e');
+
+      const promoted = togglePromotion(s);
+      // `B*5e` を適用した局面と一致しないので、最善との比較ができない
+      expect(lastMoveGradeTarget(promoted)).toBeNull();
+      // 局面評価そのものは従来どおり出せる
+      expect(positionEvalTarget(promoted).from).toBe(currentState(promoted));
+
+      expect(lastMoveGradeTarget(togglePromotion(promoted))?.move).toBe('B*5e');
+    });
+
+    it('成れない駒（金）を打った直後は切り替えられない', () => {
+      // ▲６八金を駒台へ移してから打つ（金は成れない）
+      let s = tapSquare(createStudySession(initial), sq('6i'));
+      s = tapHand(s, 'sente');
+      s = tapHand(s, 'sente', 'G');
+      s = tapSquare(s, sq('5e'));
+      expect(lastMove(s)).toBe('G*5e');
+      expect(canTogglePromotion(s)).toBe(false);
+      expect(togglePromotion(s)).toBe(s);
+    });
+  });
+
+  /** 🔴 回帰: 盤上の手の成り / 不成は従来どおり（採点の対象からも外れない） */
+  it('盤上の手を成らせても採点の対象のまま', () => {
+    const promoted = togglePromotion(applyStudyMoves(initial, ['8h2b']));
+    expect(lastMove(promoted)).toBe('8h2b+');
+    expect(isLastMovePromoted(promoted)).toBe(true);
+    expect(lastMoveGradeTarget(promoted)?.move).toBe('8h2b+');
   });
 });
 

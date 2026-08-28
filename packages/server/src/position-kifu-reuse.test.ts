@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { reuseFromKifu, type KifuPositionMatch } from './position-kifu-reuse.js';
+import {
+  namedMoveAnalysesQuery,
+  playedMoveAnalysesQuery,
+  positionEvalAnalysesQuery,
+  reuseFromKifu,
+  type KifuPositionMatch,
+} from './position-kifu-reuse.js';
 import type { EvalCandidate } from './position-eval.js';
 
 const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
@@ -257,5 +263,55 @@ describe('source', () => {
   // ここが null を返すことが、その分岐に入る条件そのもの
   it('再利用できないときは null を返す（route はエンジンへ回して source: engine を付ける）', () => {
     expect(reuseFromKifu({ sfen: SFEN, move: null }, [match()])).toBeNull();
+  });
+});
+
+/**
+ * レビュー指摘 `OCL-74319F91` の回帰。
+ *
+ * 一致局面をまず 20 件に切ってから解析を引くと、切り落とした側に再利用できる解析が
+ * あっても見つけられない。**上限が「再利用条件を満たす行」に対してかかる**こと、
+ * 並びが解析日時の降順であることを SQL の形で固定する（DB 接続は要らない）。
+ */
+describe('クエリの形（上限は絞り込みの後）', () => {
+  function render(query: { toSQL: () => { sql: string; params: unknown[] } }) {
+    const { sql, params } = query.toSQL();
+    return { sql: sql.toLowerCase(), params };
+  }
+
+  it('局面評価: 候補手 3 本揃いに絞ってから、解析日時の降順で上限をかける', () => {
+    const { sql, params } = render(positionEvalAnalysesQuery(SFEN));
+    // 局面索引と解析を結合している（一致局面だけを先に切っていない）
+    expect(sql).toContain('inner join `move_analyses`');
+    // 3 本揃いの条件が where に入っている
+    expect(sql).toContain('exists');
+    expect(params).toContain(3);
+    // 並びと上限はその後
+    expect(sql.indexOf('order by')).toBeGreaterThan(sql.indexOf('exists'));
+    expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
+    // 解析が新しい順、同時刻は kifuId 降順（応答が揺れない）
+    // ⚠ 列名は DB 上も camelCase（drizzle の casing 変換は入れていない）
+    expect(sql).toMatch(/order by .*createdat` desc.*kifuid` desc/);
+  });
+
+  it('名指し評価 ①: その手を持つ候補手に結合してから上限をかける', () => {
+    const { sql, params } = render(namedMoveAnalysesQuery(SFEN, '7g7f'));
+    expect(sql).toContain('inner join `candidate_moves`');
+    expect(params).toContain('7g7f');
+    // 候補手の本数は問わない（3 本揃いの条件を持ち込まない）
+    expect(sql).not.toContain('exists');
+    expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
+  });
+
+  it('名指し評価 ②: 次局面へ自己結合し、解析済みのものだけに絞ってから上限をかける', () => {
+    const { sql, params } = render(playedMoveAnalysesQuery(SFEN, '7g7f'));
+    // 局面索引の自己結合で「次の局面に至った手」を辿る
+    expect(sql).toContain('`next_positions`');
+    expect(sql).toContain('+ 1');
+    expect(params).toContain('7g7f');
+    // 候補手が 1 本も無い解析は材料にならないので SQL で落とす
+    expect(sql).toContain('exists');
+    expect(params).toContain(1);
+    expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
   });
 });

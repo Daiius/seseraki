@@ -77,6 +77,7 @@ import {
   EvaluationQueueFullError,
   requestEvaluation,
 } from './position-eval.js';
+import { lookupKifuEvaluation } from './position-kifu-reuse.js';
 import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
@@ -897,9 +898,21 @@ const route = app
       // キャッシュ・ジョブのキーは**読み直して書き戻した SFEN**にする。
       // 手数の有無や書き方の揺れで同じ局面が別扱いになるのを防ぐ（prd/12 §2.4）
       const normalized = positionSfen(state);
+
+      // 🔴 **エンジンにジョブを積む前に、既存の棋譜解析から引く**（prd/12 §2.6）。
+      // 検討の起点は閲覧中の棋譜の局面なので、数手動かすまでは解析済みの局面を
+      // なぞっているだけのことが多い。⚠ 局面の検証（上）はこの判定より**前**のまま
+      // 保つ——エンジンに渡さないとしても、壊れた局面を受け付けてよいことにはならない。
+      // ⚠ **`source` で出所を隠さない**（解析時のエンジン設定は今と違いうる）
+      const reused = await lookupKifuEvaluation({ sfen: normalized, move });
+      if (reused) {
+        // `reused` が `source: 'kifu'` を持つ（出所の付与は position-kifu-reuse.ts の責務）
+        return c.json({ sfen: normalized, move, ...reused });
+      }
+
       try {
         const outcome = await requestEvaluation({ sfen: normalized, move });
-        return c.json({ sfen: normalized, move, ...outcome });
+        return c.json({ sfen: normalized, move, source: 'engine' as const, ...outcome });
       } catch (err) {
         if (err instanceof EvaluationQueueFullError) {
           // worker が止まっている疑い。積み上げずにその場で断る

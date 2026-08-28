@@ -76,11 +76,16 @@ export function HandDisplay({
     寄せてある**ので、左端に足すと**ボタンは空き部分へ伸びるだけで、既に並んでいる駒は
     1px も動かない**。末尾（右端）に足すと、出入りのたびに駒が左右へずれる。
     位置としても、空き部分に接する側にあるので「ここに置ける」と読める。
+
+    🔴 **色は盤の選択ハイライトと同じ `secondary` 系で塗る。** 破線の枠 + 弱色では
+    「押せる場所」だと分からなかった（実機の指摘）。⚠ その前は**行全体**を薄く光らせて
+    いて「目立ちすぎる」と言われている——**面積が駒 1 個ぶんに限られていることが前提**で
+    色を強めている。行全体を光らせる形には戻さない。
   */
   const addButton = onTrayClick ? (
     <button
       type="button"
-      className="shogi-hand-piece flex items-center justify-center rounded border border-dashed border-base-content/30 text-base-content/50"
+      className="shogi-hand-piece flex items-center justify-center rounded bg-secondary text-secondary-content ring-2 ring-secondary ring-inset"
       aria-label={`${label}の駒台へ置く`}
       title="選んでいる駒をこの駒台へ移す"
       onClick={onTrayClick}

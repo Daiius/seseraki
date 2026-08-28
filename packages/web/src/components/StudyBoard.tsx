@@ -34,6 +34,7 @@ import {
   type StudySession,
 } from '../lib/study';
 import {
+  EvalRequestTracker,
   requestPositionEval,
   validateEvalTarget,
   type EvalCandidateView,
@@ -152,7 +153,12 @@ export function StudyBoard({
   const [evalState, setEvalState] = useState<EvalState>(initialEval ?? { kind: 'idle' });
   const [replay, setReplay] = useState<Replay | null>(null);
   const [seenKey, setSeenKey] = useState(baseKey);
-  const abortRef = useRef<AbortController | null>(null);
+  /**
+   * 走っている評価要求の番人（`EvalRequestTracker`）。
+   * 🔒 **局面が変わりうる操作のたびに `cancel()` を呼ぶ**——さもないと旧局面の応答が
+   * 今の盤の評価として出る（レビュー指摘 `OCL-AED22F46`）。
+   */
+  const trackerRef = useRef(new EvalRequestTracker());
 
   // 🔴 **起点が変わったら検討を捨てる**（= 手送りされた。prd/12 §3.1）。
   // 確認ダイアログは出さない（連打を妨げないため・検討は元々保存しない）。
@@ -163,11 +169,15 @@ export function StudyBoard({
     setSession(createStudySession(baseState));
     setEvalState({ kind: 'idle' });
     setReplay(null);
+    // 🔴 **走っている要求もこの場で捨てる。** effect の後片付けに任せると、
+    //    「破棄した後・effect が走る前」に応答が届いた場合に、捨てたはずの評価が
+    //    新しい起点の画面へ出てしまう（レビュー指摘 `OCL-AED22F46` と同じ穴）。
+    //    `seenKey !== baseKey` で守られており、何度呼んでも安全な操作
+    trackerRef.current.cancel();
   }
 
-  // 走っている long-poll は、起点が変わったら（= 検討を捨てたら）止める。
-  // アンマウント時も同じ。abort の応答は `kind: 'aborted'` で握り潰される
-  useEffect(() => () => abortRef.current?.abort(), [baseKey]);
+  // アンマウントでも走っている long-poll を捨てる（起点の変化は上で処理済み）
+  useEffect(() => () => trackerRef.current.cancel(), []);
 
   const studying = isStudying(session);
   const state = currentState(session);
@@ -203,20 +213,21 @@ export function StudyBoard({
     // 🔒 **送る前にクライアントで検証する**（往復を減らす。判定は `shared` の 1 つ）
     const violations = validateEvalTarget(from, target.move);
     if (violations.length > 0) {
+      // 🔴 **走っている要求もここで捨てる。** 弾いた新局面の警告を、後から届いた
+      //    旧局面の結果が上書きしてしまう（レビュー指摘 `OCL-AED22F46`）
+      trackerRef.current.cancel();
       setEvalState({ kind: 'invalid', violations });
       return;
     }
 
     // 押し直したら前の要求を捨てる（二重送信の抑止も兼ねる）
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
+    const { token, signal } = trackerRef.current.begin();
     setReplay(null);
     setEvalState({ kind: 'loading', mode });
 
-    const result = await requestPositionEval(target, controller.signal);
-    if (abortRef.current !== controller) return;
-    abortRef.current = null;
+    const result = await requestPositionEval(target, signal);
+    // 🔒 待っている間に局面が変わっていたら**この結果は今の盤のものではない**
+    if (!trackerRef.current.accepts(token)) return;
     switch (result.kind) {
       case 'aborted':
         return;
@@ -241,10 +252,18 @@ export function StudyBoard({
     }
   };
 
+  /**
+   * 検討セッションを進める**唯一の口**（盤のタップ・undo・棋譜に戻る・手番トグル・
+   * 成/不成・持ち駒/駒箱の出し入れは、すべてここを通る）。
+   *
+   * 🔒 **局面が変わったら、走っている評価要求も捨てる。** 表示を idle に戻すだけでは、
+   * 後から届いた旧局面の結果が今の盤の評価として出てしまう（レビュー指摘 `OCL-AED22F46`）。
+   * ⚠ 選択が変わっただけ（`steps` が同じ）なら局面は動いていないので、要求は捨てない。
+   */
   const edit = (next: StudySession) => {
     setSession(next);
-    // 局面が変われば前の評価結果は別の局面のものになる。**残して混ぜない**
     if (next.steps !== session.steps) {
+      trackerRef.current.cancel();
       setEvalState({ kind: 'idle' });
       setReplay(null);
     }

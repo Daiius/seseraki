@@ -114,3 +114,50 @@ export async function requestPositionEval(
     return { kind: 'failed', message: 'サーバーに接続できません' };
   }
 }
+
+/**
+ * 走っている評価要求の**採否を決める**小さな番人。
+ *
+ * 🔴 **踏んだ不具合**（レビュー指摘 `OCL-AED22F46`）: 評価は long-poll で数秒〜十数秒
+ * かかる（既存解析に無い局面は必ずエンジン経由）。その間に駒を動かすのはごく自然な操作だが、
+ * 要求を捨てていなかったため**旧局面の応答が、編集後の盤の評価として表示された**。
+ * 検討ツールとしては値の意味が壊れる。クライアント検証で弾いた警告を、後から届いた
+ * 旧要求の結果が上書きする経路もあった。
+ *
+ * 🔒 **待っている間に盤を固める案は採らない。** prd/12 §3 は「駒を動かした時点で検討が
+ * 始まる」「手送りしたら破棄」という自由な操作を前提にしており、待ちの間だけ盤が固まるのは
+ * 体験として不自然。**要求の側を捨てる**（abort + 世代で無視）方を採る。
+ *
+ * 🔒 **abort だけに頼らない。** `AbortController` は fetch を止めるが、応答の受信と
+ * abort が競れば**結果が手元まで届く**（`requestPositionEval` が `kind: 'done'` を
+ * 返しきった後の abort は何も取り消さない）。世代（token）を進めて、
+ * **反映してよいかを呼び出し側が明示的に判定する**。
+ */
+export class EvalRequestTracker {
+  #controller: AbortController | null = null;
+  #token = 0;
+
+  /** 新しい要求を始める。前の要求はここで捨てられる（押し直し・二重送信の抑止） */
+  begin(): { token: number; signal: AbortSignal } {
+    this.cancel();
+    const controller = new AbortController();
+    this.#controller = controller;
+    return { token: this.#token, signal: controller.signal };
+  }
+
+  /**
+   * 走っている要求を捨てる。**局面が変わりうる操作のたびに呼ぶ**
+   * （編集 / undo / 棋譜に戻る / 手送りによる破棄 / クライアント検証で弾いたとき）。
+   * 走っていなくても呼んでよい（世代だけが進む）。
+   */
+  cancel(): void {
+    this.#controller?.abort();
+    this.#controller = null;
+    this.#token += 1;
+  }
+
+  /** `begin` で受け取った token の結果を、今の画面へ反映してよいか */
+  accepts(token: number): boolean {
+    return token === this.#token;
+  }
+}

@@ -79,7 +79,7 @@ export function createClient(baseUrl: string, apiKey: string) {
     },
 
     /**
-     * 評価結果 or 失敗を報告する（**失敗も完了**。待っている long-poll を起こす）。
+     * 評価結果 or 失敗を報告する（**失敗も完了**。要求側が取りに来る結果になる）。
      * 🔒 棋譜の analysisError / analysisRevision には触れない（prd/12 §2.5）。
      */
     async reportPositionResult(

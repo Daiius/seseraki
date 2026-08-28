@@ -316,7 +316,7 @@ describe("drainEvaluationJobs", () => {
     await expect(drainEvaluationJobs(engine, source, GO)).rejects.toBeInstanceOf(
       InteractiveEngineError,
     );
-    // 待っている long-poll をエラーで起こす（結果もエラーも返さないまま待たせない）
+    // エラーも完了として報告する（結果もエラーも出ないまま宙に浮かせない）
     expect(reports).toEqual([
       {
         id: "eval-1",

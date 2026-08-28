@@ -1,0 +1,401 @@
+/**
+ * 検討盤のセッション状態（prd/12 §3）。
+ *
+ * 🔒 **ロジックはここ（`.ts`）に置き、コンポーネントに埋めない。** web のテストは
+ * `src` 配下の `*.test.ts` だけを対象にする（`vitest.config.ts`）ので、`.tsx` に書いた
+ * 分岐は一切テストできない。タップ 2 段の解決・undo スタック・USI 手の組み立て・
+ * 評価の送り先の決定は、すべてこのファイルの純関数で行う。
+ *
+ * 🔒 **盤面編集そのものは `shared/position-edit.ts` を組み合わせるだけ**（M2a）。
+ * ここで駒の動かし方を再実装しない。
+ *
+ * 🔒 **`BoardState` は不変**。各操作は新しい `StudySession` を返し、元は書き換えない
+ * （undo スタックが壊れるため）。
+ *
+ * ## 操作モデル: 選択 → 対象 の 2 段（prd/12 §3.1）
+ *
+ * 選べるものは 3 種類（盤のマス / 持ち駒 / 駒箱）で、**選んだ状態で別の場所を叩くと
+ * そこが行き先になる**。ドラッグ&ドロップは採らない。
+ *
+ * | 選択 → 叩いた先 | 起きること |
+ * |---|---|
+ * | マス → マス | `movePiece`（重ねた駒は動かした側の持ち駒へ） |
+ * | マス → 持ち駒 | `moveToHand`（その側の持ち駒になる） |
+ * | マス → 駒箱 | `removePiece`（盤から取り除く） |
+ * | 持ち駒 → マス | `dropFromHand`（打つ） |
+ * | 持ち駒 → 駒箱 | 持ち駒を 1 枚減らす（＝駒箱へ戻る） |
+ * | 駒箱 → マス | `placePiece`（その側の駒として置く） |
+ * | 駒箱 → 持ち駒 | `addToHand`（その側の持ち駒に 1 枚足す） |
+ *
+ * 同じものをもう一度叩けば選択解除。**行き先を選ぶ前なら選び直せる**ので、盤マスが
+ * 44px 基準を下回る例外（prd/12 §3.3）をこの 2 段が支えている。
+ */
+import {
+  addToHand,
+  canPromote,
+  dropFromHand,
+  handCount,
+  movePiece,
+  moveToHand,
+  pieceAt,
+  pieceBox,
+  placePiece,
+  positionSfen,
+  removePiece,
+  setHandCount,
+  toggleSideToMove,
+  unpromoted,
+  type BasePieceKind,
+  type BoardState,
+  type HandPieceKind,
+  type PieceKind,
+  type Side,
+  type SquareRef,
+} from 'shared';
+
+/** 選択中のもの。行き先を叩くまで保持する */
+export type StudySelection =
+  | { kind: 'square'; square: SquareRef }
+  | { kind: 'hand'; side: Side; piece: HandPieceKind }
+  | { kind: 'box'; side: Side; piece: BasePieceKind };
+
+/** 手順 1 段。`steps[0]` は起点（棋譜の局面）で `move` は常に null */
+export interface StudyStep {
+  state: BoardState;
+  /**
+   * この局面に至った**盤上の手**（USI）。駒箱・持ち駒・手番の編集で進んだ段は null。
+   * 名指し評価（「この手を読む」）はこれが非 null のときだけ出せる。
+   */
+  move: string | null;
+}
+
+/**
+ * 検討セッション。**一本道 + undo**（prd/12 §3.2。分岐ツリーは持たない）。
+ * セッション内限定で保存しない。
+ */
+export interface StudySession {
+  steps: StudyStep[];
+  selection: StudySelection | null;
+}
+
+/** 棋譜の局面を起点にセッションを作る */
+export function createStudySession(base: BoardState): StudySession {
+  return { steps: [{ state: base, move: null }], selection: null };
+}
+
+/** 現在の検討局面 */
+export function currentState(session: StudySession): BoardState {
+  return session.steps[session.steps.length - 1].state;
+}
+
+/** 起点（棋譜の局面） */
+export function baseState(session: StudySession): BoardState {
+  return session.steps[0].state;
+}
+
+/**
+ * 検討が始まっているか（＝1 段でも進めたか）。
+ * **これが true になって初めて操作パネルを出す**（段階的開示。prd/12 §3.1）。
+ */
+export function isStudying(session: StudySession): boolean {
+  return session.steps.length > 1;
+}
+
+/** 直前の段の盤上の手（無ければ null） */
+export function lastMove(session: StudySession): string | null {
+  return session.steps[session.steps.length - 1].move;
+}
+
+/* ---------- USI 座標 ---------- */
+
+/** `board[row][col]` の添字 → USI 座標（例 `{row:6,col:2}` → `7g`） */
+export function usiSquare({ row, col }: SquareRef): string {
+  return `${9 - col}${String.fromCharCode(97 + row)}`;
+}
+
+/** USI 座標（例 `7g`）→ `board` の添字 */
+export function squareOfUsi(usi: string): SquareRef {
+  return { row: usi.charCodeAt(1) - 97, col: 9 - Number(usi[0]) };
+}
+
+/** 盤上の移動（`7g7f` / 成りは `7g7f+`） */
+export function usiMoveOf(from: SquareRef, to: SquareRef, promote = false): string {
+  return `${usiSquare(from)}${usiSquare(to)}${promote ? '+' : ''}`;
+}
+
+/** 駒打ち（`P*5e`） */
+export function usiDropOf(kind: HandPieceKind, to: SquareRef): string {
+  return `${kind}*${usiSquare(to)}`;
+}
+
+/* ---------- 内部ヘルパー ---------- */
+
+function sameSquare(a: SquareRef, b: SquareRef): boolean {
+  return a.row === b.row && a.col === b.col;
+}
+
+/**
+ * 1 段進める。**局面が変わらなかったら段を積まない**（`position-edit` の関数は
+ * 不正な入力で state をそのまま返すので、同一性で「効かなかった」を判定できる）。
+ */
+function push(
+  session: StudySession,
+  state: BoardState,
+  move: string | null,
+): StudySession {
+  if (state === currentState(session)) return { ...session, selection: null };
+  return { steps: [...session.steps, { state, move }], selection: null };
+}
+
+/**
+ * 指した側の手番だったら手番を進める。
+ *
+ * ⚠ **`movePiece` 自体は手番を触らない**（M2a の純関数は「編集」なので当然）。
+ * ただし検討盤では「手番側の駒を動かす」＝**指し手**なので、そのまま手番を渡さないと
+ * 直後の「この局面を評価」が**相手玉を取れる局面**として弾かれ、意味も合わない。
+ * 相手側の駒を動かしたときは編集とみなして手番を触らない（手番トグルで直せる）。
+ */
+function advanceTurn(next: BoardState, moverSide: Side, before: BoardState): BoardState {
+  if (next === before) return next;
+  return moverSide === before.sideToMove ? toggleSideToMove(next) : next;
+}
+
+/* ---------- タップの解決 ---------- */
+
+/** 盤のマスを叩いた */
+export function tapSquare(session: StudySession, square: SquareRef): StudySession {
+  const state = currentState(session);
+  const sel = session.selection;
+
+  if (sel === null) {
+    // 1 段目: 駒のあるマスだけ選べる（空きマスを叩いても何も起きない）
+    return pieceAt(state, square)
+      ? { ...session, selection: { kind: 'square', square } }
+      : session;
+  }
+
+  if (sel.kind === 'square') {
+    if (sameSquare(sel.square, square)) return { ...session, selection: null };
+    const piece = pieceAt(state, sel.square);
+    if (!piece) return { ...session, selection: null };
+    const moved = movePiece(state, sel.square, square);
+    return push(
+      session,
+      advanceTurn(moved, piece.side, state),
+      usiMoveOf(sel.square, square),
+    );
+  }
+
+  if (sel.kind === 'hand') {
+    const dropped = dropFromHand(state, sel.side, sel.piece, square);
+    return push(
+      session,
+      advanceTurn(dropped, sel.side, state),
+      usiDropOf(sel.piece, square),
+    );
+  }
+
+  // 駒箱から置く。**編集**なので手番は動かさない（指し手ではない）
+  const placed = placePiece(state, square, {
+    kind: sel.piece as PieceKind,
+    side: sel.side,
+  });
+  return push(session, placed, null);
+}
+
+/**
+ * 持ち駒を叩いた。`piece` を省くと「その側の持ち駒置き場」を叩いた扱い（行き先専用）。
+ *
+ * ⚠ 選択中のものがあるときは**叩いた駒種ではなく選択中の駒**が動く（行き先として
+ * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ。
+ */
+export function tapHand(
+  session: StudySession,
+  side: Side,
+  piece?: HandPieceKind,
+): StudySession {
+  const state = currentState(session);
+  const sel = session.selection;
+
+  if (sel === null) {
+    if (!piece || handCount(state, side, piece) <= 0) return session;
+    return { ...session, selection: { kind: 'hand', side, piece } };
+  }
+
+  if (sel.kind === 'square') {
+    // 盤の駒を持ち駒へ（玉は持てないので駒箱へ戻る＝`moveToHand` の仕様）
+    return push(session, moveToHand(state, sel.square, side), null);
+  }
+
+  if (sel.kind === 'hand') {
+    if (sel.side === side && sel.piece === piece) {
+      return { ...session, selection: null };
+    }
+    // 別の持ち駒を叩いたら選び直し（持ち駒同士の受け渡しは用途が無い）
+    return piece && handCount(state, side, piece) > 0
+      ? { ...session, selection: { kind: 'hand', side, piece } }
+      : { ...session, selection: null };
+  }
+
+  // 駒箱 → 持ち駒。玉は持ち駒にできない
+  if (sel.piece === 'K') return { ...session, selection: null };
+  return push(session, addToHand(state, side, sel.piece, 1), null);
+}
+
+/** 駒箱を叩いた */
+export function tapBox(
+  session: StudySession,
+  side: Side,
+  piece: BasePieceKind,
+): StudySession {
+  const state = currentState(session);
+  const sel = session.selection;
+
+  if (sel === null) {
+    return pieceBox(state)[piece] > 0
+      ? { ...session, selection: { kind: 'box', side, piece } }
+      : session;
+  }
+
+  if (sel.kind === 'square') {
+    // 盤から取り除く＝駒箱へ戻す
+    return push(session, removePiece(state, sel.square), null);
+  }
+
+  if (sel.kind === 'hand') {
+    // 持ち駒を 1 枚減らす＝駒箱へ戻す
+    return push(
+      session,
+      setHandCount(
+        state,
+        sel.side,
+        sel.piece,
+        handCount(state, sel.side, sel.piece) - 1,
+      ),
+      null,
+    );
+  }
+
+  if (sel.side === side && sel.piece === piece) return { ...session, selection: null };
+  return pieceBox(state)[piece] > 0
+    ? { ...session, selection: { kind: 'box', side, piece } }
+    : { ...session, selection: null };
+}
+
+/* ---------- パネルの操作 ---------- */
+
+/** 手番を入れ替える（prd/12 §2.3。手番を問わず評価できる） */
+export function toggleTurn(session: StudySession): StudySession {
+  return push(session, toggleSideToMove(currentState(session)), null);
+}
+
+/** 1 段戻す。起点までしか戻らない（起点で押しても何も起きない） */
+export function undo(session: StudySession): StudySession {
+  if (session.steps.length <= 1) return { ...session, selection: null };
+  return { steps: session.steps.slice(0, -1), selection: null };
+}
+
+/** 棋譜の局面へ戻す（検討を捨てる） */
+export function resetStudy(session: StudySession): StudySession {
+  return createStudySession(baseState(session));
+}
+
+/** 直前の盤上の手を、成 / 不成で指し直せるか */
+export function canTogglePromotion(session: StudySession): boolean {
+  return promotionRetry(session) !== null;
+}
+
+/**
+ * 直前の盤上の手の成り / 不成を切り替える（指し直す）。
+ *
+ * タップ 2 段では成りを聞かないので、**指した後にここで切り替える**。
+ * 段を積み増さず**直前の段を差し替える**（成 / 不成は 1 つの手の 2 つの形なので、
+ * undo 2 回で元へ戻る形にすると手順の意味がずれる）。
+ */
+export function togglePromotion(session: StudySession): StudySession {
+  const retry = promotionRetry(session);
+  if (!retry) return session;
+  const steps = session.steps.slice(0, -1);
+  steps.push({ state: retry.state, move: retry.move });
+  return { steps, selection: null };
+}
+
+function promotionRetry(
+  session: StudySession,
+): { state: BoardState; move: string } | null {
+  if (session.steps.length < 2) return null;
+  const last = session.steps[session.steps.length - 1];
+  const prevStep = session.steps[session.steps.length - 2];
+  const move = last.move;
+  // 駒打ちは成って打てない（`P*5e` に `+` は付かない）
+  if (!move || !/^[1-9][a-i][1-9][a-i]\+?$/.test(move)) return null;
+
+  const promoted = move.endsWith('+');
+  const from = squareOfUsi(move.slice(0, 2));
+  const to = squareOfUsi(move.slice(2, 4));
+  const piece = pieceAt(prevStep.state, from);
+  if (!piece) return null;
+  // 成れない駒（金・玉）と、元から成っている駒を動かした手は切り替えの対象外
+  if (!promoted && !canPromote(piece.kind)) return null;
+  if (!promoted && unpromoted(piece.kind) !== piece.kind) return null;
+
+  const moved = movePiece(prevStep.state, from, to, { promote: !promoted });
+  return {
+    state: advanceTurn(moved, piece.side, prevStep.state),
+    move: usiMoveOf(from, to, !promoted),
+  };
+}
+
+/**
+ * USI の手順をタップ操作としてそのまま流し、セッションを組み立てる。
+ *
+ * **テストと DEV ギャラリー（`/dev-gallery`）で「検討中の状態」を固定するための入口。**
+ * 盤面をハードコードせず、実際のタップと同じ経路（`tapSquare` / `tapHand`）を通すので、
+ * 操作モデルを変えたらここも一緒に壊れる（＝嘘をつかない）。
+ */
+export function applyStudyMoves(base: BoardState, moves: string[]): StudySession {
+  let session = createStudySession(base);
+  for (const move of moves) {
+    const drop = move.match(/^([PLNSGBR])\*([1-9][a-i])$/);
+    if (drop) {
+      session = tapHand(
+        session,
+        currentState(session).sideToMove,
+        drop[1] as HandPieceKind,
+      );
+      session = tapSquare(session, squareOfUsi(drop[2]));
+      continue;
+    }
+    session = tapSquare(session, squareOfUsi(move.slice(0, 2)));
+    session = tapSquare(session, squareOfUsi(move.slice(2, 4)));
+    if (move.endsWith('+')) session = togglePromotion(session);
+  }
+  return session;
+}
+
+/* ---------- 評価の送り先 ---------- */
+
+/** `POST /api/positions/evaluate` に送る body */
+export interface EvalTarget {
+  sfen: string;
+  move: string | null;
+}
+
+/** 「この局面を評価」: 現在の検討局面をそのまま送る */
+export function positionEvalTarget(session: StudySession): EvalTarget {
+  return { sfen: positionSfen(currentState(session)), move: null };
+}
+
+/**
+ * 「この手を読む」: **直前の手を、その手を指す前の局面で**名指しする。
+ *
+ * ⚠ 送る SFEN は「1 つ前の段」。名指し評価は `go searchmoves <手>` なので、
+ * 手を適用した後の局面を送ると別の手を読むことになる。
+ * 直前の段が編集（駒箱・持ち駒・手番）なら名指しできないので null を返す。
+ */
+export function namedEvalTarget(session: StudySession): EvalTarget | null {
+  if (session.steps.length < 2) return null;
+  const move = lastMove(session);
+  if (!move) return null;
+  return { sfen: positionSfen(session.steps[session.steps.length - 2].state), move };
+}

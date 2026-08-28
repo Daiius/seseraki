@@ -307,8 +307,33 @@ describe('undo と redo', () => {
     expect(namedEvalTarget(s)).toEqual({
       sfen: positionSfen(initial),
       move: '7g7f',
+      from: initial,
     });
     expect(positionEvalTarget(s).sfen).toBe(positionSfen(currentState(s)));
+  });
+
+  /**
+   * 🔴 回帰（レビュー指摘 `OCL-753E7A28`）。cursor 方式へ変えたとき、名指し評価の
+   * **基点だけが配列末尾基準のまま**取り残されていた。undo して redo 分が残っていると
+   * 「送る局面・手」と「検証と PV 再生に使う局面」がずれ、正しい要求を誤って弾いたり、
+   * **返ってきた咎め筋を別の盤から再生**したりする。
+   */
+  it('🔴 undo して redo 分が残っていても、送り先と基点が cursor に揃う', () => {
+    const full = applyStudyMoves(initial, ['7g7f', '3c3d', '2g2f']);
+    const s = undo(undo(full)); // ▲７六歩まで戻す（redo 分が 2 段残っている）
+    expect(canRedo(s)).toBe(true);
+
+    const target = namedEvalTarget(s);
+    expect(target?.move).toBe('7g7f');
+    // 送る SFEN も基点も cursor の 1 つ手前（= 初期局面）で、末尾の局面ではない
+    expect(target?.sfen).toBe(positionSfen(initial));
+    expect(target?.from).toBe(initial);
+    expect(target?.from).not.toBe(currentState(full));
+
+    // 局面評価の側も cursor の局面（末尾ではない）
+    const position = positionEvalTarget(s);
+    expect(position.from).toBe(currentState(s));
+    expect(position.sfen).toBe(positionSfen(currentState(s)));
   });
 });
 
@@ -318,13 +343,18 @@ describe('評価の送り先', () => {
     expect(positionEvalTarget(s)).toEqual({
       sfen: positionSfen(currentState(s)),
       move: null,
+      from: currentState(s),
     });
   });
 
   it('名指し評価は「その手を指す前」の局面と手を送る', () => {
     const s = applyStudyMoves(initial, ['7g7f']);
     // 🔴 手を適用した後の局面を送ると別の手を読むことになる
-    expect(namedEvalTarget(s)).toEqual({ sfen: positionSfen(initial), move: '7g7f' });
+    expect(namedEvalTarget(s)).toEqual({
+      sfen: positionSfen(initial),
+      move: '7g7f',
+      from: initial,
+    });
   });
 
   it('検討していない / 直前が編集なら名指しできない', () => {

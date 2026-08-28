@@ -235,8 +235,10 @@ export function StudyBoard({
   const run = async (mode: EvalMode) => {
     const target = mode === 'position' ? positionEvalTarget(session) : named;
     if (!target) return;
-    const from =
-      mode === 'position' ? state : session.steps[session.steps.length - 2].state;
+    // 🔴 **基点は送り先と同じ関数から取る**（レビュー指摘 `OCL-753E7A28`）。
+    //    ここで別に数え直すと、undo して redo 分が残っているときに
+    //    「送った局面」と「検証・PV 再生の基点」がずれる。
+    const from = target.from;
 
     // 🔒 **送る前にクライアントで検証する**（往復を減らす。判定は `shared` の 1 つ）
     const violations = validateEvalTarget(from, target.move);

@@ -427,15 +427,28 @@ export function applyStudyMoves(base: BoardState, moves: string[]): StudySession
 
 /* ---------- 評価の送り先 ---------- */
 
-/** `POST /api/positions/evaluate` に送る body */
+/**
+ * 評価の送り先。`sfen` と `move` がそのまま `POST /api/positions/evaluate` の body になる。
+ *
+ * 🔴 **基点（`from`）も一緒に返す**（レビュー指摘 `OCL-753E7A28`）。送る SFEN の元になった
+ * 局面は、**クライアント検証にも結果の保存（咎め筋の再生の基点）にも要る**。呼び出し側で
+ * 別に計算すると、`cursor` が末尾に無いとき（undo して redo 分が残っているとき）に
+ * 簡単にずれる——実際、cursor 方式へ変えたときに名指し評価の基点だけが配列末尾基準の
+ * まま取り残されていた。**送信対象と基点は 1 つの関数から導出する。**
+ */
 export interface EvalTarget {
+  /** 送る局面（正規化 SFEN） */
   sfen: string;
+  /** 名指し評価の対象手（局面評価は null） */
   move: string | null;
+  /** `sfen` の元になった局面そのもの。検証と PV 再生の基点 */
+  from: BoardState;
 }
 
 /** 「この局面を評価」: 現在の検討局面をそのまま送る */
 export function positionEvalTarget(session: StudySession): EvalTarget {
-  return { sfen: positionSfen(currentState(session)), move: null };
+  const from = currentState(session);
+  return { sfen: positionSfen(from), move: null, from };
 }
 
 /**
@@ -449,5 +462,8 @@ export function namedEvalTarget(session: StudySession): EvalTarget | null {
   if (session.cursor < 1) return null;
   const move = lastMove(session);
   if (!move) return null;
-  return { sfen: positionSfen(session.steps[session.cursor - 1].state), move };
+  // ⚠ **`cursor` の 1 つ手前**。配列の末尾ではない（undo して redo 分が残っていると
+  //    末尾は「まだやり直していない先の局面」で、送る手とも噛み合わない）
+  const from = session.steps[session.cursor - 1].state;
+  return { sfen: positionSfen(from), move, from };
 }

@@ -10,7 +10,12 @@ import {
   type SquareRef,
 } from 'shared';
 import { BoardGrid, HandDisplay } from './BoardGrid';
-import { ChevronLeftIcon, ChevronRightIcon } from './icons';
+import {
+  ArrowUturnLeftIcon,
+  ArrowsRightLeftIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+} from './icons';
 import { formatTurnScore, moveDestination } from '../lib/usi';
 import { DEFAULT_THRESHOLDS, lossLabel, type Thresholds } from '../lib/cpl';
 import {
@@ -151,6 +156,13 @@ export interface StudyBoardProps {
    */
   initialSession?: StudySession;
   initialEval?: EvalState;
+  /**
+   * 「評価する」の幅（`/dev-gallery` で見比べるためのつまみ。恒久的な設定ではない）。
+   *
+   * - `'fill'`（既定・**案 A**）: 行の残り幅いっぱい。主操作が一番大きく押し間違えにくい
+   * - `'auto'`（**案 B**）: ラベルぶんの幅。行が詰まって見え、盤に近い
+   */
+  evalButtonWidth?: 'fill' | 'auto';
 }
 
 /** 咎め筋（PV）の再生位置。**読み専用の一時状態**（prd/12 §3.2） */
@@ -161,6 +173,22 @@ interface Replay {
 
 /** 操作系のボタン。モバイル 44px（375px 未満は 40px）・デスクトップは小さく */
 const TOUCH_BTN = 'btn max-md:h-11 max-md:min-h-11 max-[374px]:h-10 max-[374px]:min-h-10 md:btn-sm';
+
+/**
+ * アイコンだけのボタン（検討の操作パネル。prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 🔒 **正方形にする**——高さだけ 44px にしても幅が潰れればタップの的は小さいままで、
+ * prd/05 §2.1 の 44px 基準を満たさない。高さと同じ幅を明示して `px-0` で内側の余白を消す。
+ * 🔒 **`shrink-0`**——同じ行の「評価する」が残り幅いっぱいに伸びる（案 A）ので、
+ * 縮められる側にしておくとアイコンボタンから先に潰れる。
+ */
+const ICON_BTN = `${TOUCH_BTN} shrink-0 px-0 max-md:w-11 max-[374px]:w-10 md:w-8`;
+
+/**
+ * 文字（`成` / `☗先手`）を入れる小さなボタン。**幅は下限だけ決めて内容で伸ばす**——
+ * `不成` や手番の記号はアイコンより広く、固定幅だと収まらない。
+ */
+const GLYPH_BTN = `${TOUCH_BTN} shrink-0 px-2 gap-1 max-md:min-w-11 max-[374px]:min-w-10 md:min-w-8`;
 
 
 /** 手番側から数えて i 手目の手番記号 */
@@ -181,6 +209,7 @@ export function StudyBoard({
   thresholds = DEFAULT_THRESHOLDS,
   initialSession,
   initialEval,
+  evalButtonWidth = 'fill',
 }: StudyBoardProps) {
   const [session, setSession] = useState<StudySession>(
     () => initialSession ?? createStudySession(baseState),
@@ -487,8 +516,17 @@ export function StudyBoard({
       */}
       {studying && (
         <div className="max-w-3xl flex flex-col gap-2 no-tap-select">
+          {/*
+            🔴 **操作は 1 行に収める**（prd/12 §3.2・決定 2026-08-29）。以前は
+            「棋譜に戻る / 手番 / 成にする」と「評価する」が 2 行に分かれ、390px で
+            折り返していた。**アイコン化で 4 つを 1 行に**畳む。
+            ⚠ 320px のような狭い幅では折り返して 2 行になる（許容）。パネルは
+            コントローラー行より**下**にあるので、折り返しても盤・◀ ▶ は動かない
+            （prd/05 §2.1 / PR #105 の教訓）。
+            🔒 アイコンのみのボタンには **`aria-label` を必ず付ける**（`title` も残す）。
+          */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="badge badge-primary badge-sm">
+            <span className="badge badge-primary badge-sm shrink-0">
               {replaying ? '読み筋を再生中' : '検討中'}
             </span>
             {/*
@@ -498,43 +536,67 @@ export function StudyBoard({
             */}
             <button
               type="button"
-              className={clsx(TOUCH_BTN, 'btn-ghost')}
+              className={clsx(ICON_BTN, 'btn-ghost')}
               onClick={() => edit(resetStudy(session))}
+              aria-label="棋譜に戻る"
+              title="棋譜に戻る（検討を捨てる）"
             >
-              棋譜に戻る
+              <ArrowUturnLeftIcon />
             </button>
+            {/*
+              🔴 **手番の記号（☗ / ☖）は落とさない**（決定 2026-08-29）。このボタンは
+              操作であると同時に「**今どちらの手番か**」の状態表示を兼ねている——手番を
+              自由に入れ替えられる検討盤で記号を消すと、今どちら番なのかが画面から消える
+              （評価値の視点は手番側なので、読み違いに直結する。prd/12 §2.3）。
+            */}
             <button
               type="button"
-              className={clsx(TOUCH_BTN, 'btn-outline')}
+              className={clsx(GLYPH_BTN, 'btn-outline')}
               onClick={() => edit(toggleTurn(session))}
               disabled={replaying}
+              aria-label={`手番を入れ替える（今は${state.sideToMove === 'sente' ? '先手' : '後手'}番）`}
               title="手番を入れ替える"
             >
-              手番 {state.sideToMove === 'sente' ? '☗先手' : '☖後手'}
+              <ArrowsRightLeftIcon className="size-4" />
+              <span>{state.sideToMove === 'sente' ? '☗' : '☖'}</span>
             </button>
+            {/*
+              ⚠ **条件付きで出入りする**（`canTogglePromotion`）。アイコンではなく
+              「成」「不成」の字にしたのは、成 / 不成という将棋の概念に対応する図像が
+              無く、字の方が短く読めるため。
+            */}
             {canTogglePromotion(session) && (
               <button
                 type="button"
-                className={clsx(TOUCH_BTN, 'btn-outline')}
+                className={clsx(GLYPH_BTN, 'btn-outline')}
                 onClick={() => edit(togglePromotion(session))}
                 disabled={replaying}
+                aria-label={
+                  lastMove(session)?.endsWith('+')
+                    ? '直前の手を不成で指し直す'
+                    : '直前の手を成で指し直す'
+                }
                 title="直前の手を成 / 不成で指し直す"
               >
-                {lastMove(session)?.endsWith('+') ? '不成にする' : '成にする'}
+                {lastMove(session)?.endsWith('+') ? '不成' : '成'}
               </button>
             )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
             {/*
               🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。かつての
               「この手を読む」（名指し評価）は返る数字が局面評価と同じで符号だけ反転して
               いたため web から外した。直前が盤上の指し手なら、この 1 押しで 1 手前の
               局面も評価して**直前の手の採点**まで出す（API の名指し評価は MCP 向けに残る）。
+              🔒 **ここだけラベルを残す**（主操作をアイコンに畳まない）。
+              ⚠ 幅は「成」の出入りで動くので、`flex-1`（案 A）でも内容幅（案 B）でも
+              崩れない組み方にしてある。
             */}
             <button
               type="button"
-              className={clsx(TOUCH_BTN, 'btn-primary')}
+              className={clsx(
+                TOUCH_BTN,
+                'btn-primary',
+                evalButtonWidth === 'fill' && 'flex-1 min-w-24',
+              )}
               onClick={() => void run()}
               disabled={evalState.kind === 'loading' || replaying}
               title={

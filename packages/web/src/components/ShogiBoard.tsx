@@ -6,9 +6,15 @@ import {
   positionSfen,
   usiToJapaneseWithPiece,
   type BoardState,
-  type PieceKind,
 } from 'shared';
-import { turnSymbol, formatScore, formatScoreShort, toSenteEval } from '../lib/usi';
+import {
+  turnSymbol,
+  formatScore,
+  formatScoreShort,
+  moveDestination,
+  toSenteEval,
+} from '../lib/usi';
+import { StudyBoard } from './StudyBoard';
 import {
   computeMoveLosses,
   formatLoss,
@@ -19,15 +25,6 @@ import {
   type Thresholds,
 } from '../lib/cpl';
 import { EvalGraph } from './EvalGraph';
-
-const PIECE_DISPLAY: Record<PieceKind, string> = {
-  P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
-  '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
-};
-
-const HAND_ORDER: PieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
-const COL_LABELS = [9, 8, 7, 6, 5, 4, 3, 2, 1];
-const ROW_LABELS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 
 const ICON_PROPS = {
   xmlns: 'http://www.w3.org/2000/svg',
@@ -109,104 +106,6 @@ interface Props {
   initialMoveIndex?: number;
 }
 
-export function HandDisplay({
-  hand,
-  side,
-  name,
-}: {
-  hand: Partial<Record<PieceKind, number>>;
-  side: 'sente' | 'gote';
-  name?: string | null;
-}) {
-  const pieces = HAND_ORDER.flatMap((kind) => {
-    const count = hand[kind];
-    if (!count) return [];
-    return [`${PIECE_DISPLAY[kind]}${count > 1 ? count : ''}`];
-  });
-  const symbol = side === 'sente' ? '☗' : '☖';
-  const label = name ?? (side === 'sente' ? '先手' : '後手');
-  return (
-    <div className="text-sm lg:text-base flex items-center">
-      <span className="font-semibold">{symbol}{label}</span>
-      <span className="ml-auto">{pieces.length > 0 ? pieces.join(' ') : 'なし'}</span>
-    </div>
-  );
-}
-
-/** USI の手から移動先の [row, col] を取得 */
-function lastMoveDestination(usiMove: string): [number, number] | null {
-  // 駒打ち: "B*5c" → "5c"
-  const dropMatch = usiMove.match(/^[PLNSGBR]\*(\d[a-i])$/);
-  if (dropMatch) {
-    const col = 9 - Number(dropMatch[1][0]);
-    const row = dropMatch[1].charCodeAt(1) - 97;
-    return [row, col];
-  }
-  // 通常の移動: "7g7f" or "7g7f+" → "7f"
-  const moveMatch = usiMove.match(/^\d[a-i](\d[a-i])\+?$/);
-  if (moveMatch) {
-    const col = 9 - Number(moveMatch[1][0]);
-    const row = moveMatch[1].charCodeAt(1) - 97;
-    return [row, col];
-  }
-  return null;
-}
-
-// 局面検索（/positions）でも使うので export する（盤の見た目を 1 箇所に保つ）
-export function BoardGrid({ state, lastMoveTo, flipped }: { state: BoardState; lastMoveTo: [number, number] | null; flipped: boolean }) {
-  const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
-  const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
-  const rowOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
-  const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
-
-  return (
-    <div className="inline-grid grid-cols-[repeat(9,2rem)_1.25rem] grid-rows-[1rem_repeat(9,2rem)] md:grid-cols-[repeat(9,2.5rem)_1.5rem] md:grid-rows-[1.25rem_repeat(9,2.5rem)] lg:grid-cols-[repeat(9,3rem)_1.75rem] lg:grid-rows-[1.5rem_repeat(9,3rem)] xl:grid-cols-[repeat(9,3.5rem)_2rem] xl:grid-rows-[1.75rem_repeat(9,3.5rem)]">
-      {/* 筋番号（1行目） */}
-      {colLabels.map((col) => (
-        <div
-          key={`col-${col}`}
-          className="flex items-end justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
-        >
-          {col}
-        </div>
-      ))}
-      <div />
-      {/* 盤面 9x9 + 段番号 */}
-      {rowOrder.flatMap((rowIdx, ri) => [
-        ...colOrder.map((colIdx) => {
-          const sq = state.board[rowIdx][colIdx];
-          const isLastMove = lastMoveTo !== null && lastMoveTo[0] === rowIdx && lastMoveTo[1] === colIdx;
-          return (
-            <div
-              key={`${rowIdx}-${colIdx}`}
-              className={clsx(
-                'size-8 md:size-10 lg:size-12 xl:size-14 border border-base-300 flex items-center justify-center text-sm md:text-base lg:text-lg xl:text-xl font-bold',
-                isLastMove && 'bg-primary/15',
-              )}
-            >
-              {sq && (
-                <span
-                  className={clsx(
-                    'inline-block',
-                    (flipped ? sq.side === 'sente' : sq.side === 'gote') && 'rotate-180 text-error',
-                  )}
-                >
-                  {PIECE_DISPLAY[sq.kind]}
-                </span>
-              )}
-            </div>
-          );
-        }),
-        <div
-          key={`row-${ri}`}
-          className="flex items-center justify-center text-[10px] md:text-xs lg:text-sm text-base-content/50"
-        >
-          {rowLabels[ri]}
-        </div>,
-      ])}
-    </div>
-  );
-}
 
 export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0 }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
@@ -296,7 +195,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     }
   }
 
-  const lastMoveTo = displayedMove ? lastMoveDestination(displayedMove) : null;
+  const lastMoveTo = displayedMove ? moveDestination(displayedMove) : null;
 
   // 情報行は 1 行に収める（下記）ので、長い符号は truncate される。
   // 全文へ到達する手段として title に同じ文字列を渡すため、ここで 1 度だけ作る。
@@ -391,42 +290,27 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     <div className="flex flex-col">
       {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
       <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
-      {/* 盤面 */}
-      <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
-        <HandDisplay
-          hand={flipped ? displayState.hand.sente : displayState.hand.gote}
-          side={flipped ? 'sente' : 'gote'}
-          name={flipped ? sente : gote}
-        />
-        {/*
-          盤面の左右タップで手を送る（モバイル用）。挙動は下の ◀ ▶ ボタンと機械的に同じで、
-          分岐中にタップすると本筋へ復帰する（キーボードの ←→ は分岐内を移動するので非対称）。
-          左右は盤面反転に依らず**画面基準**（◀ が左・▶ が右というボタンの並びに合わせる）。
-          タブ順からは外す（同じ操作はコントローラー行のボタンが担うため）。
-        */}
-        <div className="relative w-fit no-tap-select">
-          <BoardGrid state={displayState} lastMoveTo={lastMoveTo} flipped={flipped} />
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="1手戻る"
-            className="absolute inset-y-0 left-0 w-1/2 touch-manipulation"
-            onClick={() => navigateMain(Math.max(0, moveIndex - 1))}
-          />
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label="1手進む"
-            className="absolute inset-y-0 right-0 w-1/2 touch-manipulation"
-            onClick={() => navigateMain(Math.min(totalMoves, moveIndex + 1))}
-          />
-        </div>
-        <HandDisplay
-          hand={flipped ? displayState.hand.gote : displayState.hand.sente}
-          side={flipped ? 'gote' : 'sente'}
-          name={flipped ? gote : sente}
-        />
-      </div>
+      {/*
+        盤面 + 検討盤（prd/12 §3）。**盤のタップは駒の選択**なので、
+        🔴 かつてここにあった「盤面の左右半分タップで 1 手送り」は廃止した
+        （決定・2026-08-28。prd/05 §2.1 / prd/12 §3.1）。手送りは下のコントローラー行と
+        キーボードに一本化してある。
+
+        検討中の状態は `StudyBoard` が持つ。**表示局面（`displayState`）が変われば
+        検討は捨てられる**ので、手送りとの関係はここに書かずに済む。
+        情報行とコントローラー行を `children` として渡し、操作パネルが**それより下**に
+        出るようにしている（パネルが現れても ◀ ▶ の位置が動かない。prd/05 §2.1）。
+      */}
+      <StudyBoard
+        baseState={displayState}
+        // 「今どこを見ているか」。分岐中の局面はレンダーごとに作り直されるので、
+        // 局面オブジェクトの同一性ではなくこの鍵で破棄を判定させる
+        baseKey={`${moveIndex}:${branchRank ?? '-'}:${branchDepth}`}
+        baseLastMoveTo={lastMoveTo}
+        flipped={flipped}
+        sente={sente}
+        gote={gote}
+      >
 
       {/*
         コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ
@@ -542,6 +426,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
           <IconFlip />
         </button>
       </div>
+      </StudyBoard>
       </div>
 
       {/* スクロール領域: 候補手 + 評価値グラフ */}

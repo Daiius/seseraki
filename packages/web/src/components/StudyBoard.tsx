@@ -141,6 +141,21 @@ export interface StudyBoardProps {
   /** 検討していないときのキーボード手送り。省略するとキーボードは何もしない */
   keyboardNav?: KeyboardNav;
   /**
+   * 盤 + `children` + 操作パネルを**1 つの要素にまとめる**ためのクラス。
+   * 呼び出し側がスクロール追従（`sticky`）のグループを作るために渡す。
+   * 省略すると余計な要素を挟まない（`/dev-gallery` はそのまま）。
+   */
+  groupClassName?: string;
+  /**
+   * 操作パネルより**下**（＝ `groupClassName` のグループの外）に置く領域。
+   *
+   * 🔒 **検討中かどうかで出し分けたいものはここへ渡す**（prd/12 §3.1・決定 2026-08-29）。
+   * 検討状態はこのコンポーネントが持つので、`children` と同じく `StudyControls` を渡す形にして
+   * **検討中かの出所を 1 つに保つ**——呼び出し側に同じ状態をもう 1 つ持たせない。
+   * （候補手一覧・評価値グラフはスクロール領域にあるので `children` の位置には置けない）
+   */
+  footer?: (controls: StudyControls) => ReactNode;
+  /**
    * 悪手判定の閾値（prd/05 §2.5）。**直前の手の採点の色分けに使う**（prd/12 §3.2）。
    *
    * 🔒 **棋譜側の悪手マーカーと同じ供給元を使う**（`useThresholds` → `ShogiBoard` → ここ）。
@@ -199,6 +214,8 @@ export function StudyBoard({
   gote,
   children,
   keyboardNav,
+  groupClassName,
+  footer,
   thresholds = DEFAULT_THRESHOLDS,
   initialSession,
   initialEval,
@@ -468,7 +485,12 @@ export function StudyBoard({
   const topSide: Side = flipped ? 'sente' : 'gote';
   const bottomSide: Side = flipped ? 'gote' : 'sente';
 
-  return (
+  /*
+    盤 + 情報行 / コントローラー行（`children`）+ 操作パネル。**この 3 つで 1 グループ**で、
+    呼び出し側は `groupClassName` で `sticky` にする。`footer` はこのグループの外（下）に出る
+    ので、スクロールしていく領域（候補手・評価値グラフ）を置ける。
+  */
+  const group = (
     <>
       <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
         <HandDisplay
@@ -623,6 +645,13 @@ export function StudyBoard({
 
         </div>
       )}
+    </>
+  );
+
+  return (
+    <>
+      {groupClassName ? <div className={groupClassName}>{group}</div> : group}
+      {footer?.(controls)}
     </>
   );
 }

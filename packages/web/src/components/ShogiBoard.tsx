@@ -15,6 +15,7 @@ import {
   toSenteEval,
 } from '../lib/usi';
 import { StudyBoard } from './StudyBoard';
+import type { StudySession } from '../lib/study';
 import { BoardControls } from './BoardControls';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 import {
@@ -81,10 +82,16 @@ interface Props {
    * 初期局面から始めるので渡さない。範囲外の値は端に丸める。
    */
   initialMoveIndex?: number;
+  /**
+   * 検討セッションの初期状態。**DEV ギャラリー用**（`initialMoveIndex` と同じ趣旨）。
+   * 検討中の見え方——候補手を出さない・評価値グラフから手送りできない
+   * （prd/12 §3.1・決定 2026-08-29）——を実物のまま並べるための入口で、通常は渡さない。
+   */
+  initialStudySession?: StudySession;
 }
 
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0 }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0, initialStudySession }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
   const userSide = subjectSide ?? null;
@@ -238,8 +245,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
 
   return (
     <div className="flex flex-col">
-      {/* スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー */}
-      <div className="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2">
       {/*
         盤面 + 検討盤（prd/12 §3）。**盤のタップは駒の選択**なので、
         🔴 かつてここにあった「盤面の左右半分タップで 1 手送り」は廃止した
@@ -266,6 +271,82 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         // 🔒 直前の手の採点の色分けは**棋譜側の悪手マーカーと同じ閾値**で判定する
         //    （prd/12 §3.2・決定 2026-08-29。1 つの画面に基準を 2 つ持たない）
         thresholds={thresholds}
+        // スクロール時に上端へ固定するグループ: 盤面 + コンパクト行 + コントローラー + 操作パネル
+        initialSession={initialStudySession}
+        groupClassName="sticky top-0 z-10 bg-base-100 shadow-sm flex flex-col gap-3 pb-2"
+        /*
+          スクロール領域: 候補手 + 評価値グラフ。
+          🔴 **検討中かどうかで出し分けるのでここに渡す**（prd/12 §3.1・決定 2026-08-29）。
+          検討状態は `StudyBoard` が持つので、`study.studying` を受け取って判断する
+          ——`ShogiBoard` に同じ状態をもう 1 つ持たせない。
+        */
+        footer={(study) => (
+          <div className="flex flex-col gap-3 pt-3">
+            {/*
+              候補手一覧（読み筋付き）。
+              🔴 **検討中は出さない**（決定・2026-08-29）。この一覧は棋譜側の `moveIndex` に
+              紐づいており、**検討で駒を動かしても一切変わらない**。盤の局面と対応しない
+              候補手を同じ画面に置くと、どの局面の話なのか読めなくなる。
+              🔒 さらに、ここの「分岐を進む」は `branchRank` / `branchDepth` を動かす
+              ＝ `StudyBoard` の `baseKey` を変えるので、**検討セッションが黙って捨てられる**。
+              prd/12 §3.1 の「検討を抜けるのは『棋譜に戻る』だけ」に反する出口だった。
+            */}
+            {!study.studying && prevAnalysis && prevAnalysis.candidates.length > 0 && (
+              <div className="max-w-3xl">
+                <CandidateList
+                  ref={candidateListRef}
+                  candidates={prevAnalysis.candidates}
+                  played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
+                  evalMoveNumber={evalMoveNumber}
+                  positions={positions}
+                  moveIndex={moveIndex}
+                  loss={currentLoss}
+                  label={currentLoss ? labelOf(currentLoss, thresholds) : null}
+                  branchRank={branchRank}
+                  branchDepth={branchDepth}
+                  onBranchForward={onBranchForward}
+                  onBranchBack={onBranchBack}
+                />
+              </div>
+            )}
+
+            {/*
+              評価値グラフ。
+              🔴 **検討中も出したまま**（決定・2026-08-29）。グラフは「棋譜全体の評価値の推移」で
+              あって現在局面に紐づく主張が弱く、検討しながら見る価値がある。
+              🔒 ただし**クリックによる手送りは無効にする**——`goToMain` は `moveIndex` を
+              動かす＝検討を黙って捨てるので、候補手と同じ「余計な出口」になる。
+              `onClickMove` を渡さなければクリック層そのものが描かれない。
+              ⚠ 現在位置マーカーは棋譜側の `moveIndex`（＝検討の起点）を指したままでよい。
+              ⚠ 押せないことは**薄さで示すに留める**（目立たせすぎない）。
+            */}
+            <div
+              className={clsx(study.studying && 'opacity-60')}
+              title={study.studying ? '検討中はグラフから手送りできない（棋譜に戻ると押せる）' : undefined}
+            >
+              <EvalGraph
+                analyses={sortedAnalyses}
+                currentMove={moveIndex}
+                onClickMove={study.studying ? undefined : goToMain}
+                losses={losses}
+                thresholds={thresholds}
+                userSide={userSide}
+                branch={
+                  branchActive && branchCandidate
+                    ? {
+                        moveNumber: evalMoveNumber + 1,
+                        value: toSenteEval(
+                          branchCandidate.scoreType,
+                          branchCandidate.scoreValue,
+                          evalMoveNumber,
+                        ),
+                      }
+                    : null
+                }
+              />
+            </div>
+          </div>
+        )}
       >
       {(study) => (
       <>
@@ -345,52 +426,6 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
       </>
       )}
       </StudyBoard>
-      </div>
-
-      {/* スクロール領域: 候補手 + 評価値グラフ */}
-      <div className="flex flex-col gap-3 pt-3">
-        {/* 候補手一覧（読み筋付き） */}
-        {prevAnalysis && prevAnalysis.candidates.length > 0 && (
-          <div className="max-w-3xl">
-            <CandidateList
-              ref={candidateListRef}
-              candidates={prevAnalysis.candidates}
-              played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
-              evalMoveNumber={evalMoveNumber}
-              positions={positions}
-              moveIndex={moveIndex}
-              loss={currentLoss}
-              label={currentLoss ? labelOf(currentLoss, thresholds) : null}
-              branchRank={branchRank}
-              branchDepth={branchDepth}
-              onBranchForward={onBranchForward}
-              onBranchBack={onBranchBack}
-            />
-          </div>
-        )}
-
-        {/* 評価値グラフ */}
-        <EvalGraph
-          analyses={sortedAnalyses}
-          currentMove={moveIndex}
-          onClickMove={goToMain}
-          losses={losses}
-          thresholds={thresholds}
-          userSide={userSide}
-          branch={
-            branchActive && branchCandidate
-              ? {
-                  moveNumber: evalMoveNumber + 1,
-                  value: toSenteEval(
-                    branchCandidate.scoreType,
-                    branchCandidate.scoreValue,
-                    evalMoveNumber,
-                  ),
-                }
-              : null
-          }
-        />
-      </div>
     </div>
   );
 }

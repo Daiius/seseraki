@@ -100,9 +100,12 @@ function Phone({ children }: { children: ReactNode }) {
 function KifuCase({
   initialMoveIndex,
   analyses,
+  study,
 }: {
   initialMoveIndex: number;
   analyses: ReturnType<typeof analysisAt>[];
+  /** 検討中の見え方を出すための初期検討状態（渡さなければ通常の棋譜閲覧） */
+  study?: Parameters<typeof ShogiBoard>[0]['initialStudySession'];
 }) {
   return (
     <Phone>
@@ -115,6 +118,7 @@ function KifuCase({
         subjectSide={null}
         thresholds={DEFAULT_THRESHOLDS}
         initialMoveIndex={initialMoveIndex}
+        initialStudySession={study}
       />
     </Phone>
   );
@@ -252,6 +256,40 @@ function Gallery() {
             analysisAt(2, 'mate', 15, '8h2b+', ['8h2b+', '3a2b', 'B*4e']),
             analysisAt(3, 'mate', -15, '2b3a'),
           ]}
+        />
+      </Case>
+
+      {/*
+        🔴 **検討中は、盤と対応しない棋譜側の UI を出さない**（prd/12 §3.1・決定 2026-08-29）。
+        下の 2 ケースは**同じ棋譜・同じ手数**で、違いは検討しているかどうかだけ。
+
+        - **候補手一覧**: 棋譜側の手数に紐づいており検討で駒を動かしても変わらないので、
+          検討中は**出さない**。⚠ ここの「分岐を進む」は棋譜側の分岐位置を動かす＝
+          **検討セッションが黙って捨てられる**経路でもあった。
+        - **評価値グラフ**: 棋譜全体の推移なので**出したまま**。ただし**クリックで手送りできない**
+          （こちらも検討を黙って捨てる出口だった）。押せないことは薄さで示す。
+
+        どちらも「**検討を抜けるのは『棋譜に戻る』だけ**」を守るための措置。
+      */}
+      <Case title="棋譜・検討していない（候補手が出て、グラフから手送りできる）">
+        {/* 比較用の基準。候補手の「分岐を進む」もグラフのクリックも効く */}
+        <KifuCase
+          initialMoveIndex={0}
+          analyses={[analysisAt(0, 'cp', 42, '7g7f', ['7g7f', '3c3d']), analysisAt(1, 'cp', -30, '3c3d')]}
+        />
+      </Case>
+
+      <Case title="棋譜・検討中（候補手を出さず、グラフから手送りできない）">
+        {/*
+          ▲８八角×２二まで動かした検討中の状態。**候補手ブロックが丸ごと消え**、
+          評価値グラフは薄くなってクリックが効かない。
+          ⚠ 盤・コントローラー行・操作パネルの位置が上のケースと**同じ**であることも見る
+          （消えるのはスクロール領域なので、上のグループは動かない。prd/05 §2.1）。
+        */}
+        <KifuCase
+          initialMoveIndex={0}
+          analyses={[analysisAt(0, 'cp', 42, '7g7f', ['7g7f', '3c3d']), analysisAt(1, 'cp', -30, '3c3d')]}
+          study={applyStudyMoves(KIFU_POSITIONS[0], ['8h2b'])}
         />
       </Case>
 

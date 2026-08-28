@@ -270,6 +270,20 @@ describe("drainEvaluationJobs", () => {
     expect(reports.map((r) => r.id)).toEqual(["eval-1", "eval-2"]);
   });
 
+  // 🔴 局面評価の 3 本は API の契約（prd/12 §2.2）。棋譜解析の `ENGINE_MULTIPV` は
+  // 運用で増減してよいつまみなので、そちらに乗せると設定次第で 1 本・5 本と揺れる
+  it("MultiPV を 3 に設定してから探索する（ENGINE_MULTIPV に乗らない）", async () => {
+    const { engine, optionCalls } = createStubEngine(
+      [searchResult([info(1, ["7g7f"], 50)])],
+      { MultiPV: "1" },
+    );
+    const { source } = createStubSource([job("eval-1")]);
+
+    await drainEvaluationJobs(engine, source, GO);
+
+    expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
   it("上限で打ち切る（棋譜解析が評価要求で止まり続けない）", async () => {
     const { engine } = createStubEngine([
       searchResult([info(1, ["7g7f"], 50)]),

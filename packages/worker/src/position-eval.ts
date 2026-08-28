@@ -6,7 +6,8 @@
  * USI は毎回 `position` で局面を明示するので、割り込みによるエンジン状態の汚染はない。
  * 置換表の共有は許容する（検討局面は閲覧中の棋譜の派生局面で、むしろ共有できる側）。
  *
- * **パラメータは棋譜解析と同一**（`ENGINE_MOVETIME` / `ENGINE_DEPTH`・MultiPV 3）。
+ * **探索時間は棋譜解析と同一**（`ENGINE_MOVETIME` / `ENGINE_DEPTH`）。
+ * **MultiPV だけは棋譜解析の `ENGINE_MULTIPV` に乗らず 3 本固定**（API 契約。prd/12 §2.2）。
  *
  * 🔴 **局面評価は MultiPV を自分で設定してから探索する。** `analyzeKifu` は解析の
  * 終わりに MultiPV を 1 へ戻すため、エンジンの設定に乗るだけだと**同じ要求が
@@ -78,8 +79,6 @@ const MAX_JOBS_PER_DRAIN = 8;
 
 /** {@link drainEvaluationJobs} の調整つまみ */
 export interface DrainOptions {
-  /** 局面評価の候補手数（既定 {@link DEFAULT_EVAL_MULTI_PV}） */
-  multiPv?: number;
   /** 1 回で処理するジョブ数の上限（既定 {@link MAX_JOBS_PER_DRAIN}） */
   maxJobs?: number;
 }
@@ -213,6 +212,11 @@ export async function evaluateJob(
  *   （取り残したジョブは server 側で期限が来れば `failed` になる。prd/12 §2.4）
  * - エンジンの失敗は当該ジョブを `failed` で完了させたうえで {@link InteractiveEngineError}
  *   を投げる。呼び出し側はエンジンを再起動する
+ *
+ * ⚠ **候補手数は常に {@link DEFAULT_EVAL_MULTI_PV}（3 本）で、呼び出し側から変えられない。**
+ * 棋譜解析の `ENGINE_MULTIPV` は運用で増減してよいつまみだが、局面評価の 3 本は
+ * **API の契約**（prd/12 §2.2）で、web / MCP はこれを前提に組む。目的が違うので同じ値に乗せない
+ * （`ENGINE_MULTIPV=1` の構成で局面評価まで 1 本になる、という取り違えを型で塞ぐ）。
  */
 export async function drainEvaluationJobs(
   engine: EvalEngine,
@@ -220,7 +224,7 @@ export async function drainEvaluationJobs(
   goCommand: string,
   options: DrainOptions = {},
 ): Promise<number> {
-  const { multiPv = DEFAULT_EVAL_MULTI_PV, maxJobs = MAX_JOBS_PER_DRAIN } = options;
+  const { maxJobs = MAX_JOBS_PER_DRAIN } = options;
   let processed = 0;
   while (processed < maxJobs) {
     let job: PositionEvalJob | null;
@@ -234,7 +238,7 @@ export async function drainEvaluationJobs(
 
     let result: PositionEvalResult;
     try {
-      result = await evaluateJob(engine, job, goCommand, multiPv);
+      result = await evaluateJob(engine, job, goCommand, DEFAULT_EVAL_MULTI_PV);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[PositionEval] Evaluation failed (${job.id}):`, reason);

@@ -138,9 +138,10 @@ async function main() {
     /** 待っている評価ジョブを捌く。エンジンが落ちたら再起動し、捌けなかったことを返す */
     const drainPositionJobs = async (): Promise<boolean> => {
       try {
-        await drainEvaluationJobs(engine, positionJobs, goCommand, {
-          multiPv: config.engineMultiPv,
-        });
+        // ⚠ MultiPV は `drainEvaluationJobs` が 3 本固定で設定する（`ENGINE_MULTIPV` は渡さない）。
+        // 棋譜解析の候補手数は運用で増減できるつまみだが、局面評価の 3 本は
+        // **API の契約**（prd/12 §2.2）で、利用側はこれを前提に組む。目的が違うので同じ値に乗せない
+        await drainEvaluationJobs(engine, positionJobs, goCommand);
         return true;
       } catch (err) {
         if (!(err instanceof InteractiveEngineError)) throw err;
@@ -207,9 +208,8 @@ async function main() {
             // 1 局面ごとに検討局面の評価を差し込む（prd/12 §2.1）。
             // 最大待ちは「現局面の解析残り時間 + ポーリング間隔」に収まる
             onPositionBoundary: async () => {
-              await drainEvaluationJobs(engine, positionJobs, goCommand, {
-                multiPv: config.engineMultiPv,
-              });
+              // ⚠ ここでも MultiPV は渡さない（3 本固定・上の drainPositionJobs と同じ理由）
+              await drainEvaluationJobs(engine, positionJobs, goCommand);
             },
             // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
             // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）

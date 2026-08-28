@@ -6,7 +6,14 @@ import { AnalyzingAlert } from '../components/AnalyzingAlert';
 import { CopyButton } from '../components/CopyButton';
 import { ClipboardIcon } from '../components/icons';
 import { ShogiBoard } from '../components/ShogiBoard';
+import { StudyBoard, type EvalState } from '../components/StudyBoard';
 import { DEFAULT_THRESHOLDS } from '../lib/cpl';
+import {
+  applyStudyMoves,
+  createStudySession,
+  squareOfUsi,
+  tapSquare,
+} from '../lib/study';
 
 /**
  * DEV 専用の UI ギャラリー。特定の表示状態（解析中など）を、認証も API も loader も通さず
@@ -108,6 +115,43 @@ function KifuCase({
   );
 }
 
+/**
+ * 検討盤（prd/12 §3）のケース。
+ *
+ * 盤面はここでもハードコードせず、`buildPositions` で作った局面に**実際のタップと同じ経路**
+ * （`applyStudyMoves` / `tapSquare`）を通して状態を作る。操作モデルを変えたらここも
+ * 一緒に壊れるので、ギャラリーが嘘をつかない。
+ */
+function StudyCase({
+  session,
+  evalState,
+}: {
+  session: Parameters<typeof StudyBoard>[0]['initialSession'];
+  evalState?: EvalState;
+}) {
+  return (
+    <Phone>
+      <StudyBoard
+        baseState={KIFU_POSITIONS[0]}
+        baseKey="gallery"
+        baseLastMoveTo={null}
+        flipped={false}
+        sente="先手"
+        gote="後手"
+        initialSession={session}
+        initialEval={evalState}
+      />
+    </Phone>
+  );
+}
+
+/** 評価結果の見え方を固定するための候補手（スコアは**手番側から見た値**） */
+const STUDY_CANDIDATES = [
+  { rank: 1, move: '3c3d', scoreType: 'cp', scoreValue: 42, pv: ['3c3d', '2f2e', '8c8d'], depth: 22 },
+  { rank: 2, move: '8c8d', scoreType: 'cp', scoreValue: 18, pv: ['8c8d', '2e2d'], depth: 22 },
+  { rank: 3, move: '4a3b', scoreType: 'cp', scoreValue: -35, pv: ['4a3b'], depth: 21 },
+];
+
 function Gallery() {
   if (!import.meta.env.DEV) return null;
   return (
@@ -190,6 +234,77 @@ function Gallery() {
             analysisAt(3, 'mate', -15, '2b3a'),
           ]}
         />
+      </Case>
+
+      {/*
+        検討盤（prd/12 §3）。⚠ **盤マスは幅と高さから算出する**ので、この枠の中では
+        実寸にならない（ビューポート基準）。マスの大きさを見るときはブラウザ幅そのものを変える。
+      */}
+      <Case title="検討・駒を選択中（パネルはまだ出ない）">
+        {/* 7七の歩を選んだ状態。**動かすまでは今までの画面と同じ**＝パネルが無い */}
+        <StudyCase
+          session={tapSquare(createStudySession(KIFU_POSITIONS[0]), squareOfUsi('7g'))}
+        />
+      </Case>
+
+      <Case title="検討中（駒を動かして操作パネルが出た状態）">
+        {/* ▲２六歩まで進めた検討。パネルは**コントローラー行より下**に出る位置にある */}
+        <StudyCase session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])} />
+      </Case>
+
+      <Case title="検討・局面評価の結果（出所 = エンジン）">
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            mode: 'position',
+            base: KIFU_POSITIONS[1],
+            candidates: STUDY_CANDIDATES,
+            source: 'engine',
+            fallback: false,
+          }}
+        />
+      </Case>
+
+      <Case title="検討・名指し評価の結果（出所 = 既存解析・咎め筋つき）">
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            mode: 'move',
+            base: KIFU_POSITIONS[0],
+            candidates: [
+              {
+                rank: 1,
+                move: '2g2f',
+                scoreType: 'cp',
+                scoreValue: -60,
+                pv: ['2g2f', '8c8d', '2f2e', '8d8e'],
+                depth: 20,
+              },
+            ],
+            source: 'kifu',
+            fallback: true,
+          }}
+        />
+      </Case>
+
+      <Case title="検討・評価待ち / 検証で弾かれた局面">
+        <div className="flex flex-col gap-4">
+          <StudyCase
+            session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+            evalState={{ kind: 'loading', mode: 'move' }}
+          />
+          <StudyCase
+            session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+            evalState={{
+              kind: 'invalid',
+              violations: [
+                { code: 'two_pawns', message: '先手の歩が5筋に2枚あります（二歩）' },
+              ],
+            }}
+          />
+        </div>
       </Case>
     </div>
   );

@@ -156,13 +156,6 @@ export interface StudyBoardProps {
    */
   initialSession?: StudySession;
   initialEval?: EvalState;
-  /**
-   * 「評価する」の幅（`/dev-gallery` で見比べるためのつまみ。恒久的な設定ではない）。
-   *
-   * - `'fill'`（既定・**案 A**）: 行の残り幅いっぱい。主操作が一番大きく押し間違えにくい
-   * - `'auto'`（**案 B**）: ラベルぶんの幅。行が詰まって見え、盤に近い
-   */
-  evalButtonWidth?: 'fill' | 'auto';
 }
 
 /** 咎め筋（PV）の再生位置。**読み専用の一時状態**（prd/12 §3.2） */
@@ -209,7 +202,6 @@ export function StudyBoard({
   thresholds = DEFAULT_THRESHOLDS,
   initialSession,
   initialEval,
-  evalButtonWidth = 'fill',
 }: StudyBoardProps) {
   const [session, setSession] = useState<StudySession>(
     () => initialSession ?? createStudySession(baseState),
@@ -536,7 +528,10 @@ export function StudyBoard({
             */}
             <button
               type="button"
-              className={clsx(ICON_BTN, 'btn-ghost')}
+              // 🔴 **枠を付ける**（決定 2026-08-29）。アイコンのみになった以上、枠が
+              //    無いとボタンだと分からず、44px のタップ範囲も画面から読めない。
+              //    手番・成と同じ見た目に揃える（`btn-ghost` から変更）
+              className={clsx(ICON_BTN, 'btn-outline')}
               onClick={() => edit(resetStudy(session))}
               aria-label="棋譜に戻る"
               title="棋譜に戻る（検討を捨てる）"
@@ -557,8 +552,15 @@ export function StudyBoard({
               aria-label={`手番を入れ替える（今は${state.sideToMove === 'sente' ? '先手' : '後手'}番）`}
               title="手番を入れ替える"
             >
-              <ArrowsRightLeftIcon className="size-4" />
-              <span>{state.sideToMove === 'sente' ? '☗' : '☖'}</span>
+              <ArrowsRightLeftIcon className="size-4 shrink-0" />
+              {/*
+                ⚠ **記号は少し大きく**（決定 2026-08-29）。390px の実機で ☗ と ☖ の
+                塗り分けが判別しづらかった。**文字（先 / 後）を足すのではなく、
+                今ある記号を読める大きさにする**（1 行に収める意味が無くなるため）。
+              */}
+              <span className="shrink-0 text-base leading-none">
+                {state.sideToMove === 'sente' ? '☗' : '☖'}
+              </span>
             </button>
             {/*
               ⚠ **条件付きで出入りする**（`canTogglePromotion`）。アイコンではなく
@@ -587,16 +589,19 @@ export function StudyBoard({
               いたため web から外した。直前が盤上の指し手なら、この 1 押しで 1 手前の
               局面も評価して**直前の手の採点**まで出す（API の名指し評価は MCP 向けに残る）。
               🔒 **ここだけラベルを残す**（主操作をアイコンに畳まない）。
-              ⚠ 幅は「成」の出入りで動くので、`flex-1`（案 A）でも内容幅（案 B）でも
-              崩れない組み方にしてある。
+
+              🔴 **幅の規則は md を境に変える**（決定 2026-08-29）:
+              **md 未満は残り幅いっぱい**（`flex-1`）、**md 以上は内容ぶんの幅**。
+              - モバイルでは「成」の出入りで空く幅をこのボタンが吸うので、行の見え方が安定する
+                （実測 390px では残り幅いっぱいでも内容幅との差は 10px しかない——アイコン 3 つと
+                「検討中」バッジで幅がほぼ埋まっているため。**害が無く、揃う利点だけ残る**）
+              - デスクトップでは残り幅いっぱいにすると**「評価する」が 534px の帯**になる
+                （棋譜詳細の行幅 736px で実測）。**狙いだったモバイルでは効かず、
+                デスクトップだけ壊れる**ので、md 以上は内容ぶんに戻す
             */}
             <button
               type="button"
-              className={clsx(
-                TOUCH_BTN,
-                'btn-primary',
-                evalButtonWidth === 'fill' && 'flex-1 min-w-24',
-              )}
+              className={clsx(TOUCH_BTN, 'btn-primary', 'max-md:flex-1 max-md:min-w-24')}
               onClick={() => void run()}
               disabled={evalState.kind === 'loading' || replaying}
               title={

@@ -133,12 +133,9 @@ function KifuCase({
 function StudyCase({
   session,
   evalState,
-  evalButtonWidth,
 }: {
   session: Parameters<typeof StudyBoard>[0]['initialSession'];
   evalState?: EvalState;
-  /** 「評価する」の幅の案（A = `'fill'`・既定 / B = `'auto'`）を見比べるためのつまみ */
-  evalButtonWidth?: Parameters<typeof StudyBoard>[0]['evalButtonWidth'];
 }) {
   return (
     <Phone>
@@ -151,7 +148,6 @@ function StudyCase({
         gote="後手"
         initialSession={session}
         initialEval={evalState}
-        evalButtonWidth={evalButtonWidth}
       >
         {(study) => (
           <BoardControls
@@ -319,35 +315,32 @@ function Gallery() {
       </Case>
 
       {/*
-        🔴 **検討の操作は 1 行に収める**（prd/12 §3.2・決定 2026-08-29）。
+        🔴 **検討の操作は 1 行に収める**（prd/12 §3.1・決定 2026-08-29）。
         `棋譜に戻る`（戻るアイコン）/ `手番`（入れ替えアイコン + ☗☖）/ `成`（字）/
         `評価する`（ラベルのまま）の 4 つ。アイコンのみのボタンは**正方形**で
-        44px（375px 未満は 40px）を満たし、`aria-label` を持つ。
+        44px（375px 未満は 40px）を満たし、**枠付き**（`btn-outline`）で
+        `aria-label` を持つ。手番の記号は**少し大きめ**にして枠内で読めるようにしてある。
+
+        🔴 **「評価する」の幅は md を境に規則が変わる**（決定 2026-08-29）:
+        **md 未満は残り幅いっぱい**（「成」の出入りで空く幅を吸って行が安定する）、
+        **md 以上は内容ぶんの幅**（残り幅いっぱいにするとデスクトップでは 500px 超の帯になる）。
+        → **ブラウザ幅を md（768px）の上下にまたいで見ると、この違いが確認できる。**
 
         ⚠ **ギャラリーは 390px 相当の枠（`Phone`）で見る前提。** 320px でどうなるかは
         ブラウザ幅そのものを 320px に縮めて確認する（枠はカード余白のぶん実機より狭い）。
         **狭い幅では折り返して 2 行になる**が、パネルはコントローラー行より下にあるので
         盤・◀ ▶ は動かない（prd/05 §2.1）。
-
-        「評価する」の大きさは**案 A / 案 B を並べて見比べる**（既定は案 A）。
       */}
-      <Case title="検討・操作ボタン 1 行（案 A: 評価するが残り幅いっぱい・「成」あり）">
+      <Case title="検討・操作ボタン 1 行（「成」あり）">
         {/* ▲８八角で２二の角を取った直後。**成 / 不成を切り替えられる**ので「成」が出る */}
         <StudyCase session={applyStudyMoves(KIFU_POSITIONS[0], ['8h2b'])} />
       </Case>
 
-      <Case title="検討・操作ボタン 1 行（案 B: 評価するが内容ぶんの幅・「成」あり）">
-        {/* 案 A と同じ局面。違いは「評価する」の幅だけ（`evalButtonWidth='auto'`） */}
-        <StudyCase
-          session={applyStudyMoves(KIFU_POSITIONS[0], ['8h2b'])}
-          evalButtonWidth="auto"
-        />
-      </Case>
-
-      <Case title="検討・操作ボタン 1 行（案 A・「成」が出ていない）">
+      <Case title="検討・操作ボタン 1 行（「成」が出ていない）">
         {/*
-          ▲６八金（金は成れない）なので「成」ボタンが出ない。案 A では余った幅を
-          「評価する」が吸うので、**ボタンの出入りで行が崩れない**ことを見る。
+          ▲６八金（金は成れない）なので「成」ボタンが出ない。md 未満では余った幅を
+          「評価する」が吸うので、**ボタンの出入りで行が崩れない**ことを見る
+          （md 以上では「評価する」は内容ぶんのままで、行が短くなるだけ）。
         */}
         <StudyCase session={applyStudyMoves(KIFU_POSITIONS[0], ['6i7h'])} />
       </Case>

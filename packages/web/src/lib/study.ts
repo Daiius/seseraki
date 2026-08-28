@@ -217,7 +217,7 @@ export function tapSquare(session: StudySession, square: SquareRef): StudySessio
 }
 
 /**
- * 駒台を叩いた。`piece` を省くと**空き部分（受け皿）**を叩いた扱い。
+ * 駒台を叩いた。`piece` を省くと**受け皿**（盤の駒を選んでいる間だけ出る）を叩いた扱い。
  *
  * 🔴 **これが駒箱の代わり**（prd/12 §3.2・決定 2026-08-28）。盤の駒を選んだ状態で
  * 駒台を叩けば、その駒はその側の持ち駒になる（成駒は生駒に戻る）。駒箱は
@@ -226,7 +226,7 @@ export function tapSquare(session: StudySession, square: SquareRef): StudySessio
  * ので、失われる機能もない。
  *
  * ⚠ 選択中のものがあるときは**叩いた駒種ではなく選択中の駒**が動く（行き先として
- * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ——**空き部分を叩いても
+ * 振る舞う）。選択が無いときだけ、叩いた駒種そのものを選ぶ——**受け皿を叩いても
  * 何も起きない**（そこから選択が始まったりはしない）。
  */
 export function tapHand(

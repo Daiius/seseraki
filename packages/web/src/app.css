@@ -109,6 +109,17 @@
   font-size: calc(var(--sq) * 0.42);
 }
 
+/*
+  駒台の受け皿（「+」ボタン）の中のアイコン。
+  ⚠ **寸法は CSS で当てる。** `icons.tsx` のアイコンは `className` が既定の `size-5` を
+  置き換えるので、寸法クラスを持たない値を渡すと属性の 24px に落ちる（iOS では潰れる）。
+  ボタン自体は `.shogi-hand-piece` で駒と同じ寸法なので、その中に収まる比率にする。
+*/
+.shogi-hand-add-icon {
+  width: calc(var(--sq) * 0.5);
+  height: calc(var(--sq) * 0.5);
+}
+
 /* 枚数は駒の右上に上付きで重ねる（1 枚のときは出さない） */
 .shogi-hand-count {
   font-size: calc(var(--sq) * 0.3);

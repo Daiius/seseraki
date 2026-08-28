@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import type { BoardState, HandPieceKind, PieceKind, SquareRef } from 'shared';
+import { PlusIcon } from './icons';
 
 /**
  * 盤の見た目（9x9 + 筋段のラベル）と持ち駒表示。
@@ -48,11 +49,12 @@ export function HandDisplay({
   /** 選択中の持ち駒。盤の選択マスと同じ見せ方で強調する */
   selected?: HandPieceKind | null;
   /**
-   * 駒台の**空き部分**（受け皿）を叩いたときに呼ぶ。盤の駒を選んでいる間だけ渡す想定で、
-   * **渡したときだけ受け皿として光る**（prd/12 §3.2）。
+   * 駒台の受け皿（「+」ボタン）を叩いたときに呼ぶ。盤の駒を選んでいる間だけ渡す想定で、
+   * **渡したときだけ「+」が出る**（prd/12 §3.2）。
    *
-   * 🔒 選んでいないときは渡さない——余計な装飾を出さないため、また空き部分を叩いても
-   * 何も起きないため（そこから選択が始まったりはしない）。
+   * 🔒 **見えることと押せることを 1 つの条件で決める。** 渡さなければボタン自体が
+   * 描かれないので、「押せるのに見えない / 見えるのに押せない」が起きない。
+   * 選んでいないときに「+」が並んでいても意味が読めないため、そのときは渡さない。
    */
   onTrayClick?: () => void;
 }) {
@@ -66,35 +68,38 @@ export function HandDisplay({
   const rotate = flipped ? side === 'sente' : side === 'gote';
 
   /*
-    🔒 **行の高さは中身によらず 1 マスぶん**（`.shogi-hand-row`）。受け皿は名前と駒の間の
-    空き部分を占め、`self-stretch` で行いっぱいに伸ばすだけなので、**足しても行の高さは
-    変わらない**（prd/05 §2.1・盤ごと下の操作ボタンがずれない）。
-    持ち駒が無いときの「なし」もこの中に置く——**そこが一番自然な着地点**だから。
+    🔒 **行の高さは中身によらず 1 マスぶん**（`.shogi-hand-row`）。受け皿の「+」は
+    駒と同じ寸法（`.shogi-hand-piece`）なので、出入りしても行の高さは変わらない
+    （prd/05 §2.1・盤ごと下の操作ボタンがずれない）。
+
+    🔴 **「+」は駒の並びの左端（＝空き側）に置く。** 駒の並びは `ml-auto` で**右に
+    寄せてある**ので、左端に足すと**ボタンは空き部分へ伸びるだけで、既に並んでいる駒は
+    1px も動かない**。末尾（右端）に足すと、出入りのたびに駒が左右へずれる。
+    位置としても、空き部分に接する側にあるので「ここに置ける」と読める。
   */
-  const trayClass = clsx(
-    'flex-1 self-stretch flex items-center justify-end rounded px-1',
-    onTrayClick && 'bg-secondary/20 ring-1 ring-secondary/60 ring-inset',
-  );
-  const trayContent =
-    pieces.length === 0 ? <span className="text-base-content/50">なし</span> : null;
+  const addButton = onTrayClick ? (
+    <button
+      type="button"
+      className="shogi-hand-piece flex items-center justify-center rounded border border-dashed border-base-content/30 text-base-content/50"
+      aria-label={`${label}の駒台へ置く`}
+      title="選んでいる駒をこの駒台へ移す"
+      onClick={onTrayClick}
+    >
+      {/* ⚠ 寸法は CSS で当てる。`className` は既定の `size-5` を置き換えるので、
+          寸法クラスを持たない値を渡すと iOS で潰れる（`icons.tsx` 冒頭） */}
+      <PlusIcon className="shogi-hand-add-icon" />
+    </button>
+  ) : null;
 
   return (
     <div className="shogi-hand-row text-sm lg:text-base flex items-center gap-1 no-tap-select">
       <span className="font-semibold whitespace-nowrap">{symbol}{label}</span>
-      {onTrayClick ? (
-        <button
-          type="button"
-          className={trayClass}
-          aria-label={`${label}の駒台へ置く`}
-          title="選んでいる駒をこの駒台へ移す"
-          onClick={onTrayClick}
-        >
-          {trayContent}
-        </button>
-      ) : (
-        <div className={trayClass}>{trayContent}</div>
-      )}
-      <div className="flex items-center">
+      <div className="ml-auto flex items-center">
+        {addButton}
+        {/* 「なし」は空のときだけ。⚠ 「+」が出ているならそちらが空きを示すので出さない */}
+        {pieces.length === 0 && addButton === null && (
+          <span className="text-base-content/50">なし</span>
+        )}
         {pieces.map(({ kind, count }) => {
           const isSelected = selected === kind;
           const className = clsx(

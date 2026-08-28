@@ -21,7 +21,7 @@ import {
   currentState,
   isStudying,
   lastMove,
-  namedEvalTarget,
+  lastMoveGradeTarget,
   positionEvalTarget,
   redo,
   redoAll,
@@ -37,11 +37,13 @@ import {
 import {
   EvalRequestTracker,
   evalStateAfterPositionChange,
+  gradeLastMove,
   headlineCandidate,
   requestPositionEval,
   validateEvalTarget,
-  type EvalMode,
+  type EvalSource,
   type EvalState,
+  type MoveGrade,
 } from '../lib/positionEval';
 
 /**
@@ -222,12 +224,24 @@ export function StudyBoard({
       replay.depth > 0 ? moveDestination(replayPv[replay.depth - 1]) : null;
   }
 
-  const named = namedEvalTarget(session);
+  const gradeTarget = lastMoveGradeTarget(session);
   const selection = session.selection;
 
-  const run = async (mode: EvalMode) => {
-    const target = mode === 'position' ? positionEvalTarget(session) : named;
-    if (!target) return;
+  /**
+   * 「評価する」（prd/12 §3.2・決定 2026-08-29）。**ボタンは 1 つ**。
+   *
+   * 主は**現在の検討局面の局面評価**。加えて**直前が盤上の指し手なら 1 手前の局面も
+   * 並行して評価**し、直前の手の採点（最善との差 = 損失）を出す。
+   *
+   * 🔒 **副次の要求が主を壊さないこと。** 1 手前の評価が失敗・busy・abort でも、
+   * 主の局面評価の結果は必ず出す（採点だけ省く）。`requestPositionEval` は例外を
+   * 投げないので、`Promise.all` でまとめても主が落ちることはない。
+   *
+   * 🔒 **世代（token）は 1 つ、`AbortSignal` は共有**（レビュー指摘 `OCL-AED22F46`）。
+   * `begin()` を 2 回呼ぶと 1 本目が自分自身の 2 本目に捨てられ、判定が崩れる。
+   */
+  const run = async () => {
+    const target = positionEvalTarget(session);
     // 🔴 **基点は送り先と同じ関数から取る**（レビュー指摘 `OCL-753E7A28`）。
     //    ここで別に数え直すと、undo して redo 分が残っているときに
     //    「送った局面」と「検証・PV 再生の基点」がずれる。
@@ -246,9 +260,19 @@ export function StudyBoard({
     // 押し直したら前の要求を捨てる（二重送信の抑止も兼ねる）
     const { token, signal } = trackerRef.current.begin();
     setReplay(null);
-    setEvalState({ kind: 'loading', mode });
+    setEvalState({ kind: 'loading' });
 
-    const result = await requestPositionEval(target, signal);
+    // 採点用の副次要求。⚠ **弾かれたら黙って採点だけ諦める**（主の警告にはしない）
+    const grading =
+      gradeTarget !== null
+      && validateEvalTarget(gradeTarget.target.from, null).length === 0
+        ? gradeTarget
+        : null;
+
+    const [result, gradeResult] = await Promise.all([
+      requestPositionEval(target, signal),
+      grading ? requestPositionEval(grading.target, signal) : Promise.resolve(null),
+    ]);
     // 🔒 待っている間に局面が変わっていたら**この結果は今の盤のものではない**
     if (!trackerRef.current.accepts(token)) return;
     switch (result.kind) {
@@ -266,11 +290,20 @@ export function StudyBoard({
       case 'done':
         setEvalState({
           kind: 'done',
-          mode,
           base: from,
           candidates: result.candidates,
           source: result.source,
-          fallback: result.fallback,
+          // ⚠ 採点は**取れたときだけ**。1 手前が失敗・busy・abort なら null
+          grade:
+            grading !== null && gradeResult?.kind === 'done'
+              ? gradeLastMove({
+                  from: grading.target.from,
+                  move: grading.move,
+                  current: headlineCandidate(result.candidates),
+                  previousCandidates: gradeResult.candidates,
+                  previousSource: gradeResult.source,
+                })
+              : null,
         });
     }
   };
@@ -482,26 +515,24 @@ export function StudyBoard({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {/*
+              🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。かつての
+              「この手を読む」（名指し評価）は返る数字が局面評価と同じで符号だけ反転して
+              いたため web から外した。直前が盤上の指し手なら、この 1 押しで 1 手前の
+              局面も評価して**直前の手の採点**まで出す（API の名指し評価は MCP 向けに残る）。
+            */}
             <button
               type="button"
               className={clsx(TOUCH_BTN, 'btn-primary')}
-              onClick={() => void run('position')}
+              onClick={() => void run()}
               disabled={evalState.kind === 'loading' || replaying}
-            >
-              この局面を評価
-            </button>
-            <button
-              type="button"
-              className={clsx(TOUCH_BTN, 'btn-outline')}
-              onClick={() => void run('move')}
-              disabled={evalState.kind === 'loading' || named === null || replaying}
               title={
-                named === null
-                  ? '直前が盤上の指し手のときだけ読める（駒箱・持ち駒・手番の編集の後は押せない）'
-                  : 'この手を名指しでエンジンに読ませる'
+                gradeTarget === null
+                  ? 'この局面をエンジンに評価させる'
+                  : 'この局面を評価し、直前の手が最善とどれだけ離れていたかも出す'
               }
             >
-              この手を読む
+              評価する
             </button>
           </div>
 
@@ -554,8 +585,7 @@ function EvalResultView({
       <div className="flex items-center gap-2 text-sm">
         <span className="loading loading-dots loading-md" aria-label="評価しています" />
         <span className="text-base-content/60">
-          {evalState.mode === 'move' ? 'この手を読んでいます' : 'この局面を評価しています'}
-          （エンジンが空くまで十数秒かかることがある）
+          評価しています（エンジンが空くまで十数秒かかることがある）
         </span>
       </div>
     );
@@ -588,9 +618,9 @@ function EvalResultView({
     return <div className="alert alert-warning text-sm">{evalState.message}</div>;
   }
 
-  const { base, candidates, source, fallback, mode } = evalState;
+  const { base, candidates, source, grade } = evalState;
   const side = base.sideToMove;
-  // 🔴 **この局面（この手）の評価値を 1 つ、単独で出す。**
+  // 🔴 **この局面の評価値を 1 つ、単独で出す。**
   //    候補手リストの 1 行目に埋もれていると「評価値が 1 つ決まるはずなのに無い」と
   //    読めてしまう（実機で踏んだ）。棋譜閲覧の情報行（prd/05 §2.1）と同じく、
   //    見る場所を 1 か所に決める
@@ -598,43 +628,24 @@ function EvalResultView({
 
   return (
     <div className="flex flex-col gap-1 text-sm">
-      <div className="flex items-center gap-2">
-        <span className="text-base-content/60">
-          {mode === 'move' ? '名指し評価' : '局面評価'}
-        </span>
-        {/* 🔒 どこから来た値かを出す（prd/12 §2.6） */}
-        <span
-          className={clsx('badge badge-sm', source === 'kifu' ? 'badge-ghost' : 'badge-info')}
-          title={
-            source === 'kifu'
-              ? '既存の棋譜解析から引いた値（解析時のエンジン設定は今と違いうる）'
-              : '今のエンジンが計算した値'
-          }
-        >
-          {source === 'kifu' ? '既存解析' : 'エンジン'}
-        </span>
-        {fallback && (
-          <span className="badge badge-sm badge-ghost" title="手を適用した局面を評価して符号を反転した">
-            反転
-          </span>
-        )}
-      </div>
       {/*
+        🔴 **評価値と出所を 1 行にまとめる**（決定 2026-08-29）。以前は「局面評価 [エンジン]」と
+        「この局面の評価値 +42 (先手有利)」の 2 段だったが、ボタンが 1 つになって
+        「どちらの評価か」を言う必要が無くなったので、見る場所も 1 行に畳む。
         評価値は**手番側から見た値**（prd/12 §2.3）。棋譜側の `formatScore` は手数の
-        parity で先手視点へ直すので使えない。文言は情報行と同じ形（`+42 (先手有利)` /
-        `先手勝ち(15手詰)`）に揃える。
+        parity で先手視点へ直すので使えない。
         🔒 結果ブロックの中に収めるので、上の操作パネル・コントローラー行は動かない。
       */}
-      {headline && (
-        <div className="flex items-baseline gap-2 flex-wrap">
-          <span className="text-base-content/60 whitespace-nowrap">
-            {mode === 'move' ? 'この手を指したときの評価値' : 'この局面の評価値'}
-          </span>
+      <div className="flex items-baseline gap-2 flex-wrap">
+        {headline && (
           <span className="text-lg font-bold">
             {formatTurnScore(headline.scoreType, headline.scoreValue, side)}
           </span>
-        </div>
-      )}
+        )}
+        {/* 🔒 どこから来た値かを出す（prd/12 §2.6） */}
+        <SourceBadge source={source} />
+      </div>
+      {grade && <MoveGradeView grade={grade} />}
       {candidates.length === 0 && (
         <p className="text-base-content/60">候補手が返らなかった（詰みなど）</p>
       )}
@@ -715,6 +726,86 @@ function EvalResultView({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * 値の出所（prd/12 §2.6）。🔒 **必ず出す**——既存解析の値と今のエンジンの値を黙って混ぜない。
+ * 主の局面評価と、直前の手の採点に使った 1 手前の評価は**別々の要求**なので、
+ * それぞれの行に出す（片方だけ既存解析ということが起きる）。
+ */
+function SourceBadge({ source }: { source: EvalSource }) {
+  return (
+    <span
+      className={clsx('badge badge-sm', source === 'kifu' ? 'badge-ghost' : 'badge-info')}
+      title={
+        source === 'kifu'
+          ? '既存の棋譜解析から引いた値（解析時のエンジン設定は今と違いうる）'
+          : '今のエンジンが計算した値'
+      }
+    >
+      {source === 'kifu' ? '既存解析' : 'エンジン'}
+    </span>
+  );
+}
+
+/**
+ * 直前の手の採点（prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 「評価する」を押したとき、直前が盤上の指し手なら 1 手前の局面も評価している。
+ * その最善手と、指した手（現局面の評価の符号反転）を**同じ視点**で並べて差を見せる。
+ *
+ * ⚠ **視点は指した側**（`grade.from.sideToMove`）。現局面の視点（相手番）とは反転している
+ * ので、上の評価値の行とは符号が逆に見える——だから**「直前の手」と明示した別ブロック**に置く。
+ * ⚠ **損失の数値は両方 `cp` のときだけ**（`mate` の引き算は意味を持たない。{@link scoreLoss}）。
+ */
+function MoveGradeView({ grade }: { grade: MoveGrade }) {
+  const side = grade.from.sideToMove;
+  const symbol = symbolAt(side, 0);
+  return (
+    <div className="rounded-lg bg-base-200 p-2 flex flex-col gap-1">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="text-base-content/60 whitespace-nowrap">直前の手</span>
+        <span className="font-bold whitespace-nowrap">
+          {symbol}
+          {usiToJapaneseWithPiece(grade.from, grade.move)}
+        </span>
+        <span className="whitespace-nowrap">
+          {formatTurnScore(grade.playedScoreType, grade.playedScoreValue, side)}
+        </span>
+        <SourceBadge source={grade.source} />
+      </div>
+      {grade.isBest ? (
+        /* 指した手が 1 手前の rank 1 そのもの。**損失は出さない**（数字より結論が要る） */
+        <div className="font-semibold text-success">最善手</div>
+      ) : (
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-base-content/60 whitespace-nowrap">最善</span>
+          <span className="font-bold whitespace-nowrap">
+            {symbol}
+            {usiToJapaneseWithPiece(grade.from, grade.best.move)}
+          </span>
+          <span className="whitespace-nowrap">
+            {formatTurnScore(grade.best.scoreType, grade.best.scoreValue, side)}
+          </span>
+          {grade.loss === null ? (
+            /* 🔒 `mate` が絡むときは**両者を並べるに留める**（引き算に意味が無い） */
+            <span className="text-base-content/60 whitespace-nowrap">
+              （詰みが絡むので損失は出さない）
+            </span>
+          ) : (
+            <span
+              className={clsx(
+                'whitespace-nowrap font-semibold',
+                grade.loss > 0 && 'text-warning',
+              )}
+            >
+              損失 {grade.loss}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

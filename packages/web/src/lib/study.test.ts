@@ -16,7 +16,7 @@ import {
   currentState,
   isStudying,
   lastMove,
-  namedEvalTarget,
+  lastMoveGradeTarget,
   positionEvalTarget,
   redo,
   redoAll,
@@ -239,8 +239,8 @@ describe('駒台での受け渡し', () => {
     expect(handCount(currentState(s), 'sente', 'P')).toBe(0);
     // 手番側の駒を打ったので手番が進む（盤上の駒を動かしたときと同じ規則）
     expect(currentState(s).sideToMove).toBe('gote');
-    // 打った手はそのまま名指し評価にかけられる
-    expect(namedEvalTarget(s)?.move).toBe('P*5e');
+    // 打った手はそのまま採点の対象になる
+    expect(lastMoveGradeTarget(s)?.move).toBe('P*5e');
   });
 
   it('相手側の持ち駒を打っても手番は進まない（指し手ではなく編集）', () => {
@@ -340,33 +340,32 @@ describe('undo と redo', () => {
     expect(currentState(s)).toBe(initial);
   });
 
-  it('戻した位置から評価できる（名指しは戻した先の手が対象）', () => {
+  it('戻した位置から評価できる（採点は戻した先の手が対象）', () => {
     const s = undo(applyStudyMoves(initial, ['7g7f', '3c3d']));
-    expect(namedEvalTarget(s)).toEqual({
-      sfen: positionSfen(initial),
+    expect(lastMoveGradeTarget(s)).toEqual({
+      target: { sfen: positionSfen(initial), move: null, from: initial },
       move: '7g7f',
-      from: initial,
     });
     expect(positionEvalTarget(s).sfen).toBe(positionSfen(currentState(s)));
   });
 
   /**
-   * 🔴 回帰（レビュー指摘 `OCL-753E7A28`）。cursor 方式へ変えたとき、名指し評価の
-   * **基点だけが配列末尾基準のまま**取り残されていた。undo して redo 分が残っていると
-   * 「送る局面・手」と「検証と PV 再生に使う局面」がずれ、正しい要求を誤って弾いたり、
-   * **返ってきた咎め筋を別の盤から再生**したりする。
+   * 🔴 回帰（レビュー指摘 `OCL-753E7A28`）。cursor 方式へ変えたとき、直前の手を対象に
+   * する評価の**基点だけが配列末尾基準のまま**取り残されていた。undo して redo 分が
+   * 残っていると「送る局面・手」と「検証と PV 再生に使う局面」がずれ、正しい要求を
+   * 誤って弾いたり、**返ってきた咎め筋を別の盤から再生**したりする。
    */
   it('🔴 undo して redo 分が残っていても、送り先と基点が cursor に揃う', () => {
     const full = applyStudyMoves(initial, ['7g7f', '3c3d', '2g2f']);
     const s = undo(undo(full)); // ▲７六歩まで戻す（redo 分が 2 段残っている）
     expect(canRedo(s)).toBe(true);
 
-    const target = namedEvalTarget(s);
-    expect(target?.move).toBe('7g7f');
+    const grade = lastMoveGradeTarget(s);
+    expect(grade?.move).toBe('7g7f');
     // 送る SFEN も基点も cursor の 1 つ手前（= 初期局面）で、末尾の局面ではない
-    expect(target?.sfen).toBe(positionSfen(initial));
-    expect(target?.from).toBe(initial);
-    expect(target?.from).not.toBe(currentState(full));
+    expect(grade?.target.sfen).toBe(positionSfen(initial));
+    expect(grade?.target.from).toBe(initial);
+    expect(grade?.target.from).not.toBe(currentState(full));
 
     // 局面評価の側も cursor の局面（末尾ではない）
     const position = positionEvalTarget(s);
@@ -385,18 +384,22 @@ describe('評価の送り先', () => {
     });
   });
 
-  it('名指し評価は「その手を指す前」の局面と手を送る', () => {
+  /**
+   * 🔴 **web の評価ボタンは 1 つ**（決定 2026-08-29）。直前の手の採点に使うのは
+   * **1 手前の「局面評価」**で、名指し評価（`go searchmoves`）ではない。
+   * 送る `move` は null であること（＝局面評価であること）をここで固定する。
+   */
+  it('採点は「その手を指す前」の局面を、局面評価として送る', () => {
     const s = applyStudyMoves(initial, ['7g7f']);
-    // 🔴 手を適用した後の局面を送ると別の手を読むことになる
-    expect(namedEvalTarget(s)).toEqual({
-      sfen: positionSfen(initial),
+    expect(lastMoveGradeTarget(s)).toEqual({
+      // ⚠ 手を適用した後の局面を送ると、最善手が「次の手番の最善」になってしまう
+      target: { sfen: positionSfen(initial), move: null, from: initial },
       move: '7g7f',
-      from: initial,
     });
   });
 
-  it('検討していない / 直前が編集なら名指しできない', () => {
-    expect(namedEvalTarget(createStudySession(initial))).toBeNull();
-    expect(namedEvalTarget(toggleTurn(createStudySession(initial)))).toBeNull();
+  it('検討していない / 直前が編集なら採点できない', () => {
+    expect(lastMoveGradeTarget(createStudySession(initial))).toBeNull();
+    expect(lastMoveGradeTarget(toggleTurn(createStudySession(initial)))).toBeNull();
   });
 });

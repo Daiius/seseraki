@@ -320,58 +320,123 @@ function Gallery() {
       </Case>
 
       {/*
-        評価結果の先頭に「この局面の評価値」が 1 つ出る。局面評価は rank 1 のスコア、
-        名指し評価はその手のスコアで、**同じ場所に同じ形**で出す。
+        🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。結果の先頭は
+        **評価値と出所バッジの 1 行**（`+42 (先手有利)` + `[エンジン]`）で、以前の
+        「局面評価 / 名指し評価」という見出し行は無くなった。
         ⚠ 視点は手番側（prd/12 §2.3）。`base` の手番が後手なら符号が反転して見える。
       */}
-      <Case title="検討・局面評価の結果（出所 = エンジン）">
+      <Case title="検討・評価結果（出所 = エンジン・採点なし）">
+        {/* 直前が編集だった場合など、採点が取れなかったときの見え方（`grade: null`） */}
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
           evalState={{
             kind: 'done',
-            mode: 'position',
             base: KIFU_POSITIONS[1],
             candidates: STUDY_CANDIDATES,
             source: 'engine',
-            fallback: false,
+            grade: null,
           }}
         />
       </Case>
 
-      <Case title="検討・名指し評価の結果（出所 = 既存解析・咎め筋つき）">
+      <Case title="検討・評価結果（出所 = 既存解析・咎め筋つき）">
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
           evalState={{
             kind: 'done',
-            mode: 'move',
-            base: KIFU_POSITIONS[0],
+            base: KIFU_POSITIONS[1],
             candidates: [
               {
                 rank: 1,
-                move: '2g2f',
+                move: '8c8d',
                 scoreType: 'cp',
                 scoreValue: -60,
-                pv: ['2g2f', '8c8d', '2f2e', '8d8e'],
+                pv: ['8c8d', '2f2e', '8d8e', '2e2d'],
                 depth: 20,
               },
             ],
             source: 'kifu',
-            fallback: true,
+            grade: null,
           }}
         />
       </Case>
 
-      <Case title="検討・評価値が詰みのとき（見出しの最長形）">
+      {/*
+        🔴 **直前の手の採点**（決定 2026-08-29）。「評価する」を 1 回押すと、現在の局面と
+        **1 手前の局面**の両方を評価し、最善との差を出す。
+        ⚠ 採点ブロックの視点は**指した側**なので、上の評価値の行とは符号が逆に見える。
+        3 通り（最善手だった / 損した / 詰みが絡む）を並べて、色と文言の出方を見る。
+      */}
+      <Case title="検討・直前の手の採点（最善手だった）">
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            base: KIFU_POSITIONS[1],
+            candidates: STUDY_CANDIDATES,
+            source: 'engine',
+            grade: {
+              from: KIFU_POSITIONS[0],
+              move: '2g2f',
+              // 現局面（後手番）の rank 1 が −42 → 先手から見て +42
+              playedScoreType: 'cp',
+              playedScoreValue: 42,
+              best: {
+                rank: 1,
+                move: '2g2f',
+                scoreType: 'cp',
+                scoreValue: 42,
+                pv: ['2g2f'],
+                depth: 22,
+              },
+              isBest: true,
+              loss: 0,
+              source: 'engine',
+            },
+          }}
+        />
+      </Case>
+
+      <Case title="検討・直前の手の採点（最善を外して損した）">
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            base: KIFU_POSITIONS[1],
+            candidates: STUDY_CANDIDATES,
+            source: 'engine',
+            grade: {
+              from: KIFU_POSITIONS[0],
+              move: '2g2f',
+              playedScoreType: 'cp',
+              playedScoreValue: 12,
+              best: {
+                rank: 1,
+                move: '7g7f',
+                scoreType: 'cp',
+                scoreValue: 45,
+                pv: ['7g7f', '3c3d', '2g2f'],
+                depth: 22,
+              },
+              isBest: false,
+              loss: 33,
+              source: 'kifu',
+            },
+          }}
+        />
+      </Case>
+
+      <Case title="検討・直前の手の採点（詰みが絡む = 損失を出さない）">
         {/*
-          `先手勝ち(15手詰)` は評価値の表示で最も長くなる形。見出しの行が折り返しても
-          結果ブロックの中に収まり、上の操作パネル・コントローラー行が動かないことを見る。
-          ⚠ base（KIFU_POSITIONS[1]）は後手番なので、手番視点の +15 は後手の勝ちになる。
+          🔒 `mate` は「詰みまでの手数」で `cp` と単位が違い、`mate` 同士でも引き算に意味が
+          無い。**数値は出さず両者を並べる**（`scoreLoss` が null を返すケース）。
+          評価値の最長形（`先手勝ち(15手詰)`）が折り返しても、結果ブロックの中に収まって
+          上の操作パネル・コントローラー行が動かないことも合わせて見る。
         */}
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
           evalState={{
             kind: 'done',
-            mode: 'position',
             base: KIFU_POSITIONS[1],
             candidates: [
               {
@@ -384,7 +449,24 @@ function Gallery() {
               },
             ],
             source: 'engine',
-            fallback: false,
+            grade: {
+              from: KIFU_POSITIONS[0],
+              move: '2g2f',
+              // 現局面が「後手の 15 手詰」→ 先手から見れば mate −15
+              playedScoreType: 'mate',
+              playedScoreValue: -15,
+              best: {
+                rank: 1,
+                move: '7g7f',
+                scoreType: 'cp',
+                scoreValue: 45,
+                pv: ['7g7f'],
+                depth: 22,
+              },
+              isBest: false,
+              loss: null,
+              source: 'engine',
+            },
           }}
         />
       </Case>
@@ -406,7 +488,7 @@ function Gallery() {
         <div className="flex flex-col gap-4">
           <StudyCase
             session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
-            evalState={{ kind: 'loading', mode: 'move' }}
+            evalState={{ kind: 'loading' }}
           />
           <StudyCase
             session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}

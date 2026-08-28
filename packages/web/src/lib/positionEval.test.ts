@@ -3,7 +3,9 @@ import { createInitialState } from 'shared';
 import {
   EvalRequestTracker,
   evalStateAfterPositionChange,
+  gradeLastMove,
   headlineCandidate,
+  scoreLoss,
   type EvalCandidateView,
   type EvalState,
 } from './positionEval';
@@ -113,13 +115,12 @@ describe('evalStateAfterPositionChange', () => {
   it('評価結果が出ていたら stale になる（値は消える・手がかりは残る）', () => {
     const done: EvalState = {
       kind: 'done',
-      mode: 'position',
       base: createInitialState(),
       candidates: [
         { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 42, pv: ['7g7f'], depth: 20 },
       ],
       source: 'engine',
-      fallback: false,
+      grade: null,
     };
     const next = evalStateAfterPositionChange(done);
     expect(next).toEqual({ kind: 'stale' });
@@ -139,7 +140,7 @@ describe('evalStateAfterPositionChange', () => {
   });
 
   it.each<[string, EvalState]>([
-    ['loading', { kind: 'loading', mode: 'move' }],
+    ['loading', { kind: 'loading' }],
     ['invalid', { kind: 'invalid', violations: [] }],
     ['busy', { kind: 'busy' }],
     ['error', { kind: 'error', message: 'サーバーに接続できません' }],
@@ -188,12 +189,153 @@ describe('headlineCandidate', () => {
     expect(headline?.move).toBe('7g7f');
   });
 
-  it('名指し評価: 返るのはその手 1 本なので、それがその手の評価値になる', () => {
-    const named = candidate(1, -60, '2g2f');
-    expect(headlineCandidate([named])).toBe(named);
+  it('候補手が 1 本しか返らなくても、それがその局面の評価値になる', () => {
+    const only = candidate(1, -60, '2g2f');
+    expect(headlineCandidate([only])).toBe(only);
   });
 
   it('候補手が無ければ null（詰みなど）', () => {
     expect(headlineCandidate([])).toBeNull();
+  });
+});
+
+/**
+ * 直前の手の採点（prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 🔴 **web の評価ボタンを 1 つにまとめた**。押すと現在の検討局面を評価し、直前が盤上の
+ * 指し手なら 1 手前の局面も評価して、最善との差（損失）を出す。かつての「この手を読む」
+ * （名指し評価）は返る数字が局面評価と同じで**符号だけ反転**していたため web から外した。
+ *
+ * 🔒 **視点をすべて「指した側」に揃えること**がこの関数の肝。現局面の評価は相手番視点なので
+ * 符号を反転する——ここを間違えると、良い手が悪い手に見える。
+ */
+describe('gradeLastMove', () => {
+  const from = createInitialState(); // 先手番（＝ 指した側は先手）
+  const candidate = (
+    rank: number,
+    move: string,
+    scoreValue: number,
+    scoreType = 'cp',
+  ): EvalCandidateView => ({ rank, move, scoreType, scoreValue, pv: [move], depth: 20 });
+
+  it('指した手の評価値は現局面（相手番視点）の符号反転', () => {
+    const grade = gradeLastMove({
+      from,
+      move: '7g7f',
+      // 現局面は後手番なので −42 = 先手から見て +42
+      current: candidate(1, '3c3d', -42),
+      previousCandidates: [candidate(1, '7g7f', 42)],
+      previousSource: 'engine',
+    });
+    expect(grade?.playedScoreValue).toBe(42);
+    expect(grade?.playedScoreType).toBe('cp');
+  });
+
+  it('指した手が 1 手前の rank 1 なら最善手（損失 0）', () => {
+    const grade = gradeLastMove({
+      from,
+      move: '7g7f',
+      current: candidate(1, '3c3d', -42),
+      previousCandidates: [candidate(1, '7g7f', 42), candidate(2, '2g2f', 30)],
+      previousSource: 'engine',
+    });
+    expect(grade?.isBest).toBe(true);
+    expect(grade?.loss).toBe(0);
+    expect(grade?.best.move).toBe('7g7f');
+  });
+
+  it('損失 = 最善のスコア − 指した手のスコア（同じ視点で引く）', () => {
+    const grade = gradeLastMove({
+      from,
+      move: '2g2f',
+      current: candidate(1, '3c3d', -12), // 指した後: 先手から見て +12
+      previousCandidates: [candidate(1, '7g7f', 45), candidate(2, '2g2f', 30)],
+      previousSource: 'engine',
+    });
+    expect(grade?.isBest).toBe(false);
+    expect(grade?.loss).toBe(33);
+  });
+
+  it('最善は rank の一番小さいものを選ぶ（配列の並びに頼らない）', () => {
+    const grade = gradeLastMove({
+      from,
+      move: '2g2f',
+      current: candidate(1, '3c3d', -12),
+      previousCandidates: [candidate(2, '2g2f', 30), candidate(1, '7g7f', 45)],
+      previousSource: 'kifu',
+    });
+    expect(grade?.best.move).toBe('7g7f');
+    expect(grade?.source).toBe('kifu');
+  });
+
+  /**
+   * 🔒 **`mate` が絡んだら損失の数値は出さない。** `mate` の値は詰みまでの手数で、
+   * `cp` とは単位が違い、`mate` 同士でも引き算に意味が無い。
+   */
+  it('mate が絡むと損失は null（値そのものは両方残す）', () => {
+    const mateBest = gradeLastMove({
+      from,
+      move: '2g2f',
+      current: candidate(1, '3c3d', -12),
+      previousCandidates: [candidate(1, '5e5d', 5, 'mate')],
+      previousSource: 'engine',
+    });
+    expect(mateBest?.loss).toBeNull();
+    expect(mateBest?.best.scoreType).toBe('mate');
+    expect(mateBest?.playedScoreValue).toBe(12);
+
+    const matePlayed = gradeLastMove({
+      from,
+      move: '2g2f',
+      // 現局面が「後手の 3 手詰」＝ 先手から見れば mate −3
+      current: candidate(1, '3c3d', 3, 'mate'),
+      previousCandidates: [candidate(1, '7g7f', 45)],
+      previousSource: 'engine',
+    });
+    expect(matePlayed?.loss).toBeNull();
+    expect(matePlayed?.playedScoreType).toBe('mate');
+    expect(matePlayed?.playedScoreValue).toBe(-3);
+  });
+
+  it('材料が欠けたら採点しない（現局面の評価値が無い / 1 手前の候補手が空）', () => {
+    expect(
+      gradeLastMove({
+        from,
+        move: '7g7f',
+        current: null,
+        previousCandidates: [candidate(1, '7g7f', 42)],
+        previousSource: 'engine',
+      }),
+    ).toBeNull();
+    expect(
+      gradeLastMove({
+        from,
+        move: '7g7f',
+        current: candidate(1, '3c3d', -42),
+        previousCandidates: [],
+        previousSource: 'engine',
+      }),
+    ).toBeNull();
+  });
+});
+
+describe('scoreLoss', () => {
+  it('両方 cp なら差を返す', () => {
+    expect(scoreLoss({ scoreType: 'cp', scoreValue: 45 }, { scoreType: 'cp', scoreValue: 12 }))
+      .toBe(33);
+  });
+
+  it('どちらかが mate なら null', () => {
+    expect(scoreLoss({ scoreType: 'mate', scoreValue: 5 }, { scoreType: 'cp', scoreValue: 12 }))
+      .toBeNull();
+    expect(scoreLoss({ scoreType: 'cp', scoreValue: 45 }, { scoreType: 'mate', scoreValue: -3 }))
+      .toBeNull();
+    expect(scoreLoss({ scoreType: 'mate', scoreValue: 5 }, { scoreType: 'mate', scoreValue: 3 }))
+      .toBeNull();
+  });
+
+  it('別々の探索なので負にもなりうる（丸めずそのまま返す）', () => {
+    expect(scoreLoss({ scoreType: 'cp', scoreValue: 40 }, { scoreType: 'cp', scoreValue: 46 }))
+      .toBe(-6);
   });
 });

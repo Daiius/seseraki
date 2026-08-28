@@ -15,9 +15,6 @@ import { validateMoveOnPosition, validatePositionForEngine } from 'shared';
 import { client } from './honoClient';
 import type { EvalTarget } from './study';
 
-/** 評価の種別。局面評価 / 名指し評価（prd/12 §2.2） */
-export type EvalMode = 'position' | 'move';
-
 /**
  * 評価要求の画面上の状態。**押されたときだけ動く**（前例: `routes/positions.tsx`）。
  *
@@ -39,15 +36,19 @@ export type EvalMode = 'position' | 'move';
 export type EvalState =
   | { kind: 'idle' }
   | { kind: 'stale' }
-  | { kind: 'loading'; mode: EvalMode }
+  | { kind: 'loading' }
   | {
       kind: 'done';
-      mode: EvalMode;
-      /** 評価した局面（名指し評価では**その手を指す前**の局面） */
+      /** 評価した局面（= 現在の検討局面） */
       base: BoardState;
       candidates: EvalCandidateView[];
       source: EvalSource;
-      fallback: boolean;
+      /**
+       * 直前の手の採点（{@link gradeLastMove}）。取れなかったときは null
+       * （直前が編集 / 1 手前の評価が失敗・busy・abort）。
+       * 🔒 **主の局面評価はこれが null でも必ず出す。**
+       */
+      grade: MoveGrade | null;
     }
   | { kind: 'invalid'; violations: PositionViolation[] }
   | { kind: 'busy' }
@@ -86,8 +87,7 @@ export interface EvalCandidateView {
  * 棋譜を見ているときは情報行に評価値が 1 つ出る（prd/05 §2.1）ので、
  * **同じ画面の中で扱いが食い違っていた**のも良くない。
  *
- * - **局面評価**: rank 1 の候補手のスコアが、そのままその局面の評価値。
- * - **名指し評価**: 返るのはその手 1 本なので、それが「その手を指したときの評価値」。
+ * rank 1 の候補手のスコアが、そのままその局面の評価値になる。
  *
  * ⚠ **rank の一番小さいものを選ぶ**（配列の並びに頼らない）。候補が空（詰みなど）なら null。
  */
@@ -103,6 +103,92 @@ export function headlineCandidate(
 
 /** 値の出所（prd/12 §2.6）。UI に必ず出す */
 export type EvalSource = 'kifu' | 'engine';
+
+/**
+ * 直前の手の採点（prd/12 §3.2・決定 2026-08-29）。
+ *
+ * 🔴 **web の評価ボタンは 1 つ**になった。押すと現在の検討局面を評価し、**直前が盤上の
+ * 指し手なら 1 手前の局面も並行して評価**して、その手が最善手とどれだけ離れていたかを出す。
+ * かつての「この手を読む」（名指し評価 = `go searchmoves`）は、返る数字が局面評価と
+ * **同じで符号だけ反転**していたため web からは外した（API には残る。prd/12 §2.2 / §4）。
+ *
+ * ⚠ **スコアはすべて「指した側から見た値」に揃える**（現局面の評価は相手番視点なので反転する）。
+ */
+export interface MoveGrade {
+  /** 採点した手を**指す前**の局面。表記（`usiToJapaneseWithPiece`）と視点の基点 */
+  from: BoardState;
+  /** 採点した手（USI） */
+  move: string;
+  /** 指した手の評価値（**指した側視点**。現局面の評価の符号反転） */
+  playedScoreType: string;
+  playedScoreValue: number;
+  /** 1 手前の局面の rank 1（指した側視点。`from` の手番から見た値がそのまま使える） */
+  best: EvalCandidateView;
+  /** 指した手が最善手そのものだったか */
+  isBest: boolean;
+  /**
+   * 損失 = 最善のスコア − 指した手のスコア。
+   * 🔒 **両方 `cp` のときだけ数値**。どちらかが `mate` なら null（引き算が意味を持たない）。
+   */
+  loss: number | null;
+  /** 1 手前の評価の出所（prd/12 §2.6。主の評価と別々に出す） */
+  source: EvalSource;
+}
+
+/**
+ * 損失（centipawn）。**両方 `cp` のときだけ数値を返す**。
+ *
+ * 🔴 `mate` の値は「詰みまでの手数」で、`cp` と単位が違うし `mate` 同士でも引き算に
+ * 意味が無い（`mate 3` − `mate 5` は 2 点差ではない）。**数値を出さず両者を並べる**方を採る。
+ *
+ * ⚠ 符号は「最善 − 指した手」なので通常は 0 以上だが、2 回の探索は別々（深さも別）なので
+ * **わずかに負になることがある**。丸めずそのまま返す（表示側が読み替えない）。
+ */
+export function scoreLoss(
+  best: { scoreType: string; scoreValue: number },
+  played: { scoreType: string; scoreValue: number },
+): number | null {
+  if (best.scoreType !== 'cp' || played.scoreType !== 'cp') return null;
+  return best.scoreValue - played.scoreValue;
+}
+
+/**
+ * 直前の手を採点する。**評価値そのものは 2 つの応答から作る**:
+ *
+ * - 指した手の評価値 = **現局面（手を指した後）の評価値の符号反転**。現局面の評価は
+ *   相手番視点なので、反転すれば「指した側から見た、その手を指した結果」になる。
+ * - 最善 = **1 手前の局面**の rank 1（`from` の手番 = 指した側の視点なのでそのまま）。
+ *
+ * ⚠ 材料が欠けたら null を返す（候補手が空 / 現局面の評価値が無い）。
+ * 🔒 **null は「採点が出ない」だけで、主の局面評価は必ず出す**（呼び出し側の責務）。
+ */
+export function gradeLastMove(params: {
+  from: BoardState;
+  move: string;
+  /** 現局面（手を指した後）の評価値。相手番視点 */
+  current: EvalCandidateView | null;
+  /** 1 手前の局面の候補手（指した側視点） */
+  previousCandidates: EvalCandidateView[];
+  previousSource: EvalSource;
+}): MoveGrade | null {
+  const { from, move, current, previousCandidates, previousSource } = params;
+  if (current === null) return null;
+  const best = headlineCandidate(previousCandidates);
+  if (best === null) return null;
+
+  // 🔴 符号反転はここだけ。相手番視点 → 指した側視点
+  const played = { scoreType: current.scoreType, scoreValue: -current.scoreValue };
+  return {
+    from,
+    move,
+    playedScoreType: played.scoreType,
+    playedScoreValue: played.scoreValue,
+    best,
+    isBest: best.move === move,
+    loss: scoreLoss(best, played),
+    source: previousSource,
+  };
+}
 
 export type EvalResult =
   | {

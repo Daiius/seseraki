@@ -57,8 +57,8 @@ export type StudySelection =
 export interface StudyStep {
   state: BoardState;
   /**
-   * この局面に至った**盤上の手**（USI）。駒箱・持ち駒・手番の編集で進んだ段は null。
-   * 名指し評価（「この手を読む」）はこれが非 null のときだけ出せる。
+   * この局面に至った**盤上の手**（USI）。持ち駒・手番の編集で進んだ段は null。
+   * 直前の手の採点（{@link lastMoveGradeTarget}）はこれが非 null のときだけ出せる。
    */
   move: string | null;
 }
@@ -173,7 +173,7 @@ function push(
  *
  * ⚠ **`movePiece` 自体は手番を触らない**（M2a の純関数は「編集」なので当然）。
  * ただし検討盤では「手番側の駒を動かす」＝**指し手**なので、そのまま手番を渡さないと
- * 直後の「この局面を評価」が**相手玉を取れる局面**として弾かれ、意味も合わない。
+ * 直後の「評価する」が**相手玉を取れる局面**として弾かれ、意味も合わない。
  * 相手側の駒を動かしたときは編集とみなして手番を触らない（手番トグルで直せる）。
  */
 function advanceTurn(next: BoardState, moverSide: Side, before: BoardState): BoardState {
@@ -415,31 +415,46 @@ export function applyStudyMoves(base: BoardState, moves: string[]): StudySession
 export interface EvalTarget {
   /** 送る局面（正規化 SFEN） */
   sfen: string;
-  /** 名指し評価の対象手（局面評価は null） */
+  /** 名指し評価の対象手（局面評価は null）。⚠ web からは常に null（prd/12 §3.2） */
   move: string | null;
   /** `sfen` の元になった局面そのもの。検証と PV 再生の基点 */
   from: BoardState;
 }
 
-/** 「この局面を評価」: 現在の検討局面をそのまま送る */
+/** 「評価する」の主の送り先: 現在の検討局面をそのまま送る */
 export function positionEvalTarget(session: StudySession): EvalTarget {
   const from = currentState(session);
   return { sfen: positionSfen(from), move: null, from };
 }
 
 /**
- * 「この手を読む」: **直前の手を、その手を指す前の局面で**名指しする。
+ * 直前の手を採点するための、**1 手前の局面の局面評価ターゲット**（prd/12 §3.2・決定 2026-08-29）。
  *
- * ⚠ 送る SFEN は「1 つ前の段」。名指し評価は `go searchmoves <手>` なので、
- * 手を適用した後の局面を送ると別の手を読むことになる。
- * 直前の段が編集（駒箱・持ち駒・手番）なら名指しできないので null を返す。
+ * 🔴 **名指し評価（`go searchmoves`）は web からは使わない。** 返る数字は「その手を指した
+ * 後の局面の評価の符号反転」と同じで、局面評価が候補手 3 本を返すぶん上位互換だった。
+ * 代わりに **1 手前の局面を普通に評価**し、rank 1（最善）と、指した手の評価値
+ * （現局面の評価の符号反転）を突き合わせて損失を出す。
+ * ⚠ 名指し評価は API には残る——盤に指さずに手を指定できるのは MCP の用途（prd/12 §4）。
+ *
+ * ⚠ 送る `move` は **null**（局面評価）。基点は **`cursor` の 1 つ手前**で、配列の末尾ではない
+ * （undo して redo 分が残っていると末尾は「まだやり直していない先の局面」になる。
+ * レビュー指摘 `OCL-753E7A28`）。
+ * 🔒 **採点対象の手も同じ関数から返す**——別に数え直すと局面と手がずれる。
+ *
+ * 直前の段が編集（持ち駒・手番）なら採点できないので null を返す。
  */
-export function namedEvalTarget(session: StudySession): EvalTarget | null {
+export function lastMoveGradeTarget(session: StudySession): LastMoveGradeTarget | null {
   if (session.cursor < 1) return null;
   const move = lastMove(session);
   if (!move) return null;
-  // ⚠ **`cursor` の 1 つ手前**。配列の末尾ではない（undo して redo 分が残っていると
-  //    末尾は「まだやり直していない先の局面」で、送る手とも噛み合わない）
   const from = session.steps[session.cursor - 1].state;
-  return { sfen: positionSfen(from), move, from };
+  return { target: { sfen: positionSfen(from), move: null, from }, move };
+}
+
+/** {@link lastMoveGradeTarget} の戻り値。送り先と採点対象の手を 1 つにまとめる */
+export interface LastMoveGradeTarget {
+  /** 1 手前の局面の局面評価（`move` は null） */
+  target: EvalTarget;
+  /** 採点する直前の手（USI） */
+  move: string;
 }

@@ -77,6 +77,30 @@ export interface EvalCandidateView {
   depth: number;
 }
 
+/**
+ * 「この局面の評価値」として単独で出す 1 本を選ぶ。
+ *
+ * 🔴 **実機で踏んだ**: 局面評価は候補手 3 本を返すが、**その局面自体の評価値が
+ * 単独では出ていなかった**。最善手のスコアがそのまま局面の評価値なのに、候補手リストの
+ * 1 行目に埋もれていて「評価値が 1 つ決まるはずなのに、どこにも無い」と読めた。
+ * 棋譜を見ているときは情報行に評価値が 1 つ出る（prd/05 §2.1）ので、
+ * **同じ画面の中で扱いが食い違っていた**のも良くない。
+ *
+ * - **局面評価**: rank 1 の候補手のスコアが、そのままその局面の評価値。
+ * - **名指し評価**: 返るのはその手 1 本なので、それが「その手を指したときの評価値」。
+ *
+ * ⚠ **rank の一番小さいものを選ぶ**（配列の並びに頼らない）。候補が空（詰みなど）なら null。
+ */
+export function headlineCandidate(
+  candidates: EvalCandidateView[],
+): EvalCandidateView | null {
+  let best: EvalCandidateView | null = null;
+  for (const candidate of candidates) {
+    if (best === null || candidate.rank < best.rank) best = candidate;
+  }
+  return best;
+}
+
 /** 値の出所（prd/12 §2.6）。UI に必ず出す */
 export type EvalSource = 'kifu' | 'engine';
 

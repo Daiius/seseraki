@@ -264,6 +264,11 @@ function Gallery() {
         <StudyCase session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])} />
       </Case>
 
+      {/*
+        評価結果の先頭に「この局面の評価値」が 1 つ出る。局面評価は rank 1 のスコア、
+        名指し評価はその手のスコアで、**同じ場所に同じ形**で出す。
+        ⚠ 視点は手番側（prd/12 §2.3）。`base` の手番が後手なら符号が反転して見える。
+      */}
       <Case title="検討・局面評価の結果（出所 = エンジン）">
         <StudyCase
           session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
@@ -297,6 +302,34 @@ function Gallery() {
             ],
             source: 'kifu',
             fallback: true,
+          }}
+        />
+      </Case>
+
+      <Case title="検討・評価値が詰みのとき（見出しの最長形）">
+        {/*
+          `先手勝ち(15手詰)` は評価値の表示で最も長くなる形。見出しの行が折り返しても
+          結果ブロックの中に収まり、上の操作パネル・コントローラー行が動かないことを見る。
+          ⚠ base（KIFU_POSITIONS[1]）は後手番なので、手番視点の +15 は後手の勝ちになる。
+        */}
+        <StudyCase
+          session={applyStudyMoves(KIFU_POSITIONS[0], ['2g2f'])}
+          evalState={{
+            kind: 'done',
+            mode: 'position',
+            base: KIFU_POSITIONS[1],
+            candidates: [
+              {
+                rank: 1,
+                move: '3c3d',
+                scoreType: 'mate',
+                scoreValue: 15,
+                pv: ['3c3d'],
+                depth: 30,
+              },
+            ],
+            source: 'engine',
+            fallback: false,
           }}
         />
       </Case>

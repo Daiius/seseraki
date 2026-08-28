@@ -35,6 +35,7 @@ import {
 import {
   EvalRequestTracker,
   evalStateAfterPositionChange,
+  headlineCandidate,
   requestPositionEval,
   validateEvalTarget,
   type EvalMode,
@@ -540,6 +541,11 @@ function EvalResultView({
 
   const { base, candidates, source, fallback, mode } = evalState;
   const side = base.sideToMove;
+  // 🔴 **この局面（この手）の評価値を 1 つ、単独で出す。**
+  //    候補手リストの 1 行目に埋もれていると「評価値が 1 つ決まるはずなのに無い」と
+  //    読めてしまう（実機で踏んだ）。棋譜閲覧の情報行（prd/05 §2.1）と同じく、
+  //    見る場所を 1 か所に決める
+  const headline = headlineCandidate(candidates);
 
   return (
     <div className="flex flex-col gap-1 text-sm">
@@ -564,6 +570,22 @@ function EvalResultView({
           </span>
         )}
       </div>
+      {/*
+        評価値は**手番側から見た値**（prd/12 §2.3）。棋譜側の `formatScore` は手数の
+        parity で先手視点へ直すので使えない。文言は情報行と同じ形（`+42 (先手有利)` /
+        `先手勝ち(15手詰)`）に揃える。
+        🔒 結果ブロックの中に収めるので、上の操作パネル・コントローラー行は動かない。
+      */}
+      {headline && (
+        <div className="flex items-baseline gap-2 flex-wrap">
+          <span className="text-base-content/60 whitespace-nowrap">
+            {mode === 'move' ? 'この手を指したときの評価値' : 'この局面の評価値'}
+          </span>
+          <span className="text-lg font-bold">
+            {formatTurnScore(headline.scoreType, headline.scoreValue, side)}
+          </span>
+        </div>
+      )}
       {candidates.length === 0 && (
         <p className="text-base-content/60">候補手が返らなかった（詰みなど）</p>
       )}

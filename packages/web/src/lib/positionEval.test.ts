@@ -3,6 +3,8 @@ import { createInitialState } from 'shared';
 import {
   EvalRequestTracker,
   evalStateAfterPositionChange,
+  headlineCandidate,
+  type EvalCandidateView,
   type EvalState,
 } from './positionEval';
 
@@ -143,5 +145,55 @@ describe('evalStateAfterPositionChange', () => {
     ['error', { kind: 'error', message: 'サーバーに接続できません' }],
   ])('%s も「評価しようとした」状態なので stale になる', (_label, state) => {
     expect(evalStateAfterPositionChange(state)).toEqual({ kind: 'stale' });
+  });
+});
+
+/**
+ * 「この局面の評価値」として単独で出す 1 本（実機の指摘が起点）。
+ *
+ * 🔴 局面評価は候補手 3 本を返すが、**その局面自体の評価値が単独では出ていなかった**。
+ * 最善手のスコアがそのまま局面の評価値なのに候補手リストの 1 行目に埋もれていて、
+ * 「評価値が 1 つ決まるはずなのに、どこにも無い」と読めた。
+ */
+describe('headlineCandidate', () => {
+  const candidate = (
+    rank: number,
+    scoreValue: number,
+    move: string,
+  ): EvalCandidateView => ({
+    rank,
+    move,
+    scoreType: 'cp',
+    scoreValue,
+    pv: [move],
+    depth: 20,
+  });
+
+  it('局面評価: rank 1 のスコアがその局面の評価値になる', () => {
+    const headline = headlineCandidate([
+      candidate(1, 42, '7g7f'),
+      candidate(2, 18, '2g2f'),
+      candidate(3, -35, '6i7h'),
+    ]);
+    expect(headline?.rank).toBe(1);
+    expect(headline?.scoreValue).toBe(42);
+  });
+
+  it('並び順に頼らず rank の一番小さいものを選ぶ', () => {
+    const headline = headlineCandidate([
+      candidate(3, -35, '6i7h'),
+      candidate(1, 42, '7g7f'),
+      candidate(2, 18, '2g2f'),
+    ]);
+    expect(headline?.move).toBe('7g7f');
+  });
+
+  it('名指し評価: 返るのはその手 1 本なので、それがその手の評価値になる', () => {
+    const named = candidate(1, -60, '2g2f');
+    expect(headlineCandidate([named])).toBe(named);
+  });
+
+  it('候補手が無ければ null（詰みなど）', () => {
+    expect(headlineCandidate([])).toBeNull();
   });
 });

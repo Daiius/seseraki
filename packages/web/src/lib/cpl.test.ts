@@ -198,8 +198,8 @@ describe('labelText / formatLoss', () => {
   it('詰み系は手数を添える', () => {
     const missed = { ...base, loss: null, mate: { kind: 'missed' as const, moves: 5 } };
     const into = { ...base, loss: null, mate: { kind: 'into' as const, moves: 3 } };
-    expect(labelText(missed, 'mate')).toBe('詰み逃し（5手詰）');
-    expect(labelText(into, 'mate')).toBe('詰まされ（3手詰）');
+    expect(labelText(missed, 'mate')).toBe('詰み逃し（5手で詰み）');
+    expect(labelText(into, 'mate')).toBe('詰まされ（3手で詰み）');
     expect(formatLoss(missed)).toBeNull();
   });
 

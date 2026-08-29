@@ -52,7 +52,11 @@ export const DEFAULT_THRESHOLDS: Thresholds = {
 export interface MateEvent {
   /** missed = 自分の詰みを逃した / into = 詰まされる筋に入った */
   kind: 'missed' | 'into';
-  /** 詰み手数（短いほど重い。評価値グラフではマーカーの赤さで表す） */
+  /**
+   * エンジンの詰み距離（`score mate N`・plies）。短いほど重い（評価値グラフではマーカーの赤さで表す）。
+   * ⚠ **詰将棋の「N手詰」ではない**——受方の応手・逆王手・合駒が全部入る手数。
+   * 読み筋の形（王手の連続かどうか）は `shared` の `classifyMateLine` が判定する。
+   */
   moves: number;
 }
 
@@ -191,8 +195,8 @@ export function labelText(l: MoveLoss, label: MoveLabel): string | null {
   if (label === 'mate') {
     if (!l.mate) return null;
     return l.mate.kind === 'missed'
-      ? `詰み逃し（${l.mate.moves}手詰）`
-      : `詰まされ（${l.mate.moves}手詰）`;
+      ? `詰み逃し（${l.mate.moves}手で詰み）`
+      : `詰まされ（${l.mate.moves}手で詰み）`;
   }
   if (label === 'blunder') return '悪手';
   if (label === 'dubious') return '疑問手';

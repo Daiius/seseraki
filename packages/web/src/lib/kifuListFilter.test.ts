@@ -100,7 +100,7 @@ describe('describeFilters', () => {
   });
 
   it('取りこぼしは手数付きで出す', () => {
-    expect(describeFilters({ missedMate: 10 })).toBe('10手詰以下の取りこぼし');
+    expect(describeFilters({ missedMate: 10 })).toBe('10手以内の詰みの取りこぼし');
   });
 
   it('複数の条件は · で連結する', () => {

@@ -11,6 +11,7 @@ import {
   turnSymbol,
   formatScore,
   formatScoreShort,
+  mateLineOf,
   moveDestination,
   toSenteEval,
 } from '../lib/usi';
@@ -190,15 +191,29 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
   // 情報行に出す局面評価値。分岐を辿っている間は分岐先の値、それ以外は現在局面の最善値。
   // 同じ値を 2 つの形で出す: 広い画面は形勢の言葉つき、狭い画面は短い形（§2.1 / usi.ts）。
   const shownScore = branchActive && branchCandidate
-    ? { type: branchCandidate.scoreType, value: branchCandidate.scoreValue, at: evalMoveNumber }
+    ? {
+        type: branchCandidate.scoreType,
+        value: branchCandidate.scoreValue,
+        at: evalMoveNumber,
+        pv: branchCandidate.pv,
+      }
     : currentBest
-      ? { type: currentBest.scoreType, value: currentBest.scoreValue, at: moveIndex }
+      ? {
+          type: currentBest.scoreType,
+          value: currentBest.scoreValue,
+          at: moveIndex,
+          pv: currentBest.pv,
+        }
       : null;
+  // `score mate N` は plies（応手込み）なので、読み筋を辿って形が判ったときだけ「N手詰」を名乗る
+  const shownMateLine = shownScore
+    ? mateLineOf(positions[shownScore.at], shownScore.type, shownScore.value, shownScore.pv)
+    : undefined;
   const posEvalText = shownScore
-    ? formatScore(shownScore.type, shownScore.value, shownScore.at)
+    ? formatScore(shownScore.type, shownScore.value, shownScore.at, shownMateLine)
     : null;
   const posEvalShortText = shownScore
-    ? formatScoreShort(shownScore.type, shownScore.value, shownScore.at)
+    ? formatScoreShort(shownScore.type, shownScore.value, shownScore.at, shownMateLine)
     : null;
 
   const onBranchForward = (rank: number, pv: string[]) => {
@@ -355,7 +370,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
         コンパクト情報行: 指し手 | 評価値 | 手数/N + 分岐バッジ
 
         🔒 **高さを内容で変えない。** 以前は `flex-wrap` だったため、符号や評価値
-        （「先手勝ち(15手詰)」など）が伸びると右ブロックが折り返して行が 2 行になり、
+        （「先手勝ち(必至・15手で詰み)」など）が伸びると右ブロックが折り返して行が 2 行になり、
         **下のコントローラー行が丸ごと下へずれた**。連打中にずれると、指の下に来た
         「この局面を探す」を踏んで /positions へ飛ぶ。
         対策は「折り返さない・はみ出しは truncate で吸収・高さは min-h-6 で固定」。
@@ -512,7 +527,12 @@ function CandidateList({
                   {usiToJapaneseWithPiece(prevState, c.move)}
                 </span>
                 <span className="text-base-content/70">
-                  {formatScore(c.scoreType, c.scoreValue, evalMoveNumber)}
+                  {formatScore(
+                    c.scoreType,
+                    c.scoreValue,
+                    evalMoveNumber,
+                    mateLineOf(prevState, c.scoreType, c.scoreValue, c.pv),
+                  )}
                 </span>
                 <span className="text-xs text-base-content/40">
                   d{c.depth}

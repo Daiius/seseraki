@@ -5,6 +5,7 @@ import {
   usiToJapaneseWithPiece,
   type BoardState,
   type HandPieceKind,
+  type MateLine,
   type PieceKind,
   type Side,
   type SquareRef,
@@ -16,7 +17,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from './icons';
-import { formatTurnScore, moveDestination } from '../lib/usi';
+import { formatTurnScore, mateLineOf, moveDestination } from '../lib/usi';
 import { DEFAULT_THRESHOLDS, lossLabel, type Thresholds } from '../lib/cpl';
 import {
   canPutSelectionOnHand,
@@ -781,6 +782,15 @@ function EvalResultView({
   //    読めてしまう（実機で踏んだ）。棋譜閲覧の情報行（prd/05 §2.1）と同じく、
   //    見る場所を 1 か所に決める
   const headline = headlineCandidate(candidates);
+  /*
+    `score mate N` は plies（受方の応手・逆王手・合駒込み）なので、そのまま「N手詰」と
+    書かない。読み筋を辿って形が判ったときだけ名乗る（`classifyMateLine`）。
+    🔒 **直前の手の採点にも同じ分類を渡す**——採点の「指した手の評価値」は
+    この評価値の符号反転そのものなので、攻方も読み筋も同じ（視点だけが逆）。
+  */
+  const headlineLine = headline
+    ? mateLineOf(base, headline.scoreType, headline.scoreValue, headline.pv)
+    : undefined;
 
   return (
     <div className="flex flex-col gap-1 text-sm">
@@ -795,13 +805,15 @@ function EvalResultView({
       <div className="flex items-baseline gap-2 flex-wrap">
         {headline && (
           <span className="text-lg font-bold">
-            {formatTurnScore(headline.scoreType, headline.scoreValue, side)}
+            {formatTurnScore(headline.scoreType, headline.scoreValue, side, headlineLine)}
           </span>
         )}
         {/* 🔒 どこから来た値かを出す（prd/12 §2.6） */}
         <SourceBadge source={source} />
       </div>
-      {grade && <MoveGradeView grade={grade} thresholds={thresholds} />}
+      {grade && (
+        <MoveGradeView grade={grade} playedLine={headlineLine} thresholds={thresholds} />
+      )}
       {candidates.length === 0 && (
         <p className="text-base-content/60">候補手が返らなかった（詰みなど）</p>
       )}
@@ -845,7 +857,12 @@ function EvalResultView({
                 {usiToJapaneseWithPiece(base, c.move)}
               </span>
               <span className="text-base-content/70">
-                {formatTurnScore(c.scoreType, c.scoreValue, side)}
+                {formatTurnScore(
+                  c.scoreType,
+                  c.scoreValue,
+                  side,
+                  mateLineOf(base, c.scoreType, c.scoreValue, c.pv),
+                )}
               </span>
               <span className="text-xs text-base-content/40">d{c.depth}</span>
               {pvLen > 0 && (
@@ -950,9 +967,12 @@ function SourceBadge({ source }: { source: EvalSource }) {
  */
 function MoveGradeView({
   grade,
+  playedLine,
   thresholds,
 }: {
   grade: MoveGrade;
+  /** 指した手の評価値の mate 分類（主の局面評価と同じもの。視点だけが逆） */
+  playedLine: MateLine | undefined;
   thresholds: Thresholds;
 }) {
   const side = grade.from.sideToMove;
@@ -978,7 +998,7 @@ function MoveGradeView({
           {usiToJapaneseWithPiece(grade.from, grade.move)}
         </span>
         <span className="whitespace-nowrap">
-          {formatTurnScore(grade.playedScoreType, grade.playedScoreValue, side)}
+          {formatTurnScore(grade.playedScoreType, grade.playedScoreValue, side, playedLine)}
         </span>
       </div>
       {/*
@@ -1001,7 +1021,12 @@ function MoveGradeView({
             {usiToJapaneseWithPiece(grade.from, grade.best.move)}
           </span>
           <span className="whitespace-nowrap">
-            {formatTurnScore(grade.best.scoreType, grade.best.scoreValue, side)}
+            {formatTurnScore(
+              grade.best.scoreType,
+              grade.best.scoreValue,
+              side,
+              mateLineOf(grade.from, grade.best.scoreType, grade.best.scoreValue, grade.best.pv),
+            )}
           </span>
           <SourceBadge source={grade.source} />
           {grade.loss === null ? (

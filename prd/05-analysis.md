@@ -151,6 +151,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | MultiPV | `ENGINE_MULTIPV` | 3 | 候補手数 |
 | — | `ENGINE_DEPTH` | 10 | 探索深さ |
 | — | `ENGINE_MOVETIME` | 未設定 | 1 局面あたりの思考時間(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整） |
+| — | `ENGINE_PROBE_MOVETIME` | 未設定 | 詰めろ probe（[12](./12-position-lab.md) §2.2）の思考時間(ms)。未設定なら `ENGINE_MOVETIME` / `ENGINE_DEPTH` と同じ |
 | EvalDir | `ENGINE_EVAL_DIR` | — | 本番: 評価関数ディレクトリ |
 | BookDir | `ENGINE_BOOK_DIR` | — | 本番: 定跡ディレクトリ |
 | ConsiderationMode | — | true | 読み筋を置換表から延長して出力する（§1.3a） |

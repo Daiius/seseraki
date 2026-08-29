@@ -51,24 +51,63 @@ export type EvalOutcome =
       fallback: boolean;
       /** 評価が確定した時刻（ISO）。キャッシュの古さを見るのに使う */
       evaluatedAt: string;
+      /**
+       * 探索に与えた予算（worker が実際に送った `go` から読み取った値）。
+       *
+       * 🔒 詰めろ probe の「検出なし」は**「詰めろではない」ではなく「この予算では
+       * 見つからなかった」**でしかない（設計 §2.7）。予算を伏せるとその区別が
+       * 表示側で付けられなくなるので、結果に添えて運ぶ。
+       */
+      budget?: { movetime?: number; depth?: number };
     }
   | { status: 'failed'; error: string };
 
-export interface EvalRequest {
+/**
+ * 評価の種別（設計 §2.4）。
+ *
+ * - `eval`: 局面評価 / 名指し評価。**MultiPV 3 固定**（prd/12 §2.2 の API 契約）
+ * - `probe`: 詰めろ probe。**MultiPV 1**。手番を反転した局面 P′ を撃ち、`mate +N` が
+ *   返れば「受方がパスしたら詰む」＝詰めろ。1 本しか見ないので `move` は持たない
+ *
+ * 🔴 **probe を eval に相乗りさせられない。** やねうら王の「詰みを読み切ったら
+ * 打ち切る」早期終了は **MultiPV 1 のときだけ効く**（MultiPV 3 は予算を使い切る。
+ * 本番実測）。別種別にして初めて「詰めろがある局面は数十 ms で返る」が成り立つ。
+ */
+export type EvalKind = 'eval' | 'probe';
+
+/**
+ * 評価の対象（種別を持たない部分）。**棋譜解析からの再利用**（`position-kifu-reuse.ts`）は
+ * ここまでしか見ない——再利用できるのは局面評価 / 名指し評価だけで、probe は
+ * 手番を反転した局面を MultiPV 1 で撃つ別物なので棋譜には無い。
+ */
+export interface EvalTarget {
   /** 正規化済みの局面キー（`positionSfen`。route 側で SFEN を読み直して正規化する） */
   sfen: string;
   /** 名指し評価の対象手（USI）。局面評価は null */
   move: string | null;
 }
 
+export type EvalRequest =
+  | (EvalTarget & { kind: 'eval' })
+  | {
+      kind: 'probe';
+      /** 手番を反転して正規化した局面 P′（`usiPositionSfen`） */
+      sfen: string;
+      /** probe は候補手を名指ししない（型で縛る。設計 §4 B1-1） */
+      move: null;
+    };
+
 /** worker に渡すジョブ */
-export interface ClaimedEvalJob extends EvalRequest {
-  id: string;
-}
+export type ClaimedEvalJob = EvalRequest & { id: string };
 
 /** worker からの結果報告 */
 export type EvalReport =
-  | { candidates: EvalCandidate[]; fallback: boolean }
+  | {
+      candidates: EvalCandidate[];
+      fallback: boolean;
+      /** worker が実際に送った `go` の予算（`{ movetime }` or `{ depth }`） */
+      budget?: { movetime?: number; depth?: number };
+    }
   | { error: string };
 
 /** キャッシュに載せる件数の上限。超えたら**古い順に捨てる**（Map は挿入順を保つ） */
@@ -116,9 +155,12 @@ const RESULT_TTL_MS = 300_000;
 /** 保持する完了結果の件数の上限。超えたら古い順に捨てる（Map は挿入順を保つ） */
 const RESULT_LIMIT = 200;
 
-interface Job extends EvalRequest {
+interface Job {
   id: string;
   key: string;
+  kind: EvalKind;
+  sfen: string;
+  move: string | null;
   status: 'queued' | 'running';
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -138,7 +180,10 @@ let sequence = 0;
  * キャッシュとジョブのキー（prd/12 §2.4）。
  * **正規化 SFEN + 評価種別 + 名指し手**。局面評価と名指し評価は別物なので混ざらないようにする。
  */
-export function evaluationKey({ sfen, move }: EvalRequest): string {
+export function evaluationKey(request: EvalRequest): string {
+  // 🔒 probe は MultiPV も局面（手番反転済み）も eval と違う。**同じ SFEN でも別エントリ**
+  if (request.kind === 'probe') return `probe ${request.sfen}`;
+  const { sfen, move } = request;
   return move === null ? `position ${sfen}` : `move ${sfen} ${move}`;
 }
 
@@ -223,6 +268,7 @@ export function startEvaluation(request: EvalRequest): EvalStart {
   const job: Job = {
     id: `eval-${++sequence}`,
     key,
+    kind: request.kind,
     sfen: request.sfen,
     move: request.move,
     status: 'queued',
@@ -268,7 +314,10 @@ export function claimEvaluationJob(): ClaimedEvalJob | null {
       envMs('POSITION_EVAL_RUN_TIMEOUT_MS', DEFAULT_RUN_TIMEOUT_MS),
       'worker から評価結果が返りませんでした',
     );
-    return { id: job.id, sfen: job.sfen, move: job.move };
+    // kind は worker が探索の組み立て（MultiPV・予算）を選ぶのに要る
+    return job.kind === 'probe'
+      ? { id: job.id, kind: 'probe', sfen: job.sfen, move: null }
+      : { id: job.id, kind: 'eval', sfen: job.sfen, move: job.move };
   }
   return null;
 }
@@ -293,6 +342,7 @@ export function completeEvaluationJob(id: string, report: EvalReport): boolean {
           candidates: report.candidates,
           fallback: report.fallback,
           evaluatedAt: new Date().toISOString(),
+          ...(report.budget ? { budget: report.budget } : {}),
         },
   );
   return true;

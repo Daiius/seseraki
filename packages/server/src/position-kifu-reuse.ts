@@ -27,7 +27,7 @@ import { and, asc, desc, eq, exists, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/mysql-core';
 import { db } from './db/index.js';
 import { candidateMoves, kifuPositions, moveAnalyses } from './db/schema.js';
-import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';
+import type { EvalCandidate, EvalTarget, EvalOutcome } from './position-eval.js';
 
 type DoneOutcome = Extract<EvalOutcome, { status: 'done' }>;
 
@@ -111,7 +111,7 @@ function isoOr(now: Date | null): string {
  * @returns 再利用できるなら評価結果。できなければ `null`（= エンジンへ回す）
  */
 export function reuseFromKifu(
-  request: EvalRequest,
+  request: EvalTarget,
   matches: KifuPositionMatch[],
 ): ReusedEvalOutcome | null {
   if (request.move === null) {
@@ -378,7 +378,7 @@ function emptyMatch(kifuId: number, moveNumber: number): KifuPositionMatch {
  * ①②は**両方引く**。どちらを採るかは `reuseFromKifu` が決める（①が優先）。
  */
 export async function findKifuPositionMatches(
-  request: EvalRequest,
+  request: EvalTarget,
 ): Promise<KifuPositionMatch[]> {
   const { sfen, move } = request;
 
@@ -425,7 +425,7 @@ export async function findKifuPositionMatches(
  * ここで答えられた要求はジョブを積まずに返る、というのがこの経路の目的。
  */
 export async function lookupKifuEvaluation(
-  request: EvalRequest,
+  request: EvalTarget,
 ): Promise<ReusedEvalOutcome | null> {
   const matches = await findKifuPositionMatches(request);
   if (matches.length === 0) return null;

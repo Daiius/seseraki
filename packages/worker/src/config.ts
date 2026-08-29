@@ -39,6 +39,12 @@ export function loadConfig() {
     engineMovetime: process.env.ENGINE_MOVETIME
       ? Number(process.env.ENGINE_MOVETIME)
       : undefined,
+    // 詰めろ probe の予算（設計 §2.1）。**未設定なら棋譜解析と同じ**（prd/12 §2.1 の既定）。
+    // 「取り逃した詰めろ」は予算を伸ばすほど減る（単調）ので、probe だけ長くしたく
+    // なったときの口として分けてある。⚠ `go mate` は使わない（設計 §0.2）
+    engineProbeMovetime: process.env.ENGINE_PROBE_MOVETIME
+      ? Number(process.env.ENGINE_PROBE_MOVETIME)
+      : undefined,
     engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
     engineHash: Number(optionalEnv("ENGINE_HASH", "128")),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,

@@ -49,6 +49,7 @@ async function main() {
     enginePath: config.enginePath,
     engineDepth: config.engineDepth,
     engineMovetime: config.engineMovetime,
+    engineProbeMovetime: config.engineProbeMovetime,
     engineThreads: config.engineThreads,
     // hashfull のログ（1 局ごとに出る peak）と突き合わせられるよう、設定値も残す
     engineHash: config.engineHash,
@@ -135,13 +136,22 @@ async function main() {
       depth: config.engineDepth,
       movetime: config.engineMovetime,
     });
+    // 詰めろ probe の `go`。`ENGINE_PROBE_MOVETIME` を設定したときだけ棋譜解析と別になる。
+    // 🔒 **`go mate` は組み立てない**（設計 §0.2。やねうら王の通常エンジンは時間引数を
+    //    停止条件として読まず、`bestmove` を待つ worker が固まる）
+    const probeGoCommand = buildGoCommand({
+      depth: config.engineDepth,
+      movetime: config.engineProbeMovetime ?? config.engineMovetime,
+    });
     /** 待っている評価ジョブを捌く。エンジンが落ちたら再起動し、捌けなかったことを返す */
     const drainPositionJobs = async (): Promise<boolean> => {
       try {
         // ⚠ MultiPV は `drainEvaluationJobs` が 3 本固定で設定する（`ENGINE_MULTIPV` は渡さない）。
         // 棋譜解析の候補手数は運用で増減できるつまみだが、局面評価の 3 本は
         // **API の契約**（prd/12 §2.2）で、利用側はこれを前提に組む。目的が違うので同じ値に乗せない
-        await drainEvaluationJobs(engine, positionJobs, goCommand);
+        await drainEvaluationJobs(engine, positionJobs, goCommand, {
+          probeGoCommand,
+        });
         return true;
       } catch (err) {
         if (!(err instanceof InteractiveEngineError)) throw err;
@@ -209,7 +219,9 @@ async function main() {
             // 最大待ちは「現局面の解析残り時間 + ポーリング間隔」に収まる
             onPositionBoundary: async () => {
               // ⚠ ここでも MultiPV は渡さない（3 本固定・上の drainPositionJobs と同じ理由）
-              await drainEvaluationJobs(engine, positionJobs, goCommand);
+              await drainEvaluationJobs(engine, positionJobs, goCommand, {
+                probeGoCommand,
+              });
             },
             // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
             // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）

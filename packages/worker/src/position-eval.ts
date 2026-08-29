@@ -28,12 +28,27 @@ const USI_DEFAULT_MULTI_PV = "1";
 /** 局面評価の既定の候補手数（prd/12 §2.2） */
 export const DEFAULT_EVAL_MULTI_PV = 3;
 
+/**
+ * 詰めろ probe の候補手数。**1 で固定**（設計 §0.4）。
+ *
+ * 🔴 やねうら王の「詰みを読み切ったら反復深化を打ち切る」早期終了は
+ * **MultiPV 1 のときだけ効く**（本番実測: 9 手詰 + `movetime 2000` で MultiPV 1 は 66ms、
+ * MultiPV 3 は 2000ms 使い切り）。3 本にすると詰めろがある局面でも毎回予算を使い切るので、
+ * probe を局面評価（3 本固定）に相乗りさせられない。
+ */
+export const PROBE_MULTI_PV = 1;
+
 /** server から受け取る評価ジョブ */
 export interface PositionEvalJob {
   id: string;
-  /** 局面キーと同じ 3 フィールドの SFEN（手数を持たない） */
+  /**
+   * 評価の種別（設計 §2.4）。`probe` は**手番を反転した局面 P′** の詰めろ探索で、
+   * MultiPV も予算も局面評価とは別（{@link PROBE_MULTI_PV}）
+   */
+  kind: "eval" | "probe";
+  /** 局面キーと同じ 3 フィールドの SFEN（手数を持たない。probe は 4 フィールドで来る） */
   sfen: string;
-  /** 名指し評価の対象手（USI）。局面評価は null */
+  /** 名指し評価の対象手（USI）。局面評価と probe は null */
   move: string | null;
 }
 
@@ -41,6 +56,28 @@ export interface PositionEvalResult {
   candidates: CandidateMove[];
   /** `searchmoves` ではなく符号反転のフォールバックで求めたか（prd/12 §2.2） */
   fallback: boolean;
+  /**
+   * 実際に送った `go` の予算。probe の「検出なし」が**「詰めろではない」ではなく
+   * 「この予算では見つからなかった」**でしかないことを表示側で扱えるようにする（設計 §2.7）
+   */
+  budget?: { movetime?: number; depth?: number };
+}
+
+/**
+ * 送った `go` コマンドから予算を読み取る。
+ *
+ * 🔒 **組み立てた文字列そのものから取る**（別に受け取った設定値ではなく）。
+ * 「エンジンに何を渡したか」と結果に添える値が構造的にずれない。
+ */
+export function budgetOfGoCommand(go: string): {
+  movetime?: number;
+  depth?: number;
+} {
+  const movetime = /\bmovetime\s+(\d+)/.exec(go);
+  if (movetime) return { movetime: Number(movetime[1]) };
+  const depth = /\bdepth\s+(\d+)/.exec(go);
+  if (depth) return { depth: Number(depth[1]) };
+  return {};
 }
 
 /** server とのやり取り（テストではスタブを渡す） */
@@ -81,6 +118,11 @@ const MAX_JOBS_PER_DRAIN = 8;
 export interface DrainOptions {
   /** 1 回で処理するジョブ数の上限（既定 {@link MAX_JOBS_PER_DRAIN}） */
   maxJobs?: number;
+  /**
+   * 詰めろ probe に使う `go`（既定は棋譜解析と同じ `goCommand`）。
+   * `ENGINE_PROBE_MOVETIME` を設定したときだけ別の値になる（prd/12 §2.2）
+   */
+  probeGoCommand?: string;
 }
 
 /**
@@ -141,6 +183,8 @@ function positionCommand(sfen: string, moves: string[] = []): string {
 /**
  * 評価ジョブを 1 件処理する。
  *
+ * - 詰めろ probe: **MultiPV 1** で `go`（`searchmoves` は使わない）→ 候補手 1 本 + 予算。
+ *   rank 1 が `mate +N` なら詰めろ（受方がパスしたら N 手で詰む）
  * - 局面評価: `go`（MultiPV を `multiPv` にしてから探索し、終わったら戻す）→ 候補手とスコア
  * - 名指し評価: `go searchmoves <手>` → **その手の**スコアと読み筋（相手の咎め筋）
  *   非対応なら「手を適用した局面を評価して符号反転」のフォールバックで**同じ契約**を守る。
@@ -153,6 +197,20 @@ export async function evaluateJob(
   multiPv: number = DEFAULT_EVAL_MULTI_PV,
 ): Promise<PositionEvalResult> {
   const position = positionCommand(job.sfen);
+
+  if (job.kind === "probe") {
+    // 🔒 `goCommand` は `buildGoCommand` が組み立てたもの（`go movetime` / `go depth`）。
+    //    **`go mate` を組み立てる経路は作らない**——やねうら王の通常エンジンは
+    //    `go mate <ms>` の時間引数を停止条件として読まず、`bestmove` が返らない（設計 §0.2）
+    const result = await withMultiPv(engine, PROBE_MULTI_PV, () =>
+      engine.analyze(position, goCommand),
+    );
+    return {
+      candidates: extractMultiPvResults(result.infoLines).slice(0, 1),
+      fallback: false,
+      budget: budgetOfGoCommand(goCommand),
+    };
+  }
 
   if (job.move === null) {
     const result = await withMultiPv(engine, multiPv, () =>
@@ -224,7 +282,7 @@ export async function drainEvaluationJobs(
   goCommand: string,
   options: DrainOptions = {},
 ): Promise<number> {
-  const { maxJobs = MAX_JOBS_PER_DRAIN } = options;
+  const { maxJobs = MAX_JOBS_PER_DRAIN, probeGoCommand = goCommand } = options;
   let processed = 0;
   while (processed < maxJobs) {
     let job: PositionEvalJob | null;
@@ -238,7 +296,12 @@ export async function drainEvaluationJobs(
 
     let result: PositionEvalResult;
     try {
-      result = await evaluateJob(engine, job, goCommand, DEFAULT_EVAL_MULTI_PV);
+      result = await evaluateJob(
+        engine,
+        job,
+        job.kind === "probe" ? probeGoCommand : goCommand,
+        DEFAULT_EVAL_MULTI_PV,
+      );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[PositionEval] Evaluation failed (${job.id}):`, reason);

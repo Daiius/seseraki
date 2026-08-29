@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  budgetOfGoCommand,
   drainEvaluationJobs,
   evaluateJob,
   InteractiveEngineError,
@@ -80,7 +81,7 @@ describe("evaluateJob（局面評価）", () => {
 
     const result = await evaluateJob(
       engine,
-      { id: "eval-1", sfen: SFEN, move: null },
+      { id: "eval-1", kind: "eval", sfen: SFEN, move: null },
       GO,
     );
 
@@ -104,7 +105,7 @@ describe("evaluateJob（局面評価）", () => {
       searchResult([info(1, ["7g7f"], 50)]),
     ]);
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", kind: "eval", sfen: SFEN, move: null }, GO, 3);
 
     // 設定 → 探索 → 復元の順であること（探索中に値が変わっていないこと）
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
@@ -116,7 +117,7 @@ describe("evaluateJob（局面評価）", () => {
       { MultiPV: "3" },
     );
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", kind: "eval", sfen: SFEN, move: null }, GO, 3);
 
     expect(optionCalls).toEqual(["(go)"]);
   });
@@ -125,7 +126,7 @@ describe("evaluateJob（局面評価）", () => {
     const { engine, optionCalls } = createStubEngine([], { MultiPV: "1" });
 
     await expect(
-      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3),
+      evaluateJob(engine, { id: "eval-1", kind: "eval", sfen: SFEN, move: null }, GO, 3),
     ).rejects.toThrow();
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
@@ -137,15 +138,105 @@ describe("evaluateJob（局面評価）", () => {
     ]);
     await evaluateJob(
       engine,
-      { id: "eval-1", sfen: `${SFEN} 25`, move: null },
+      { id: "eval-1", kind: "eval", sfen: `${SFEN} 25`, move: null },
       GO,
     );
     expect(calls[0].position).toBe(`position sfen ${SFEN} 25`);
   });
 });
 
+/**
+ * 詰めろ probe（設計 §2.1 / §4 B1-1）。手番を反転した局面 P′ を **MultiPV 1** で撃ち、
+ * rank 1 が `mate +N` なら詰めろ。
+ */
+describe("evaluateJob（詰めろ probe）", () => {
+  const probe = (sfen = SFEN): PositionEvalJob => ({
+    id: "eval-1",
+    kind: "probe",
+    sfen,
+    move: null,
+  });
+
+  // 🔴 MultiPV 3 では「詰みを読み切ったら打ち切る」早期終了が効かず、詰めろがある局面でも
+  //    予算を使い切る（本番実測。設計 §0.4）。1 にすることが probe の成立条件
+  it("MultiPV を 1 にして探索し、終わったら元の値へ戻す", async () => {
+    const { engine, optionCalls } = createStubEngine(
+      [
+        searchResult([
+          { multipv: 1, depth: 9, score: { type: "mate", value: 1 }, pv: ["8c8b"] },
+        ]),
+      ],
+      { MultiPV: "3" },
+    );
+
+    await evaluateJob(engine, probe(), GO);
+
+    expect(optionCalls).toEqual(["MultiPV=1", "(go)", "MultiPV=3"]);
+  });
+
+  it("mate を候補手 1 本 + 予算として返す", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([
+        { multipv: 1, depth: 9, score: { type: "mate", value: 1 }, pv: ["8c8b"] },
+      ]),
+    ]);
+
+    const result = await evaluateJob(engine, probe(`${SFEN} 1`), GO);
+
+    expect(calls[0].position).toBe(`position sfen ${SFEN} 1`);
+    expect(result.fallback).toBe(false);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].score).toEqual({ type: "mate", value: 1 });
+    expect(result.budget).toEqual({ movetime: 1000 });
+  });
+
+  // 🔒 **回帰防止**: やねうら王の通常エンジンは `go mate <ms>` の時間引数を停止条件として
+  //    読まず、事実上 `go infinite` になる（設計 §0.2）。`bestmove` を待つ worker が固まるので、
+  //    `go mate` を組み立てる経路そのものを作らない
+  it("組み立てた go に mate を含まない（go mate は使わない）", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([
+        { multipv: 1, depth: 9, score: { type: "mate", value: 1 }, pv: ["8c8b"] },
+      ]),
+    ]);
+
+    await evaluateJob(engine, probe(), GO);
+
+    expect(calls[0].go).toBe(GO);
+    expect(calls[0].go).not.toContain("mate");
+    // searchmoves も使わない（probe は最善手 1 本を見るだけ）
+    expect(calls[0].go).not.toContain("searchmoves");
+  });
+
+  it("mate が出なくても候補をそのまま返す（「詰めろではない」と決めつけない）", async () => {
+    const { engine } = createStubEngine([
+      searchResult([info(1, ["7g7f", "3c3d"], 120)]),
+    ]);
+
+    const result = await evaluateJob(engine, probe(), GO);
+
+    expect(result.candidates[0].score).toEqual({ type: "cp", value: 120 });
+    // 「この予算では見つからなかった」ことを表示側が言えるように予算が付く（設計 §2.7）
+    expect(result.budget).toEqual({ movetime: 1000 });
+  });
+});
+
+describe("budgetOfGoCommand", () => {
+  it("movetime を読む", () => {
+    expect(budgetOfGoCommand("go movetime 1500")).toEqual({ movetime: 1500 });
+  });
+
+  it("depth を読む", () => {
+    expect(budgetOfGoCommand("go depth 10")).toEqual({ depth: 10 });
+  });
+
+  it("読み取れなければ空（数字を作らない）", () => {
+    expect(budgetOfGoCommand("go infinite")).toEqual({});
+  });
+});
+
 describe("evaluateJob（名指し評価）", () => {
-  const job: PositionEvalJob = { id: "eval-1", sfen: SFEN, move: "9g9f" };
+  const job: PositionEvalJob = { id: "eval-1", kind: "eval", sfen: SFEN, move: "9g9f" };
 
   it("searchmoves が効くなら、その手のスコアと読み筋を返す", async () => {
     const { engine, calls } = createStubEngine([
@@ -255,7 +346,7 @@ function createStubSource(jobs: PositionEvalJob[]) {
 }
 
 describe("drainEvaluationJobs", () => {
-  const job = (id: string): PositionEvalJob => ({ id, sfen: SFEN, move: null });
+  const job = (id: string): PositionEvalJob => ({ id, kind: "eval", sfen: SFEN, move: null });
 
   it("待っているジョブを処理しきって戻る", async () => {
     const { engine } = createStubEngine([
@@ -282,6 +373,40 @@ describe("drainEvaluationJobs", () => {
     await drainEvaluationJobs(engine, source, GO);
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
+  // `ENGINE_PROBE_MOVETIME` を設定したときだけ probe の予算が別になる（prd/12 §2.2）
+  it("probe には probeGoCommand を使う", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([
+        { multipv: 1, depth: 9, score: { type: "mate", value: 1 }, pv: ["8c8b"] },
+      ]),
+    ]);
+    const { source, reports } = createStubSource([
+      { id: "eval-1", kind: "probe", sfen: SFEN, move: null },
+    ]);
+
+    await drainEvaluationJobs(engine, source, GO, {
+      probeGoCommand: "go movetime 3000",
+    });
+
+    expect(calls[0].go).toBe("go movetime 3000");
+    const report = reports[0].report;
+    expect("budget" in report && report.budget).toEqual({ movetime: 3000 });
+  });
+
+  // 🔒 `ENGINE_PROBE_MOVETIME` 未設定なら棋譜解析と同じコマンド（prd/12 §2.1 の既定）
+  it("probeGoCommand 未指定なら棋譜解析と同じ go を使う", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([info(1, ["7g7f"], 50)]),
+    ]);
+    const { source } = createStubSource([
+      { id: "eval-1", kind: "probe", sfen: SFEN, move: null },
+    ]);
+
+    await drainEvaluationJobs(engine, source, GO);
+
+    expect(calls[0].go).toBe(GO);
   });
 
   it("上限で打ち切る（棋譜解析が評価要求で止まり続けない）", async () => {

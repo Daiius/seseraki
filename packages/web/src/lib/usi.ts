@@ -134,8 +134,11 @@ function mateWording(plies: number, line?: MateLine): string {
 /** mate の短い形（情報行）。勝者の記号は呼び出し側が前置する */
 function mateWordingShort(plies: number, line?: MateLine): string {
   if (line?.kind === 'checkmate') return `${plies}手詰`;
-  if (line?.kind === 'hisshi') return `必至${plies}`;
-  return `詰${plies}`;
+  // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` / `▲詰5` は
+  //    「必至9」「詰5」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
+  //    数の終わりを示すのでそのまま
+  if (line?.kind === 'hisshi') return `必至(${plies})`;
+  return `詰(${plies})`;
 }
 
 /**

@@ -42,26 +42,26 @@ describe('formatScoreShort', () => {
     // 🔒 ここが要点。mate は「先手 / 後手」の語だけが勝者を担っており、
     // 手数だけにすると頓死の前後で数字が変わるだけになって勝敗の入れ替わりが出ない。
     it('同じ mate 13 でも、手番が変われば詰ます側が入れ替わる', () => {
-      expect(formatScoreShort('mate', 13, 0)).toBe('▲詰13'); // 先手番の局面
-      expect(formatScoreShort('mate', 13, 1)).toBe('△詰13'); // 後手番の局面
+      expect(formatScoreShort('mate', 13, 0)).toBe('▲詰(13)'); // 先手番の局面
+      expect(formatScoreShort('mate', 13, 1)).toBe('△詰(13)'); // 後手番の局面
       // 長い形でも同じことが起きている（短い形はその情報を捨てていない）
       expect(formatScore('mate', 13, 0)).toBe('先手勝ち(13手で詰み)');
       expect(formatScore('mate', 13, 1)).toBe('後手勝ち(13手で詰み)');
     });
 
     it('負の mate は相手が詰ます', () => {
-      expect(formatScoreShort('mate', -13, 0)).toBe('△詰13');
-      expect(formatScoreShort('mate', -13, 1)).toBe('▲詰13');
+      expect(formatScoreShort('mate', -13, 0)).toBe('△詰(13)');
+      expect(formatScoreShort('mate', -13, 1)).toBe('▲詰(13)');
     });
 
     it('頓死（詰ます側が入れ替わる）が短い形でも読める', () => {
       // 13 手で詰みだったのが、次の手で 1 手詰で負けになる
-      expect(formatScoreShort('mate', 13, 10)).toBe('▲詰13');
-      expect(formatScoreShort('mate', 1, 11)).toBe('△詰1');
+      expect(formatScoreShort('mate', 13, 10)).toBe('▲詰(13)');
+      expect(formatScoreShort('mate', 1, 11)).toBe('△詰(1)');
     });
 
     it.each([1, 15, 99])('mate %i も手数をそのまま出す', (moves) => {
-      expect(formatScoreShort('mate', moves, 0)).toBe(`▲詰${moves}`);
+      expect(formatScoreShort('mate', moves, 0)).toBe(`▲詰(${moves})`);
     });
 
     it('0 手詰と値が壊れている場合は勝者を名乗らない（長い形と同じ）', () => {
@@ -140,12 +140,12 @@ describe('mate の表記は読み筋の形で決まる', () => {
 
   it('初手だけ静かな手（hisshi）は必至として出す', () => {
     expect(formatScore('mate', 9, 0, line({ kind: 'hisshi' }))).toBe('先手勝ち(必至・9手で詰み)');
-    expect(formatScoreShort('mate', 9, 0, line({ kind: 'hisshi' }))).toBe('▲必至9');
+    expect(formatScoreShort('mate', 9, 0, line({ kind: 'hisshi' }))).toBe('▲必至(9)');
   });
 
   it('途中に静かな手が混ざる（forced）は既定と同じ「N手で詰み」', () => {
     expect(formatScore('mate', 9, 0, line({ kind: 'forced' }))).toBe('先手勝ち(9手で詰み)');
-    expect(formatScoreShort('mate', 9, 0, line({ kind: 'forced' }))).toBe('▲詰9');
+    expect(formatScoreShort('mate', 9, 0, line({ kind: 'forced' }))).toBe('▲詰(9)');
   });
 
   it('unknown は line を省略したときと同じ', () => {

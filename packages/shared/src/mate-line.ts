@@ -14,13 +14,42 @@
 import { applyMove, type BoardState, type Side } from './board';
 import { isAttackedBy } from './position-validation';
 
+/**
+ * 分類の種類。
+ *
+ * 🔴 **「受けが無い」を担保しているのは pv ではなく mate スコアの方**（レビュー `OCL-72421091` への反証）。
+ * engine が `mate N` を返した時点で「**受方がどう応じても N 手以内に詰む**」ことは読み切られている
+ * （受方は最長になる応手を選ぶので、pv の受方の手は最善の粘り）。`classifyMateLine` が pv から
+ * 取り出しているのは**攻方の手が王手だったかどうか**という一点だけで、受けの全数検証は
+ * mate スコアが済ませている。
+ *
+ * ⚠ ただし**攻方の手の側は pv 1 本の観測**にすぎない。他の受け方に対する攻方の手は pv に現れないので、
+ * 「攻方の手が全て王手」は**この読み筋上での事実**であって、あらゆる変化で王手の連続になる保証ではない
+ * （下記 `checkmate` の但し書き）。
+ *
+ * ⚠ **深さ不足による false negative は許容する**（読み切れず mate が出なければ分類の対象にすらならない）。
+ * 「取りこぼし」（prd/09 §3.1）と同じ性質で、出た分だけが正しいという方向に倒してある。
+ */
 export type MateLineKind =
-  /** 攻方の手が全て王手（詰将棋の「詰み」と同じ形。合駒・逆王手は含みうる） */
+  /**
+   * **pv 上で**攻方の手が全て王手だった、という観測事実（詰将棋の「詰み」と同じ形）。
+   * ⚠ **pv に現れない受け方まで検証したものではない**——他の応手では静かな手が混ざりうる。
+   * ⚠ 手数（`plies`）は engine の距離のままで、**合駒を含む**（`interposes`）。
+   */
   | 'checkmate'
-  /** 初手だけ静かな手で、以降の攻方の手は全て王手（必至を掛ける手 / 受けなしの局面） */
+  /**
+   * 初手だけ静かな手で、以降の攻方の手は全て王手（必至を掛ける手 / 受けなしの局面）。
+   * 「受けが無い」は mate スコアが担保しているので、**静かな手で受けなしにした ＝ 必至**と言える。
+   */
   | 'hisshi'
   /** 途中に静かな手を挟む（受けなし。2手すき以上が受からない形など） */
   | 'forced'
+  /**
+   * pv が終局マーカー（`resign` / `win`）だった＝**既に詰んでいる局面**。
+   * 🔒 **`unknown`（読めない指し手）と混ぜない。** 混ぜると「本当に pv が壊れている」場合と
+   * 区別が付かず、終局局面が `詰(1)` のように表示される（実際に踏んだ。kifu 1 の 106 手目）。
+   */
+  | 'gameover'
   /** pv が無い / mate 距離より短い / 盤面が追えない */
   | 'unknown';
 
@@ -39,6 +68,12 @@ export interface MateLine {
 
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
 const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
+
+/**
+ * 指し手ではなく**局面が終わっている**ことを表す USI の応答。
+ * `bestmove resign` は合法手が無い（＝既に詰んでいる）ときに返り、pv にそのまま保存されている。
+ */
+const GAME_OVER_MOVES: readonly string[] = ['resign', 'win'];
 
 /** USI 座標（例 `7g`）→ `[row, col]`。盤の内部表現は `board.ts` と同じ向き */
 function usiToIndex(usi: string): [row: number, col: number] {
@@ -90,6 +125,12 @@ export function classifyMateLine(
   const unknown = (): MateLine => ({ kind: 'unknown', plies, checks, interposes });
 
   if (!Number.isInteger(mateValue) || plies === 0) return unknown();
+  // 🔴 **終局マーカーの判定は手数の検査より先**（`mate -1` + pv `['resign']` は `pv.length < plies` を
+  //    通り抜けるが、`mate -5` のような値と組み合わさると通り抜けない）。局面が終わっていることは
+  //    手数と無関係に pv の先頭で判る
+  if (pv.length > 0 && GAME_OVER_MOVES.includes(pv[0])) {
+    return { kind: 'gameover', plies, checks: 0, interposes: 0 };
+  }
   // PV は延長されうるが完全とは限らない。短い PV で `checkmate` と言い切らない
   if (pv.length < plies) return unknown();
 

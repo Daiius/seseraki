@@ -149,6 +149,9 @@ function mateWordingShort(plies: number, line?: MateLine): string {
  */
 function describeSenteScore(scoreType: string, senteValue: number, line?: MateLine): string {
   if (scoreType === 'mate') {
+    // 🔒 pv が終局マーカー（`resign`）＝**既に詰んでいる局面**。`mate 0` と同じ扱いにする。
+    //    ここを落とすと終局局面が「1手で詰み」と出る（実際に踏んだ。kifu 1 の 106 手目）
+    if (line?.kind === 'gameover') return '詰み';
     if (senteValue > 0) return `先手勝ち(${mateWording(senteValue, line)})`;
     if (senteValue < 0) return `後手勝ち(${mateWording(-senteValue, line)})`;
     return '詰み';
@@ -254,6 +257,7 @@ export function formatScoreShort(
   if (scoreType === 'mate') {
     // ▲ / △ は「詰ます側」。0 手詰（既に詰んでいる）と値が壊れている場合は
     // `formatScore` と同じく勝者を名乗らない
+    if (line?.kind === 'gameover') return '詰み'; // 終局局面（pv が `resign`）
     if (senteValue > 0) return `▲${mateWordingShort(senteValue, line)}`;
     if (senteValue < 0) return `△${mateWordingShort(-senteValue, line)}`;
     return '詰み';

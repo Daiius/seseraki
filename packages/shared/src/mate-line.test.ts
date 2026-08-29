@@ -116,6 +116,39 @@ describe('classifyMateLine', () => {
     });
   });
 
+  describe('終局マーカー（gameover）', () => {
+    // dev DB の実データ: kifu 1 の 106 手目は `mate -1` / pv `["resign"]`（もう詰んでいる）。
+    // 🔒 **`unknown` に落とさない**——落とすと既定の「N手で詰み」が出て `△詰(1)` になる（実際に踏んだ）
+    const f = FIXTURES.allChecks;
+
+    it('pv が resign なら gameover', () => {
+      const state = parseSfen(f.sfen)!;
+      expect(classifyMateLine(state, ['resign'], -1)).toEqual({
+        kind: 'gameover',
+        plies: 1,
+        checks: 0,
+        interposes: 0,
+      });
+    });
+
+    it('win も終局マーカーとして扱う', () => {
+      const state = parseSfen(f.sfen)!;
+      expect(classifyMateLine(state, ['win'], 1).kind).toBe('gameover');
+    });
+
+    it('手数の検査より先に判定する（pv が mate 距離より短くても gameover）', () => {
+      const state = parseSfen(f.sfen)!;
+      expect(classifyMateLine(state, ['resign'], -5).kind).toBe('gameover');
+    });
+
+    it('読めない指し手一般は gameover にしない（unknown のまま）', () => {
+      const state = parseSfen(f.sfen)!;
+      expect(classifyMateLine(state, ['bestmove'], -1).kind).toBe('unknown');
+      // 2 手目以降に混ざった resign も終局マーカーではない（読み筋が壊れている）
+      expect(classifyMateLine(state, ['L*8c', 'resign'], 2).kind).toBe('unknown');
+    });
+  });
+
   describe('unknown', () => {
     const f = FIXTURES.allChecks;
 

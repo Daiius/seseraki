@@ -174,6 +174,17 @@ describe('mate の表記は読み筋の形で決まる', () => {
     );
   });
 
+  it('終局マーカー（gameover）は「詰み」に倒す', () => {
+    // 🔴 dev DB の kifu 1 の 106 手目（`mate -1` / pv `["resign"]`）が `△詰(1)` と出ていた。
+    //    もう詰んでいる局面なので `mate 0` と同じ扱いにする
+    const over = line({ kind: 'gameover', plies: 1 });
+    expect(formatScore('mate', -1, 0, over)).toBe('詰み');
+    expect(formatScoreShort('mate', -1, 0, over)).toBe('詰み');
+    expect(formatTurnScore('mate', -1, 'gote', over)).toBe('詰み');
+    // ⚠ 分類が付かなければ従来どおり「N手で詰み」（本当に pv が壊れている場合と混ぜない）
+    expect(formatScoreShort('mate', -1, 0)).toBe('△詰(1)');
+  });
+
   it('0 手詰は line があっても「詰み」', () => {
     expect(formatScore('mate', 0, 0, line({ kind: 'checkmate' }))).toBe('詰み');
     expect(formatScoreShort('mate', 0, 0, line({ kind: 'checkmate' }))).toBe('詰み');
@@ -196,6 +207,12 @@ describe('mateLineOf', () => {
       checks: 3,
       interposes: 1,
     });
+  });
+
+  it('pv が resign なら gameover（表示は「詰み」）', () => {
+    const l = mateLineOf(state, 'mate', -1, ['resign']);
+    expect(l?.kind).toBe('gameover');
+    expect(formatScoreShort('mate', -1, 0, l)).toBe('詰み');
   });
 
   it('cp・盤面なし・pv なしは undefined', () => {

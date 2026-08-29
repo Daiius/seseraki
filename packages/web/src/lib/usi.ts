@@ -129,7 +129,11 @@ function mateWording(plies: number, line?: MateLine): string {
     const interposes = line.interposes > 0 ? `・合駒${line.interposes}` : '';
     return `${plies}手詰${interposes}`;
   }
-  if (line?.kind === 'hisshi') return `必至・${plies}手で詰み`;
+  // 🔒 `hisshi` と `forced` はどちらも「相手がどう応じても詰む（受けが無い）」状態で、
+  //    将棋の言葉としては同じ**必至**。違うのは手順の形（初手が静かか、途中に静かな手が
+  //    混ざるか）だけなので、**分類は残したまま表示だけを揃える**（決定 2026-08-29）。
+  //    「受けなし」を第三の語として立てると、実装の都合を将棋の言葉のように見せてしまう
+  if (line?.kind === 'hisshi' || line?.kind === 'forced') return `必至・${plies}手で詰み`;
   return `${plies}手で詰み`;
 }
 
@@ -137,11 +141,14 @@ function mateWording(plies: number, line?: MateLine): string {
 function mateWordingShort(plies: number, line?: MateLine): string {
   if (line?.kind === 'gameover') return '詰み';
   if (line?.kind === 'checkmate') return `${plies}手詰`;
-  // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` / `▲詰5` は
-  //    「必至9」「詰5」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
+  // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` は
+  //    「必至9」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
   //    数の終わりを示すのでそのまま
-  if (line?.kind === 'hisshi') return `必至(${plies})`;
-  return `詰(${plies})`;
+  if (line?.kind === 'hisshi' || line?.kind === 'forced') return `必至(${plies})`;
+  // 🔒 分類が付かない（`unknown` / pv なし）ときは**「必至」と名乗る根拠が無い**ので語を強めない。
+  //    ただし `詰(N)` は「詰んでいる」と読めてしまうため綴りを変える。`N手で詰` なら
+  //    広い形の `N手で詰み` と同じ読み下しになり、数は `手` で終わるので括弧も要らない
+  return `${plies}手で詰`;
 }
 
 /**

@@ -45,7 +45,14 @@ export type MateLineKind =
   /** 途中に静かな手を挟む（受けなし。2手すき以上が受からない形など） */
   | 'forced'
   /**
-   * pv が終局マーカー（`resign` / `win`）だった＝**既に詰んでいる局面**。
+   * **手番側の玉が王手されていて、engine が指す手を持たない**（pv が `resign`・`mateValue < 0`）。
+   *
+   * ⚠ **詰みの証明ではない。** 「合法手が無い」ことの検証には合法手生成が要り、それは作らないと
+   * 決めてある（prd/12 §2.5）。ここが根拠にするのは**盤面から確かめられる範囲の観測事実**——
+   * 「王手されている」＋「engine が指す手を持たない」の 2 つだけ。
+   *
+   * 🔒 **`win`（入玉宣言勝ち）は含めない。** 手番側が**勝つ**手なので意味が正反対。
+   * 🔒 **王手されていない `resign`（見切り投了）は `unknown` に落とす。**
    * 🔒 **`unknown`（読めない指し手）と混ぜない。** 混ぜると「本当に pv が壊れている」場合と
    * 区別が付かず、終局局面が `詰(1)` のように表示される（実際に踏んだ。kifu 1 の 106 手目）。
    */
@@ -70,10 +77,13 @@ export interface MateLine {
 const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
 
 /**
- * 指し手ではなく**局面が終わっている**ことを表す USI の応答。
- * `bestmove resign` は合法手が無い（＝既に詰んでいる）ときに返り、pv にそのまま保存されている。
+ * 投了（`bestmove resign`）。**指し手ではない**ので盤面には適用できない。
+ *
+ * 🔒 **`win`（入玉宣言勝ち）は含めない。** `win` は**手番側が勝つ**手で意味が正反対であり、
+ * 「手番側が詰まされている」の根拠にならない（レビュー `OCL-DA238CEA`）。
+ * dev DB の実データでも `win` を含む pv は 1 件も無い。
  */
-const GAME_OVER_MOVES: readonly string[] = ['resign', 'win'];
+const RESIGN = 'resign';
 
 /** USI 座標（例 `7g`）→ `[row, col]`。盤の内部表現は `board.ts` と同じ向き */
 function usiToIndex(usi: string): [row: number, col: number] {
@@ -125,17 +135,31 @@ export function classifyMateLine(
   const unknown = (): MateLine => ({ kind: 'unknown', plies, checks, interposes });
 
   if (!Number.isInteger(mateValue) || plies === 0) return unknown();
-  // 🔴 **終局マーカーの判定は手数の検査より先**（`mate -1` + pv `['resign']` は `pv.length < plies` を
-  //    通り抜けるが、`mate -5` のような値と組み合わさると通り抜けない）。局面が終わっていることは
-  //    手数と無関係に pv の先頭で判る
-  if (pv.length > 0 && GAME_OVER_MOVES.includes(pv[0])) {
-    return { kind: 'gameover', plies, checks: 0, interposes: 0 };
-  }
-  // PV は延長されうるが完全とは限らない。短い PV で `checkmate` と言い切らない
-  if (pv.length < plies) return unknown();
 
   const attacker: Side = mateValue > 0 ? state.sideToMove : opponentOf(state.sideToMove);
   const defender = opponentOf(attacker);
+
+  /*
+    🔴 **投了（`resign`）は 3 条件を全て満たすときだけ `gameover`**（レビュー `OCL-DA238CEA`）。
+    `resign` は「engine が指す手を持たない」ことの表明でしかなく、それ単体では盤面の状態を証明しない。
+
+    1. `pv[0] === 'resign'`（`win` = 入玉宣言勝ちは意味が正反対なので外す）
+    2. `mateValue < 0`（手番側が負けている ＝ 投了するのは手番側）
+    3. **手番側の玉が王手されている**（盤面から確かめられる）
+
+    ⚠ **判定は手数の検査より先**。`resign` は指し手ではないので `pv.length` を mate 距離と
+    比べても意味がない（`mate -1` は通り抜けるが `mate -5` は通り抜けない、という差が出てしまう）。
+  */
+  if (pv.length > 0 && pv[0] === RESIGN) {
+    if (mateValue < 0 && isChecked(state, defender, attacker) === true) {
+      return { kind: 'gameover', plies, checks: 0, interposes: 0 };
+    }
+    // 王手されていないのに投了した（見切り投了）/ 手番側が勝っている pv は根拠にならない
+    return unknown();
+  }
+
+  // PV は延長されうるが完全とは限らない。短い PV で `checkmate` と言い切らない
+  if (pv.length < plies) return unknown();
 
   // 攻方の手が王手だったか（先頭から順）。`mateValue < 0` のとき pv の初手は受方の手なので、
   // 「現局面で受方玉が王手されているか」＝直前の攻方の手が王手だったか、を先頭に置く

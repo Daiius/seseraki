@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSfen, type MateLine } from 'shared';
+import { applyMove, parseSfen, type MateLine } from 'shared';
 import {
   formatScore,
   formatScoreShort,
@@ -174,15 +174,21 @@ describe('mate の表記は読み筋の形で決まる', () => {
     );
   });
 
-  it('終局マーカー（gameover）は「詰み」に倒す', () => {
+  it('投了（gameover）は手数を出さず「詰み」。ただし勝者は残す', () => {
     // 🔴 dev DB の kifu 1 の 106 手目（`mate -1` / pv `["resign"]`）が `△詰(1)` と出ていた。
-    //    もう詰んでいる局面なので `mate 0` と同じ扱いにする
+    //    手数に意味が無い局面なので「詰み」にするが、**勝者は mate の符号から判る**ので落とさない
     const over = line({ kind: 'gameover', plies: 1 });
-    expect(formatScore('mate', -1, 0, over)).toBe('詰み');
-    expect(formatScoreShort('mate', -1, 0, over)).toBe('詰み');
-    expect(formatTurnScore('mate', -1, 'gote', over)).toBe('詰み');
+    expect(formatScore('mate', -1, 0, over)).toBe('後手勝ち(詰み)');
+    expect(formatScoreShort('mate', -1, 0, over)).toBe('△詰み');
+    expect(formatTurnScore('mate', 1, 'gote', over)).toBe('後手勝ち(詰み)');
+    // 先手が詰ます側なら ▲
+    expect(formatScoreShort('mate', -1, 1, over)).toBe('▲詰み');
     // ⚠ 分類が付かなければ従来どおり「N手で詰み」（本当に pv が壊れている場合と混ぜない）
     expect(formatScoreShort('mate', -1, 0)).toBe('△詰(1)');
+  });
+
+  it('勝者不明の「詰み」は mate 0 の側だけ', () => {
+    expect(formatScore('mate', 0, 0, line({ kind: 'gameover', plies: 0 }))).toBe('詰み');
   });
 
   it('0 手詰は line があっても「詰み」', () => {
@@ -209,10 +215,18 @@ describe('mateLineOf', () => {
     });
   });
 
-  it('pv が resign なら gameover（表示は「詰み」）', () => {
-    const l = mateLineOf(state, 'mate', -1, ['resign']);
+  it('王手されている手番側の resign は gameover（表示は勝者付きの「詰み」）', () => {
+    // `R*5b` は王手。指した後は手番側（後手）が王手されている
+    const checked = applyMove(state, 'R*5b');
+    const l = mateLineOf(checked, 'mate', -1, ['resign']);
     expect(l?.kind).toBe('gameover');
-    expect(formatScoreShort('mate', -1, 0, l)).toBe('詰み');
+    expect(formatScoreShort('mate', -1, 0, l)).toBe('△詰み');
+  });
+
+  it('王手されていない resign と win は gameover にしない', () => {
+    // 🔒 `resign` は「engine が指す手を持たない」表明でしかなく、盤面の状態を証明しない
+    expect(mateLineOf(state, 'mate', -1, ['resign'])?.kind).toBe('unknown');
+    expect(mateLineOf(applyMove(state, 'R*5b'), 'mate', -1, ['win'])?.kind).toBe('unknown');
   });
 
   it('cp・盤面なし・pv なしは undefined', () => {

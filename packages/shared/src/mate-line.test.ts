@@ -116,14 +116,20 @@ describe('classifyMateLine', () => {
     });
   });
 
-  describe('終局マーカー（gameover）', () => {
-    // dev DB の実データ: kifu 1 の 106 手目は `mate -1` / pv `["resign"]`（もう詰んでいる）。
-    // 🔒 **`unknown` に落とさない**——落とすと既定の「N手で詰み」が出て `△詰(1)` になる（実際に踏んだ）
-    const f = FIXTURES.allChecks;
+  describe('投了（gameover）', () => {
+    /*
+      dev DB の実データ: kifu 1 の 106 手目は `mate -1` / pv `["resign"]`（王手されていて詰み）。
+      🔒 **`unknown` に落とさない**——落とすと既定の「N手で詰み」が出て `△詰(1)` になる（実際に踏んだ）。
+      ⚠ ただし `resign` は「engine が指す手を持たない」表明でしかないので、
+      **手番側が王手されていること**まで盤面で確かめてから `gameover` にする（レビュー `OCL-DA238CEA`）。
+    */
+    // `R*5b` は王手なので、指した後の局面は「手番側（後手）が王手されている」
+    const checkedState = applyMove(parseSfen(FIXTURES.interpose.sfen)!, 'R*5b');
+    // 攻め手番の局面。手番側（先手）は王手されていない
+    const quietState = parseSfen(FIXTURES.allChecks.sfen)!;
 
-    it('pv が resign なら gameover', () => {
-      const state = parseSfen(f.sfen)!;
-      expect(classifyMateLine(state, ['resign'], -1)).toEqual({
+    it('王手されている手番側の resign（mate が負）は gameover', () => {
+      expect(classifyMateLine(checkedState, ['resign'], -1)).toEqual({
         kind: 'gameover',
         plies: 1,
         checks: 0,
@@ -131,21 +137,29 @@ describe('classifyMateLine', () => {
       });
     });
 
-    it('win も終局マーカーとして扱う', () => {
-      const state = parseSfen(f.sfen)!;
-      expect(classifyMateLine(state, ['win'], 1).kind).toBe('gameover');
+    it('手数の検査より先に判定する（pv が mate 距離より短くても gameover）', () => {
+      expect(classifyMateLine(checkedState, ['resign'], -5).kind).toBe('gameover');
     });
 
-    it('手数の検査より先に判定する（pv が mate 距離より短くても gameover）', () => {
-      const state = parseSfen(f.sfen)!;
-      expect(classifyMateLine(state, ['resign'], -5).kind).toBe('gameover');
+    it('王手されていない resign（見切り投了）は unknown', () => {
+      expect(classifyMateLine(quietState, ['resign'], -1).kind).toBe('unknown');
+    });
+
+    it('mate が正（手番側が勝っている）の resign は unknown', () => {
+      // 「手番側が詰まされている」の根拠にならない
+      expect(classifyMateLine(checkedState, ['resign'], 1).kind).toBe('unknown');
+    });
+
+    it('win（入玉宣言勝ち）は gameover にしない', () => {
+      // 🔒 手番側が**勝つ**手なので意味が正反対
+      expect(classifyMateLine(checkedState, ['win'], -1).kind).toBe('unknown');
+      expect(classifyMateLine(checkedState, ['win'], 1).kind).toBe('unknown');
     });
 
     it('読めない指し手一般は gameover にしない（unknown のまま）', () => {
-      const state = parseSfen(f.sfen)!;
-      expect(classifyMateLine(state, ['bestmove'], -1).kind).toBe('unknown');
-      // 2 手目以降に混ざった resign も終局マーカーではない（読み筋が壊れている）
-      expect(classifyMateLine(state, ['L*8c', 'resign'], 2).kind).toBe('unknown');
+      expect(classifyMateLine(checkedState, ['bestmove'], -1).kind).toBe('unknown');
+      // 2 手目以降に混ざった resign も投了局面ではない（読み筋が壊れている）
+      expect(classifyMateLine(quietState, ['L*8c', 'resign'], 2).kind).toBe('unknown');
     });
   });
 

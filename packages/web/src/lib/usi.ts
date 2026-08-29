@@ -121,6 +121,8 @@ export function turnSymbol(moveNumber: number): string {
  * 読み筋を辿って攻方の手が全て王手だと判った（`checkmate`）ときだけ「N手詰」を名乗る。
  */
 function mateWording(plies: number, line?: MateLine): string {
+  // 投了局面（手番側が王手されていて engine が指す手を持たない）。手数は意味を持たないので出さない
+  if (line?.kind === 'gameover') return '詰み';
   if (line?.kind === 'checkmate') {
     // 合駒で手数が伸びていることは「N手詰」を名乗るときだけ添える（設計 §1.4）。
     // 「N手で詰み」は元々詰将棋の手数を騙っていないので、添えても情報が増えない
@@ -133,6 +135,7 @@ function mateWording(plies: number, line?: MateLine): string {
 
 /** mate の短い形（情報行）。勝者の記号は呼び出し側が前置する */
 function mateWordingShort(plies: number, line?: MateLine): string {
+  if (line?.kind === 'gameover') return '詰み';
   if (line?.kind === 'checkmate') return `${plies}手詰`;
   // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` / `▲詰5` は
   //    「必至9」「詰5」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
@@ -149,9 +152,8 @@ function mateWordingShort(plies: number, line?: MateLine): string {
  */
 function describeSenteScore(scoreType: string, senteValue: number, line?: MateLine): string {
   if (scoreType === 'mate') {
-    // 🔒 pv が終局マーカー（`resign`）＝**既に詰んでいる局面**。`mate 0` と同じ扱いにする。
-    //    ここを落とすと終局局面が「1手で詰み」と出る（実際に踏んだ。kifu 1 の 106 手目）
-    if (line?.kind === 'gameover') return '詰み';
+    // 🔒 `gameover`（pv が `resign`）は手数を出さず `詰み` にするが、**勝者は落とさない**
+    //    （`mate` の符号から判るため。§2.1）。勝者不明の `詰み` は `mate 0` の側だけ
     if (senteValue > 0) return `先手勝ち(${mateWording(senteValue, line)})`;
     if (senteValue < 0) return `後手勝ち(${mateWording(-senteValue, line)})`;
     return '詰み';
@@ -257,7 +259,6 @@ export function formatScoreShort(
   if (scoreType === 'mate') {
     // ▲ / △ は「詰ます側」。0 手詰（既に詰んでいる）と値が壊れている場合は
     // `formatScore` と同じく勝者を名乗らない
-    if (line?.kind === 'gameover') return '詰み'; // 終局局面（pv が `resign`）
     if (senteValue > 0) return `▲${mateWordingShort(senteValue, line)}`;
     if (senteValue < 0) return `△${mateWordingShort(-senteValue, line)}`;
     return '詰み';

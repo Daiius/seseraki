@@ -88,6 +88,8 @@ import {
   parseSfen,
   positionDiff,
   positionSfen,
+  toggleSideToMove,
+  usiPositionSfen,
   validateMoveOnPosition,
   validatePositionForEngine,
   type PositionDiff,
@@ -916,7 +918,7 @@ const route = app
       }
 
       try {
-        const started = startEvaluation({ sfen: normalized, move });
+        const started = startEvaluation({ kind: 'eval', sfen: normalized, move });
         if (started.state === 'settled') {
           return c.json({
             sfen: normalized,
@@ -938,6 +940,87 @@ const route = app
       } catch (err) {
         if (err instanceof EvaluationQueueFullError) {
           // worker が止まっている疑い。積み上げずにその場で断る
+          return c.json({ error: '評価キューが一杯です' } as const, 503);
+        }
+        throw err;
+      }
+    },
+  )
+  // 詰めろ probe（設計 §2.1 / §4 B1-1）。body の SFEN は**受方 D の手番の局面 P**。
+  // server が手番を反転した P′ を作り、**MultiPV 1** で撃つ（worker 側）。rank 1 が
+  // `mate +N` なら「受方がパスしたら N 手で詰む」＝**詰めろ**。
+  //
+  // 🔒 **`go mate` は使わない。** やねうら王の通常エンジン（本番の NNUE ビルド）は
+  //    `go mate <ms>` の時間引数を停止条件として読まず、事実上 `go infinite` になる
+  //    （`limits.mate` が時間管理を止めるだけで代替の停止が無く、「詰みを読み切ったら
+  //    打ち切る」早期終了も `!limits.mate` でガードされている）。`bestmove` を待つ
+  //    worker が固まる。代わりに `go movetime`（`buildGoCommand`）を使う。
+  // 🔒 **検出できなかったことを「詰めろではない」と読み替えない。** 根の `score mate` は
+  //    読み切りなので false positive は実質無いが、出なかったことは「その予算では
+  //    見つからなかった」以上を意味しない（設計 §2.7）。結果には `budget` が付く。
+  //
+  // 取りに来る口は GET /positions/evaluate/:jobId を共用する（結果型が同じなので分けない）。
+  .post(
+    '/positions/threat',
+    sessionRequired,
+    zv(
+      'json',
+      z.object({
+        /** 受方手番の局面 P。3 フィールド（手数なし）でも 4 フィールドでも受ける */
+        sfen: z.string().min(1).max(200),
+      }),
+    ),
+    (c) => {
+      const { sfen } = c.req.valid('json');
+
+      const state = parseSfen(sfen);
+      if (!state) {
+        return c.json({ error: 'SFEN を読めません', violations: [] }, 400);
+      }
+
+      // 手番反転（SFEN 文字列を直接いじらない。正規化がずれるとキャッシュキーが割れる）
+      const flipped = toggleSideToMove(state);
+      const position = validatePositionForEngine(flipped);
+      if (!position.ok) {
+        // 🔒 P で受方が王手されていた（= P′ で王を取れる）ときは**判定しない**のが正しい。
+        //    王手中の局面は「詰めろが掛かっているか」の問いにならない。エラーではないので 200
+        if (position.violations.some((v) => v.code === 'king_capturable')) {
+          return c.json({
+            status: 'done' as const,
+            applicable: false as const,
+            reason: 'in_check' as const,
+          });
+        }
+        return c.json(
+          { error: 'エンジンに渡せない局面です', violations: position.violations },
+          400,
+        );
+      }
+
+      // 反転後の局面を正規化してキーにする（`probe <sfen>`。同じ SFEN の eval とは別エントリ）
+      const normalized = usiPositionSfen(flipped);
+
+      try {
+        const started = startEvaluation({ kind: 'probe', sfen: normalized, move: null });
+        if (started.state === 'settled') {
+          return c.json({
+            sfen: normalized,
+            applicable: true as const,
+            source: 'engine' as const,
+            ...started.outcome,
+          });
+        }
+        return c.json(
+          {
+            sfen: normalized,
+            applicable: true as const,
+            status: 'pending' as const,
+            jobId: started.jobId,
+          },
+          202,
+        );
+      } catch (err) {
+        if (err instanceof EvaluationQueueFullError) {
           return c.json({ error: '評価キューが一杯です' } as const, 503);
         }
         throw err;
@@ -1384,6 +1467,16 @@ const route = app
           candidates: z.array(candidateMoveSchema),
           /** 名指し評価を符号反転のフォールバックで求めたか（prd/12 §2.2） */
           fallback: z.boolean().default(false),
+          /**
+           * worker が実際に送った `go` の予算。**「検出なし」の意味を決める値**なので
+           * 結果に添えて運ぶ（設計 §2.7）
+           */
+          budget: z
+            .object({
+              movetime: z.number().int().positive().optional(),
+              depth: z.number().int().positive().optional(),
+            })
+            .optional(),
         }),
         z.object({ error: z.string().min(1).max(500) }),
       ]),
@@ -1401,6 +1494,7 @@ const route = app
                 pv: candidate.pv ?? [],
               })),
               fallback: body.fallback,
+              budget: body.budget,
             },
       );
       // applied=false は期限切れで既に落ちたジョブ（worker 側は次へ進んでよい）

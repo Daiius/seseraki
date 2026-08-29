@@ -23,13 +23,15 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 - USI は毎回 `position` で局面を明示するため、割り込みによるエンジン状態の汚染はない。
   置換表の共有は許容する（interactive 局面は閲覧中の棋譜の派生局面で、むしろエントリを共有できる側）。
 - **探索時間のパラメータは棋譜解析と同一**（`ENGINE_MOVETIME` / `ENGINE_DEPTH`）。
+  例外は詰めろ probe の**任意**の口 `ENGINE_PROBE_MOVETIME`（§2.2）。未設定ならこれも同一。
 
-### 2.2 評価は 2 種
+### 2.2 評価は 3 種
 
 | 種別 | USI | 返すもの |
 |---|---|---|
 | 局面評価 | `go`（MultiPV 3） | 候補手 3 本とスコア |
 | 名指し評価 | `go searchmoves <手>` | **その手の**スコアと読み筋（= 相手の最善の咎め筋） |
+| 詰めろ probe | `go`（**MultiPV 1**・手番を反転した局面） | 候補手 1 本とスコア + 使った予算（`budget`） |
 
 - 名指し評価が本命。「候補に現れなかった手はなぜダメか」に、損失（最善との差）と咎め筋で直接答える。
 - 🔴 **局面評価は MultiPV を自分で設定してから探索する**（worker・実測 2026-08-28）。棋譜解析
@@ -42,6 +44,42 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
   同じ値に乗せると `ENGINE_MULTIPV=1` の構成で局面評価まで 1 本になり、契約が壊れる。
 - ⚠ 実装時にやねうら王の `searchmoves` 対応を確認する。非対応なら「手を適用した局面を評価し
   符号を反転して返す」フォールバックで同じ API 契約を守る（エンジン的には裏表の関係）。
+
+#### 2.2a 詰めろ probe（手番反転 + MultiPV 1）
+
+「この局面に**詰めろ**（1 手すき）が掛かっているか」を engine で判定する。USI の `score mate N` は
+「詰みまでの手数」でしかなく、詰めろという概念はエンジンに無い。
+
+- **原理**: 受方 D の手番の局面 P に対し、**手番を反転**した P′ を作って攻方手番で探索する。
+  rank 1 が `mate +N` なら「**受方がパスしたら N 手で詰む**」＝詰めろ。
+  受方手番のまま読ませると詰めろは「受ければ消える脅威」なので最善線に現れない
+  （そこで mate が出るのは受けが無いとき＝必至で、別の問い）。
+  🔒 反転は**盤面状態の手番を入れ替える**（`toggleSideToMove`）。SFEN 文字列を直接書き換えると
+  正規化がずれてキャッシュキーが一致しなくなる。
+- **API**: `POST /positions/threat`（body は P の SFEN）。server が反転・検証してジョブを積む。
+  結果を取りに来る口は `GET /positions/evaluate/:jobId` を共用する（結果型が同じ）。
+  P で受方が王手されているときは詰めろの問いにならないので、**判定せず** 200 で
+  `{ status: 'done', applicable: false, reason: 'in_check' }` を返す。
+- 🔴 **`go mate` は使わない。** やねうら王の通常エンジン（本番の NNUE ビルド）は `go mate <ms>` の
+  時間引数を**停止条件として読まない**。`limits.mate` は通常の時間管理を止めるだけで代替の
+  時間停止が無く、「詰みを読み切ったら反復深化を打ち切る」早期終了も `!limits.mate` で
+  ガードされている。つまり事実上 `go infinite` で、`bestmove` を待つ worker が固まる
+  （本番イメージで実測: 9 手詰に `go mate 3000` → 9 秒経っても `bestmove` が返らない）。
+  `checkmate` 応答を返す詰将棋エンジンは別ビルドで、本番のバイナリには含まれない。
+  代わりに通常の `go movetime` / `go depth` を使う（`buildGoCommand` の 1 本道）。
+- 🔴 **MultiPV は 1**。上記の早期終了は **MultiPV 1 のときだけ効く**（本番実測: 9 手詰 +
+  `movetime 2000` で MultiPV 1 は 66ms、MultiPV 3 は 2000ms 使い切り）。だから probe は
+  **局面評価（3 本固定）に相乗りできず、別のジョブ種別**にしてある。詰めろがある局面は
+  数十 ms で返り、無い局面は予算を使い切る（早期終了の条件が詰み発見時にしか無いため）。
+- **予算**は任意の `ENGINE_PROBE_MOVETIME`（ms）。未設定なら棋譜解析と同じ（§2.1）。
+- 🔒 **見つからなかったことを「詰めろではない」と言わない。** 根の `score mate` は読み切りなので
+  false positive は実質無いが、出なかったことは「**その予算では見つからなかった**」以上を
+  意味しない。表示は **「検出なし（予算 1.0s）」**の形にし、見つかったときだけ「詰めろ（N手）」と
+  断定する（[09](./09-analytics.md) §3.1 の「取りこぼしは検出漏れの方向」と同じ姿勢）。
+  取り逃しは予算を伸ばすほど単調に減るので、結果には**使った予算 `budget` を添える**。
+- **必至**は probe ではなく P そのものの評価（受方手番・MultiPV 3）で `mate −N` が出た場合を指す
+  （`classifyMateLine` の `hisshi`。[05](./05-analysis.md) §2.2）。P の評価が mate なら詰めろは自明なので
+  probe は撃たない。
 
 ### 2.3 評価値は手番側から見た値
 
@@ -57,6 +95,8 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 
 - ジョブキューと結果キャッシュを **server プロセスのメモリ内**に持つ（DB テーブルは足さない。決定・2026-08-20）。
   キーは正規化 SFEN（+ 評価種別・名指し手）。同一局面の再訪は即答。
+  🔒 詰めろ probe は **`probe <sfen>` の別キー**（同じ SFEN でも局面評価とは MultiPV も
+  局面の手番も違うので、混ぜると片方の結果がもう片方の答えとして返る）。
 - 再起動で消えることは許容する（web が再要求すれば済む）。エンジン構成変更時の古いキャッシュも
   再起動で消えるため、[08](./08-roadmap.md) の「解析来歴は持たない」と整合する。
 - worker 向けに claim / 結果報告のエンドポイントを追加（既存 worker API と同じ API_KEY 系統・outbound polling は不変）。
@@ -109,9 +149,10 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 | Method | Path | 認証 | 内容 |
 |---|---|---|---|
 | POST | `/api/positions/evaluate` | セッション | `{ sfen, move? }`。`move` があれば名指し評価。**即座に返す**（結果 or `202` + `jobId`） |
-| GET | `/api/positions/evaluate/:jobId` | セッション | 結果を取りに行く。`pending` / `done` / `failed`、知らない id は **404** |
-| GET | `/api/worker/position-jobs` | API_KEY | 待っているジョブを 1 件 claim（無ければ `null`） |
-| POST | `/api/worker/position-jobs/:id/result` | API_KEY | 結果 `{ candidates, fallback }` または失敗 `{ error }` を報告 |
+| POST | `/api/positions/threat` | セッション | `{ sfen }`（受方手番の局面 P）。手番を反転して詰めろ probe（§2.2a）。返りは evaluate と同じ形。王手中は `{ applicable: false, reason: 'in_check' }` を **200** |
+| GET | `/api/positions/evaluate/:jobId` | セッション | 結果を取りに行く（**threat と共用**）。`pending` / `done` / `failed`、知らない id は **404** |
+| GET | `/api/worker/position-jobs` | API_KEY | 待っているジョブを 1 件 claim（無ければ `null`）。`kind: 'eval' \| 'probe'` で探索の組み立てが変わる |
+| POST | `/api/worker/position-jobs/:id/result` | API_KEY | 結果 `{ candidates, fallback, budget? }` または失敗 `{ error }` を報告 |
 
 - 応答は `{ sfen, move, status: 'done' | 'failed' | 'pending', … }`。`sfen` は**読み直して書き戻した正規化キー**
   （手数の有無や書き方の揺れで同じ局面が別扱いにならないようにする）。

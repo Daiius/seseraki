@@ -91,8 +91,6 @@ export function createClient(baseUrl: string, apiKey: string) {
           ? { error: report.error }
           : {
               fallback: report.fallback,
-              // 予算は「検出なし」の意味を決める値なので結果と一緒に運ぶ（設計 §2.7）
-              budget: report.budget,
               candidates: report.candidates.map((c) => ({
                 rank: c.rank,
                 move: c.move,

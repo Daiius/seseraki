@@ -1,3 +1,22 @@
+import { classifyMateLine, type BoardState, type MateLine } from 'shared';
+
+/**
+ * 表示に使う mate 分類を作る。mate 以外・盤面や pv が無いときは `undefined`
+ * （＝分類不明として「N手で詰み」の既定表記になる）。
+ *
+ * `state` は**その評価値を出した局面**、`scoreValue` は**その局面の手番側から見た値**
+ * （保存値そのまま）でなければならない。ずれると攻方を取り違える。
+ */
+export function mateLineOf(
+  state: BoardState | undefined | null,
+  scoreType: string,
+  scoreValue: number,
+  pv: string[] | undefined | null,
+): MateLine | undefined {
+  if (scoreType !== 'mate' || !state || !pv || pv.length === 0) return undefined;
+  return classifyMateLine(state, pv, scoreValue);
+}
+
 /**
  * 保存値（手番視点）を先手視点へ正規化し、±3000 にクランプする。
  * **表示用途に限る**——悪手判定（CPL）は同一局面内で最善手と実手を比べるため
@@ -95,13 +114,40 @@ export function turnSymbol(moveNumber: number): string {
 }
 
 /**
+ * mate の括弧内（広い形）。
+ *
+ * 🔴 **`score mate N` は「詰みまでの手数（plies）」**で、受方の応手・逆王手・合駒が全部入る。
+ * 日本語の「N手詰」（詰将棋 = 初手から王手の連続）とは意味が違うので、**既定は「N手で詰み」**とし、
+ * 読み筋を辿って攻方の手が全て王手だと判った（`checkmate`）ときだけ「N手詰」を名乗る。
+ */
+function mateWording(plies: number, line?: MateLine): string {
+  if (line?.kind === 'checkmate') {
+    // 合駒で手数が伸びていることは「N手詰」を名乗るときだけ添える（設計 §1.4）。
+    // 「N手で詰み」は元々詰将棋の手数を騙っていないので、添えても情報が増えない
+    const interposes = line.interposes > 0 ? `・合駒${line.interposes}` : '';
+    return `${plies}手詰${interposes}`;
+  }
+  if (line?.kind === 'hisshi') return `必至・${plies}手で詰み`;
+  return `${plies}手で詰み`;
+}
+
+/** mate の短い形（情報行）。勝者の記号は呼び出し側が前置する */
+function mateWordingShort(plies: number, line?: MateLine): string {
+  if (line?.kind === 'checkmate') return `${plies}手詰`;
+  if (line?.kind === 'hisshi') return `必至${plies}`;
+  return `詰${plies}`;
+}
+
+/**
  * **先手視点に直したあとの値**を読みやすい文字列にする。
  * 視点をどう作るかは呼び出し側の責務（棋譜は手数の parity・検討盤は手番）。
+ *
+ * `line` は読み筋の分類（`classifyMateLine`）。省略すると mate は「N手で詰み」になる。
  */
-function describeSenteScore(scoreType: string, senteValue: number): string {
+function describeSenteScore(scoreType: string, senteValue: number, line?: MateLine): string {
   if (scoreType === 'mate') {
-    if (senteValue > 0) return `先手勝ち(${senteValue}手詰)`;
-    if (senteValue < 0) return `後手勝ち(${-senteValue}手詰)`;
+    if (senteValue > 0) return `先手勝ち(${mateWording(senteValue, line)})`;
+    if (senteValue < 0) return `後手勝ち(${mateWording(-senteValue, line)})`;
     return '詰み';
   }
 
@@ -124,9 +170,10 @@ export function formatScore(
   scoreType: string,
   scoreValue: number,
   moveNumber: number,
+  line?: MateLine,
 ): string {
   // 後手番（奇数手目）のスコアは反転して先手視点にする
-  return describeSenteScore(scoreType, moveNumber % 2 === 1 ? -scoreValue : scoreValue);
+  return describeSenteScore(scoreType, moveNumber % 2 === 1 ? -scoreValue : scoreValue, line);
 }
 
 /**
@@ -146,10 +193,12 @@ export function formatTurnScore(
   scoreType: string,
   scoreValue: number,
   sideToMove: 'sente' | 'gote',
+  line?: MateLine,
 ): string {
   return describeSenteScore(
     scoreType,
     sideToMove === 'gote' ? -scoreValue : scoreValue,
+    line,
   );
 }
 
@@ -194,6 +243,7 @@ export function formatScoreShort(
   scoreType: string,
   scoreValue: number,
   moveNumber: number,
+  line?: MateLine,
 ): string {
   // 後手番（奇数手目）のスコアは反転して先手視点にする（`formatScore` と同じ）
   const senteValue = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
@@ -201,8 +251,8 @@ export function formatScoreShort(
   if (scoreType === 'mate') {
     // ▲ / △ は「詰ます側」。0 手詰（既に詰んでいる）と値が壊れている場合は
     // `formatScore` と同じく勝者を名乗らない
-    if (senteValue > 0) return `▲${senteValue}手詰`;
-    if (senteValue < 0) return `△${-senteValue}手詰`;
+    if (senteValue > 0) return `▲${mateWordingShort(senteValue, line)}`;
+    if (senteValue < 0) return `△${mateWordingShort(-senteValue, line)}`;
     return '詰み';
   }
 

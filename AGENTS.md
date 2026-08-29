@@ -60,6 +60,7 @@
 | `packages/mcp` | REST をツール定義に翻訳する薄い stdio MCP サーバ（[prd/12](./prd/12-position-lab.md) §4） |
 
 > ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
+> 詰み筋の分類（`mate-line.ts` の `classifyMateLine`。[prd/05](./prd/05-analysis.md) §2.2）も `shared` にある。
 > `lib/usi.ts`（盤面を使わない USI 変換・評価値整形）・`lib/cpl.ts`（悪手判定）・kifu-export・
 > zod 検証スキーマはまだ `packages/web` にあり gap。server のプロンプト生成エンドポイント化も未着手。
 > ⚠ **`shared` に環境依存を持ち込まない。** web（ブラウザ）と server / worker（node）の両方が使うため、

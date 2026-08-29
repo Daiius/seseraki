@@ -130,7 +130,7 @@ export function describeFilters({
         : '';
     parts.push(`${side}${tactic}`);
   }
-  if (missedMate) parts.push(`${missedMate}手詰以下の取りこぼし`);
+  if (missedMate) parts.push(`${missedMate}手以内の詰みの取りこぼし`);
   // 片側だけの指定も「どちら側が開いているか」が読めるように `〜` を残す
   if (from || to) parts.push(`${from ?? ''}〜${to ?? ''}`);
   if (sort !== DEFAULT_SORT || order !== DEFAULT_ORDER) {

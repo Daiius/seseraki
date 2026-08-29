@@ -308,6 +308,10 @@ export function generateKifuMarkdown(input: KifuExportInput): string {
     '## 評価値推移（先手視点 cp、正＝先手有利。⚠＝悪手、?＝疑問手、×＝詰み系。'
       + `損失＝最善手の評価 − 実手の評価。悪手 ${thresholds.blunder}cp / 疑問手 ${thresholds.dubious}cp 以上）`,
   );
+  // 🔴 `M` の意味を明示する（設計 Phase A）。`score mate N` は plies で、
+  //    **受方の応手・逆王手・合駒が全部入る**——詰将棋の「N手詰」ではない
+  lines.push('');
+  lines.push('※ `M` は詰みまでの手数（相手の応手・合駒を含む）。詰将棋の「N手詰」とは数え方が違う。');
   lines.push('');
   lines.push('| 手数 | 指し手 | 評価値 | 備考 |');
   lines.push('|---:|---|---:|---|');

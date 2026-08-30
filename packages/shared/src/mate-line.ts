@@ -29,6 +29,12 @@ import { isAttackedBy } from './position-validation';
  *
  * ⚠ **深さ不足による false negative は許容する**（読み切れず mate が出なければ分類の対象にすらならない）。
  * 「取りこぼし」（prd/09 §3.1）と同じ性質で、出た分だけが正しいという方向に倒してある。
+ *
+ * ⚠ **「必至」が保証するのは受けが無いことだけで、いま詰めろが掛かっていることではない**
+ * （レビュー `OCL-91BC8098` への回答。詳細は prd/05 §2.2）。攻方が王手されている局面では、
+ * 攻方はまず王手を外す必要があるためその瞬間に詰めろは掛かっていないが、受けが無いことは
+ * 変わらないので本サービスでは「必至」と表示する。手番を相手に渡しても詰むかの検証（本当の
+ * 詰めろ判定）は未実装。
  */
 export type MateLineKind =
   /**
@@ -43,7 +49,7 @@ export type MateLineKind =
    *
    * 🔒 **表示は `forced` と同じ「必至」**（prd/05 §2.2）。「受けが無い」ことは mate スコアが
    * 保証しており、**読み筋の形は条件ではない**ので、表示で両者を分ける理由が無い。
-   * ただし **`sideToMoveInCheck === true`（王手中）なら必至とは呼ばない**（`MateLine` 参照）。
+   * ただし **`matedSideInCheck === true`（詰まされる側が王手中）なら必至とは呼ばない**（`MateLine` 参照）。
    *
    * 🔒 **分類の区別は残す**——手番を反転して探索する判定を将来入れたとき、
    * 「詰めろ」を正しく名乗り分ける余地にする。
@@ -84,11 +90,18 @@ export interface MateLine {
   /** 受方の合駒（王手中に打って直後に取られた手）の数。無駄合いの近似（設計 §1.4） */
   interposes: number;
   /**
-   * 🔴 **現局面で「手番側」の玉が王手されているか**（表示語の選択に使う。レビュー `OCL-2C1FDEAD`）。
+   * 🔴 **現局面で「詰まされる側」の玉が王手されているか**（表示語の選択に使う。レビュー `OCL-2C1FDEAD`）。
    *
-   * 🔴 **必至は王手が掛かっていない局面にだけ使う。** 「受けが無い」ことは **mate スコアが
-   * 保証している**（相手が最善に応じても詰む、という読み切り）ので、**読み筋の形は必至の条件では
-   * ない**。語が不適切になるのは**王手中**だけ——そこは詰めろの段階ではなく、既に詰まし合いの最中。
+   * 詰まされる側（受方）は **mate の符号で決まる**——`mateValue > 0` なら手番側の相手、
+   * `mateValue < 0` なら手番側自身。**手番側ではない**。
+   *
+   * 🔴 **必至は「詰まされる側に王手が掛かっていない」局面にだけ使う。** 「受けが無い」ことは
+   * **mate スコアが保証している**（相手が最善に応じても詰む、という読み切り）ので、**読み筋の形は
+   * 必至の条件ではない**。語が不適切になるのは**詰まされる側が王手中**のときだけ——そこは
+   * 詰めろの段階ではなく、既に詰まし合いの最中。
+   * ⚠ **勝つ側（攻方）が王手されていることは必至かどうかと関係が無い。** 実際に踏んだ:
+   * 手番側を見る実装（#114）は、手番側が攻方のときに**勝つ側の王手**を理由に必至を取り下げ、
+   * 必至である局面を `△5手で詰` と表示していた（kifu1 #103）。
    *
    * ⚠ **分類（`kind`）だけでは弾けない。** 王手されている側が**玉を逃げる手**は王手ではないので、
    * 形の上では `hisshi` にも `forced` にもなりうる。表示側は `hisshi` / `forced` **かつ**
@@ -96,14 +109,15 @@ export interface MateLine {
    * 🔒 `checkmate` はこの除外の対象外。王手を解除しながら王手を掛ける手から詰ますことはあり、
    * それは正真正銘の即詰みなので `N手詰` のままでよい。
    *
-   * 🔒 **`mateValue < 0` のときに分類へ使っている王手判定とは視点が違う。** あちらは
-   * 「**受方**の玉が王手されているか」（＝直前の攻方の手が王手だったか）で、こちらは
-   * 常に「**手番側**の玉」。`mateValue > 0`（手番側が詰ます）なら受方は相手なので、
-   * 両者は別の玉を見ている。
+   * ⚠ **現状のデータでは、この除外は発火しない。** dev DB の rank1 mate 行 14 件を突き合わせた
+   * ところ、**詰まされる側が王手されている行は例外なく `checkmate` か `gameover`** で、
+   * `hisshi` / `forced` には現れなかった（実質は「mate が出ていれば必至」）。
+   * 🔒 **それでも規則として残す**——将来のデータや手番反転探索で発火しうるし、
+   * 「王手中を必至と呼ばない」こと自体は正しいから。
    *
    * ⚠ 玉が盤上に無い（盤面が追えない）ときは `false`。その場合は分類自体が `unknown` に落ちる。
    */
-  sideToMoveInCheck: boolean;
+  matedSideInCheck: boolean;
 }
 
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
@@ -165,21 +179,34 @@ export function classifyMateLine(
   const plies = Math.abs(mateValue);
   let checks = 0;
   let interposes = 0;
-  // 表示語の選択にだけ使う観測事実（分類には使わない）。玉が無ければ `false`（分類は unknown に落ちる）
-  const sideToMoveInCheck =
-    isChecked(state, state.sideToMove, opponentOf(state.sideToMove)) === true;
+
+  // 符号が読めない / 距離 0 では攻方・受方が決まらないので、王手判定より先に落とす
+  if (!Number.isInteger(mateValue) || plies === 0) {
+    return { kind: 'unknown', plies, checks: 0, interposes: 0, matedSideInCheck: false };
+  }
+
+  const attacker: Side = mateValue > 0 ? state.sideToMove : opponentOf(state.sideToMove);
+  const defender = opponentOf(attacker);
+
+  /*
+    🔴 **「受方（＝詰まされる側）の玉が王手されているか」は 1 回だけ求めて 2 用途で共有する。**
+    かつては分類用（`mateValue < 0` のとき「直前の攻方の手が王手だったか」）と表示用が
+    別々に立っていたが、表示用を正しい側——手番側ではなく**詰まされる側**——に直した結果、
+    **両者は同じ盤面・同じ玉を見る同一の判定**になった（`mateValue < 0` なら受方＝手番側で、
+    以前から同じものだった）。別名で 2 回書くと「視点が違うのだろう」と読ませてしまうので統合する。
+
+    用途が違うことは残っている: 分類は `null`（玉が盤上に無い ＝ 追えない）を `unknown` の
+    根拠に使い、表示は `null` を `false` に潰す。**その差だけを生の値と真偽値の 2 変数で表す。**
+  */
+  const matedInCheck = isChecked(state, defender, attacker);
+  const matedSideInCheck = matedInCheck === true;
   const unknown = (): MateLine => ({
     kind: 'unknown',
     plies,
     checks,
     interposes,
-    sideToMoveInCheck,
+    matedSideInCheck,
   });
-
-  if (!Number.isInteger(mateValue) || plies === 0) return unknown();
-
-  const attacker: Side = mateValue > 0 ? state.sideToMove : opponentOf(state.sideToMove);
-  const defender = opponentOf(attacker);
 
   /*
     🔴 **投了（`resign`）は 3 条件を全て満たすときだけ `gameover`**（レビュー `OCL-DA238CEA`）。
@@ -187,14 +214,15 @@ export function classifyMateLine(
 
     1. `pv[0] === 'resign'`（`win` = 入玉宣言勝ちは意味が正反対なので外す）
     2. `mateValue < 0`（手番側が負けている ＝ 投了するのは手番側）
-    3. **手番側の玉が王手されている**（盤面から確かめられる）
+    3. **手番側の玉が王手されている**（盤面から確かめられる。`mateValue < 0` なので
+       手番側＝受方であり、`matedInCheck` がそのまま「手番側の玉が王手されているか」になる）
 
     ⚠ **判定は手数の検査より先**。`resign` は指し手ではないので `pv.length` を mate 距離と
     比べても意味がない（`mate -1` は通り抜けるが `mate -5` は通り抜けない、という差が出てしまう）。
   */
   if (pv.length > 0 && pv[0] === RESIGN) {
-    if (mateValue < 0 && isChecked(state, defender, attacker) === true) {
-      return { kind: 'gameover', plies, checks: 0, interposes: 0, sideToMoveInCheck };
+    if (mateValue < 0 && matedInCheck === true) {
+      return { kind: 'gameover', plies, checks: 0, interposes: 0, matedSideInCheck };
     }
     // 王手されていないのに投了した（見切り投了）/ 手番側が勝っている pv は根拠にならない
     return unknown();
@@ -207,9 +235,8 @@ export function classifyMateLine(
   // 「現局面で受方玉が王手されているか」＝直前の攻方の手が王手だったか、を先頭に置く
   const attackerChecks: boolean[] = [];
   if (mateValue < 0) {
-    const inCheck = isChecked(state, defender, attacker);
-    if (inCheck === null) return unknown();
-    attackerChecks.push(inCheck);
+    if (matedInCheck === null) return unknown();
+    attackerChecks.push(matedInCheck);
   }
 
   // 受方が王手中に打った駒のマス（直後に攻方が取れば合駒とみなす）
@@ -244,10 +271,10 @@ export function classifyMateLine(
 
   if (attackerChecks.length === 0) return unknown();
   if (attackerChecks.every(Boolean)) {
-    return { kind: 'checkmate', plies, checks, interposes, sideToMoveInCheck };
+    return { kind: 'checkmate', plies, checks, interposes, matedSideInCheck };
   }
   if (!attackerChecks[0] && attackerChecks.slice(1).every(Boolean)) {
-    return { kind: 'hisshi', plies, checks, interposes, sideToMoveInCheck };
+    return { kind: 'hisshi', plies, checks, interposes, matedSideInCheck };
   }
-  return { kind: 'forced', plies, checks, interposes, sideToMoveInCheck };
+  return { kind: 'forced', plies, checks, interposes, matedSideInCheck };
 }

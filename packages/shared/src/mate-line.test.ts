@@ -53,6 +53,7 @@ describe('classifyMateLine', () => {
       plies: 9,
       checks: 4,
       interposes: 0,
+      sideToMoveInCheck: false,
     });
   });
 
@@ -62,6 +63,7 @@ describe('classifyMateLine', () => {
       plies: 9,
       checks: 5,
       interposes: 0,
+      sideToMoveInCheck: false,
     });
   });
 
@@ -71,6 +73,8 @@ describe('classifyMateLine', () => {
       plies: 5,
       checks: 1,
       interposes: 0,
+      // 🔴 手番側（後手）が王手されている。だから「必至」とは表示しない（`OCL-2C1FDEAD`）
+      sideToMoveInCheck: true,
     });
   });
 
@@ -80,6 +84,7 @@ describe('classifyMateLine', () => {
       plies: 7,
       checks: 1,
       interposes: 0,
+      sideToMoveInCheck: true,
     });
   });
 
@@ -89,6 +94,7 @@ describe('classifyMateLine', () => {
       plies: 5,
       checks: 3,
       interposes: 1,
+      sideToMoveInCheck: false,
     });
   });
 
@@ -101,6 +107,8 @@ describe('classifyMateLine', () => {
         plies: 4,
         checks: 2,
         interposes: 1,
+        // 受方手番（mate が負）なので、手番側＝受方が王手されている
+        sideToMoveInCheck: true,
       });
     });
 
@@ -112,6 +120,73 @@ describe('classifyMateLine', () => {
         plies: 8,
         checks: 4,
         interposes: 0,
+        sideToMoveInCheck: false,
+      });
+    });
+  });
+
+  /**
+   * 🔴 **「必至」を名乗れるのは手番側が王手されていないときだけ**（レビュー `OCL-2C1FDEAD`）。
+   *
+   * 「受けが無い」ことは **mate スコアそのものが保証している**（相手が最善に応じても詰む、という
+   * 読み切り）。読み筋の**形**は受けの有無とは関係が無いので、`hisshi` / `forced` の別は表示の
+   * 条件ではない。必至という語が不適切になるのは**いま王手が掛かっている**ときだけ——王手中は
+   * 詰めろの段階ではなく、既に詰まし合いの最中だから。
+   *
+   * ⚠ **分類（`kind`）だけでは弾けない。** 王手されている側が**玉を逃げる手**は王手ではないので、
+   * 形の上では `hisshi` にも `forced` にもなりうる。そこで `sideToMoveInCheck` を添える。
+   *
+   * 🔒 **`mateValue < 0` のときに分類へ使っている王手判定とは視点が違う。** あちらは
+   * 「受方の玉」、こちらは常に「手番側の玉」を見る。
+   */
+  describe('sideToMoveInCheck（表示語の選択に使う）', () => {
+    it('kifu1 #103 は手番側（後手）が王手されている', () => {
+      // 🔴 回帰テスト: この局面が `△必至(5)` と表示されていた（実際に踏んだ）。
+      //    王手が掛かっている局面なので「必至」ではない（表示は `△5手で詰`）
+      const line = classify(FIXTURES.quietMiddle);
+      expect(line.kind).toBe('forced');
+      expect(line.sideToMoveInCheck).toBe(true);
+      expect(classify(FIXTURES.quietMiddleLong).sideToMoveInCheck).toBe(true);
+    });
+
+    it('kifu1 #104（1 手進めた #103）は王手されていない forced ＝ 必至を名乗れる', () => {
+      // 🔴 今回の訂正の要。**王手中でない `forced` は「必至」のまま**。
+      //    「受けが無い」ことは mate スコアが保証しており、読み筋の形は条件ではない
+      const f = FIXTURES.quietMiddle;
+      const state = applyMove(parseSfen(f.sfen)!, f.pv[0]);
+      expect(classifyMateLine(state, f.pv.slice(1), -(f.mate - 1))).toEqual({
+        kind: 'forced',
+        plies: 4,
+        checks: 1,
+        interposes: 0,
+        sideToMoveInCheck: false,
+      });
+    });
+
+    it('kifu2 #80 / #72 は手番側（先手）が王手されていない', () => {
+      expect(classify(FIXTURES.quietFirst).sideToMoveInCheck).toBe(false);
+      expect(classify(FIXTURES.allChecks).sideToMoveInCheck).toBe(false);
+      expect(classify(FIXTURES.interpose).sideToMoveInCheck).toBe(false);
+    });
+
+    it('hisshi の形でも王手中なら sideToMoveInCheck が立つ', () => {
+      /*
+        ⚠ **合成局面**（dev DB に実例が無い）。攻方（先手）自身が王手されていて、
+        初手が玉の早逃げ（王手ではない ＝ 静かな手）、以降が王手という形。
+        **玉を逃げただけでも分類は `hisshi` に落ちる**ことを示す——だから
+        分類だけを見て「必至」と名乗ってはいけない。
+
+        - 先手玉 9i が 9a の飛車に王手されている
+        - `9i8i`（早逃げ・王手でない）→ `9a9b` → `G*5b`（後手玉 5a への王手）
+      */
+      const state = parseSfen('r3k4/9/9/9/9/9/9/9/K8 b G 1');
+      expect(state).not.toBeNull();
+      expect(classifyMateLine(state!, ['9i8i', '9a9b', 'G*5b'], 3)).toEqual({
+        kind: 'hisshi',
+        plies: 3,
+        checks: 1,
+        interposes: 0,
+        sideToMoveInCheck: true,
       });
     });
   });
@@ -134,6 +209,7 @@ describe('classifyMateLine', () => {
         plies: 1,
         checks: 0,
         interposes: 0,
+        sideToMoveInCheck: true,
       });
     });
 
@@ -183,6 +259,7 @@ describe('classifyMateLine', () => {
         plies: 0,
         checks: 0,
         interposes: 0,
+        sideToMoveInCheck: false,
       });
     });
 

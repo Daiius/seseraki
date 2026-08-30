@@ -41,16 +41,19 @@ export type MateLineKind =
    * 初手だけ静かな手で、以降の攻方の手は全て王手（必至を掛ける手 / 受けなしの局面）。
    * 「受けが無い」は mate スコアが担保しているので、**静かな手で受けなしにした ＝ 必至**と言える。
    *
-   * 🔒 **表示は `forced` と同じ「必至」**（prd/05 §2.2）。将棋の言葉としては両者は同じもので、
-   * 違うのは手順の形だけ。**分類の区別は残す**——手番を反転して探索する判定を将来入れたとき、
+   * 🔒 **表示は `forced` と同じ「必至」**（prd/05 §2.2）。「受けが無い」ことは mate スコアが
+   * 保証しており、**読み筋の形は条件ではない**ので、表示で両者を分ける理由が無い。
+   * ただし **`sideToMoveInCheck === true`（王手中）なら必至とは呼ばない**（`MateLine` 参照）。
+   *
+   * 🔒 **分類の区別は残す**——手番を反転して探索する判定を将来入れたとき、
    * 「詰めろ」を正しく名乗り分ける余地にする。
    */
   | 'hisshi'
   /**
-   * 途中に静かな手を挟む（受けなし。2手すき以上が受からない形など）。
+   * 途中に静かな手を挟む（2手すき以上が受からない形・玉の早逃げが混ざる形など）。
    *
-   * 🔒 **表示は `hisshi` と同じ「必至」**（prd/05 §2.2）。手順の形が違うだけで、
-   * 「相手がどう応じても詰む」という内容は `hisshi` と変わらない。
+   * 🔒 **表示は `hisshi` と同じ「必至」**（王手中を除く。prd/05 §2.2）。手順の形が違うだけで、
+   * 「相手がどう応じても詰む」という内容は mate スコアの側が保証している。
    */
   | 'forced'
   /**
@@ -80,6 +83,27 @@ export interface MateLine {
   checks: number;
   /** 受方の合駒（王手中に打って直後に取られた手）の数。無駄合いの近似（設計 §1.4） */
   interposes: number;
+  /**
+   * 🔴 **現局面で「手番側」の玉が王手されているか**（表示語の選択に使う。レビュー `OCL-2C1FDEAD`）。
+   *
+   * 🔴 **必至は王手が掛かっていない局面にだけ使う。** 「受けが無い」ことは **mate スコアが
+   * 保証している**（相手が最善に応じても詰む、という読み切り）ので、**読み筋の形は必至の条件では
+   * ない**。語が不適切になるのは**王手中**だけ——そこは詰めろの段階ではなく、既に詰まし合いの最中。
+   *
+   * ⚠ **分類（`kind`）だけでは弾けない。** 王手されている側が**玉を逃げる手**は王手ではないので、
+   * 形の上では `hisshi` にも `forced` にもなりうる。表示側は `hisshi` / `forced` **かつ**
+   * この値が `false` のときだけ「必至」を出す（prd/05 §2.2）。
+   * 🔒 `checkmate` はこの除外の対象外。王手を解除しながら王手を掛ける手から詰ますことはあり、
+   * それは正真正銘の即詰みなので `N手詰` のままでよい。
+   *
+   * 🔒 **`mateValue < 0` のときに分類へ使っている王手判定とは視点が違う。** あちらは
+   * 「**受方**の玉が王手されているか」（＝直前の攻方の手が王手だったか）で、こちらは
+   * 常に「**手番側**の玉」。`mateValue > 0`（手番側が詰ます）なら受方は相手なので、
+   * 両者は別の玉を見ている。
+   *
+   * ⚠ 玉が盤上に無い（盤面が追えない）ときは `false`。その場合は分類自体が `unknown` に落ちる。
+   */
+  sideToMoveInCheck: boolean;
 }
 
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
@@ -141,7 +165,16 @@ export function classifyMateLine(
   const plies = Math.abs(mateValue);
   let checks = 0;
   let interposes = 0;
-  const unknown = (): MateLine => ({ kind: 'unknown', plies, checks, interposes });
+  // 表示語の選択にだけ使う観測事実（分類には使わない）。玉が無ければ `false`（分類は unknown に落ちる）
+  const sideToMoveInCheck =
+    isChecked(state, state.sideToMove, opponentOf(state.sideToMove)) === true;
+  const unknown = (): MateLine => ({
+    kind: 'unknown',
+    plies,
+    checks,
+    interposes,
+    sideToMoveInCheck,
+  });
 
   if (!Number.isInteger(mateValue) || plies === 0) return unknown();
 
@@ -161,7 +194,7 @@ export function classifyMateLine(
   */
   if (pv.length > 0 && pv[0] === RESIGN) {
     if (mateValue < 0 && isChecked(state, defender, attacker) === true) {
-      return { kind: 'gameover', plies, checks: 0, interposes: 0 };
+      return { kind: 'gameover', plies, checks: 0, interposes: 0, sideToMoveInCheck };
     }
     // 王手されていないのに投了した（見切り投了）/ 手番側が勝っている pv は根拠にならない
     return unknown();
@@ -210,9 +243,11 @@ export function classifyMateLine(
   }
 
   if (attackerChecks.length === 0) return unknown();
-  if (attackerChecks.every(Boolean)) return { kind: 'checkmate', plies, checks, interposes };
-  if (!attackerChecks[0] && attackerChecks.slice(1).every(Boolean)) {
-    return { kind: 'hisshi', plies, checks, interposes };
+  if (attackerChecks.every(Boolean)) {
+    return { kind: 'checkmate', plies, checks, interposes, sideToMoveInCheck };
   }
-  return { kind: 'forced', plies, checks, interposes };
+  if (!attackerChecks[0] && attackerChecks.slice(1).every(Boolean)) {
+    return { kind: 'hisshi', plies, checks, interposes, sideToMoveInCheck };
+  }
+  return { kind: 'forced', plies, checks, interposes, sideToMoveInCheck };
 }

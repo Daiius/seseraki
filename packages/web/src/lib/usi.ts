@@ -129,19 +129,44 @@ function mateWording(plies: number, line?: MateLine): string {
     const interposes = line.interposes > 0 ? `・合駒${line.interposes}` : '';
     return `${plies}手詰${interposes}`;
   }
-  if (line?.kind === 'hisshi') return `必至・${plies}手で詰み`;
+  if (isHisshi(line)) return `必至・${plies}手で詰み`;
   return `${plies}手で詰み`;
+}
+
+/**
+ * 「必至」を名乗ってよいか。
+ *
+ * 🔴 **「受けが無い」ことは mate スコアそのものが保証している**（相手が最善に応じても詰む、という
+ * 読み切り）。読み筋の**形**（初手が静かか、途中に静かな手が混ざるか）は受けの有無とは関係が無いので、
+ * `hisshi` と `forced` を分ける理由が表示には無い。
+ *
+ * 🔴 **必至という語が不適切になるのは「いま王手が掛かっている」ときだけ**（レビュー `OCL-2C1FDEAD`・
+ * prd/05 §2.2）。必至は「**受けられない詰めろ**が掛かっている」状態を指す語で、王手中は詰めろの
+ * 段階ではなく既に詰まし合いの最中だから。⚠ 分類だけでは弾けない——**王手されている側が玉を
+ * 逃げる手は王手ではない**ので、形の上では `hisshi` にも `forced` にもなりうる。
+ *
+ * 🔒 **`unknown` は含めない。** 形を追えなかった以上、**盤面の状態そのものを信用しきれない**
+ * （pv が読めない・mate 距離より短いケースを含む）。王手判定が正しく効いている保証も無い。
+ *
+ * 🔒 **`checkmate` にこの除外は掛けない**（呼び出し側で先に返している）。王手を解除しながら
+ * 王手を掛ける手から詰ますことはあり、それは正真正銘の即詰みで `N手詰` のままが正しい。
+ */
+function isHisshi(line?: MateLine): boolean {
+  return (line?.kind === 'hisshi' || line?.kind === 'forced') && !line.sideToMoveInCheck;
 }
 
 /** mate の短い形（情報行）。勝者の記号は呼び出し側が前置する */
 function mateWordingShort(plies: number, line?: MateLine): string {
   if (line?.kind === 'gameover') return '詰み';
   if (line?.kind === 'checkmate') return `${plies}手詰`;
-  // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` / `▲詰5` は
-  //    「必至9」「詰5」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
+  // 🔒 手数は括弧で括る（決定 2026-08-29・実機で確認）。`▲必至9` は
+  //    「必至9」が 1 語に見えて手数が読み取りにくかった。`手詰` は語尾が
   //    数の終わりを示すのでそのまま
-  if (line?.kind === 'hisshi') return `必至(${plies})`;
-  return `詰(${plies})`;
+  if (isHisshi(line)) return `必至(${plies})`;
+  // 🔒 必至を名乗れない場合（王手中 / `unknown` / pv なし）は語を強めない。
+  //    ただし `詰(N)` は「詰んでいる」と読めてしまうため綴りを変える。`N手で詰` なら
+  //    広い形の `N手で詰み` と同じ読み下しになり、数は `手` で終わるので括弧も要らない
+  return `${plies}手で詰`;
 }
 
 /**

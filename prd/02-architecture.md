@@ -138,9 +138,6 @@
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:push && pnpm db:seed`。dev のスキーマ変更は `pnpm db:push`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
   - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
-  - worker のエンジン関連（`ENGINE_*`）の一覧は [05](./05-analysis.md) §1.3。**任意**の
-    `ENGINE_PROBE_MOVETIME` は詰めろ probe（[12](./12-position-lab.md) §2.2）だけの思考時間(ms)で、
-    未設定なら棋譜解析と同じ予算（`ENGINE_MOVETIME` / `ENGINE_DEPTH`）を使う。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。

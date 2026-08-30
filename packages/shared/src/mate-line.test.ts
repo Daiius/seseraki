@@ -53,7 +53,7 @@ describe('classifyMateLine', () => {
       plies: 9,
       checks: 4,
       interposes: 0,
-      sideToMoveInCheck: false,
+      matedSideInCheck: false,
     });
   });
 
@@ -63,7 +63,7 @@ describe('classifyMateLine', () => {
       plies: 9,
       checks: 5,
       interposes: 0,
-      sideToMoveInCheck: false,
+      matedSideInCheck: false,
     });
   });
 
@@ -73,8 +73,9 @@ describe('classifyMateLine', () => {
       plies: 5,
       checks: 1,
       interposes: 0,
-      // 🔴 手番側（後手）が王手されている。だから「必至」とは表示しない（`OCL-2C1FDEAD`）
-      sideToMoveInCheck: true,
+      // 🔴 手番側（後手）は王手されているが、**詰まされる側（先手）は王手されていない**。
+      //    だから「必至」と表示してよい（`OCL-2C1FDEAD`）
+      matedSideInCheck: false,
     });
   });
 
@@ -84,7 +85,8 @@ describe('classifyMateLine', () => {
       plies: 7,
       checks: 1,
       interposes: 0,
-      sideToMoveInCheck: true,
+      // 同じ局面なので同じ——詰まされるのは先手で、先手玉に王手は掛かっていない
+      matedSideInCheck: false,
     });
   });
 
@@ -94,7 +96,7 @@ describe('classifyMateLine', () => {
       plies: 5,
       checks: 3,
       interposes: 1,
-      sideToMoveInCheck: false,
+      matedSideInCheck: false,
     });
   });
 
@@ -107,8 +109,8 @@ describe('classifyMateLine', () => {
         plies: 4,
         checks: 2,
         interposes: 1,
-        // 受方手番（mate が負）なので、手番側＝受方が王手されている
-        sideToMoveInCheck: true,
+        // 受方手番（mate が負）なので、詰まされる側＝手番側。その玉が王手されている
+        matedSideInCheck: true,
       });
     });
 
@@ -120,38 +122,40 @@ describe('classifyMateLine', () => {
         plies: 8,
         checks: 4,
         interposes: 0,
-        sideToMoveInCheck: false,
+        matedSideInCheck: false,
       });
     });
   });
 
   /**
-   * 🔴 **「必至」を名乗れるのは手番側が王手されていないときだけ**（レビュー `OCL-2C1FDEAD`）。
+   * 🔴 **「必至」を名乗れるのは「詰まされる側」が王手されていないときだけ**（レビュー `OCL-2C1FDEAD`）。
    *
    * 「受けが無い」ことは **mate スコアそのものが保証している**（相手が最善に応じても詰む、という
    * 読み切り）。読み筋の**形**は受けの有無とは関係が無いので、`hisshi` / `forced` の別は表示の
-   * 条件ではない。必至という語が不適切になるのは**いま王手が掛かっている**ときだけ——王手中は
-   * 詰めろの段階ではなく、既に詰まし合いの最中だから。
+   * 条件ではない。必至という語が不適切になるのは**詰まされる側にいま王手が掛かっている**ときだけ
+   * ——そこは詰めろの段階ではなく、既に詰まし合いの最中だから。
+   *
+   * ⚠ **見るのは詰まされる側であって手番側ではない。** 勝つ側が王手されていることは必至かどうかと
+   * 関係が無い。手番側を見る実装（#114）は、手番側が攻方のときに必至を誤って取り下げていた。
    *
    * ⚠ **分類（`kind`）だけでは弾けない。** 王手されている側が**玉を逃げる手**は王手ではないので、
-   * 形の上では `hisshi` にも `forced` にもなりうる。そこで `sideToMoveInCheck` を添える。
+   * 形の上では `hisshi` にも `forced` にもなりうる。そこで `matedSideInCheck` を添える。
    *
-   * 🔒 **`mateValue < 0` のときに分類へ使っている王手判定とは視点が違う。** あちらは
-   * 「受方の玉」、こちらは常に「手番側の玉」を見る。
+   * 🔒 **詰まされる側は mate の符号で決まる**——正なら手番側の相手、負なら手番側自身。
    */
-  describe('sideToMoveInCheck（表示語の選択に使う）', () => {
-    it('kifu1 #103 は手番側（後手）が王手されている', () => {
-      // 🔴 回帰テスト: この局面が `△必至(5)` と表示されていた（実際に踏んだ）。
-      //    王手が掛かっている局面なので「必至」ではない（表示は `△5手で詰`）
+  describe('matedSideInCheck（表示語の選択に使う）', () => {
+    it('kifu1 #103 は手番側が王手されているが、詰まされる側は王手されていない', () => {
+      // 🔴 回帰テスト。**手番（後手）は王手されているが、詰まされるのは先手**で、
+      //    先手玉に王手は掛かっていない。`mate 5` が出ている以上どう応じても詰むので
+      //    **これは必至**（表示は `△必至(5)`）。手番側を見て必至を取り下げていたのが誤り
       const line = classify(FIXTURES.quietMiddle);
       expect(line.kind).toBe('forced');
-      expect(line.sideToMoveInCheck).toBe(true);
-      expect(classify(FIXTURES.quietMiddleLong).sideToMoveInCheck).toBe(true);
+      expect(line.matedSideInCheck).toBe(false);
+      expect(classify(FIXTURES.quietMiddleLong).matedSideInCheck).toBe(false);
     });
 
-    it('kifu1 #104（1 手進めた #103）は王手されていない forced ＝ 必至を名乗れる', () => {
-      // 🔴 今回の訂正の要。**王手中でない `forced` は「必至」のまま**。
-      //    「受けが無い」ことは mate スコアが保証しており、読み筋の形は条件ではない
+    it('kifu1 #104（1 手進めた #103）も王手されていない forced ＝ 必至を名乗れる', () => {
+      // こちらは mate が負（手番側＝詰まされる側）。その先手玉に王手は掛かっていない
       const f = FIXTURES.quietMiddle;
       const state = applyMove(parseSfen(f.sfen)!, f.pv[0]);
       expect(classifyMateLine(state, f.pv.slice(1), -(f.mate - 1))).toEqual({
@@ -159,34 +163,48 @@ describe('classifyMateLine', () => {
         plies: 4,
         checks: 1,
         interposes: 0,
-        sideToMoveInCheck: false,
+        matedSideInCheck: false,
       });
     });
 
-    it('kifu2 #80 / #72 は手番側（先手）が王手されていない', () => {
-      expect(classify(FIXTURES.quietFirst).sideToMoveInCheck).toBe(false);
-      expect(classify(FIXTURES.allChecks).sideToMoveInCheck).toBe(false);
-      expect(classify(FIXTURES.interpose).sideToMoveInCheck).toBe(false);
+    it('kifu2 #80 / #72 は詰まされる側（後手）が王手されていない', () => {
+      expect(classify(FIXTURES.quietFirst).matedSideInCheck).toBe(false);
+      expect(classify(FIXTURES.allChecks).matedSideInCheck).toBe(false);
+      expect(classify(FIXTURES.interpose).matedSideInCheck).toBe(false);
     });
 
-    it('hisshi の形でも王手中なら sideToMoveInCheck が立つ', () => {
-      /*
-        ⚠ **合成局面**（dev DB に実例が無い）。攻方（先手）自身が王手されていて、
-        初手が玉の早逃げ（王手ではない ＝ 静かな手）、以降が王手という形。
-        **玉を逃げただけでも分類は `hisshi` に落ちる**ことを示す——だから
-        分類だけを見て「必至」と名乗ってはいけない。
+    /*
+      ⚠ **合成局面**（dev DB に実例が無い）。**同じ盤面・同じ読み筋を mate の符号だけ変えて**
+      使い、`matedSideInCheck` が符号で切り替わることを固定する。
 
-        - 先手玉 9i が 9a の飛車に王手されている
-        - `9i8i`（早逃げ・王手でない）→ `9a9b` → `G*5b`（後手玉 5a への王手）
-      */
-      const state = parseSfen('r3k4/9/9/9/9/9/9/9/K8 b G 1');
-      expect(state).not.toBeNull();
-      expect(classifyMateLine(state!, ['9i8i', '9a9b', 'G*5b'], 3)).toEqual({
-        kind: 'hisshi',
-        plies: 3,
-        checks: 1,
-        interposes: 0,
-        sideToMoveInCheck: true,
+      - 先手玉 9i が 9a の飛車に王手されている（＝**手番側**が王手中）
+      - `9i8i`（早逃げ・王手でない）→ `9a9b` → `G*5b`（後手玉 5a への王手）
+      - **玉を逃げただけでも分類は `hisshi` / `forced` に落ちる**——だから分類だけを見て
+        「必至」と名乗ってはいけない、という元の論点はそのまま
+    */
+    describe('符号で見る側が切り替わる（合成局面・先手玉が王手されている）', () => {
+      const sfen = 'r3k4/9/9/9/9/9/9/9/K8 b G 1';
+      const pv = ['9i8i', '9a9b', 'G*5b'];
+
+      it('mate が正なら詰まされる側は相手（後手）＝ 王手されていない', () => {
+        // 🔴 手番側（先手）は王手中だが、それは**勝つ側の王手**なので必至とは無関係
+        const state = parseSfen(sfen);
+        expect(state).not.toBeNull();
+        expect(classifyMateLine(state!, pv, 3)).toEqual({
+          kind: 'hisshi',
+          plies: 3,
+          checks: 1,
+          interposes: 0,
+          matedSideInCheck: false,
+        });
+      });
+
+      it('mate が負なら詰まされる側は手番側（先手）＝ 王手されている', () => {
+        const state = parseSfen(sfen);
+        expect(state).not.toBeNull();
+        expect(classifyMateLine(state!, pv, -3)).toMatchObject({
+          matedSideInCheck: true,
+        });
       });
     });
   });
@@ -199,8 +217,9 @@ describe('classifyMateLine', () => {
       **手番側が王手されていること**まで盤面で確かめてから `gameover` にする（レビュー `OCL-DA238CEA`）。
     */
     // `R*5b` は王手なので、指した後の局面は「手番側（後手）が王手されている」
+    //（`mate` が負なら手番側＝詰まされる側）
     const checkedState = applyMove(parseSfen(FIXTURES.interpose.sfen)!, 'R*5b');
-    // 攻め手番の局面。手番側（先手）は王手されていない
+    // 攻め手番の局面。詰まされる側（後手）は王手されていない
     const quietState = parseSfen(FIXTURES.allChecks.sfen)!;
 
     it('王手されている手番側の resign（mate が負）は gameover', () => {
@@ -209,7 +228,7 @@ describe('classifyMateLine', () => {
         plies: 1,
         checks: 0,
         interposes: 0,
-        sideToMoveInCheck: true,
+        matedSideInCheck: true,
       });
     });
 
@@ -259,7 +278,7 @@ describe('classifyMateLine', () => {
         plies: 0,
         checks: 0,
         interposes: 0,
-        sideToMoveInCheck: false,
+        matedSideInCheck: false,
       });
     });
 

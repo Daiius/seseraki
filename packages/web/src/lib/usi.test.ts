@@ -130,7 +130,7 @@ describe('mate の表記は読み筋の形で決まる', () => {
     plies: 9,
     checks: 0,
     interposes: 0,
-    sideToMoveInCheck: false,
+    matedSideInCheck: false,
     ...over,
   });
 
@@ -154,23 +154,25 @@ describe('mate の表記は読み筋の形で決まる', () => {
     );
   });
 
-  it('王手中は「必至」を名乗らない（形を問わず）', () => {
-    // 🔴 必至は「受けられない詰めろが掛かっている」状態を指す語で、**今まさに王手が掛かって
-    //    いる局面には使わない**（王手中は詰めろの段階ではなく詰まし合いの最中）。
+  it('詰まされる側が王手中なら「必至」を名乗らない（形を問わず）', () => {
+    // 🔴 必至は「受けられない詰めろが掛かっている」状態を指す語で、**詰まされる側に今まさに王手が
+    //    掛かっている局面には使わない**（王手中は詰めろの段階ではなく詰まし合いの最中）。
+    //    ⚠ 見るのは**詰まされる側**であって手番側ではない。勝つ側が王手されていることは必至かどうかと
+    //    関係が無い（レビュー `OCL-2C1FDEAD`）。
     //    ⚠ 分類だけでは弾けない——王手された側が玉を逃げる手は王手ではないので、形の上では
-    //    `hisshi` にも `forced` にもなりうる（レビュー `OCL-2C1FDEAD`）
+    //    `hisshi` にも `forced` にもなりうる
     for (const kind of ['hisshi', 'forced'] as const) {
-      const checked = line({ kind, sideToMoveInCheck: true });
+      const checked = line({ kind, matedSideInCheck: true });
       expect(formatScore('mate', 9, 0, checked)).toBe('先手勝ち(9手で詰み)');
       expect(formatScoreShort('mate', 9, 0, checked)).toBe('▲9手で詰');
       expect(formatTurnScore('mate', 9, 'gote', checked)).toBe('後手勝ち(9手で詰み)');
     }
   });
 
-  it('王手中でも checkmate は「N手詰」のまま', () => {
+  it('詰まされる側が王手中でも checkmate は「N手詰」のまま', () => {
     // 🔒 王手を解除しながら王手を掛ける手から詰ますことはある。正真正銘の即詰みなので
     //    除外の対象にしない（除外するのは必至を名乗る側だけ）
-    const checked = line({ kind: 'checkmate', sideToMoveInCheck: true });
+    const checked = line({ kind: 'checkmate', matedSideInCheck: true });
     expect(formatScore('mate', 9, 0, checked)).toBe('先手勝ち(9手詰)');
     expect(formatScoreShort('mate', 9, 0, checked)).toBe('▲9手詰');
   });
@@ -243,7 +245,7 @@ describe('mateLineOf', () => {
       plies: 5,
       checks: 3,
       interposes: 1,
-      sideToMoveInCheck: false,
+      matedSideInCheck: false,
     });
   });
 
@@ -273,17 +275,23 @@ describe('mateLineOf', () => {
     expect(formatScore('mate', 5, 0, l)).toBe('先手勝ち(5手詰・合駒1)');
   });
 
-  it('王手中の局面は必至を名乗らない（kifu1 #103・回帰）', () => {
-    // 🔴 dev DB の実データ。手番（後手）が王手されているのに `△必至(5)` と出ていた
-    //    （レビュー `OCL-2C1FDEAD`）。王手中は詰めろの段階ではないので「必至」ではない
-    const checkedState = parseSfen(
+  it('手番側が王手されていても、詰まされる側が王手中でなければ必至（kifu1 #103・回帰）', () => {
+    /*
+      🔴 dev DB の実データ。**「手番側は王手されているが、詰まされる側は王手されていない」**ケース。
+      - 後手番 / 後手玉に王手あり / 先手玉に王手なし / `mate 5`（後手が 5 手で詰ます）
+      - 詰まされるのは**先手**で、先手玉に王手は掛かっていない ＝ **必至**
+
+      手番側を見ていた実装（#114）は、勝つ側（後手）の王手を理由に必至を取り下げ、
+      `△5手で詰` と表示していた。必至かどうかは**詰まされる側**の王手で決まる。
+    */
+    const state103 = parseSfen(
       '1l1+P1k1nl/s2+N1sg2/nL2Np1p1/KPPpr3p/2+b3PP1/8P/3s1P3/1+p4SR1/5G2L w 4Pb2g2p 1',
     )!;
-    const l = mateLineOf(checkedState, 'mate', 5, ['4a3a', '5c4a+', '3a2b', '4a4b', '7e8e']);
-    expect(l).toMatchObject({ kind: 'forced', sideToMoveInCheck: true });
+    const l = mateLineOf(state103, 'mate', 5, ['4a3a', '5c4a+', '3a2b', '4a4b', '7e8e']);
+    expect(l).toMatchObject({ kind: 'forced', matedSideInCheck: false });
     // 103 手目（後手番）なので先手視点では -5 ＝ 後手が詰ます
-    expect(formatScoreShort('mate', 5, 103, l)).toBe('△5手で詰');
-    expect(formatScore('mate', 5, 103, l)).toBe('後手勝ち(5手で詰み)');
+    expect(formatScoreShort('mate', 5, 103, l)).toBe('△必至(5)');
+    expect(formatScore('mate', 5, 103, l)).toBe('後手勝ち(必至・5手で詰み)');
   });
 });
 

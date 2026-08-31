@@ -6,6 +6,7 @@ import {
   FlipIcon,
 } from './icons';
 import type { StudyControls } from './StudyBoard';
+import { useDisplaySize } from '../lib/displaySize';
 
 /**
  * 盤の下のコントローラー行（≪ ◀ slider ▶ ≫ + 盤面反転。prd/05 §2.1）。
@@ -27,7 +28,12 @@ import type { StudyControls } from './StudyBoard';
  * 検討の出口は「棋譜に戻る」だけ。
  *
  * ⚠ `ShogiBoard` から切り出したのは、`/dev-gallery` が**実物と同じ行**を出せるように
- * するため（複製すると、片方だけ直して嘘をつく）。
+ * するため（複製すると、片方だけ直して嘘をつく）。表示サイズの設定もここに入れているので、
+ * `/dev-gallery` でも同じ高さで確かめられる。
+ *
+ * **ボタンの高さは設定で切り替わる**（`lib/displaySize.ts`）:
+ * 既定は `md:btn-sm`（モバイルは daisyUI の既定サイズ = 連打しやすい大きさ、md 以上で小さく）、
+ * `compact` はモバイルでも `btn-sm`。縦のスペースを評価値・読み筋へ回すための選択肢。
  */
 export function BoardControls({
   study,
@@ -48,11 +54,14 @@ export function BoardControls({
 }) {
   const atStart = !branchActive && moveIndex === 0;
   const atEnd = !branchActive && moveIndex === totalMoves;
+  const { displaySize } = useDisplaySize();
+  // ⚠ クラス名は**リテラルで**書く（Tailwind はソースを走査して拾うので、組み立てると消える）
+  const btnSize = displaySize.controlSize === 'compact' ? 'btn-sm' : 'md:btn-sm';
 
   return (
     <div className="flex items-center gap-2 max-w-3xl no-tap-select">
       <button
-        className="btn btn-outline md:btn-sm"
+        className={`btn btn-outline ${btnSize}`}
         onClick={study.studying ? study.undoAll : () => onGoTo(0)}
         disabled={study.studying ? !study.canUndo : atStart}
         title={study.studying ? '検討の最初へ (Home)' : '最初へ (Home)'}
@@ -60,7 +69,7 @@ export function BoardControls({
         <ChevronDoubleLeftIcon />
       </button>
       <button
-        className="btn btn-outline flex-1 md:btn-sm md:flex-none"
+        className={`btn btn-outline flex-1 md:flex-none ${btnSize}`}
         onClick={study.studying ? study.undo : () => onGoTo(Math.max(0, moveIndex - 1))}
         disabled={study.studying ? !study.canUndo : atStart}
         title={study.studying ? '検討を1手戻す (←)' : '戻る (←)'}
@@ -79,7 +88,7 @@ export function BoardControls({
         aria-label="手数"
       />
       <button
-        className="btn btn-outline flex-1 md:btn-sm md:flex-none"
+        className={`btn btn-outline flex-1 md:flex-none ${btnSize}`}
         onClick={
           study.studying ? study.redo : () => onGoTo(Math.min(totalMoves, moveIndex + 1))
         }
@@ -89,14 +98,14 @@ export function BoardControls({
         <ChevronRightIcon />
       </button>
       <button
-        className="btn btn-outline md:btn-sm"
+        className={`btn btn-outline ${btnSize}`}
         onClick={study.studying ? study.redoAll : () => onGoTo(totalMoves)}
         disabled={study.studying ? !study.canRedo : atEnd}
         title={study.studying ? '検討の最後へ (End)' : '最後へ (End)'}
       >
         <ChevronDoubleRightIcon />
       </button>
-      <button className="btn btn-outline md:btn-sm" onClick={onFlip} title="盤面反転">
+      <button className={`btn btn-outline ${btnSize}`} onClick={onFlip} title="盤面反転">
         <FlipIcon />
       </button>
     </div>

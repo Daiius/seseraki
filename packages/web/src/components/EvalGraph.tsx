@@ -9,6 +9,7 @@ import {
   type MoveLoss,
   type Thresholds,
 } from '../lib/cpl';
+import { useDisplaySize } from '../lib/displaySize';
 
 interface EvalPoint {
   moveNumber: number;
@@ -71,8 +72,23 @@ function mateColor(moves: number): string {
   );
   return `color-mix(in oklab, ${MATE_VIVID} ${Math.round(t * 100)}%, var(--color-error))`;
 }
+/*
+  グラフの縦幅。**設定で半分にできる**（`lib/displaySize.ts` の `graphSize`。要望 2026-08-31）。
+  モバイルで盤の下に評価値・読み筋・候補手を並べると縦が足りなくなるため、
+  「推移の形さえ分かればよい」ときにグラフを畳んで他へ回せるようにする。
+
+  ⚠ **半分にしても壊れないことを確認済み**（下限を別に設けていないのはそのため）:
+  - ▲ / △ のラベルは上端 `PADDING_Y + 12`・下端 `HEIGHT - PADDING_Y - 4` に置くので、
+    最小 60px でも 28px 離れていて重ならない（フォント 10px）。
+  - 現在手のマーカー（r=4）・悪手マーカー（半径 5 + 縁取り 5）は評価値がクランプ端に
+    張り付いても SVG の内側に収まる（`PADDING_Y` = 8 の外へ出るのは最大 7.5px）。
+  - `PADDING_Y` は据え置き。半分の高さでは相対的に余白が厚くなるが、マーカーが端で
+    切れないための余白なので**高さに比例させると切れる**。
+*/
 const HEIGHT_DESKTOP = 120;
 const HEIGHT_MOBILE = 180;
+const HEIGHT_DESKTOP_COMPACT = 60;
+const HEIGHT_MOBILE_COMPACT = 90;
 const PADDING_X_DESKTOP = 32;
 const PADDING_X_MOBILE = 14;
 const PADDING_Y = 8;
@@ -133,7 +149,11 @@ export function EvalGraph({
       : [];
 
   const isMobile = useIsMobile();
-  const HEIGHT = isMobile ? HEIGHT_MOBILE : HEIGHT_DESKTOP;
+  const { displaySize } = useDisplaySize();
+  const compact = displaySize.graphSize === 'compact';
+  const HEIGHT = isMobile
+    ? (compact ? HEIGHT_MOBILE_COMPACT : HEIGHT_MOBILE)
+    : (compact ? HEIGHT_DESKTOP_COMPACT : HEIGHT_DESKTOP);
   const PADDING_X = isMobile ? PADDING_X_MOBILE : PADDING_X_DESKTOP;
   // 手あたりの最低密度（px/手）。コンテナがこれで足りれば幅いっぱいに追従し、
   // 足りない（＝非常に長い棋譜）ときだけ下限幅まで広げて横スクロールさせる。

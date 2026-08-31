@@ -48,18 +48,38 @@
 
   🔒 **変数は `:root` に置く。** 盤（`.shogi-board`）だけでなく**持ち駒の行も同じ寸法**を
   使うため、盤の要素にぶら下げると持ち駒側から参照できない。
+
+  **表示サイズの設定**（`lib/displaySize.ts`）は `--sq-scale` で入る。既定 1（現状維持）、
+  `data-board-size='compact'` のときだけ縮める。
+  🔒 **算出そのものは触らず、結果に率を掛ける。** `--sq-reserved` を膨らませて縮める案は
+  「盤 + 操作行が画面に収まる」ための見積もりを嘘にするので採らない（横画面で破綻する）。
+  ⚠ **上限（`--sq-cap`）にも率が掛かる形にする。** 幅の広い端末では clamp の上限側が
+  効いているため、上限を据え置くと**その端末だけ compact が何も変わらない**。
+  下限 1.25rem にも掛かるが、あれは「読めない盤を出さない」最後の止めなので実害はない。
 */
 :root {
   --sq-cap: 2.5rem;
   --sq-reserved: 7.5rem;
-  --sq: clamp(
-    1.25rem,
-    min(
-      calc((min(100vw, 48rem) - 2rem) / 9.6),
-      calc((100svh - var(--sq-reserved)) / 11.5)
-    ),
-    var(--sq-cap)
+  --sq-scale: 1;
+  --sq: calc(
+    clamp(
+      1.25rem,
+      min(
+        calc((min(100vw, 48rem) - 2rem) / 9.6),
+        calc((100svh - var(--sq-reserved)) / 11.5)
+      ),
+      var(--sq-cap)
+    ) * var(--sq-scale)
   );
+}
+
+/*
+  盤を「少し小さめ」にして縦のスペースを評価値・読み筋へ回す（設定 `/settings`）。
+  0.85 は暫定値——盤の高さ（11.5 マス）が 15% 縮むぶん、390px 幅の端末で 60px 前後が
+  下の情報行に戻る。実物を見て詰める前提の数字なので、変えるならここ 1 箇所でよい。
+*/
+:root[data-board-size='compact'] {
+  --sq-scale: 0.85;
 }
 
 @media (min-width: 64rem) {

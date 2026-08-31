@@ -6,7 +6,9 @@ import {
   MIN_MATE_MAX,
   useMateMax,
 } from '../lib/mateMax';
+import { useDisplaySize } from '../lib/displaySize';
 import { ThresholdSettings } from '../components/ThresholdSettings';
+import { DisplaySizeSettings } from '../components/DisplaySizeSettings';
 import { SelfSettings } from '../components/SelfSettings';
 import { client } from '../lib/honoClient';
 
@@ -31,18 +33,25 @@ export const Route = createFileRoute('/settings')({
  *
  * 取りこぼしの詰み手数（prd/09 §5）も同じ性質（恒常的な好み）なのでここに置く。
  * ⚠ **こちらは「既定値」で、`/stats` では URL の `mateMax` が優先される**（prd/09 §3.1）。
+ *
+ * 表示サイズ（`lib/displaySize.ts`）も同じ性質——恒常的な好みで全画面に効く——のでここに置く。
  */
 function SettingsPage() {
   const { me } = Route.useLoaderData();
   const router = useRouter();
   const { thresholds, setThresholds } = useThresholds();
   const { mateMax, setMateMax } = useMateMax();
+  const { displaySize, setDisplaySize } = useDisplaySize();
 
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">設定</h2>
       {me && <SelfSettings me={me} onChanged={() => router.invalidate()} />}
       <section className="flex flex-col gap-3">
+        <h3 className="text-lg font-semibold">表示サイズ</h3>
+        <DisplaySizeSettings displaySize={displaySize} onChange={setDisplaySize} />
+      </section>
+      <section className="flex flex-col gap-3 mt-6">
         <h3 className="text-lg font-semibold">悪手判定のしきい値</h3>
         <ThresholdSettings thresholds={thresholds} onChange={setThresholds} />
       </section>

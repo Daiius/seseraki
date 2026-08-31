@@ -20,21 +20,10 @@ import {
   PlusIcon,
   VideoCameraIcon,
 } from '../components/icons';
+import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 
-/*
- * ヘッダーのタッチターゲット寸法。
- *
- * モバイルの誤タップ対策として Apple HIG 44pt / WCAG 2.2 SC 2.5.5(AAA) の 44px を狙い、
- * ターゲット間は Material の 8dp 以上を取る。ただし 44px×5 + 8px×4 = 252px は、
- * navbar の padding とロゴを足すと 320px 幅（iPhone SE 等の下限）に収まらない。
- * そこで 375px 未満だけ「40px ターゲット / 間隔 4px / ロゴ縮小」へ落とす
- * （40px は WCAG 2.2 SC 2.5.8(AA) の下限 24px は十分上回る。溢れて押せなくなるより良い）。
- * デスクトップ幅（sm 以上）はポインタ操作なので btn-sm（32px）のまま。
- */
-const ICON_BTN = 'btn btn-ghost btn-sm btn-square max-sm:size-11 max-[374px]:size-10';
-
-/** メニュー項目。ヘッダーのボタンと同じ 44px の当たり判定を持たせる */
-const MENU_ITEM = 'min-h-11 gap-3';
+// タッチターゲットの寸法は `lib/touchTargets.ts` に集約している（棋譜詳細の ⋯ メニューも
+// 同じ基準を使うため。寸法を決めた理由・44px を落とさない理由はそちらに書いてある）。
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -162,13 +151,9 @@ function RootComponent() {
                 かえって不整合になる。通常のリスト + リンクとして公開し、開閉状態は
                 `<summary>` の aria-expanded（ブラウザが持つ）に任せる。
 
-                項目もヘッダーのボタンと同じ基準で 44px 高を確保する（Apple HIG 44pt /
-                WCAG 2.2 SC 2.5.5）。幅では出し分けない——メニューは開いている間だけ出る
-                一時的な面で、幅ごとに高さが変わると出現位置の見当が付けにくい。
-                項目間は 4px。Material の 8px はメニュー内では隙間が目立ちすぎ、44px の
-                高さが既に十分な当たり判定を与えているので、区切りが分かる最小限に留める
+                項目の高さ（44px）と項目間（4px）の根拠は `lib/touchTargets.ts`。
               */}
-              <ul className="dropdown-content menu bg-base-100 rounded-box z-20 mt-1 w-48 gap-1 p-2 shadow">
+              <ul className={`${MENU_LIST} w-48`}>
                 {/* 項目を押しても dropdown は閉じないので、遷移・実行の前に明示的に閉じる */}
                 <li>
                   <Link to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>

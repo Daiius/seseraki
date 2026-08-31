@@ -32,6 +32,7 @@
  * ⚠ `shared` の `pieceBox` は残っているが、**web からはもう使わない**（server / MCP 向け）。
  */
 import {
+  applyMove,
   canPromote,
   dropFromHand,
   handCount,
@@ -465,6 +466,58 @@ export function applyStudyMoves(base: BoardState, moves: string[]): StudySession
     if (move.endsWith('+')) session = togglePromotion(session);
   }
   return session;
+}
+
+/* ---------- 咎め筋（PV）の確定 ---------- */
+
+/**
+ * 選択だけを解く（局面・手順は動かさない）。
+ *
+ * ⚠ **咎め筋の再生を始めるときに使う**（prd/12 §3.2）。選択は**検討局面の座標**を指して
+ * いるので、プレビュー局面をそのまま表示すると**別の駒の上にハイライトが残る**。
+ * 選択が無ければ同じオブジェクトを返す（無駄な再描画を作らない）。
+ */
+export function clearSelection(session: StudySession): StudySession {
+  return session.selection === null ? session : { ...session, selection: null };
+}
+
+
+/**
+ * 咎め筋（PV）の先頭 `depth` 手を手順へ積んだセッションを返す（prd/12 §3.2・決定 2026-09-01）。
+ *
+ * 🔴 **再生中の表示局面もこれで作る。** 表示と確定を同じ関数から導くので、
+ * 「見ていた局面を確定する」が構造的に嘘にならない——別々に計算するとずれる。
+ *
+ * 🔴 **1 手 1 段で積む**（まとめて 1 段にしない）。{@link StudyStep.move} は「この局面に
+ * 至った盤上の手」1 本という契約で、直前手の強調・成 / 不成の指し直し・採点の 3 つが
+ * ここにぶら下がっている。N 手を畳むと `move` に入れる値が無くなり、
+ * 「◀ は 1 手戻す」（prd/12 §3.1）とも食い違う。**◀ で 1 手ずつ読み筋を戻れる。**
+ *
+ * 🔒 **適用は `applyMove`**（`movePiece` + `advanceTurn` ではない）。再生の表示が使ってきた
+ * 適用器と同じでなければ意味が無い。成りの手（`7g7f+`）も 1 回で処理できるので
+ * {@link togglePromotion} の呼び直しは要らない。⚠ 駒を取れば持ち駒に入る。
+ *
+ * 🔒 **`push` は経由せず直接積む。** `push` は「局面が変わらなければ段を積まない」ので、
+ * 万一 `applyMove` が同一参照を返すと**段数が `depth` とずれ、確定手数と再生手数が食い違う**。
+ *
+ * ⚠ **戻した先で確定したら redo 分は捨てる**（`cursor` までで切る。prd/12 §3.2 の既存規則）。
+ * 何も積まないとき（`depth <= 0` / PV が空）は**同じオブジェクトを返す**。
+ */
+export function commitReplay(
+  session: StudySession,
+  pv: readonly string[],
+  depth: number,
+): StudySession {
+  const n = Math.min(depth, pv.length);
+  if (n <= 0) return session;
+  const steps = session.steps.slice(0, session.cursor + 1);
+  let state = steps[steps.length - 1].state;
+  for (let i = 0; i < n; i++) {
+    state = applyMove(state, pv[i]);
+    // `state` は `move` を適用した結果そのものなので `faithful`（採点の対象になりうる）
+    steps.push({ state, move: pv[i], faithful: true });
+  }
+  return { steps, cursor: steps.length - 1, selection: null };
 }
 
 /* ---------- 評価の送り先 ---------- */

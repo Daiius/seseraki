@@ -1,4 +1,9 @@
-import type { BoardSize, ControlSize, DisplaySize } from '../lib/displaySize';
+import type {
+  BoardSize,
+  ControlSize,
+  DisplaySize,
+  GraphSize,
+} from '../lib/displaySize';
 
 /**
  * 表示サイズの設定 UI（`lib/displaySize.ts`）。
@@ -37,13 +42,23 @@ export function DisplaySizeSettings({
       />
       <Choice<ControlSize>
         label="操作ボタン"
-        hint="「小さめ」はモバイルでもボタンを 1 段小さくします（連打のしやすさは少し落ちます）。"
+        hint="「小さめ」はモバイルでもボタンを 1 段小さくします（連打のしやすさは少し落ちます）。検討モードの操作ボタンも一緒に小さくなります。"
         value={displaySize.controlSize}
         options={[
           { value: 'normal', label: '現在のまま（既定）' },
           { value: 'compact', label: '小さめ' },
         ]}
         onChange={(controlSize) => onChange({ ...displaySize, controlSize })}
+      />
+      <Choice<GraphSize>
+        label="評価値グラフ"
+        hint="「半分」は推移の折れ線の縦幅を半分にします。形と悪手マーカーの位置は残るので、俯瞰の用途なら読めます。"
+        value={displaySize.graphSize}
+        options={[
+          { value: 'normal', label: '現在のまま（既定）' },
+          { value: 'compact', label: '半分' },
+        ]}
+        onChange={(graphSize) => onChange({ ...displaySize, graphSize })}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 /**
- * 表示サイズの設定（盤の大きさ / 操作ボタンの高さ）の永続化。
+ * 表示サイズの設定（盤の大きさ / 操作ボタンの高さ / 評価値グラフの縦幅）の永続化。
  *
  * モバイルで盤を横幅いっぱいまで大きくすると、**縦のスペースが足りず評価値・読み筋が
  * 見づらくなる**（実使用で出た不満）。かといって小さい盤が常に正解でもないので、
@@ -25,29 +25,45 @@ import { useState } from 'react';
 
 /** `full` = 従来どおり幅いっぱいまで / `compact` = 少し小さくして縦を空ける */
 export type BoardSize = 'full' | 'compact';
-/** `normal` = 従来どおり（モバイルは daisyUI 既定サイズ） / `compact` = モバイルでも `btn-sm` */
+/**
+ * `normal` = 従来どおり（モバイルは daisyUI 既定サイズ） / `compact` = モバイルでも `btn-sm`。
+ *
+ * ⚠ **棋譜の操作行（`BoardControls`）と検討盤の操作ボタン（`StudyBoard`）を連動させる**
+ * （要望 2026-08-31）。片方だけ小さくなると、同じ画面の同じ位置にあるボタンの高さが
+ * 検討に入った瞬間に変わる。設定は増やさず 1 つで両方に効かせる。
+ */
 export type ControlSize = 'normal' | 'compact';
+/** `normal` = 従来どおり / `compact` = 評価値グラフの縦幅を約半分にする */
+export type GraphSize = 'normal' | 'compact';
 
 export type DisplaySize = {
   boardSize: BoardSize;
   controlSize: ControlSize;
+  graphSize: GraphSize;
 };
 
 /** 既定は現状維持（設定を触らなければ見た目が変わらない） */
 export const DEFAULT_DISPLAY_SIZE: DisplaySize = {
   boardSize: 'full',
   controlSize: 'normal',
+  graphSize: 'normal',
 };
 
 const STORAGE_KEY = 'seseraki:displaySize';
 
 const BOARD_SIZES: readonly BoardSize[] = ['full', 'compact'];
 const CONTROL_SIZES: readonly ControlSize[] = ['normal', 'compact'];
+const GRAPH_SIZES: readonly GraphSize[] = ['normal', 'compact'];
 
 /**
  * localStorage の生の文字列を設定に変換する。
  * 手で書き換えられていても壊れないよう、**値ごとに**既定へフォールバックする
- * （`lib/thresholds.ts` と同じ流儀。片方だけ壊れていてももう片方は生かす）。
+ * （`lib/thresholds.ts` と同じ流儀。1 つ壊れていても他は生かす）。
+ *
+ * 🔒 **設定を増やしたときは、そのキーが無い保存値が既に存在する。** キー単位で見て
+ * 欠けていれば既定に落とすので、古い保存値（`graphSize` を持たない `{boardSize, controlSize}`）
+ * を読んでも壊れない。**オブジェクト全体を捨てる作りにしない**——それだと設定を 1 つ足すたびに
+ * 既存ユーザーの設定が全部リセットされる。
  */
 export function parseDisplaySize(raw: string | null): DisplaySize {
   if (!raw) return DEFAULT_DISPLAY_SIZE;
@@ -66,6 +82,9 @@ export function parseDisplaySize(raw: string | null): DisplaySize {
     controlSize: CONTROL_SIZES.includes(v.controlSize as ControlSize)
       ? (v.controlSize as ControlSize)
       : DEFAULT_DISPLAY_SIZE.controlSize,
+    graphSize: GRAPH_SIZES.includes(v.graphSize as GraphSize)
+      ? (v.graphSize as GraphSize)
+      : DEFAULT_DISPLAY_SIZE.graphSize,
   };
 }
 

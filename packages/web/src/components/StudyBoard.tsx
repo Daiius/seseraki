@@ -53,6 +53,7 @@ import {
   type EvalState,
   type MoveGrade,
 } from '../lib/positionEval';
+import { useDisplaySize } from '../lib/displaySize';
 
 /**
  * 検討盤（prd/12 §3）。
@@ -200,6 +201,39 @@ const ICON_BTN = `${TOUCH_BTN} shrink-0 px-0 max-md:w-11 max-[374px]:w-10 md:w-8
  */
 const GLYPH_BTN = `${TOUCH_BTN} shrink-0 px-2 gap-1 max-md:min-w-11 max-[374px]:min-w-10 md:min-w-8`;
 
+/*
+  表示サイズの設定 `controlSize: 'compact'`（`lib/displaySize.ts`）のときの検討盤の操作ボタン。
+
+  🔒 **棋譜の操作行（`BoardControls`）と同じ設定で同時に切り替える**（要望 2026-08-31）。
+  検討盤の操作パネルは棋譜の操作行のすぐ上に並ぶので、片方だけ小さいと段差になる。
+  ⚠ **新しい設定は増やさない**——「操作ボタン」は利用者から見て 1 つの概念で、
+  棋譜用と検討用で別々に選びたい理由が無い。
+
+  compact は **md 以上の見た目を全幅に広げる**だけ（`btn-sm` = 32px・幅 2rem）。
+  タップの的は 44px から縮むが、それを承知で縦を稼ぐための選択肢なので、
+  ここで下限を作り直すと設定の意味が無くなる。
+*/
+const TOUCH_BTN_COMPACT = 'btn btn-sm';
+const ICON_BTN_COMPACT = `${TOUCH_BTN_COMPACT} shrink-0 px-0 w-8`;
+const GLYPH_BTN_COMPACT = `${TOUCH_BTN_COMPACT} shrink-0 px-2 gap-1 min-w-8`;
+
+/**
+ * 検討盤の操作ボタンのクラス一式を設定から決める。
+ *
+ * ⚠ **props で配らずフックで読む**——操作ボタンは `StudyBoard` 本体と `EvalResultView`
+ * （読み筋の再生）に分かれており、見た目の設定を中継させるためだけに props を増やすと
+ * 途中の階層すべてが表示サイズを知ることになる。読む側が直接読む方が繋がりが短い。
+ */
+function useStudyButtons() {
+  const { displaySize } = useDisplaySize();
+  const compact = displaySize.controlSize === 'compact';
+  return {
+    touch: compact ? TOUCH_BTN_COMPACT : TOUCH_BTN,
+    icon: compact ? ICON_BTN_COMPACT : ICON_BTN,
+    glyph: compact ? GLYPH_BTN_COMPACT : GLYPH_BTN,
+  };
+}
+
 
 /** 手番側から数えて i 手目の手番記号 */
 function symbolAt(sideToMove: Side, i: number): string {
@@ -234,6 +268,8 @@ export function StudyBoard({
    * 今の盤の評価として出る（レビュー指摘 `OCL-AED22F46`）。
    */
   const trackerRef = useRef(new EvalRequestTracker());
+  // 操作ボタンの大きさは棋譜の操作行（`BoardControls`）と同じ設定で切り替わる
+  const btn = useStudyButtons();
 
   // 🔴 **起点が変わったら検討を捨てる**（= 手送りされた。prd/12 §3.1）。
   // 確認ダイアログは出さない（連打を妨げないため・検討は元々保存しない）。
@@ -574,7 +610,7 @@ export function StudyBoard({
               // 🔴 **枠を付ける**（決定 2026-08-29）。アイコンのみになった以上、枠が
               //    無いとボタンだと分からず、44px のタップ範囲も画面から読めない。
               //    手番・成と同じ見た目に揃える（`btn-ghost` から変更）
-              className={clsx(ICON_BTN, 'btn-outline')}
+              className={clsx(btn.icon, 'btn-outline')}
               onClick={() => edit(resetStudy(session))}
               aria-label="棋譜に戻る"
               title="棋譜に戻る（検討を捨てる）"
@@ -589,7 +625,7 @@ export function StudyBoard({
             */}
             <button
               type="button"
-              className={clsx(GLYPH_BTN, 'btn-outline')}
+              className={clsx(btn.glyph, 'btn-outline')}
               onClick={() => edit(toggleTurn(session))}
               disabled={replaying}
               aria-label={`手番を入れ替える（今は${state.sideToMove === 'sente' ? '先手' : '後手'}番）`}
@@ -622,7 +658,7 @@ export function StudyBoard({
             */}
             <button
               type="button"
-              className={clsx(GLYPH_BTN, 'btn-outline')}
+              className={clsx(btn.glyph, 'btn-outline')}
               onClick={() => edit(togglePromotion(session))}
               disabled={replaying || !canTogglePromotion(session)}
               aria-label={
@@ -656,7 +692,7 @@ export function StudyBoard({
             */}
             <button
               type="button"
-              className={clsx(TOUCH_BTN, 'btn-primary', 'max-md:flex-1 max-md:min-w-24')}
+              className={clsx(btn.touch, 'btn-primary', 'max-md:flex-1 max-md:min-w-24')}
               onClick={() => void run()}
               disabled={evalState.kind === 'loading' || replaying}
               title={
@@ -721,6 +757,10 @@ function EvalResultView({
   onReplay: (replay: Replay | null) => void;
   thresholds: Thresholds;
 }) {
+  // 読み筋の再生ボタンも棋譜の操作行と同じ設定で小さくなる
+  // ⚠ **早期 return より前に呼ぶ**（フックの規則）
+  const btn = useStudyButtons();
+
   // まだ一度も評価していない（`idle`）なら何も出さない
   if (evalState.kind === 'idle') return null;
 
@@ -889,7 +929,7 @@ function EvalResultView({
                 <div className="mt-2 flex items-center gap-2 pl-5">
                   <button
                     type="button"
-                    className={clsx(TOUCH_BTN, 'btn-outline')}
+                    className={clsx(btn.touch, 'btn-outline')}
                     disabled={active === null}
                     onClick={() =>
                       onReplay(
@@ -907,7 +947,7 @@ function EvalResultView({
                   </span>
                   <button
                     type="button"
-                    className={clsx(TOUCH_BTN, 'btn-outline')}
+                    className={clsx(btn.touch, 'btn-outline')}
                     disabled={active !== null && active.depth >= pvLen}
                     onClick={() =>
                       onReplay({ candidate: i, depth: (active?.depth ?? 0) + 1 })
@@ -919,7 +959,7 @@ function EvalResultView({
                   {active !== null && (
                     <button
                       type="button"
-                      className={clsx(TOUCH_BTN, 'btn-ghost')}
+                      className={clsx(btn.touch, 'btn-ghost')}
                       onClick={() => onReplay(null)}
                     >
                       戻る

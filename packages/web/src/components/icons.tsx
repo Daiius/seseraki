@@ -354,9 +354,37 @@ export function FlipIcon({ className = 'size-5' }: IconProps) {
   );
 }
 
+/**
+ * 評価する（棋譜のコントローラー行・7 つ目。prd/12 §3.2・決定 2026-09-01）。
+ * 虫眼鏡（局面検索と同じ図像になる）・グラフ（真下の評価値グラフと紛れる）は避け、
+ * cpu-chip にした。線の太さは 2（コントローラー行の chevron と並ぶため）。
+ */
+export function CpuChipIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 0 0 2.25-2.25V6.75a2.25 2.25 0 0 0-2.25-2.25H6.75A2.25 2.25 0 0 0 4.5 6.75v10.5a2.25 2.25 0 0 0 2.25 2.25Zm.75-12h9v9h-9v-9Z"
+      />
+    </svg>
+  );
+}
+
 /*
- * 以下は検討盤の操作パネル用（prd/12 §3.2・決定 2026-08-29）。**4 つのボタンを 1 行に
- * 収める**ためにアイコン化した。線の太さは 2（コントローラー行の chevron と並ぶため）。
+ * 以下は検討盤の操作パネル用（prd/12 §3.2・決定 2026-08-29）。**アイコン化して 1 行に
+ * 収める**（「評価する」は決定 2026-09-01 でコントローラー行へ移り、パネルからは外れた）。
+ * 線の太さは 2（コントローラー行の chevron と並ぶため）。
  */
 
 /** 棋譜に戻る（arrow-uturn-left）。検討を捨てて棋譜の局面へ帰る */

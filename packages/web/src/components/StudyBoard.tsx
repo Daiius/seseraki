@@ -93,6 +93,12 @@ import { useDisplaySize } from '../lib/displaySize';
 /**
  * 検討中にコントローラー行（◀ ▶ ≪ ≫ / スライダー）へ割り当てる操作。
  * `studying` が false のときは棋譜の手送りのまま——切り替えは呼び出し側が行う。
+ *
+ * 🔴 **「評価する」も含む**（決定・2026-09-01）。以前は検討中だけ操作パネルに出す
+ * ボタンだったが、コントローラー行の 7 つ目として常設した——棋譜再生中・棋譜側の
+ * 読み筋（分岐）を辿っている最中でも押せる（局面さえあれば評価は意味を持つため。
+ * prd/12 §3.2）。**検討中かの出所を 1 つに保つのと同じ理由で、評価の状態も
+ * `BoardControls` に別に持たせず、ここから渡す。**
  */
 export interface StudyControls {
   /** 検討中か（バッジと、コントローラー行の意味の切り替え） */
@@ -109,6 +115,22 @@ export interface StudyControls {
   undoAll: () => void;
   /** ≫ 検討の最後まで進める */
   redoAll: () => void;
+  /**
+   * 評価する。盤に出ている局面（棋譜再生中ならその局面・棋譜側の読み筋を辿っている
+   * 最中ならその分岐先・検討中なら検討局面）をエンジンに評価させる。
+   * ⚠ **押しても検討モードには入らない**（手順を積まないので `studying` は立たない）。
+   * 咎め筋（PV）を再生中に押したときだけ、その読み筋を手順へ確定してから評価する
+   * （既存の `run()` の挙動そのまま）。
+   */
+  evaluate: () => void;
+  /** 評価要求が実行中か（ボタンをスピナーへ差し替えて disabled にするための状態） */
+  evaluating: boolean;
+  /**
+   * 直前の手の採点対象があるか（`lastMoveGradeTarget` が非 null）。
+   * ⚠ 検討中でカーソルが起点より進んでいるときだけ true になる——棋譜再生中は
+   * 常に false（採点は出さない。prd/12 §3.2「棋譜側では直前の手の採点を出さない」）。
+   */
+  grading: boolean;
 }
 
 /** 検討していないときのキーボード手送り（分岐移動を含む。`ShogiBoard` が渡す） */
@@ -195,8 +217,8 @@ const TOUCH_BTN = 'btn max-md:h-11 max-md:min-h-11 max-[374px]:h-10 max-[374px]:
  *
  * 🔒 **正方形にする**——高さだけ 44px にしても幅が潰れればタップの的は小さいままで、
  * prd/05 §2.1 の 44px 基準を満たさない。高さと同じ幅を明示して `px-0` で内側の余白を消す。
- * 🔒 **`shrink-0`**——同じ行の「評価する」が残り幅いっぱいに伸びる（案 A）ので、
- * 縮められる側にしておくとアイコンボタンから先に潰れる。
+ * 🔒 **`shrink-0`**——幅の決まらない要素（`flex-wrap` した次の行の折り返し等）と同じ行に
+ * 並んでも、縮められる側にしておくとこのボタンから先に潰れないようにする。
  */
 const ICON_BTN = `${TOUCH_BTN} shrink-0 px-0 max-md:w-11 max-[374px]:w-10 md:w-8`;
 
@@ -516,6 +538,11 @@ export function StudyBoard({
     redo: () => edit(redo(session)),
     undoAll: () => edit(undoAll(session)),
     redoAll: () => edit(redoAll(session)),
+    // 🔒 **`run()` の中身には触らない**（レビュー指摘 `OCL-AED22F46` / `OCL-BE4CEA52` /
+    //    `OCL-17AFF653` の集積地。決定・2026-09-01）。変えるのは「呼べる場所」だけ
+    evaluate: () => void run(),
+    evaluating: evalState.kind === 'loading',
+    grading: gradeTarget !== null,
   };
 
   /**
@@ -637,11 +664,18 @@ export function StudyBoard({
           {/*
             🔴 **操作は 1 行に収める**（prd/12 §3.2・決定 2026-08-29）。以前は
             「棋譜に戻る / 手番 / 成にする」と「評価する」が 2 行に分かれ、390px で
-            折り返していた。**アイコン化で 4 つを 1 行に**畳む。
+            折り返していた。**アイコン化で 1 行に**畳む。
             ⚠ 320px のような狭い幅では折り返して 2 行になる（許容）。パネルは
             コントローラー行より**下**にあるので、折り返しても盤・◀ ▶ は動かない
             （prd/05 §2.1 / PR #105 の教訓）。
             🔒 アイコンのみのボタンには **`aria-label` を必ず付ける**（`title` も残す）。
+
+            🔴 **「評価する」はここには無い**（決定・2026-09-01。以前はここにあった）。
+            棋譜再生中・棋譜側の読み筋を辿っている最中でも押せるよう、
+            コントローラー行（`BoardControls`）の 7 つ目へ移した——ここに置いたままだと
+            **検討していないと押せない**ままになる。「主操作をアイコンに畳まない」も
+            同時に撤回した——行の一員になった以上、他の 6 つと同じアイコン + `btn-outline`
+            の流儀に揃える（prd/12 §3.2）。
           */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="badge badge-primary badge-sm shrink-0">
@@ -720,37 +754,7 @@ export function StudyBoard({
             >
               {isLastMovePromoted(shown) ? '不成' : '成'}
             </button>
-            {/*
-              🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。かつての
-              「この手を読む」（名指し評価）は返る数字が局面評価と同じで符号だけ反転して
-              いたため web から外した。直前が盤上の指し手なら、この 1 押しで 1 手前の
-              局面も評価して**直前の手の採点**まで出す（API の名指し評価は MCP 向けに残る）。
-              🔒 **ここだけラベルを残す**（主操作をアイコンに畳まない）。
-
-              🔴 **幅の規則は md を境に変える**（決定 2026-08-29）:
-              **md 未満は残り幅いっぱい**（`flex-1`）、**md 以上は内容ぶんの幅**。
-              - モバイルでは「成」の出入りで空く幅をこのボタンが吸うので、行の見え方が安定する
-                （実測 390px では残り幅いっぱいでも内容幅との差は 10px しかない——アイコン 3 つと
-                「検討中」バッジで幅がほぼ埋まっているため。**害が無く、揃う利点だけ残る**）
-              - デスクトップでは残り幅いっぱいにすると**「評価する」が 534px の帯**になる
-                （棋譜詳細の行幅 736px で実測）。**狙いだったモバイルでは効かず、
-                デスクトップだけ壊れる**ので、md 以上は内容ぶんに戻す
-            */}
-            <button
-              type="button"
-              className={clsx(btn.touch, 'btn-primary', 'max-md:flex-1 max-md:min-w-24')}
-              onClick={() => void run()}
-              disabled={evalState.kind === 'loading'}
-              title={
-                gradeTarget === null
-                  ? 'この局面をエンジンに評価させる'
-                  : 'この局面を評価し、直前の手が最善とどれだけ離れていたかも出す'
-              }
-            >
-              評価する
-            </button>
           </div>
-
         </div>
       )}
     </>
@@ -769,8 +773,14 @@ export function StudyBoard({
         🔒 これで**結果の高さが変わっても盤・コントローラー行・操作ボタン行は動かない**
         （prd/05 §2.1）。`stale` / `loading` / `invalid` / `busy` も同じ場所に出る。
         ⚠ `idle`（まだ一度も評価していない）のときは器ごと出さない（余白を作らない）。
+
+        🔴 **`studying` を条件から外した**（決定・2026-09-01）。「評価する」がコントローラー行の
+        7 つ目として常設され、棋譜再生中・棋譜側の読み筋を辿っている最中でも押せるようになったため、
+        結果もその状態のまま出す。**棋譜側の候補手一覧（`ShogiBoard` の footer）はこれとは別物**
+        で、隠したり置き換えたりしない——分岐の再生操作子がそちら側にあるため
+        （`EvalResultView` に「この局面の評価」の見出しを足して、どちらの一覧の話か読めるようにする）。
       */}
-      {studying && evalState.kind !== 'idle' && (
+      {evalState.kind !== 'idle' && (
         <div className="max-w-3xl pt-3 no-tap-select">
           <EvalResultView
             evalState={evalState}
@@ -807,8 +817,18 @@ function EvalResultView({
   // ⚠ **早期 return より前に呼ぶ**（フックの規則）
   const btn = useStudyButtons();
 
-  // まだ一度も評価していない（`idle`）なら何も出さない
+  // まだ一度も評価していない（`idle`）なら何も出さない（器ごと出さない。呼び出し側と対）
   if (evalState.kind === 'idle') return null;
+
+  /*
+    🔴 **見出し「この局面の評価」は非 idle の全状態に出す**（決定・2026-09-01）。
+    「評価する」がコントローラー行の常設ボタンになり、棋譜側の候補手一覧
+    （`ShogiBoard` の footer・1 手前の局面の候補手）と縦に並びうるようになったため、
+    どちらが何の話かを見出しで言う。**検討中と非検討時で見え方を分けない**——状態
+    （`loading` / `stale` 等）で出たり消えたりすると、遷移のたびに見出しが点滅して
+    かえって雑音になる。
+  */
+  let body: ReactNode;
 
   /*
     評価した後で局面が変わった状態（`stale`）。**値は消すが、手がかりは残す。**
@@ -816,27 +836,23 @@ function EvalResultView({
     位置は動かない（prd/05 §2.1）。
   */
   if (evalState.kind === 'stale') {
-    return (
-      <p className="text-sm text-base-content/60">
+    body = (
+      <p className="text-base-content/60">
         盤が変わったので前の評価は消した。もう一度評価できる
       </p>
     );
-  }
-
-  if (evalState.kind === 'loading') {
-    return (
-      <div className="flex items-center gap-2 text-sm">
+  } else if (evalState.kind === 'loading') {
+    body = (
+      <div className="flex items-center gap-2">
         <span className="loading loading-dots loading-md" aria-label="評価しています" />
         <span className="text-base-content/60">
           評価しています（エンジンが空くまで十数秒かかることがある）
         </span>
       </div>
     );
-  }
-
-  if (evalState.kind === 'invalid') {
-    return (
-      <div className="alert alert-warning text-sm">
+  } else if (evalState.kind === 'invalid') {
+    body = (
+      <div className="alert alert-warning">
         <div>
           <div className="font-semibold">この局面はエンジンに渡せない</div>
           <ul className="list-disc ps-5">
@@ -847,39 +863,34 @@ function EvalResultView({
         </div>
       </div>
     );
-  }
-
-  if (evalState.kind === 'busy') {
-    return (
-      <div className="alert alert-warning text-sm">
+  } else if (evalState.kind === 'busy') {
+    body = (
+      <div className="alert alert-warning">
         評価キューが一杯。worker が動いていない可能性がある
       </div>
     );
-  }
+  } else if (evalState.kind === 'error') {
+    body = <div className="alert alert-warning">{evalState.message}</div>;
+  } else {
+    const { base, candidates, source, grade } = evalState;
+    const side = base.sideToMove;
+    // 🔴 **この局面の評価値を 1 つ、単独で出す。**
+    //    候補手リストの 1 行目に埋もれていると「評価値が 1 つ決まるはずなのに無い」と
+    //    読めてしまう（実機で踏んだ）。棋譜閲覧の情報行（prd/05 §2.1）と同じく、
+    //    見る場所を 1 か所に決める
+    const headline = headlineCandidate(candidates);
+    /*
+      `score mate N` は plies（受方の応手・逆王手・合駒込み）なので、そのまま「N手詰」と
+      書かない。読み筋を辿って形が判ったときだけ名乗る（`classifyMateLine`）。
+      🔒 **直前の手の採点にも同じ分類を渡す**——採点の「指した手の評価値」は
+      この評価値の符号反転そのものなので、攻方も読み筋も同じ（視点だけが逆）。
+    */
+    const headlineLine = headline
+      ? mateLineOf(base, headline.scoreType, headline.scoreValue, headline.pv)
+      : undefined;
 
-  if (evalState.kind === 'error') {
-    return <div className="alert alert-warning text-sm">{evalState.message}</div>;
-  }
-
-  const { base, candidates, source, grade } = evalState;
-  const side = base.sideToMove;
-  // 🔴 **この局面の評価値を 1 つ、単独で出す。**
-  //    候補手リストの 1 行目に埋もれていると「評価値が 1 つ決まるはずなのに無い」と
-  //    読めてしまう（実機で踏んだ）。棋譜閲覧の情報行（prd/05 §2.1）と同じく、
-  //    見る場所を 1 か所に決める
-  const headline = headlineCandidate(candidates);
-  /*
-    `score mate N` は plies（受方の応手・逆王手・合駒込み）なので、そのまま「N手詰」と
-    書かない。読み筋を辿って形が判ったときだけ名乗る（`classifyMateLine`）。
-    🔒 **直前の手の採点にも同じ分類を渡す**——採点の「指した手の評価値」は
-    この評価値の符号反転そのものなので、攻方も読み筋も同じ（視点だけが逆）。
-  */
-  const headlineLine = headline
-    ? mateLineOf(base, headline.scoreType, headline.scoreValue, headline.pv)
-    : undefined;
-
-  return (
-    <div className="flex flex-col gap-1 text-sm">
+    body = (
+      <>
       {/*
         🔴 **評価値と出所を 1 行にまとめる**（決定 2026-08-29）。以前は「局面評価 [エンジン]」と
         「この局面の評価値 +42 (先手有利)」の 2 段だったが、ボタンが 1 つになって
@@ -1044,6 +1055,21 @@ function EvalResultView({
           </details>
         );
       })}
+      </>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      {/*
+        見出し「この局面の評価」（決定・2026-09-01）。棋譜側の候補手一覧
+        （`ShogiBoard` の footer・1 手前の局面の候補手）と縦に並びうるので、
+        どちらの局面の話かをここで言う。
+      */}
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+        この局面の評価
+      </h3>
+      {body}
     </div>
   );
 }

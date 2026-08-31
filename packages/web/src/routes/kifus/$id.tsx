@@ -18,6 +18,7 @@ import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
 import { TacticTags } from '../../components/TacticTags';
+import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../../lib/touchTargets';
 
 export const Route = createFileRoute('/kifus/$id')({
   loader: async ({ params }) => {
@@ -130,9 +131,17 @@ function KifuDetailPage() {
           <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
         </div>
         <div className="dropdown dropdown-end ml-auto">
+          {/*
+            🔒 **⋯ メニューは表示サイズの設定（`controlSize`）に連動させない**
+            （prd/05 §2.1・決定 2026-09-01）。操作ボタンをモバイルでも 32px まで
+            縮められるようにした例外は、**取り返しのつかない操作（削除・再解析）が
+            縮まない側に隔離されている**ことを安全策として成り立っている。
+            ここを一緒に縮めると的が小さくなるだけでなく、その論の足が外れる。
+            トリガーも項目も**設定に関わらず常に 44px**（`lib/touchTargets.ts`）。
+          */}
           <button
             tabIndex={0}
-            className="btn btn-ghost btn-sm"
+            className={ICON_BTN}
             aria-label="メニュー"
           >
             <svg
@@ -146,10 +155,7 @@ function KifuDetailPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
             </svg>
           </button>
-          <ul
-            tabIndex={0}
-            className="dropdown-content menu menu-sm bg-base-100 rounded-box z-20 mt-1 w-32 p-1 shadow"
-          >
+          <ul tabIndex={0} className={clsx(MENU_LIST, 'w-32')}>
             {/* メニュー項目は押しても dropdown が閉じないので、実行前に明示的に閉じる */}
             <li>
               <button
@@ -157,6 +163,7 @@ function KifuDetailPage() {
                   closeMenu();
                   void handleReanalyze();
                 }}
+                className={MENU_ITEM}
                 disabled={busy}
               >
                 再解析
@@ -168,7 +175,7 @@ function KifuDetailPage() {
                   closeMenu();
                   void handleDelete();
                 }}
-                className="text-error"
+                className={clsx(MENU_ITEM, 'text-error')}
                 disabled={busy}
               >
                 削除

@@ -24,6 +24,8 @@ import {
   canRedo,
   canTogglePromotion,
   canUndo,
+  clearSelection,
+  commitReplay,
   createStudySession,
   currentState,
   isLastMovePromoted,
@@ -176,7 +178,10 @@ export interface StudyBoardProps {
   initialEval?: EvalState;
 }
 
-/** 咎め筋（PV）の再生位置。**読み専用の一時状態**（prd/12 §3.2） */
+/**
+ * 咎め筋（PV）の再生位置。**確定前のプレビュー**（prd/12 §3.2・決定 2026-09-01）。
+ * ここまでの読み筋は、盤を触った時点で手順へ確定する（`commitReplay`）。
+ */
 interface Replay {
   candidate: number;
   depth: number;
@@ -291,28 +296,35 @@ export function StudyBoard({
   useEffect(() => () => trackerRef.current.cancel(), []);
 
   const studying = isStudying(session);
-  const state = currentState(session);
 
-  // 咎め筋の再生中は**読み専用**（prd/12 §3.2）。盤は再生位置の局面を出し、編集は受けない
-  const replayBase = evalState.kind === 'done' ? evalState.base : null;
   const replayPv =
     replay !== null && evalState.kind === 'done'
       ? evalState.candidates[replay.candidate]?.pv ?? []
       : [];
-  let displayState = state;
-  let displayLastMoveTo = studying
-    ? moveDestination(lastMove(session) ?? '')
-    : baseLastMoveTo;
-  if (replay !== null && replayBase) {
-    let st = replayBase;
-    for (let i = 0; i < replay.depth; i++) st = applyMove(st, replayPv[i]);
-    displayState = st;
-    displayLastMoveTo =
-      replay.depth > 0 ? moveDestination(replayPv[replay.depth - 1]) : null;
-  }
+  /**
+   * 🔴 **咎め筋（PV）の再生は「確定前のプレビュー」**（prd/12 §3.2・決定 2026-09-01）。
+   * 再生位置までの読み筋を手順へ積んだ**派生セッション**を作り、**盤・直前手の強調・
+   * 手番の記号・成 / 不成の可否・評価の送り先を、すべてここから読む**。
+   *
+   * 🔒 **こうすると「確定」という特別な処理がどこにも要らない**——再生中に盤を触ったら
+   * `shown` に操作を適用して `setSession` するだけで、そこまでの読み筋が手順に積まれる。
+   * 表示と確定が同じ関数（`commitReplay`）を通るので、**見ていた局面と確定する局面が
+   * ずれようがない。**
+   *
+   * ⚠ `replay` が非 null の間は `evalState.kind === 'done'` かつ
+   * `evalState.base === currentState(session)`（局面が変われば `edit` が再生を解除して
+   * `stale` にする）。PV の基点は現在の検討局面そのもの。
+   */
+  const shown = replay !== null ? commitReplay(session, replayPv, replay.depth) : session;
+  /** 盤に出す局面（＝再生中はプレビュー、そうでなければ現在の検討局面） */
+  const state = currentState(shown);
+  const displayLastMoveTo =
+    studying || replay !== null
+      ? moveDestination(lastMove(shown) ?? '')
+      : baseLastMoveTo;
 
-  const gradeTarget = lastMoveGradeTarget(session);
-  const selection = session.selection;
+  const gradeTarget = lastMoveGradeTarget(shown);
+  const selection = shown.selection;
 
   /**
    * 「評価する」（prd/12 §3.2・決定 2026-08-29）。**ボタンは 1 つ**。
@@ -328,7 +340,18 @@ export function StudyBoard({
    * `begin()` を 2 回呼ぶと 1 本目が自分自身の 2 本目に捨てられ、判定が崩れる。
    */
   const run = async () => {
-    const target = positionEvalTarget(session);
+    // 🔴 **再生中に押したら、そこまでの読み筋を確定してから評価する**
+    //    （prd/12 §3.2・決定 2026-09-01）。押せば評価結果が入れ替わり、**再生していた
+    //    候補手そのものが画面から消える**ので、確定しないと盤だけが「もうどこにも根拠の
+    //    無い局面」を指したまま新しい評価が出る。⚠ `setSession` は非同期なので、
+    //    以降は render 内で作った `shown` をそのまま使う（state の反映は待たない）
+    // 🔒 **解除も同時に**——検証で弾かれて早期 return する経路があるので、確定だけして
+    //    再生が残ると「読み筋を再生中」のバッジだけが居座る
+    if (replay !== null) {
+      setSession(shown);
+      setReplay(null);
+    }
+    const target = positionEvalTarget(shown);
     // 🔴 **基点は送り先と同じ関数から取る**（レビュー指摘 `OCL-753E7A28`）。
     //    ここで別に数え直すと、undo して redo 分が残っているときに
     //    「送った局面」と「検証・PV 再生の基点」がずれる。
@@ -418,33 +441,54 @@ export function StudyBoard({
    * 検討セッションを進める**唯一の口**（盤のタップ・undo・棋譜に戻る・手番トグル・
    * 成/不成・持ち駒/駒箱の出し入れは、すべてここを通る）。
    *
+   * ⚠ **渡すのは `shown`（＝再生中なら確定済みの派生セッション）に操作を適用した結果**。
+   * 再生中に触れば、そこまでの読み筋が手順に積まれた状態で編集が乗る（prd/12 §3.2）。
+   *
+   * 🔴 **何も起きなかったら確定もしない**（`next === shown`）。選択していない状態で
+   * 空きマスを叩いた等の no-op で読み筋が確定してしまうと、**触っただけで手順が伸びる**。
+   *
    * 🔒 **局面が変わったら、走っている評価要求も捨てる。** 表示を idle に戻すだけでは、
    * 後から届いた旧局面の結果が今の盤の評価として出てしまう（レビュー指摘 `OCL-AED22F46`）。
    * ⚠ 選択が変わっただけ（`steps` が同じ）なら局面は動いていないので、要求は捨てない。
    */
   const edit = (next: StudySession) => {
+    if (next === shown) return;
     setSession(next);
+    // 🔴 **確定したらプレビューは役目を終える。** 局面が変わったかに関わらず解除する
+    //    （再生中の「駒を選んだだけ」でも確定は起きている）
+    setReplay(null);
     // ⚠ **局面が変わったか**で見る。undo / redo は `steps` を作り直さず `cursor` だけ
-    //    動かすので、配列の同一性で見ると評価結果が古い局面のまま残る
+    //    動かすので、配列の同一性で見ると評価結果が古い局面のまま残る。
+    // ⚠ 比べる相手は `shown` ではなく **`session`**——出ている評価結果は
+    //    `currentState(session)` に対するもの（`evalState.base`）なので、確定して
+    //    局面が動いた時点で `stale` にしなければならない
     if (currentState(next) !== currentState(session)) {
       trackerRef.current.cancel();
       // 🔴 **黙って消さない。** 一度でも評価に触れていれば `stale` にして
       //    「盤が変わった / もう一度評価できる」ことを言う（実機で「もう評価
       //    できないのか」と読めてしまった。値そのものは残さない）
       setEvalState(evalStateAfterPositionChange(evalState));
-      setReplay(null);
     }
   };
 
   /**
-   * 咎め筋（PV）の再生中は**読み専用**（prd/12 §3.2）。盤も編集操作も受け付けず、
-   * 「戻る」で元の検討局面に帰る。**手順と undo スタックの意味を保つため。**
-   * 「棋譜に戻る」だけは残す（検討ごと捨てる操作なので、迷子になったときの出口になる）。
+   * 🔴 **咎め筋（PV）の再生中も盤は触れる**（prd/12 §3.2・決定 2026-09-01）。触ったら
+   * そこまでの読み筋が手順に確定し（`shown`）、その上に編集が乗る。
+   * ⚠ **確定の合図は「バッジが『検討中』へ戻り、盤はその場に留まる」**——駒を選んだ
+   * 1 段目で確定するので、**盤が動く前に確定したことが見える**。
    */
   const replaying = replay !== null;
-  const onSquareClick = replaying
-    ? undefined
-    : (square: SquareRef) => edit(tapSquare(session, square));
+
+  /**
+   * 咎め筋の再生位置を動かす口（候補手の中の ◀ ▶ / 「再生をやめる」/ 畳んだとき）。
+   * ⚠ **再生を始めたら選択を落とす**——選択は検討局面の座標を指しているので、
+   * プレビュー局面をそのまま出すと**別の駒の上にハイライトが残る**（prd/12 §3.2）。
+   */
+  const changeReplay = (next: Replay | null) => {
+    if (next !== null) setSession(clearSelection(session));
+    setReplay(next);
+  };
+  const onSquareClick = (square: SquareRef) => edit(tapSquare(shown, square));
 
   /**
    * 持ち駒を叩く口（prd/12 §3.2）。**盤上の駒と同じ 2 段選択**に揃える——
@@ -452,11 +496,17 @@ export function StudyBoard({
    * 先手・後手どちらの持ち駒からも打てる（フル編集）が、**手番側の駒を打ったときだけ
    * 手番が進む**（盤上の駒を動かしたときと同じ規則。`study.ts` の `advanceTurn`）。
    *
-   * ⚠ 再生中は読み専用なので渡さない（渡さなければ表示専用に戻る）。
+   * ⚠ 再生中も渡す（触れば確定する）。盤のマスと同じ扱い。
    */
   /**
    * コントローラー行（◀ ▶ ≪ ≫）へ渡す検討の操作（prd/12 §3.1・決定 2026-08-28）。
-   * ⚠ 咎め筋の再生中は読み専用なので、押せない状態にして手順を動かさせない。
+   *
+   * 🔴 **咎め筋の再生中は無効のまま**（確定の引き金にしない。prd/12 §3.2・決定 2026-09-01）。
+   * これらは編集ではなく**手順のカーソル移動**なので、引き金にすると ◀ は
+   * 「N 手確定してから 1 手戻す」になる——**画面は 1 手戻っただけに見えるのに、手順は
+   * N-1 手伸びる**。確定は「盤がその場に留まったまま自分のものになる」ことが見えて成立する
+   * ので、**位置を動かす操作を引き金にしてはいけない**。⚠ 再生の ◀ ▶（候補手の中）と
+   * 隣り合うため、両方が同時に効くと**並んだ矢印が別々の履歴を動かす**ことにもなる。
    */
   const controls: StudyControls = {
     studying,
@@ -514,9 +564,8 @@ export function StudyBoard({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [controls, keyboardNav]);
 
-  const handClick = replaying
-    ? undefined
-    : (side: Side) => (kind: HandPieceKind) => edit(tapHand(session, side, kind));
+  const handClick = (side: Side) => (kind: HandPieceKind) =>
+    edit(tapHand(shown, side, kind));
   /** その側の持ち駒のうち選択中のもの（盤の選択マスと同じ見せ方で強調する） */
   const handSelection = (side: Side) =>
     selection?.kind === 'hand' && selection.side === side ? selection.piece : null;
@@ -535,9 +584,7 @@ export function StudyBoard({
    * `OCL-3528F9AD`）。見えることと押せることは今までどおりこの 1 本で決まる。
    */
   const trayClick = (side: Side) =>
-    !replaying && canPutSelectionOnHand(session)
-      ? () => edit(tapHand(session, side))
-      : undefined;
+    canPutSelectionOnHand(shown) ? () => edit(tapHand(shown, side)) : undefined;
 
   const topSide: Side = flipped ? 'sente' : 'gote';
   const bottomSide: Side = flipped ? 'gote' : 'sente';
@@ -551,17 +598,17 @@ export function StudyBoard({
     <>
       <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
         <HandDisplay
-          hand={displayState.hand[topSide]}
+          hand={state.hand[topSide]}
           side={topSide}
           name={topSide === 'sente' ? sente : gote}
           flipped={flipped}
-          onPieceClick={handClick?.(topSide)}
+          onPieceClick={handClick(topSide)}
           selected={handSelection(topSide)}
           onTrayClick={trayClick(topSide)}
         />
         <div className="w-fit no-tap-select">
           <BoardGrid
-            state={displayState}
+            state={state}
             lastMoveTo={displayLastMoveTo}
             flipped={flipped}
             onSquareClick={onSquareClick}
@@ -569,11 +616,11 @@ export function StudyBoard({
           />
         </div>
         <HandDisplay
-          hand={displayState.hand[bottomSide]}
+          hand={state.hand[bottomSide]}
           side={bottomSide}
           name={bottomSide === 'sente' ? sente : gote}
           flipped={flipped}
-          onPieceClick={handClick?.(bottomSide)}
+          onPieceClick={handClick(bottomSide)}
           selected={handSelection(bottomSide)}
           onTrayClick={trayClick(bottomSide)}
         />
@@ -626,8 +673,7 @@ export function StudyBoard({
             <button
               type="button"
               className={clsx(btn.glyph, 'btn-outline')}
-              onClick={() => edit(toggleTurn(session))}
-              disabled={replaying}
+              onClick={() => edit(toggleTurn(shown))}
               aria-label={`手番を入れ替える（今は${state.sideToMove === 'sente' ? '先手' : '後手'}番）`}
               title="手番を入れ替える"
             >
@@ -659,20 +705,20 @@ export function StudyBoard({
             <button
               type="button"
               className={clsx(btn.glyph, 'btn-outline')}
-              onClick={() => edit(togglePromotion(session))}
-              disabled={replaying || !canTogglePromotion(session)}
+              onClick={() => edit(togglePromotion(shown))}
+              disabled={!canTogglePromotion(shown)}
               aria-label={
-                isLastMovePromoted(session)
+                isLastMovePromoted(shown)
                   ? '直前の手を不成で指し直す'
                   : '直前の手を成で指し直す'
               }
               title={
-                canTogglePromotion(session)
+                canTogglePromotion(shown)
                   ? '直前の手を成 / 不成で指し直す'
                   : '直前が盤上の手・駒打ちで、成れる駒のときだけ切り替えられる'
               }
             >
-              {isLastMovePromoted(session) ? '不成' : '成'}
+              {isLastMovePromoted(shown) ? '不成' : '成'}
             </button>
             {/*
               🔴 **評価ボタンは 1 つ**（prd/12 §3.2・決定 2026-08-29）。かつての
@@ -694,7 +740,7 @@ export function StudyBoard({
               type="button"
               className={clsx(btn.touch, 'btn-primary', 'max-md:flex-1 max-md:min-w-24')}
               onClick={() => void run()}
-              disabled={evalState.kind === 'loading' || replaying}
+              disabled={evalState.kind === 'loading'}
               title={
                 gradeTarget === null
                   ? 'この局面をエンジンに評価させる'
@@ -729,7 +775,7 @@ export function StudyBoard({
           <EvalResultView
             evalState={evalState}
             replay={replay}
-            onReplay={setReplay}
+            onReplay={changeReplay}
             thresholds={thresholds}
           />
         </div>
@@ -868,10 +914,13 @@ function EvalResultView({
         - `name` を持たせて**排他アコーディオン**にする（1 本開くと他が閉じる）。
           棋譜側とは別の名前にして、開閉の単位を混ぜない
 
-        ⚠ **咎め筋の再生（読み専用の一時状態。§3.2）が畳んだ中に入る。**
-        閉じたまま再生中だと、**盤が読み専用のまま操作子だけ画面から消える**——
-        戻る手段が無くなる。そこで **`details` が閉じたら再生を解除する**（`onToggle`）。
+        ⚠ **咎め筋の再生（確定前のプレビュー。§3.2）が畳んだ中に入る。**
+        閉じたまま再生中だと、**どこまで進めたのかを操作できなくなる**。そこで
+        **`details` が閉じたら再生を解除する**（`onToggle`。＝**確定せずにやめる**）。
         排他アコーディオンで他の候補を開いたときも同じ経路で解除される。
+        🔒 **確定と衝突しない**——確定した時点で再生は解除され、評価結果も `stale` になって
+        アコーディオンごと画面から消えるので、この規則が効くのは**まだ確定していない
+        プレビューの間だけ**。「閉じたら確定済みの手まで消える」ことは起きない。
       */}
       {candidates.map((c, i) => {
         // 再生中の候補だけ非 null。**`replay?.candidate === i` だと TS が絞れない**ので
@@ -884,7 +933,7 @@ function EvalResultView({
             key={c.rank}
             className={clsx('group rounded-lg p-2', active !== null && 'bg-base-200')}
             onToggle={(e) => {
-              // 🔒 閉じたら再生を解除する（上記のコメントの理由）。
+              // 🔒 閉じたら再生を解除する（＝確定しない。上記のコメントの理由）。
               //    md 以上は CSS で常時展開だが、`open` 属性自体は動くので同じ経路を通る
               //    ——盤が検討局面へ戻るだけで、読めなくなるものは無い
               if (!e.currentTarget.open && active !== null) onReplay(null);
@@ -917,15 +966,38 @@ function EvalResultView({
                 <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
                   {(() => {
                     let st = base;
-                    const nodes: string[] = [];
+                    // 🔴 **再生位置の手を太字にする。** 太字にするのは `depth - 1` の手
+                    //    ——**いま盤に出ている局面へ至った直前の手**（`depth` 手進めた状態で
+                    //    最後に指された手）。手がかりが再生カウンタ（`3/9`）だけだと、
+                    //    長い読み筋のどこにいるのか読み筋の側から分からない。
+                    // 🔒 **見せ方は棋譜側の候補手一覧（`ShogiBoard`）と同じ**（prd/12 §3.2
+                    //    「独自の見せ方を作らない」）。⚠ **太字以外の装飾は足さない**
+                    //    ——色・背景を付けると棋譜側と見え方がずれる。
+                    const activeIdx = active !== null ? active.depth - 1 : -1;
+                    const nodes: ReactNode[] = [];
                     for (let j = 0; j < pvLen; j++) {
-                      nodes.push(`${symbolAt(side, j)}${usiToJapaneseWithPiece(st, c.pv[j])}`);
+                      const text = `${symbolAt(side, j)}${usiToJapaneseWithPiece(st, c.pv[j])}`;
+                      if (j > 0) nodes.push(' ');
+                      if (j === activeIdx) {
+                        nodes.push(
+                          <strong key={j} className="text-base-content font-bold">
+                            {text}
+                          </strong>,
+                        );
+                      } else {
+                        nodes.push(<span key={j}>{text}</span>);
+                      }
                       st = applyMove(st, c.pv[j]);
                     }
-                    return nodes.join(' ');
+                    return nodes;
                   })()}
                 </div>
-                {/* 咎め筋の再生は**読み専用の一時状態**。「戻る」で検討局面へ帰る */}
+                {/*
+                  咎め筋の再生は**確定前のプレビュー**（prd/12 §3.2・決定 2026-09-01）。
+                  盤を触ればここまでが手順に確定し、「再生をやめる」なら確定せずに戻る。
+                  ⚠ **「戻る」から改名した**——選択肢が「捨てる / 続ける」の 2 つになった以上、
+                  「戻る」だけでは操作パネルの「棋譜に戻る」とどちらの戻るか読めない。
+                */}
                 <div className="mt-2 flex items-center gap-2 pl-5">
                   <button
                     type="button"
@@ -961,8 +1033,9 @@ function EvalResultView({
                       type="button"
                       className={clsx(btn.touch, 'btn-ghost')}
                       onClick={() => onReplay(null)}
+                      title="確定せずに検討局面へ戻る"
                     >
-                      戻る
+                      再生をやめる
                     </button>
                   )}
                 </div>

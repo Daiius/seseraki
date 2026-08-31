@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  applyMove,
   createInitialState,
   pieceAt,
   positionSfen,
@@ -8,6 +9,8 @@ import {
 import {
   applyStudyMoves,
   baseState,
+  clearSelection,
+  commitReplay,
   canPutSelectionOnHand,
   canRedo,
   canTogglePromotion,
@@ -474,5 +477,133 @@ describe('評価の送り先', () => {
   it('検討していない / 直前が編集なら採点できない', () => {
     expect(lastMoveGradeTarget(createStudySession(initial))).toBeNull();
     expect(lastMoveGradeTarget(toggleTurn(createStudySession(initial)))).toBeNull();
+  });
+});
+
+/**
+ * 咎め筋（PV）の確定（prd/12 §3.2・決定 2026-09-01）。
+ *
+ * 🔒 **再生中の表示局面もこの関数が作る。** ここが壊れると「見ていた局面と確定する局面が
+ * 違う」という、画面からは気づけない嘘になる。
+ */
+describe('咎め筋の確定（commitReplay）', () => {
+  /** 7g7f → 3c3d → 8h2b+（角で角を取って成る）。取り・成りの両方を含む読み筋 */
+  const PV = ['7g7f', '3c3d', '8h2b+'];
+
+  it('何も積まないときは同じセッションを返す', () => {
+    const s = createStudySession(initial);
+    expect(commitReplay(s, PV, 0)).toBe(s);
+    expect(commitReplay(s, [], 3)).toBe(s);
+    expect(commitReplay(s, PV, -1)).toBe(s);
+  });
+
+  it('再生位置までを 1 手 1 段で積む', () => {
+    const s = commitReplay(createStudySession(initial), PV, 2);
+    // 起点 + 2 段
+    expect(s.steps).toHaveLength(3);
+    expect(s.cursor).toBe(2);
+    expect(s.steps.map((st) => st.move)).toEqual([null, '7g7f', '3c3d']);
+    // ⚠ `move` を適用した結果そのものなので、採点の対象になりうる
+    expect(s.steps.every((st) => st.faithful)).toBe(true);
+    expect(s.selection).toBeNull();
+  });
+
+  /**
+   * 🔴 **表示と確定の同値性**（回帰の要）。再生中の盤は PV を `applyMove` で順に適用した
+   * 局面を出しており、確定はその局面をそのまま手順へ積む。**別々に計算するとずれる。**
+   */
+  it('確定した局面は、PV を applyMove で辿った局面と一致する', () => {
+    let expected = initial;
+    for (const move of PV) expected = applyMove(expected, move);
+    const s = commitReplay(createStudySession(initial), PV, PV.length);
+    expect(positionSfen(currentState(s))).toBe(positionSfen(expected));
+    // 途中の段も 1 手ずつ一致する
+    let st = initial;
+    for (let i = 0; i < PV.length; i++) {
+      st = applyMove(st, PV[i]);
+      expect(positionSfen(s.steps[i + 1].state)).toBe(positionSfen(st));
+    }
+  });
+
+  it('undo で 1 手ずつ読み筋を戻れる（確定前の局面まで戻る）', () => {
+    const before = applyStudyMoves(initial, ['2g2f']);
+    const s = commitReplay(before, PV.slice(0, 2), 2);
+    expect(canUndo(s)).toBe(true);
+    const back = undo(undo(s));
+    expect(currentState(back)).toBe(currentState(before));
+    // ⚠ 戻したぶんはやり直せる（手順は捨てない）
+    expect(canRedo(back)).toBe(true);
+    expect(currentState(redo(redo(back)))).toBe(currentState(s));
+  });
+
+  it('戻した先で確定したら、その先のやり直し分は捨てる', () => {
+    const s = undo(undo(applyStudyMoves(initial, ['7g7f', '3c3d'])));
+    expect(canRedo(s)).toBe(true);
+    const committed = commitReplay(s, PV, 1);
+    expect(committed.steps).toHaveLength(2);
+    expect(canRedo(committed)).toBe(false);
+    expect(positionSfen(currentState(committed))).toBe(
+      positionSfen(applyMove(initial, PV[0])),
+    );
+  });
+
+  it('PV より深い再生位置を渡されても PV の長さまでしか積まない', () => {
+    const s = commitReplay(createStudySession(initial), PV, 99);
+    expect(s.steps).toHaveLength(PV.length + 1);
+  });
+
+  /**
+   * 🔴 **採点の基点は `cursor` の 1 つ手前**（レビュー指摘 `OCL-753E7A28` と同種の穴）。
+   * 確定した読み筋の続きに自分の手を指したとき、基点が配列の末尾基準だとずれる。
+   */
+  it('確定した続きに指した手は、確定した最後の局面を基点に採点される', () => {
+    const committed = commitReplay(createStudySession(initial), PV, 2);
+    const s = tapSquare(tapSquare(committed, sq('2g')), sq('2f'));
+    expect(lastMoveGradeTarget(s)).toEqual({
+      target: {
+        sfen: positionSfen(currentState(committed)),
+        move: null,
+        from: currentState(committed),
+      },
+      move: '2g2f',
+    });
+  });
+
+  it('成りを含む読み筋を確定したら、その手を不成で指し直せる', () => {
+    const s = commitReplay(createStudySession(initial), PV, 3);
+    expect(lastMove(s)).toBe('8h2b+');
+    expect(isLastMovePromoted(s)).toBe(true);
+    expect(canTogglePromotion(s)).toBe(true);
+    // ⚠ 段は積み増さず**差し替える**（成 / 不成は 1 つの手の 2 つの形）
+    const retried = togglePromotion(s);
+    expect(retried.steps).toHaveLength(s.steps.length);
+    expect(lastMove(retried)).toBe('8h2b');
+  });
+
+  /**
+   * ⚠ **適用器は `applyMove`**（`movePiece` + `advanceTurn` ではない）。
+   * 駒を取れば持ち駒に入る——再生中に見ていた盤がそうなっている。
+   */
+  it('読み筋で取った駒は持ち駒に入る', () => {
+    const s = commitReplay(createStudySession(initial), PV, 3);
+    expect(handCount(currentState(s), 'sente', 'B')).toBe(1);
+    expect(currentState(s).sideToMove).toBe('gote');
+  });
+});
+
+/** 選択だけを解く（再生を始めるときに使う。prd/12 §3.2） */
+describe('clearSelection', () => {
+  it('選択が無ければ同じセッションを返す', () => {
+    const s = createStudySession(initial);
+    expect(clearSelection(s)).toBe(s);
+  });
+
+  it('局面・手順は動かさずに選択だけ落とす', () => {
+    const s = tapSquare(applyStudyMoves(initial, ['7g7f']), sq('2g'));
+    expect(s.selection).not.toBeNull();
+    const cleared = clearSelection(s);
+    expect(cleared.selection).toBeNull();
+    expect(cleared.steps).toBe(s.steps);
+    expect(cleared.cursor).toBe(s.cursor);
   });
 });

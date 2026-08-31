@@ -966,12 +966,30 @@ function EvalResultView({
                 <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
                   {(() => {
                     let st = base;
-                    const nodes: string[] = [];
+                    // 🔴 **再生位置の手を太字にする。** 太字にするのは `depth - 1` の手
+                    //    ——**いま盤に出ている局面へ至った直前の手**（`depth` 手進めた状態で
+                    //    最後に指された手）。手がかりが再生カウンタ（`3/9`）だけだと、
+                    //    長い読み筋のどこにいるのか読み筋の側から分からない。
+                    // 🔒 **見せ方は棋譜側の候補手一覧（`ShogiBoard`）と同じ**（prd/12 §3.2
+                    //    「独自の見せ方を作らない」）。⚠ **太字以外の装飾は足さない**
+                    //    ——色・背景を付けると棋譜側と見え方がずれる。
+                    const activeIdx = active !== null ? active.depth - 1 : -1;
+                    const nodes: ReactNode[] = [];
                     for (let j = 0; j < pvLen; j++) {
-                      nodes.push(`${symbolAt(side, j)}${usiToJapaneseWithPiece(st, c.pv[j])}`);
+                      const text = `${symbolAt(side, j)}${usiToJapaneseWithPiece(st, c.pv[j])}`;
+                      if (j > 0) nodes.push(' ');
+                      if (j === activeIdx) {
+                        nodes.push(
+                          <strong key={j} className="text-base-content font-bold">
+                            {text}
+                          </strong>,
+                        );
+                      } else {
+                        nodes.push(<span key={j}>{text}</span>);
+                      }
                       st = applyMove(st, c.pv[j]);
                     }
-                    return nodes.join(' ');
+                    return nodes;
                   })()}
                 </div>
                 {/*

@@ -38,6 +38,15 @@ export interface KifuAnalysisSummary {
    * エンジンが報告しなかった場合は `undefined`。
    */
   maxHashfull?: number;
+  /**
+   * 局面境界で**中断**したか（quick 待ちの棋譜に割り込まれた。prd/05 §1.1d）。
+   *
+   * 🔒 **中断は失敗ではない。** 呼び出し側は `analysisError` を立てず、エンジンも再起動せず、
+   * そのまま次の poll へ進む（quick が先に拾われ、full は後で続きから再開する。
+   * 再開位置は server 側の行数で決まるので追加の状態は要らない）。
+   * 未送信のチャンクは**中断の前に送る**ので `moveNumber` に穴は空かない。
+   */
+  interrupted: boolean;
 }
 
 /**
@@ -164,7 +173,10 @@ function extractHashfull(infoLines: UsiInfo[]): number | undefined {
  * @param options.onChunk - チャンクの送信。**完了を待ち**、投げれば解析を中断する
  *   （進捗報告と違い、握りつぶすと `moveNumber` に穴が空いて再開位置が決まらなくなる）
  * @param options.onPositionBoundary - **1 局面を解析する前**に呼ばれる割り込み点
- *   （検討局面の評価を差し込む場所。prd/12 §2.1）。投げれば解析を中断する
+ *   （検討局面の評価を差し込む場所。prd/12 §2.1）。投げれば解析を中断する。
+ *   **`true` を返すと、未送信チャンクを送ってから解析を中断する**（quick 待ちの棋譜への
+ *   割り込み。prd/05 §1.1d）——例外にしないのは、これが**失敗ではない**からで、
+ *   呼び出し側で失敗経路と取り違えようがない形にしておく
  */
 export async function analyzeKifu(
   engine: AnalysisEngine,
@@ -177,7 +189,7 @@ export async function analyzeKifu(
     chunkIntervalMs?: number;
     onProgress?: (analyzed: number, total: number) => void;
     onChunk?: (analyses: MoveAnalysis[]) => Promise<void>;
-    onPositionBoundary?: () => Promise<void>;
+    onPositionBoundary?: () => Promise<boolean | void>;
   } = {},
 ): Promise<KifuAnalysisSummary> {
   const {
@@ -214,7 +226,21 @@ export async function analyzeKifu(
   for (let i = start; i <= usiMoves.length; i++) {
     // 局面の境目が自然な割り込み点。ここで検討局面の評価を先に処理する（prd/12 §2.1）。
     // USI は毎回 `position` で局面を明示するので、割り込んでもエンジンの状態は汚れない
-    await onPositionBoundary?.();
+    const interrupt = (await onPositionBoundary?.()) === true;
+    if (interrupt) {
+      // 🔴 **未送信のチャンクを送ってから抜ける**（prd/05 §1.1d）。捨てると計算が失われるうえ、
+      // 送らないまま次の poll で再開すると **moveNumber に穴が空いて再開位置が決まらなくなる**
+      if (pending.length > 0) {
+        await onChunk?.(pending);
+        pending = [];
+      }
+      // 割り込み先（局面評価）は自分で MultiPV を設定するが、通常終了と同じ後始末をしておく
+      engine.setOption("MultiPV", "1");
+      console.log(
+        `[Analysis] Interrupted at ${i}/${usiMoves.length} (quick pending)`,
+      );
+      return { totalMoves: usiMoves.length, analyzed, maxHashfull, interrupted: true };
+    }
 
     const movesPlayed = usiMoves.slice(0, i);
     const position =
@@ -273,5 +299,6 @@ export async function analyzeKifu(
     totalMoves: usiMoves.length,
     analyzed,
     maxHashfull,
+    interrupted: false,
   };
 }

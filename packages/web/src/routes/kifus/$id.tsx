@@ -127,6 +127,9 @@ function KifuDetailPage() {
         {/* 戦型はタイトルの直下に置く。対局の性格を一目で掴む情報なので、
             盤面やメニューより先に目に入る位置がよい */}
         <div className="min-w-0">
+          {/* 🔴 **段階のバッジは置かない**（決定・2026-09-05 後段）。簡易解析だけが
+              終わっている状態は直後に詳細解析が走る一時的な状態で、モバイルの横幅を
+              恒久的に食う表示に見合わない。段階は解析中の進捗バーの濃さで分かる */}
           <h2 className="text-2xl font-bold">{kifu.title}</h2>
           <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
         </div>
@@ -200,6 +203,7 @@ function KifuDetailPage() {
 
         {analyzing && (
           <AnalyzingAlert
+            profile={analyzing.profile}
             analyzed={analyzing.analyzed}
             total={analyzing.total}
             agoText={formatUpdatedAgo(analyzing, now)}
@@ -209,6 +213,9 @@ function KifuDetailPage() {
         {kifu.analysisError && (
           <div className="alert alert-error flex items-start gap-3">
             <div className="flex-1">
+              {/* ⚠ `analysisCompletedAt` と `analysisError` の排他は意図して緩めてある
+                  （prd/05 §1.1d）。quick 完了後に詳細解析が失敗した棋譜は、**quick の結果を
+                  見せたまま**この失敗表示が出る。文言は段階で変えない（決定・2026-09-05 後段） */}
               <div className="font-semibold">解析失敗</div>
               <div className="text-sm font-mono break-all opacity-90">
                 {kifu.analysisError}

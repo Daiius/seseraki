@@ -66,9 +66,13 @@ import {
   setProgress,
 } from './analysis-progress.js';
 import {
+  ANALYSIS_STATE_RESET,
+  canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
   isChunkInRange,
+  isStageComplete,
+  nextKifuProfile,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
 import {
@@ -301,6 +305,9 @@ const route = app
           playedAt: kifus.playedAt,
           createdAt: kifus.createdAt,
           analyzedAt: kifus.analysisCompletedAt,
+          // 完了した段階のうち最も高いもの（prd/05 §1.1d）。一覧は「解析済み」に quick を
+          // 含めたうえで、簡易のみの棋譜に「簡易」の印を添えるためにこれを見る
+          analysisProfile: kifus.analysisProfile,
           analysisError: kifus.analysisError,
           hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
           // 主体の手番（prd/11 §4）。web はこれで自分/相手を出せる——
@@ -1092,8 +1099,10 @@ const route = app
             result: meta.result,
             playedAt: meta.playedAt,
             sourceTz: meta.sourceTz,
-            analysisError: null,
-            analysisCompletedAt: null,
+            // 解析状態は 3 列まとめて戻す（両段階を最初から。prd/05 §1.1d）。
+            // 動画棋譜の上書き（`video-analysis.ts`）と同じ定数を使い、
+            // **リセットの取りこぼしが片方だけ起きない**ようにする
+            ...ANALYSIS_STATE_RESET,
             analysisRevision: sql`${kifus.analysisRevision} + 1`,
           })
           .where(eq(kifus.id, id));
@@ -1143,35 +1152,93 @@ const route = app
     },
   )
   // --- Worker 向け（API_KEY 必須） ---
-  .get('/worker/kifus', apiKeyRequired, async (c) => {
-    const [kifu] = await db
-      .select({
+  // 解析すべき棋譜を 1 件返す（2 段階解析。prd/05 §1.1d）。
+  // 優先順位は **quick 未完 → quick 完了・full 未完**で、いずれも
+  // `coalesce(playedAt, createdAt)` 昇順の最古 1 件（失敗棋譜は除外）。
+  //
+  // worker は**自分が quick の設定を持つか**を `?quick=1` で伝える。持たない worker には
+  // quick 未完の棋譜を `full` として渡す（後方互換。`ENGINE_QUICK_*` 未設定なら 1 段階のまま）。
+  .get(
+    '/worker/kifus',
+    apiKeyRequired,
+    zv(
+      'query',
+      z.object({
+        // クエリはそのまま `?quick=1` と読める形にしておく（ヘッダだと RPC の型に出ない）
+        quick: z
+          .enum(['0', '1'])
+          .default('0')
+          .transform((v) => v === '1'),
+      }),
+    ),
+    async (c) => {
+      const { quick: quickCapable } = c.req.valid('query');
+      const selection = {
         id: kifus.id,
         title: kifus.title,
         kifText: kifus.kifText,
         usiMoves: kifus.usiMoves,
         analysisRevision: kifus.analysisRevision,
-      })
-      .from(kifus)
-      .where(
-        and(
-          isNull(kifus.analysisCompletedAt),
-          isNull(kifus.analysisError),
-          isNotNull(kifus.usiMoves),
-        ),
-      )
-      .orderBy(sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`)
-      .limit(1);
-    if (!kifu) return c.json(null);
-    // 既に入っている局面数を返し、worker はその続き（moveNumber = analyzedCount）から解析する
-    // （チャンク submit の中断からの再開。prd/05 §1.1c）。チャンク submit の失敗は解析ごと中断する
-    // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる
-    const [{ analyzedCount }] = await db
-      .select({ analyzedCount: count() })
-      .from(moveAnalyses)
-      .where(eq(moveAnalyses.kifuId, kifu.id));
-    return c.json({ ...kifu, analyzedCount });
-  })
+      };
+      const oldestFirst = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`;
+
+      // (1) quick 未完（まだ 1 度も全局面が揃っていない）
+      const [pendingQuick] = await db
+        .select(selection)
+        .from(kifus)
+        .where(
+          and(
+            isNull(kifus.analysisCompletedAt),
+            isNull(kifus.analysisError),
+            isNotNull(kifus.usiMoves),
+          ),
+        )
+        .orderBy(oldestFirst)
+        .limit(1);
+
+      // (2) quick 完了・full 未完
+      const [pendingFull] = pendingQuick
+        ? []
+        : await db
+            .select(selection)
+            .from(kifus)
+            .where(
+              and(
+                eq(kifus.analysisProfile, 'quick'),
+                isNull(kifus.analysisError),
+                isNotNull(kifus.usiMoves),
+              ),
+            )
+            .orderBy(oldestFirst)
+            .limit(1);
+
+      const kifu = pendingQuick ?? pendingFull;
+      if (!kifu) return c.json(null);
+      // quick を持たない worker には (1) も full として渡す（1 段階運用）
+      // ⚠ 型注釈は**リテラル union をそのまま書く**（`AnalysisProfile` の別名を使うと、
+      // Hono RPC の応答型が worker 側から名前で参照できず TS2742 になる）
+      const profile: 'quick' | 'full' =
+        pendingQuick && quickCapable ? 'quick' : 'full';
+
+      // 既に入っている局面数を返し、worker はその続き（moveNumber = analyzedCount）から解析する
+      // （チャンク submit の中断からの再開。prd/05 §1.1c）。チャンク submit の失敗は解析ごと中断する
+      // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる。
+      // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick は全行数、full は `profile='full'` の行数
+      // （full は 0 から順に上書きするので、full 行は常に先頭からの連続区間になる）
+      const [{ analyzedCount }] = await db
+        .select({ analyzedCount: count() })
+        .from(moveAnalyses)
+        .where(
+          profile === 'full'
+            ? and(
+                eq(moveAnalyses.kifuId, kifu.id),
+                eq(moveAnalyses.profile, 'full'),
+              )
+            : eq(moveAnalyses.kifuId, kifu.id),
+        );
+      return c.json({ ...kifu, analyzedCount, profile });
+    },
+  )
   .post(
     '/worker/kifus/:id/error',
     apiKeyRequired,
@@ -1180,8 +1247,14 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { error, revision } = c.req.valid('json');
-      // 同一世代 かつ 未完了 のときだけ記録（compare-and-set・単文で原子的）。
-      // completed 済みには error を立てない → completedAt と analysisError は排他になる。
+      // 同一世代 かつ **進行中だった段階が未完了** のときだけ記録（compare-and-set・単文で原子的）。
+      //
+      // 🔴 **`analysisCompletedAt IS NULL` では読まない**（改定・2026-09-05。prd/03 §2）。
+      // それは quick 完了で立つので、条件に使うと **quick 完了後の full の失敗を記録できない**
+      // （失敗した棋譜が永久に poll され続ける）。代わりに「最も高い段階＝full がまだ完了していない」
+      // ことを見る——失敗しうるのは進行中の段階だけで、full 完了済みの棋譜はそもそも poll に出ない。
+      // 帰結として **`analysisCompletedAt` と `analysisError` の排他は緩む**（quick 完了 + full 失敗で
+      // 両方が非 null）。UI は quick の結果を見せたまま「詳細解析に失敗」を示す（prd/05 §2.5）。
       const result = await db
         .update(kifus)
         .set({ analysisError: error })
@@ -1189,7 +1262,10 @@ const route = app
           and(
             eq(kifus.id, id),
             eq(kifus.analysisRevision, revision),
-            isNull(kifus.analysisCompletedAt),
+            or(
+              isNull(kifus.analysisProfile),
+              ne(kifus.analysisProfile, 'full'),
+            ),
           ),
         );
       const applied = result[0].affectedRows > 0;
@@ -1205,12 +1281,13 @@ const route = app
       z.object({
         kifuId: z.number(),
         revision: z.number(),
+        profile: z.enum(['quick', 'full']),
         analyzed: z.number().min(0),
         total: z.number().min(1),
       }),
     ),
     async (c) => {
-      const { kifuId, revision, analyzed, total } = c.req.valid('json');
+      const { kifuId, revision, profile, analyzed, total } = c.req.valid('json');
       // 進捗は表示専用でメモリにしか残らないため、トランザクションも行ロックも張らない。
       // ただし submit / error 報告と同じ世代照合はする（reanalyze 後に届いた旧解析の進捗を出さない）。
       // 完了・失敗済みも弾く＝ submit と進捗報告が前後しても「終わったのに解析中」が残らない。
@@ -1223,17 +1300,22 @@ const route = app
         .select({
           revision: kifus.analysisRevision,
           completedAt: kifus.analysisCompletedAt,
+          analysisProfile: kifus.analysisProfile,
           error: kifus.analysisError,
         })
         .from(kifus)
         .where(eq(kifus.id, kifuId));
+      // 🔴 完了は**報告された段階**で読む（prd/05 §1.1b）。`analysisCompletedAt` は quick 完了で
+      // 立つため、段階と無関係に見ると **full の進捗が最初から全部拒否される**。
+      // quick 完了後の full 進捗は受理し、full 完了後の報告だけ拒否する
       const valid =
         kifu !== undefined &&
         kifu.revision === revision &&
-        kifu.completedAt === null &&
-        kifu.error === null;
+        kifu.error === null &&
+        !isStageComplete(kifu, profile);
       const applied =
-        valid && setProgress({ kifuId, revision, analyzed, total }, token);
+        valid &&
+        setProgress({ kifuId, revision, profile, analyzed, total }, token);
       return c.json({ ok: true, applied });
     },
   )
@@ -1245,6 +1327,13 @@ const route = app
       z.object({
         kifuId: z.number(),
         revision: z.number(),
+        /** 実行した段階（`GET /api/worker/kifus` で指示されたもの。prd/05 §1.1d） */
+        profile: z.enum(['quick', 'full']),
+        // 来歴（prd/03 §3）。**記録するだけ**で、上書き・再開の条件には使わない
+        engineName: z.string().max(255).nullish(),
+        movetimeMs: z.number().int().positive().nullish(),
+        targetDepth: z.number().int().positive().nullish(),
+        multiPv: z.number().int().positive().nullish(),
         analyses: z.array(
           z.object({
             // 上限（棋譜の手数）は usiMoves を読んでからでないと判定できないのでハンドラ内で見る
@@ -1255,7 +1344,24 @@ const route = app
       }),
     ),
     async (c) => {
-      const { kifuId, revision, analyses } = c.req.valid('json');
+      const {
+        kifuId,
+        revision,
+        profile,
+        engineName,
+        movetimeMs,
+        targetDepth,
+        multiPv,
+        analyses,
+      } = c.req.valid('json');
+      // 来歴の列（局面ごとに同じ値が入る。チャンク単位で 1 回の解析設定だから）
+      const provenance = {
+        profile,
+        engineName: engineName ?? null,
+        movetimeMs: movetimeMs ?? null,
+        targetDepth: targetDepth ?? null,
+        multiPv: multiPv ?? null,
+      };
       let applied = false;
       let completed = false;
       // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して
@@ -1270,15 +1376,19 @@ const route = app
             revision: kifus.analysisRevision,
             error: kifus.analysisError,
             completedAt: kifus.analysisCompletedAt,
+            analysisProfile: kifus.analysisProfile,
             usiMoves: kifus.usiMoves,
           })
           .from(kifus)
           .where(eq(kifus.id, kifuId))
           .for('update');
-        // 同一世代 かつ 失敗記録なし かつ 未完了 のときだけ適用。既に error が立っていれば結果は
-        // 保存しない → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
+        // 同一世代 かつ 失敗記録なし かつ **その段階が未完了** のときだけ適用。既に error が
+        // 立っていれば結果は保存しない（行ロック下で error 報告と直列化する）。
         // 完了済みも弾く＝完了後の解析結果は不変（遅れて届いたチャンクで部分的に上書きされない）。
-        if (!isChunkAcceptable(current, revision)) return;
+        // ⚠ **完了の判定は段階ごと**（prd/05 §1.1d）——full 完了済みへのチャンクは破棄し、
+        // quick 完了済みの棋譜への full チャンクは受理する。`analysisCompletedAt` と
+        // `analysisError` の排他は**意図して緩めた**（quick 完了 + full 失敗で両方が非 null）
+        if (!isChunkAcceptable(current, revision, profile)) return;
         // 有効範囲（0..usiMoves.length）を保証してはじめて「件数 = 揃った局面数」が成り立つ
         // （UNIQUE(kifuId, moveNumber) が値の重複を防ぐため）。範囲外は書かずに 400 で返す
         if (!isChunkInRange(analyses, current.usiMoves)) {
@@ -1294,6 +1404,7 @@ const route = app
             .select({
               id: moveAnalyses.id,
               moveNumber: moveAnalyses.moveNumber,
+              profile: moveAnalyses.profile,
             })
             .from(moveAnalyses)
             .where(
@@ -1305,11 +1416,18 @@ const route = app
                 ),
               ),
             );
+          const existingProfiles = new Map(
+            existing.map((row) => [row.moveNumber, row.profile]),
+          );
           // 同一 moveNumber の再送は既存行を使い回して候補手を入れ直す（行が二重に増えない）
           for (const { analysis, existingId } of resolveExistingMoveAnalyses(
             analyses,
             existing,
           )) {
+            // 段階の後退防止（prd/05 §1.1d）: 既存が full の局面に quick が届いたら書かずに無視する
+            if (!canWriteRow(existingProfiles.get(analysis.moveNumber), profile)) {
+              continue;
+            }
             let moveAnalysisId = existingId;
             if (moveAnalysisId === null) {
               const [inserted] = await tx
@@ -1317,10 +1435,16 @@ const route = app
                 .values({
                   kifuId,
                   moveNumber: analysis.moveNumber,
+                  ...provenance,
                 })
                 .$returningId();
               moveAnalysisId = inserted.id;
             } else {
+              // 上書き（quick → full）でも行は増やさず、来歴を今回の段階で更新する
+              await tx
+                .update(moveAnalyses)
+                .set(provenance)
+                .where(eq(moveAnalyses.id, moveAnalysisId));
               await tx
                 .delete(candidateMoves)
                 .where(eq(candidateMoves.moveAnalysisId, moveAnalysisId));
@@ -1343,15 +1467,36 @@ const route = app
 
         // 完了は **server が件数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
         // 同じトランザクション内で数えて立てるので、チャンク境界や worker のクラッシュ位置に依存しない。
-        const [{ stored }] = await tx
-          .select({ stored: count() })
+        // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick = 全行数 / full = `profile='full'` の行数
+        const [{ stored, storedFull }] = await tx
+          .select({
+            stored: count(),
+            storedFull: sql<number>`sum(case when ${moveAnalyses.profile} = 'full' then 1 else 0 end)`.mapWith(
+              Number,
+            ),
+          })
           .from(moveAnalyses)
           .where(eq(moveAnalyses.kifuId, kifuId));
-        completed = isAnalysisComplete(stored, current.usiMoves);
-        if (completed) {
+        const quickDone = isAnalysisComplete(stored, current.usiMoves);
+        const fullDone = isAnalysisComplete(storedFull, current.usiMoves);
+        // 進捗表示を落とすのは**報告された段階**が終わったとき（full 進行中に quick の
+        // 完了で落とすと、まだ動いている解析の表示が消える）
+        completed = profile === 'full' ? fullDone : quickDone;
+        const profileAfter = nextKifuProfile(current.analysisProfile, {
+          quick: quickDone,
+          full: fullDone,
+        });
+        if (profileAfter !== current.analysisProfile) {
           await tx
             .update(kifus)
-            .set({ analysisCompletedAt: new Date() })
+            .set({
+              analysisProfile: profileAfter,
+              // `analysisCompletedAt` は「**初めて**全局面が揃った時刻」（prd/05 §1.1d）。
+              // 既に立っていれば触らない（full 完了で上書きしない）
+              ...(current.completedAt === null && (quickDone || fullDone)
+                ? { analysisCompletedAt: new Date() }
+                : {}),
+            })
             .where(eq(kifus.id, kifuId));
         }
       });
@@ -1366,8 +1511,23 @@ const route = app
   )
   // 検討局面の評価ジョブ（prd/12 §2.1）。worker は棋譜解析の**局面境界**でここを叩き、
   // 待っているジョブがあれば先に処理する。無ければ null（inbound の口は増やさない）
-  .get('/worker/position-jobs', apiKeyRequired, (c) => {
-    return c.json(claimEvaluationJob());
+  // 🔴 応答に「**quick 待ちの棋譜がある**」印を相乗りさせる（prd/05 §1.1d / prd/12 §2.1）。
+  // worker は局面境界でここを既に叩いているので、**full の解析を中断して quick を先に処理する**
+  // 判断を**通信を増やさずに**下せる。判定は軽い EXISTS 1 本（`analysisCompletedAt` に INDEX）
+  .get('/worker/position-jobs', apiKeyRequired, async (c) => {
+    const job = claimEvaluationJob();
+    const [pending] = await db
+      .select({ id: kifus.id })
+      .from(kifus)
+      .where(
+        and(
+          isNull(kifus.analysisCompletedAt),
+          isNull(kifus.analysisError),
+          isNotNull(kifus.usiMoves),
+        ),
+      )
+      .limit(1);
+    return c.json({ job, quickPending: pending !== undefined });
   })
   // 評価結果の報告。**失敗も完了**として扱う（結果もエラーも出ないまま宙に浮かせない。
   // prd/12 §2.4）。報告された結果は jobId で取りに来られるよう保持される。

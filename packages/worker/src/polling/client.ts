@@ -3,6 +3,21 @@ import type { AppType } from "server";
 import type { MoveAnalysis } from "../kifu-analysis.js";
 import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
 
+/** 解析の段階（prd/05 §1.1d）。server の `AnalysisProfile` と同じ 2 値 */
+export type AnalysisProfile = "quick" | "full";
+
+/**
+ * チャンクに添える来歴（prd/03 §3）。**記録するだけ**で、server は上書き・再開の
+ * 条件には使わない（エンジンの版文字列は再ビルドで変わるため）。
+ */
+export interface AnalysisProvenance {
+  profile: AnalysisProfile;
+  engineName?: string | null;
+  movetimeMs?: number | null;
+  targetDepth?: number | null;
+  multiPv?: number | null;
+}
+
 export function createClient(baseUrl: string, apiKey: string) {
   // server は basePath('/api') 配下。worker は server を直叩きするので baseUrl は
   // SERVER_URL のまま、呼び出しで `client.api.worker.*` と basePath を明示する
@@ -12,11 +27,17 @@ export function createClient(baseUrl: string, apiKey: string) {
   });
   return {
     /**
-     * 未解析の最古の棋譜を1件取得（なければ null）。
-     * `analyzedCount` は既に server に入っている局面数＝解析を再開する局面番号。
+     * 解析すべき棋譜を 1 件取得（なければ null）。
+     *
+     * `profile` は server が指示する**実行すべき段階**、`analyzedCount` は
+     * **その段階の**再開位置（＝その段階の行数）。`quickCapable` で
+     * 「自分が quick の設定を持つか」を伝える——持たない worker には quick 未完の棋譜が
+     * `full` として渡る（prd/05 §1.1d）。
      */
-    async fetchNextKifu() {
-      const res = await client.api.worker.kifus.$get();
+    async fetchNextKifu(quickCapable: boolean) {
+      const res = await client.api.worker.kifus.$get({
+        query: { quick: quickCapable ? "1" : "0" },
+      });
       if (!res.ok) throw new Error(`Failed to fetch kifus: ${res.status}`);
       return await res.json();
     },
@@ -29,11 +50,13 @@ export function createClient(baseUrl: string, apiKey: string) {
       kifuId: number,
       revision: number,
       analyses: MoveAnalysis[],
+      provenance: AnalysisProvenance,
     ) {
       const res = await client.api.worker.analyses.$post({
         json: {
           kifuId,
           revision,
+          ...provenance,
           analyses: analyses.map((a) => ({
             moveNumber: a.moveNumber,
             candidates: a.candidates.map((c) => ({
@@ -58,21 +81,28 @@ export function createClient(baseUrl: string, apiKey: string) {
     async reportProgress(
       kifuId: number,
       revision: number,
+      profile: AnalysisProfile,
       analyzed: number,
       total: number,
     ) {
       const res = await client.api.worker.analyses.progress.$post({
-        json: { kifuId, revision, analyzed, total },
+        json: { kifuId, revision, profile, analyzed, total },
       });
       if (!res.ok) throw new Error(`Failed to report progress: ${res.status}`);
       return await res.json();
     },
 
     /**
-     * 検討局面の評価ジョブを 1 件取る（無ければ null。prd/12 §2.1）。
+     * 検討局面の評価ジョブを 1 件取る（無ければ `job: null`。prd/12 §2.1）。
      * 棋譜解析の局面境界と、棋譜が無いときの poll から叩く。
+     *
+     * 🔴 応答には「**quick 待ちの棋譜がある**」印が相乗りしている（prd/05 §1.1d）。
+     * 局面境界で既に叩いている口なので、**通信を増やさずに**割り込みの判断ができる。
      */
-    async claimPositionJob(): Promise<PositionEvalJob | null> {
+    async claimPositionJob(): Promise<{
+      job: PositionEvalJob | null;
+      quickPending: boolean;
+    }> {
       const res = await client.api.worker["position-jobs"].$get();
       if (!res.ok) throw new Error(`Failed to claim position job: ${res.status}`);
       return await res.json();

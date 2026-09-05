@@ -59,10 +59,12 @@ function analysisAt(
   scoreValue: number,
   move: string,
   pv: string[] | null = null,
+  profile: 'quick' | 'full' = 'full',
 ) {
   return {
     id: moveNumber + 1,
     moveNumber,
+    profile,
     candidates: [
       {
         id: (moveNumber + 1) * 10,
@@ -188,21 +190,44 @@ function Gallery() {
             他バッジと同居してもモバイル幅で折り返さないかを見る */}
         <div className="flex gap-1 items-center">
           <span className="badge badge-soft badge-success badge-sm">勝</span>
-          <AnalyzingRadial analyzed={12} total={150} />
+          <AnalyzingRadial profile="full" analyzed={12} total={150} />
           <span className="badge badge-sm bg-info/50 text-info-content">●</span>
         </div>
       </Case>
 
       <Case title="一覧・円環の進行度（0% / 25% / 100%）">
         <div className="flex gap-4 items-center">
-          <AnalyzingRadial analyzed={0} total={150} />
-          <AnalyzingRadial analyzed={38} total={150} />
-          <AnalyzingRadial analyzed={150} total={150} />
+          <AnalyzingRadial profile="full" analyzed={0} total={150} />
+          <AnalyzingRadial profile="full" analyzed={38} total={150} />
+          <AnalyzingRadial profile="full" analyzed={150} total={150} />
         </div>
       </Case>
 
-      <Case title="詳細・解析中 alert（文言と progress の縦中央揃え）">
-        <AnalyzingAlert analyzed={12} total={150} agoText="3秒前に更新" />
+      <Case title="一覧・円環の段階（簡易解析中は半透明 / 詳細解析中は通常）">
+        {/* 🔴 段階は文字で出さず濃さで示す（prd/05 §2.5・決定 2026-09-05 後段）。
+            並べて濃さの差が読めるかを見る（単体で見て分かる必要はない） */}
+        <div className="flex gap-4 items-center">
+          <AnalyzingRadial profile="quick" analyzed={38} total={150} />
+          <AnalyzingRadial profile="full" analyzed={38} total={150} />
+        </div>
+      </Case>
+
+      <Case title="詳細・解析中 alert（文言と progress の縦中央揃え・上が簡易解析中）">
+        {/* 文言は段階で変えず、進捗バーの濃さだけが変わる（決定・2026-09-05 後段） */}
+        <div className="flex flex-col gap-2">
+          <AnalyzingAlert
+            profile="quick"
+            analyzed={12}
+            total={150}
+            agoText="3秒前に更新"
+          />
+          <AnalyzingAlert
+            profile="full"
+            analyzed={12}
+            total={150}
+            agoText="3秒前に更新"
+          />
+        </div>
       </Case>
 
       <Case title="コピーボタン（モバイルはアイコンのみ・sm+ でラベル）">

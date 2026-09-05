@@ -2,8 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   formatElapsed,
   formatUpdatedAgo,
+  progressDimClass,
   type AnalysisProgress,
 } from './analysisProgress';
+
+describe('progressDimClass', () => {
+  it('quick 進行中は半透明（段階は文字で出さない）', () => {
+    expect(progressDimClass('quick')).toBe('opacity-50');
+  });
+
+  it('full 進行中は現行どおりの見え方', () => {
+    expect(progressDimClass('full')).toBe('');
+  });
+});
 
 describe('formatElapsed', () => {
   it('1 分未満は秒', () => {
@@ -31,6 +42,7 @@ describe('formatUpdatedAgo', () => {
   const progress = (updatedAt: string): AnalysisProgress => ({
     kifuId: 1,
     revision: 0,
+    profile: 'full',
     analyzed: 87,
     total: 154,
     updatedAt,

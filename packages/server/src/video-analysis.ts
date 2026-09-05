@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { db } from './db';
 import { kifus, moveAnalyses, videoKifuSources } from './db/schema';
 import { composeKifVerified } from './kif/compose';
+import { ANALYSIS_STATE_RESET } from './analysis-submit';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
 import { currentUserId, subjectSideFromVideo } from './users';
@@ -186,8 +187,10 @@ export async function importVideoKifu(
       .set({
         kifText,
         usiMoves: input.usi,
-        analysisError: null,
-        analysisCompletedAt: null,
+        // 🔴 解析状態は **`ANALYSIS_STATE_RESET` で 3 列まとめて**戻す（prd/05 §1.1d）。
+        // `analysisProfile` を戻し忘れると、poll は拾えるのに submit が全部拒否される
+        // 棋譜になり、解析キューに残り続ける（レビュー `OCL-4EB35091`）
+        ...ANALYSIS_STATE_RESET,
         analysisRevision: sql`${kifus.analysisRevision} + 1`,
       })
       .where(eq(kifus.id, existing.kifuId));

@@ -475,12 +475,17 @@ function KifuListPage() {
                           )}
                           {analyzing ? (
                             <AnalyzingRadial
+                              profile={analyzing.profile}
                               analyzed={analyzing.analyzed}
                               total={analyzing.total}
                             />
                           ) : 'failed' in kifu && kifu.failed ? (
                             <span className="badge badge-error badge-sm">失敗</span>
                           ) : (
+                            /* 🔴 「解析済み」は quick 完了を含み、**簡易のみの棋譜にも
+                               追加の印は付けない**（決定・2026-09-05 後段）。詳細解析は直後に
+                               走る一時的な状態で、印を置くとモバイルで横幅を恒久的に食う。
+                               動いている段階は解析中の円環の濃さで分かる（prd/05 §2.5） */
                             'analyzed' in kifu && (
                               <span
                                 className={

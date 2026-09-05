@@ -95,6 +95,16 @@ export const kifus = mysqlTable(
     // swars 経路は gameKey 由来で常に "JST"。
     sourceTz: varchar({ length: 8 }),
     analysisCompletedAt: timestamp(),
+    /**
+     * **完了した段階のうち最も高いもの**（prd/03 §2 / prd/05 §1.1d）。
+     * quick だけ終わっている棋譜を一覧・詳細で見分けるために持つ。`reanalyze` で null に戻る。
+     *
+     * ⚠ **full 完了時刻の列は持たない**（実装判断）。`analysisCompletedAt` は
+     * 「初めて全局面が揃った時刻」で、full の完了は**この列で判別できる**。
+     * 表示・クエリのどこも full の時刻を要求していないので、要らない列を先に足さない
+     * （進捗を DB に持たなかったのと同じ立場。prd/05 §1.1b）。
+     */
+    analysisProfile: mysqlEnum(['quick', 'full']),
     analysisError: text(),
     // 解析世代。reanalyze で +1 し、worker の submit/error 報告は取得時と同一世代のみ受理
     // （実行中の旧解析がリセット後の状態を上書きするのを防ぐ）
@@ -183,6 +193,30 @@ export const moveAnalyses = mysqlTable(
       .notNull()
       .references(() => kifus.id, { onDelete: 'cascade' }),
     moveNumber: int().notNull(),
+    /**
+     * 解析段階（prd/05 §1.1d）。**行は段階が上がっても増えず、full が quick を
+     * 局面単位で上書きする**。full の進行中は 1 棋譜の中で quick と full が混在する
+     * ——これは仕様で、表示にそのまま出す。
+     *
+     * 🔒 **既定値は持たせない**（アプリが常に明示して書く）。DB 側の default に頼ると、
+     * 書き忘れが quick 扱いで静かに通る。
+     */
+    profile: mysqlEnum(['quick', 'full']).notNull(),
+    /**
+     * USI の `id name`（来歴）。
+     * 🔴 **上書き・再開の条件には使わない。** やねうら王は再ビルドで版文字列が変わるため、
+     * 識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**が起きる
+     * （prd/03 §3 / prd/05 §1.1d）。構成変更時の作り直しは `reanalyze` の運用で受ける。
+     */
+    engineName: varchar({ length: 255 }),
+    /**
+     * 解析設定（来歴）。**JSON ではなく列に分ける**——記録する値は
+     * movetime / 目標 depth / MultiPV の 3 つで**固定**（段階が 2 つ固定なのと同じ立場で、
+     * 汎用の設定袋にしない）。列なら型が付き、後から「depth が違う行」を SQL で数えられる。
+     */
+    movetimeMs: int(),
+    targetDepth: int(),
+    multiPv: int(),
     createdAt: timestamp().notNull().defaultNow(),
   },
   (table) => [

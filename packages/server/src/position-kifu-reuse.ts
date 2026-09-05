@@ -231,6 +231,14 @@ function hasCandidateRank(rank: number) {
   );
 }
 
+/**
+ * 🔴 **再利用するのは `profile='full'` の行だけ**（決定・2026-09-05。prd/12 §2.6）。
+ * `quick` の行は**エンジン評価へ回す**（`source: 'engine'`）——局面評価の品質は
+ * `ENGINE_MOVETIME` が **API の契約**（prd/12 §2.2）であって、**再利用の都合で契約を崩さない**。
+ * 候補手が 3 本揃っていることを要求するのと同じ立場。
+ */
+const isFullAnalysis = () => eq(moveAnalyses.profile, 'full');
+
 /** 解析行の select 句（3 つのクエリで共通） */
 function analysisSelection() {
   return {
@@ -259,7 +267,9 @@ export function positionEvalAnalysesQuery(sfen: string) {
         eq(moveAnalyses.moveNumber, kifuPositions.moveNumber),
       ),
     )
-    .where(and(eq(kifuPositions.sfen, sfen), hasCandidateRank(3)))
+    .where(
+      and(eq(kifuPositions.sfen, sfen), isFullAnalysis(), hasCandidateRank(3)),
+    )
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);
 }
@@ -286,7 +296,7 @@ export function namedMoveAnalysesQuery(sfen: string, move: string) {
         eq(candidateMoves.move, move),
       ),
     )
-    .where(eq(kifuPositions.sfen, sfen))
+    .where(and(eq(kifuPositions.sfen, sfen), isFullAnalysis()))
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);
 }
@@ -318,7 +328,9 @@ export function playedMoveAnalysesQuery(sfen: string, move: string) {
         eq(moveAnalyses.moveNumber, nextPositions.moveNumber),
       ),
     )
-    .where(and(eq(kifuPositions.sfen, sfen), hasCandidateRank(1)))
+    .where(
+      and(eq(kifuPositions.sfen, sfen), isFullAnalysis(), hasCandidateRank(1)),
+    )
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);
 }

@@ -8,10 +8,18 @@
 // worker は棋譜を 1 件ずつ処理するので**解析中の棋譜は常に高々 1 件**。単一プロセス前提で
 // モジュールスコープに持つ流儀は `swars/job-store.ts` と同じ（prd/02 §1 / prd/07）。
 
+import type { AnalysisProfile } from './analysis-submit.js';
+
 export interface AnalysisProgress {
   kifuId: number;
   /** 取得時の解析世代（reanalyze で +1）。どの世代の進捗かを示す */
   revision: number;
+  /**
+   * 実行中の段階（prd/05 §1.1b・§1.1d）。web が「簡易解析中」「詳細解析中」を
+   * 出し分けるために持つ。🔴 **取得側（`GET /api/analysis/progress`）の応答にも載せる**
+   * ——メモリに持つだけでは web が読めず、段階別の表示が成り立たない。
+   */
+  profile: AnalysisProfile;
   /** 解析済みの局面数 */
   analyzed: number;
   /** 解析対象の局面数（= `usiMoves.length + 1`） */

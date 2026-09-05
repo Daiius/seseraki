@@ -1,40 +1,134 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
   isChunkInRange,
+  isStageComplete,
+  nextKifuProfile,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
 
+describe('isStageComplete', () => {
+  it('未完了の棋譜はどちらの段階も未完了', () => {
+    const kifu = { completedAt: null, analysisProfile: null };
+    expect(isStageComplete(kifu, 'quick')).toBe(false);
+    expect(isStageComplete(kifu, 'full')).toBe(false);
+  });
+
+  it('quick 完了は quick だけ完了（full の進捗・チャンクは受け付ける）', () => {
+    const kifu = { completedAt: new Date('2026-09-05'), analysisProfile: 'quick' as const };
+    expect(isStageComplete(kifu, 'quick')).toBe(true);
+    expect(isStageComplete(kifu, 'full')).toBe(false);
+  });
+
+  it('full 完了は両方完了', () => {
+    const kifu = { completedAt: new Date('2026-09-05'), analysisProfile: 'full' as const };
+    expect(isStageComplete(kifu, 'quick')).toBe(true);
+    expect(isStageComplete(kifu, 'full')).toBe(true);
+  });
+
+  it('段階が記録されていない完了済み棋譜は quick 相当と読む', () => {
+    const kifu = { completedAt: new Date('2026-07-21'), analysisProfile: null };
+    expect(isStageComplete(kifu, 'quick')).toBe(true);
+    expect(isStageComplete(kifu, 'full')).toBe(false);
+  });
+});
+
+describe('canWriteRow', () => {
+  it('既存が無ければ書く', () => {
+    expect(canWriteRow(null, 'quick')).toBe(true);
+    expect(canWriteRow(undefined, 'full')).toBe(true);
+  });
+
+  it('同段階の再送は書き直す', () => {
+    expect(canWriteRow('quick', 'quick')).toBe(true);
+    expect(canWriteRow('full', 'full')).toBe(true);
+  });
+
+  it('quick を full で上書きする', () => {
+    expect(canWriteRow('quick', 'full')).toBe(true);
+  });
+
+  it('既存が full の局面に quick が届いたら書かない（段階の後退防止）', () => {
+    expect(canWriteRow('full', 'quick')).toBe(false);
+  });
+});
+
+describe('nextKifuProfile', () => {
+  it('どちらも未完了なら据え置き', () => {
+    expect(nextKifuProfile(null, { quick: false, full: false })).toBeNull();
+    expect(nextKifuProfile('quick', { quick: false, full: false })).toBe('quick');
+  });
+
+  it('quick が揃ったら quick', () => {
+    expect(nextKifuProfile(null, { quick: true, full: false })).toBe('quick');
+  });
+
+  it('full が揃ったら full', () => {
+    expect(nextKifuProfile('quick', { quick: true, full: true })).toBe('full');
+  });
+
+  it('後退させない（遅れて届いたチャンクで full から quick へ落とさない）', () => {
+    expect(nextKifuProfile('full', { quick: true, full: false })).toBe('full');
+  });
+});
+
 describe('isChunkAcceptable', () => {
-  const open = { revision: 3, error: null, completedAt: null };
+  const open = {
+    revision: 3,
+    error: null,
+    completedAt: null,
+    analysisProfile: null,
+  };
 
   it('同一世代 かつ 失敗記録なし かつ 未完了 なら受理する', () => {
-    expect(isChunkAcceptable(open, 3)).toBe(true);
+    expect(isChunkAcceptable(open, 3, 'quick')).toBe(true);
   });
 
   it('世代が進んでいたら破棄する（reanalyze 後に届いた旧解析のチャンク）', () => {
-    expect(isChunkAcceptable({ ...open, revision: 4 }, 3)).toBe(false);
+    expect(isChunkAcceptable({ ...open, revision: 4 }, 3, 'quick')).toBe(false);
   });
 
   it('取得時より世代が古い（ありえない）ケースも破棄する', () => {
-    expect(isChunkAcceptable({ ...open, revision: 2 }, 3)).toBe(false);
+    expect(isChunkAcceptable({ ...open, revision: 2 }, 3, 'quick')).toBe(false);
   });
 
-  it('失敗が記録済みなら破棄する（completedAt と analysisError を排他に保つ）', () => {
+  it('失敗が記録済みなら破棄する', () => {
     expect(
-      isChunkAcceptable({ ...open, error: 'illegal move at move 57' }, 3),
+      isChunkAcceptable({ ...open, error: 'illegal move at move 57' }, 3, 'quick'),
     ).toBe(false);
   });
 
-  it('完了済みなら破棄する（完了後の解析結果は不変・遅延チャンクで上書きしない）', () => {
-    expect(
-      isChunkAcceptable({ ...open, completedAt: new Date('2026-07-21') }, 3),
-    ).toBe(false);
+  it('その段階が完了済みなら破棄する（完了後の解析結果は不変）', () => {
+    const quickDone = {
+      ...open,
+      completedAt: new Date('2026-09-05'),
+      analysisProfile: 'quick' as const,
+    };
+    expect(isChunkAcceptable(quickDone, 3, 'quick')).toBe(false);
+  });
+
+  it('quick 完了済みの棋譜への full チャンクは受理する（段階ごとに読む）', () => {
+    const quickDone = {
+      ...open,
+      completedAt: new Date('2026-09-05'),
+      analysisProfile: 'quick' as const,
+    };
+    expect(isChunkAcceptable(quickDone, 3, 'full')).toBe(true);
+  });
+
+  it('full 完了済みへの full チャンクは破棄する', () => {
+    const fullDone = {
+      ...open,
+      completedAt: new Date('2026-09-05'),
+      analysisProfile: 'full' as const,
+    };
+    expect(isChunkAcceptable(fullDone, 3, 'full')).toBe(false);
   });
 
   it('棋譜が消えていたら破棄する', () => {
-    expect(isChunkAcceptable(undefined, 3)).toBe(false);
+    expect(isChunkAcceptable(undefined, 3, 'quick')).toBe(false);
   });
 });
 

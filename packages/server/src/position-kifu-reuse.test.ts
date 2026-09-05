@@ -314,4 +314,16 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     expect(params).toContain(1);
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
   });
+
+  it('🔴 3 本とも profile=full の解析だけに絞る（quick はエンジン評価へ回す）', () => {
+    for (const query of [
+      positionEvalAnalysesQuery(SFEN),
+      namedMoveAnalysesQuery(SFEN, '7g7f'),
+      playedMoveAnalysesQuery(SFEN, '7g7f'),
+    ]) {
+      const { sql, params } = render(query);
+      expect(sql).toContain('`move_analyses`.`profile` = ?');
+      expect(params).toContain('full');
+    }
+  });
 });

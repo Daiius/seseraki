@@ -11,16 +11,18 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 
 ### 1.1 解析フロー
 
-1. server から**未解析の最古の棋譜を 1 件取得**（`GET /api/worker/kifus`、`usiMoves` と
-   **既に入っている局面数（`analyzedCount`）**を含む。[04](./04-ingestion.md)）。
-   現行の抽出条件は「`analysisCompletedAt IS NULL` かつ `usiMoves IS NOT NULL`」を **`coalesce(playedAt, createdAt)` 昇順**で 1 件
-   （`playedAt` が null の棋譜は `createdAt` で並ぶ。`analysisError IS NULL` も条件に含む＝失敗棋譜は除外。[03](./03-data-model.md)）。
+1. server から**解析すべき棋譜を 1 件取得**（`GET /api/worker/kifus`、`usiMoves`・**実行すべき段階
+   （`profile`）**・**その段階の再開位置（`analyzedCount`）**を含む。[04](./04-ingestion.md)）。
+   抽出は **quick 未完 → full 未完**の順で、いずれも **`coalesce(playedAt, createdAt)` 昇順**の 1 件
+   （`playedAt` が null の棋譜は `createdAt` で並ぶ。`analysisError IS NULL` も条件に含む＝失敗棋譜は除外。
+   段階の定義と条件は §1.1d。[03](./03-data-model.md)）。
    **最古優先（FIFO）**は「全棋譜を時系列で見る」用途に合わせた選択（[decisions](./_grilling/decisions.md)）。
-2. `usiMoves` を使って各局面を **MultiPV（既定 3）で解析**。定跡ヒット時はエンジンが即座に候補手を返す。
+2. `usiMoves` を使って各局面を **MultiPV（既定 3）で解析**。思考時間 / depth は段階で変わるが
+   **MultiPV は両段階で共通**（§1.1d）。定跡ヒット時はエンジンが即座に候補手を返す。
    **`analyzedCount` の局面から再開**する（§1.1c）。
-3. **1 局面解析するたびに進捗を報告**（`POST /api/worker/analyses/progress`）。§1.1b。
+3. **1 局面解析するたびに進捗を報告**（`POST /api/worker/analyses/progress`・段階 `profile` を添える）。§1.1b。
 4. 解析結果を **経過時間で区切ったチャンク**として server に送信（`POST /api/worker/analyses`・
-   1 チャンク 1 トランザクション）。**完了（`analysisCompletedAt`）は server が件数で確定**する。§1.1c。
+   1 チャンク 1 トランザクション・段階 `profile` を添える）。**完了は server が段階ごとの件数で確定**する。§1.1c。
 5. **ポーリング間隔（既定 10 秒）**で繰り返す。idle 時はログ出力なし。
 
 - KIF→USI 変換は server 側で済んでおり、worker は KIF パーサーを持たない（[01](./01-domain.md) §2 / [04](./04-ingestion.md)）。
@@ -34,6 +36,8 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
   **毎局面**にするのは、N 局面ごとにすると N の適正値が 1 局面あたりの所要時間（MATERIAL/NNUE・
   depth/byoyomi で桁が変わる。§1.2・§1.4）に依存し、固定値の根拠が置けないため。メモリ更新だけで
   DB 書き込みがないので、150 局面 × 数十分に対して最大 150 リクエストは無視できる。
+- 報告には**段階（`profile`）を添える**。UI が「簡易解析中」「詳細解析中」を区別できるようにする
+  （§1.1d / §2.5）。
 - 報告には `analysisRevision` を添え、**現在の世代と一致しないときは無視する**（submit / error 報告と
   同じ世代照合。reanalyze 後に届いた旧解析の進捗を表示しない）。**完了済み・失敗記録済みの棋譜への報告も
   無視する**（報告と submit が前後しても「終わったのに解析中」が残らない）。
@@ -69,12 +73,13 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
     **「T + 1 局面」で見積もる**こと（[decisions](./_grilling/decisions.md) は決定当時の文面
     「失う上限が T 秒に固定」のまま残してある。実装上の厳密な上限はこちらが正）。
 - **途中まで入った棋譜は続きから再開する。** `GET /api/worker/kifus` が `moveAnalyses` の件数
-  （`analyzedCount`）を返し、worker は `moveNumber = analyzedCount` から解析する。チャンク submit の
+  （`analyzedCount`。**段階ごとの件数**。§1.1d）を返し、worker は `moveNumber = analyzedCount` から解析する。チャンク submit の
   失敗は解析ごと中断する（下記）ので `moveNumber` に穴が空かず、**件数がそのまま再開位置**になる。
   再開がないと、poll 条件は `analysisCompletedAt IS NULL` なので次の poll で同じ棋譜を 0 から
   解析し直し、数十分の計算は結局失われる。
 - **`analysisCompletedAt` は server が件数で判定する。** submit のたびに `moveAnalyses` の件数を数え、
   `usiMoves.length + 1` に達したら**同じトランザクション内で**立てる（[03](./03-data-model.md) §3）。
+  **段階ごとの読み替えは §1.1d**（full の完了は `profile='full'` の行数で数える）。
   「揃っていれば完了」という不変条件で決まるため、worker のクラッシュ位置やチャンク境界に依存しない。
   - worker は解析を終えたら**最終チャンクを空でも送る**（再開位置が既に全局面に達しているケースで、
     送らないと「全局面が揃っているのに未完了」の棋譜を拾い直し続ける）。
@@ -84,6 +89,8 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 - **世代照合（`analysisRevision`）と `FOR UPDATE` による reanalyze との直列化は現行のまま**。
   チャンクごとに世代を確認し、不一致なら破棄する（§1.1a）。
   - **完了済み・失敗記録済みの棋譜へのチャンクも破棄する**（＝**完了後の解析結果は不変**）。
+    ⚠ **「完了済み」は段階ごとに読む**（§1.1d）——full 完了済みへのチャンクは破棄し、
+    quick 完了済みの棋譜への full チャンクは受理する。
     片方が完了させた後に遅れて届いたチャンクを受け入れると、完了済みの結果が部分的に別実行の値で
     上書きされ、`analysisCompletedAt` も更新され続ける。作り直しは `reanalyze` の経路だけにする。
 - ⚠ **worker は単一インスタンス運用を前提とする**（同一棋譜を複数 worker が並行解析する構成は取らない）。
@@ -99,6 +106,58 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
   完了判定**（正確）と役割を分ける。DB 件数に一本化すると進捗の粒度が T 秒に落ち、最初の T 秒間は
   「未解析」に見えてしまう。
 - 理由は [`_grilling/decisions.md`](./_grilling/decisions.md)。
+
+### 1.1d 解析の 2 段階（quick / full）と割り込み（決定・2026-09-05）
+
+本番の自動解析は 1 局面 `ENGINE_MOVETIME` 1 秒で、1 局に約 2 分かかる。登録直後に「おおよそどうだったか」を
+早く見せるため、**解析を `quick` → `full` の 2 段階に分け、後から上書きしていく**。
+
+- **段階は `quick` と `full` の 2 つに固定する。** 名前に強さの順序を持たせる（quick < full）。
+  🔒 **汎用のプロファイル一覧は持たない**——増やせる形にすると、上書き規則・一覧・分析・検討盤の再利用の
+  すべてに「どれを使うか」の選択が入る。
+- **worker の設定**: `ENGINE_MOVETIME` / `ENGINE_DEPTH` は **full の設定**として据え置き、quick 用に
+  **`ENGINE_QUICK_MOVETIME` / `ENGINE_QUICK_DEPTH`** を足す（§1.3）。
+  🔒 **両方とも未設定なら quick 段階は無効**で、現状どおり full のみの 1 段階で動く（後方互換）。
+  具体値はリポジトリに固定せず env 運用にとどめる（§1.3 と同じ）。目安は quick 150ms で 120 局面 ≒ 20 秒、
+  full 1 秒で ≒ 2 分。
+- 🔒 **MultiPV（`ENGINE_MULTIPV`）は両段階で共通。** 悪手判定（§2.3）と検討盤の再利用
+  （[12](./12-position-lab.md) §2.6）が候補手数に依存するため、**quick でも本数は減らさない**。
+  検討盤の局面評価（[12](./12-position-lab.md) §2.1）のパラメータも **full と同一**のまま。
+- **優先順位は 位置評価ジョブ > quick > full**。`GET /api/worker/kifus` は
+  (1) quick 未完（`analysisCompletedAt IS NULL AND analysisError IS NULL AND usiMoves IS NOT NULL`）の最古 1 件、
+  無ければ (2) quick 完了・full 未完の最古 1 件を返し、**実行すべき段階 `profile` と、その段階の再開位置
+  `analyzedCount`** を添える。worker は poll 時に**自分が quick の設定を持つか**を伝え、持たない worker には
+  (1) を `full` として渡す（[04](./04-ingestion.md) §7）。
+- **割り込み**: full の解析中に quick 待ちの棋譜が現れたら、worker は**局面境界**で full を中断し
+  （未送信のチャンクは送る）、quick を先に処理する。full は後で続きから再開する
+  （**再開位置は行数で決まるので追加の状態は要らない**）。
+  - 中断の検知は、局面境界で既に叩いている `GET /api/worker/position-jobs`（[12](./12-position-lab.md) §2.1）の
+    応答に「**quick 待ちの棋譜がある**」印を相乗りさせる（**通信を増やさない**ための選択。[04](./04-ingestion.md) §7）。
+  - 位置評価ジョブの優先処理は現行どおり最優先（[12](./12-position-lab.md) §2.1）。
+- **保存は局面ごとに 1 行のまま**で、full が quick を局面単位で upsert で上書きする
+  （`UNIQUE(kifuId, moveNumber)` は維持。来歴列は [03](./03-data-model.md) §3）。
+  - 🔴 **full の進行中は 1 棋譜の中で quick と full の行が混在する。これは仕様であり、表示にそのまま出す**
+    （「詳しい解析で上書きしていく」の実体）。局面ごとの `profile` で見分ける（§2.2 / §2.5）。
+- **完了と再開は段階ごとの件数で決める**（§1.1c の件数方式をそのまま段階に読み替える）:
+  quick の完了 = 全行数が `usiMoves.length + 1`（現行どおり）、full の完了 = `profile='full'` の行数が
+  `usiMoves.length + 1`、full の再開位置 = `profile='full'` の行数（**full は 0 から順に上書きするので、
+  full 行は常に先頭からの連続区間になる**）。
+- **上書き規則**: server は submit されたチャンクの段階が**既存行の段階以上のときだけ**受け入れる
+  （同段階の再送は入れ直し・現行どおり）。既存行が full なのに quick が届いた局面は**書かずに無視する**
+  （単一 worker では起きないが安い保険）。
+- 🔴 **エンジン識別子は記録するが、上書き・再開の条件には使わない**（[03](./03-data-model.md) §3）。
+  本番イメージはやねうら王を最新で clone してビルドするため、**再ビルドで `id name` の版文字列が変わる**。
+  識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**が起きる。記録だけしておき、
+  構成変更時の作り直しは従来どおり `reanalyze` の運用で受ける（§1.2）。
+- **`analysisCompletedAt` は「初めて全局面が揃った時刻」**に意味を据え直す（quick 完了で立つ。quick が
+  無効な worker なら full 完了で立つ）。完了した段階のうち最も高いものは `kifus.analysisProfile` に持つ
+  （[03](./03-data-model.md) §2）。**full 完了時刻の列を別に持つかは実装判断。**
+  - ⚠ これにより **`analysisCompletedAt` と `analysisError` の排他は緩む**（quick 完了後に full が失敗すると
+    両方が非 null になる。[03](./03-data-model.md) §2）。`analysisError` は「**進行中だった段階の失敗**」を表し、
+    失敗棋譜は poll から除外される（現行どおり）。UI は quick の結果を見せたまま「詳細解析に失敗」を示す（§2.5）。
+- `reanalyze` は現行どおり**全行削除・両列クリア・`analysisRevision` +1** で、**両段階をやり直す**（§1.1a）。
+- 見送った案（段階ごとに行を別に持つ / `analysisRuns` テーブル）と理由は
+  [`_grilling/decisions.md`](./_grilling/decisions.md)。
 
 ### 1.1a ポイズンピル対策（解析失敗の扱い）
 
@@ -139,8 +198,9 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 
 > ⚠️ **運用注意: エンジン構成（MATERIAL↔NNUE・depth/byoyomi）を変えたら `reanalyze` すること**（決定・2026-07-21）。
 > 解析は途中から再開する（§1.1c）ため、構成を変えると 1 つの棋譜に**異なる基準の評価値が混ざりうる**。
-> [08](./08-roadmap.md) の確定事項「解析来歴（engine/eval）は持たない」により、再開時に前回のエンジンを
-> 比較する手段はない——**検出はせず運用で受ける**（個人用で構成変更はまれ・`reanalyze` は既にある）。
+> 来歴（エンジン名・解析設定）は `moveAnalyses` に**記録するが、上書き・再開の自動判定には使わない**
+> （改定・2026-09-05。§1.1d / [03](./03-data-model.md) §3）——**検出はせず運用で受ける**
+> （個人用で構成変更はまれ・`reanalyze` は既にある）。
 
 ### 1.3 エンジンオプション
 
@@ -150,13 +210,16 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | USI_Hash | `ENGINE_HASH` | 128 (MB) | 本番は 1024。過不足は `hashfull` で判断する（§1.3c） |
 | MultiPV | `ENGINE_MULTIPV` | 3 | 候補手数 |
 | — | `ENGINE_DEPTH` | 10 | 探索深さ |
-| — | `ENGINE_MOVETIME` | 未設定 | 1 局面あたりの思考時間(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整） |
+| — | `ENGINE_MOVETIME` | 未設定 | 1 局面あたりの思考時間(ms)。設定時は depth より優先（局面の複雑さで深さを自動調整）。**full 段階の設定**（§1.1d） |
+| — | `ENGINE_QUICK_MOVETIME` | 未設定 | quick 段階の 1 局面あたり思考時間(ms)。§1.1d |
+| — | `ENGINE_QUICK_DEPTH` | 未設定 | quick 段階の探索深さ。`ENGINE_QUICK_MOVETIME` 設定時はそちらが優先 |
 | EvalDir | `ENGINE_EVAL_DIR` | — | 本番: 評価関数ディレクトリ |
 | BookDir | `ENGINE_BOOK_DIR` | — | 本番: 定跡ディレクトリ |
 | ConsiderationMode | — | true | 読み筋を置換表から延長して出力する（§1.3a） |
 
 - 定跡関連の細目（BookFile / IgnoreBookPly / FlippedBook / BookOnTheFly / BookMoves / BookEvalDiff /
   BookDepthLimit 等）は BookDir 設定時に本番向けの値へ自動設定される（メモリ節約・回転局面ヒット・末端採用など）。
+- **`ENGINE_QUICK_*` が両方とも未設定なら quick 段階は無効**（full のみの 1 段階で動く。§1.1d）。
 - **本番の解析モードは時間指定（`ENGINE_MOVETIME`）を志向**する（局面の複雑さに応じて深さを自動調整）。ただし
   **適正値は吟味中**で、具体値はリポジトリに固定せず env 運用にとどめる（[decisions](./_grilling/decisions.md)）。
 
@@ -452,6 +515,9 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
   **CPL が第一級の指標なので、ラベルが付かない手でも損失そのものは常に出す**（段階は「どこを見るべきか」の
   目印に過ぎない）。近似（実手が候補外）には `≈` を添える。最善手が指されなかったときの候補行の枠は
   悪手・詰み系で error 色、疑問手で warning 色、ラベル無しなら枠を出さない。
+- **候補手欄に局面の段階の印を出す**（決定・2026-09-05）。その局面の解析が `quick` なら「簡易」の印を添える
+  （full 進行中は 1 棋譜の中で段階が混在するため。§1.1d）。**評価値グラフでの quick / full の描き分けは実装判断**
+  ——要件は「**局面ごとに見分けられること**」にとどめる。
 - **日本語表記**: USI→駒名付き日本語変換（例 `▲７六歩(77)`）。盤面追跡で駒名を解決（[01](./01-domain.md) §2）。
 
 ### 2.3 悪手判定（centipawn loss ベース・決定 2026-07-21）
@@ -505,7 +571,9 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
 
 ### 2.5 一覧・ヘッダー・設定ページ・折り畳み
 
-- **棋譜一覧（`/`）**: テーブル表示。解析済み/未バッジ、勝敗バッジ（自分の名前候補 `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` に一致時）。
+- **棋譜一覧（`/`）**: テーブル表示。解析済み/未バッジ（**quick 完了は「解析済み」に含める**。決定・2026-09-05
+  ——「見られる結果があること」が解析済みの意味で、詳細の有無は別の印。簡易のみの棋譜には「簡易」の印を添える。
+  `status` の区分は [04](./04-ingestion.md) §6.1）、勝敗バッジ（自分の名前候補 `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` に一致時）。
   サーバー未接続時は警告。既定は対局日時の新しい順・ページネーション付き。
   （かつて置いていた swars 取り込みの「更新」ボタンは**撤去**した。取り込みの無効化。[04](./04-ingestion.md) §4）
   - **日時列は「対局日時」だが、`playedAt` が無い棋譜は登録日時（`createdAt`）で代替する**（一覧の並びも
@@ -551,6 +619,9 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
     削除は成功すると一覧へ遷移するため通知しない。理由は [`_grilling/decisions.md`](./_grilling/decisions.md)。
   - **解析中はページ上部に「解析中 N/M・◯前に更新」+ 進捗バー**を出す（決定・2026-07-21）。一覧と同じ
     `GET /api/analysis/progress` を見て、`kifuId` が一致したときだけ表示する（§2.5 の一覧バッジと同源）。
+    - **段階を文言に出す**（決定・2026-09-05）: 進捗の `profile`（§1.1b）で「簡易解析中 k/n」「詳細解析中 k/n」を
+      出し分ける。`analysisProfile='quick'` の棋譜には**「簡易解析」バッジ**を出す（[03](./03-data-model.md) §2）。
+      quick 完了後に full が失敗した棋譜は、**quick の結果を見せたまま「詳細解析に失敗」**を示す（§1.1d）。
   - **解析中は部分結果がそのまま見える**（決定・2026-07-21）。チャンク submit（§1.1c）で途中まで入った
     解析結果が、評価値グラフ・候補手・悪手判定にそのまま反映される（解析が進んでいく様子が見えるのは
     歓迎する副次効果）。**UI 側の特別な対応は入れない**——消費者はいずれも部分結果で壊れない
@@ -636,4 +707,5 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
   （depth 別の世代は持たない。[03](./03-data-model.md) 決定済み）。局面ごとに depth が混在しても
   `candidateMoves.depth` で判別できる（[08](./08-roadmap.md)）。
 - 本番 NNUE での再解析による評価値の安定化（開発 MATERIAL 由来の序盤ブレ対策。§1.2）。
-- **解析エンジン・評価関数の来歴は DB に持たない**（決定。§1.2 の二重性は本番 NNUE 単一運用で受ける。[03](./03-data-model.md)）。
+- **解析エンジン・評価関数の来歴は `moveAnalyses` に記録する。ただし上書き・再開の自動判定には使わない**
+  （改定・2026-09-05。旧「来歴は持たない」を改めた。§1.1d / [03](./03-data-model.md) §3 / [08](./08-roadmap.md)）。

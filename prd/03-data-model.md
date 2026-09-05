@@ -72,8 +72,10 @@ kifus
 - **`analysisCompletedAt`** に INDEX。worker は「**quick 未完（`analysisCompletedAt IS NULL`）かつ失敗なし
   （`analysisError IS NULL`）の最古**」を優先で引き、無ければ「**quick 完了・full 未完の最古**」を引く
   （2 段階解析。[05](./05-analysis.md) §1.1d）。
-- **`analysisProfile`**: **完了した段階のうち最も高いもの**（`'quick'` | `'full'`）。quick だけ終わっている棋譜を
-  一覧・詳細で見分けるために持つ（[05](./05-analysis.md) §2.5）。`reanalyze` で null に戻る。
+- **`analysisProfile`**: **完了した段階のうち最も高いもの**（`'quick'` | `'full'`）。**キューの段階判定
+  （quick 完了・full 未完の抽出）と来歴のために持つ**（[05](./05-analysis.md) §1.1d）。
+  🔴 **UI の文字表示には使わない**（決定・2026-09-05・後段。quick だけ終わっている状態は直後に full が
+  走る一時的な状態で、画面に語を割かない。[05](./05-analysis.md) §2.5）。`reanalyze` で null に戻る。
   **full 完了時刻の列を別に持つかは実装判断**（[05](./05-analysis.md) §1.1d）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。

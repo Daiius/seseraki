@@ -66,6 +66,7 @@ import {
   setProgress,
 } from './analysis-progress.js';
 import {
+  ANALYSIS_STATE_RESET,
   canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
@@ -1098,10 +1099,10 @@ const route = app
             result: meta.result,
             playedAt: meta.playedAt,
             sourceTz: meta.sourceTz,
-            analysisError: null,
-            analysisCompletedAt: null,
-            // 段階もやり直す（両段階を最初から。prd/05 §1.1d）
-            analysisProfile: null,
+            // 解析状態は 3 列まとめて戻す（両段階を最初から。prd/05 §1.1d）。
+            // 動画棋譜の上書き（`video-analysis.ts`）と同じ定数を使い、
+            // **リセットの取りこぼしが片方だけ起きない**ようにする
+            ...ANALYSIS_STATE_RESET,
             analysisRevision: sql`${kifus.analysisRevision} + 1`,
           })
           .where(eq(kifus.id, id));

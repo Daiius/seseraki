@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ANALYSIS_STATE_RESET,
   canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
@@ -8,6 +9,42 @@ import {
   nextKifuProfile,
   resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
+
+describe('ANALYSIS_STATE_RESET', () => {
+  it('解析状態の 3 列を揃えて戻す（段階の取りこぼしを防ぐ）', () => {
+    expect(ANALYSIS_STATE_RESET).toEqual({
+      analysisError: null,
+      analysisCompletedAt: null,
+      analysisProfile: null,
+    });
+  });
+
+  it('full 解析済みの棋譜に当てると、次の full チャンクが受理される状態になる', () => {
+    // 動画棋譜を差分ありで再取り込みした後の状態（レビュー `OCL-4EB35091`）。
+    // `analysisProfile` を戻し忘れると、poll は拾えるのに submit が全部拒否され、
+    // その棋譜が解析キューに残り続ける
+    const completed = {
+      revision: 7,
+      error: null,
+      completedAt: new Date('2026-09-05'),
+      analysisProfile: 'full' as const,
+    };
+    expect(isChunkAcceptable(completed, 7, 'full')).toBe(false);
+
+    // リセット後の行を、submit 側が読む形（列名 → 判定の引数名）に写して確かめる。
+    // ⚠ 定数から 1 列でも落ちれば、この写し取り自体が型エラーになる
+    const afterReset = {
+      revision: 8,
+      error: ANALYSIS_STATE_RESET.analysisError,
+      completedAt: ANALYSIS_STATE_RESET.analysisCompletedAt,
+      analysisProfile: ANALYSIS_STATE_RESET.analysisProfile,
+    };
+    expect(isStageComplete(afterReset, 'quick')).toBe(false);
+    expect(isStageComplete(afterReset, 'full')).toBe(false);
+    expect(isChunkAcceptable(afterReset, 8, 'quick')).toBe(true);
+    expect(isChunkAcceptable(afterReset, 8, 'full')).toBe(true);
+  });
+});
 
 describe('isStageComplete', () => {
   it('未完了の棋譜はどちらの段階も未完了', () => {

@@ -11,6 +11,24 @@
 // `analysisCompletedAt` は quick 完了で立つので、これを段階と無関係に使うと
 // **full のチャンクが最初から全部拒否される**。
 
+/**
+ * **解析状態をリセットするときに戻す列**（`reanalyze` と動画棋譜の上書き。prd/05 §1.1a・§1.1d）。
+ *
+ * 🔴 **3 列は必ず揃えて戻す。** `analysisProfile` を戻し忘れると、
+ * **worker は拾えるのに submit が全部拒否される**棋譜ができる——poll は
+ * `analysisCompletedAt IS NULL` で拾うのに、submit の受理判定は `analysisProfile='full'` を
+ * 「full 完了済み」と読むため、そのチャンクが毎回捨てられ**解析キューに残り続ける**
+ * （レビュー `OCL-4EB35091`。動画棋譜の再取り込みで実際に踏んだ）。
+ *
+ * 呼び出し側は `analysisRevision` の +1 と `usiMoves` の差し替えを添える
+ * （世代は SQL 式・指し手は経路ごとに違うのでここには入れない）。
+ */
+export const ANALYSIS_STATE_RESET = {
+  analysisError: null,
+  analysisCompletedAt: null,
+  analysisProfile: null,
+} as const;
+
 /** 解析の段階（prd/05 §1.1d）。**2 つ固定**で、名前に強さの順序を持たせる（quick < full） */
 export type AnalysisProfile = 'quick' | 'full';
 

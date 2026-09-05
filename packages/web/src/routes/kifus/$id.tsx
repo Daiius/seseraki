@@ -8,7 +8,7 @@ import {
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { buildPositions } from 'shared';
-import { formatUpdatedAgo } from '../../lib/analysisProgress';
+import { formatUpdatedAgo, profileBadgeText } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';
 import { ShogiBoard } from '../../components/ShogiBoard';
@@ -127,7 +127,19 @@ function KifuDetailPage() {
         {/* 戦型はタイトルの直下に置く。対局の性格を一目で掴む情報なので、
             盤面やメニューより先に目に入る位置がよい */}
         <div className="min-w-0">
-          <h2 className="text-2xl font-bold">{kifu.title}</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-bold">{kifu.title}</h2>
+            {/* 🔴 簡易解析だけが終わっている棋譜に印を出す（prd/05 §2.5）。
+                full が終われば消える（詳しい解析で上書きしていく、の実体） */}
+            {profileBadgeText(kifu.analysisProfile) && (
+              <span
+                className="badge badge-ghost badge-sm"
+                title="簡易解析の結果です（詳細解析はこれから、または進行中）"
+              >
+                簡易解析
+              </span>
+            )}
+          </div>
           <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
         </div>
         <div className="dropdown dropdown-end ml-auto">
@@ -200,6 +212,7 @@ function KifuDetailPage() {
 
         {analyzing && (
           <AnalyzingAlert
+            profile={analyzing.profile}
             analyzed={analyzing.analyzed}
             total={analyzing.total}
             agoText={formatUpdatedAgo(analyzing, now)}
@@ -209,7 +222,12 @@ function KifuDetailPage() {
         {kifu.analysisError && (
           <div className="alert alert-error flex items-start gap-3">
             <div className="flex-1">
-              <div className="font-semibold">解析失敗</div>
+              {/* 🔴 quick が終わっていれば、失敗したのは**詳細解析**（prd/05 §1.1d・§2.5）。
+                  `analysisCompletedAt` と `analysisError` の排他は意図して緩めてあり、
+                  この棋譜は quick の結果を見せたまま失敗を示す */}
+              <div className="font-semibold">
+                {kifu.analysisProfile ? '詳細解析に失敗' : '解析失敗'}
+              </div>
               <div className="text-sm font-mono break-all opacity-90">
                 {kifu.analysisError}
               </div>

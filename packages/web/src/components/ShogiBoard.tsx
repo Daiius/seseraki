@@ -29,6 +29,10 @@ import {
   type Thresholds,
 } from '../lib/cpl';
 import { EvalGraph } from './EvalGraph';
+import {
+  profileBadgeText,
+  type AnalysisProfile,
+} from '../lib/analysisProgress';
 
 const ICON_PROPS = {
   xmlns: 'http://www.w3.org/2000/svg',
@@ -48,6 +52,8 @@ const IconSearch = () => (
 interface Analysis {
   id: number;
   moveNumber: number;
+  /** 解析段階（prd/05 §1.1d）。局面ごとに quick / full が混ざりうる */
+  profile: AnalysisProfile;
   candidates: {
     id: number;
     rank: number;
@@ -311,6 +317,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
                 <CandidateList
                   ref={candidateListRef}
                   candidates={prevAnalysis.candidates}
+                  profile={prevAnalysis.profile}
                   played={moveIndex > 0 ? usiMoves[moveIndex - 1] : undefined}
                   evalMoveNumber={evalMoveNumber}
                   positions={positions}
@@ -448,6 +455,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
 function CandidateList({
   ref,
   candidates,
+  profile,
   played,
   evalMoveNumber,
   positions,
@@ -461,6 +469,12 @@ function CandidateList({
 }: {
   ref?: Ref<HTMLDivElement>;
   candidates: Analysis['candidates'];
+  /**
+   * この局面の解析段階（prd/05 §1.1d）。
+   * 🔴 **full の進行中は 1 棋譜の中で quick と full が混在する。これは仕様で、
+   * 表示にそのまま出す**——局面ごとにどちらの結果を見ているかが分かるようにする。
+   */
+  profile: AnalysisProfile;
   played: string | undefined;
   evalMoveNumber: number;
   positions: BoardState[];
@@ -485,6 +499,14 @@ function CandidateList({
     <div ref={ref}>
       <div className="mb-1 flex items-center gap-2 text-sm text-base-content/60">
         <span>候補手</span>
+        {profileBadgeText(profile) && (
+          <span
+            className="badge badge-ghost badge-sm"
+            title="この局面は簡易解析の結果です（詳細解析で上書きされます）"
+          >
+            簡易
+          </span>
+        )}
         {/* CPL が第一級の指標なので、ラベルが付かない手でも損失そのものは常に出す */}
         {label && loss && (
           <span

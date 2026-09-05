@@ -1,4 +1,5 @@
 import { type CSSProperties } from 'react';
+import { analyzingTitle, type AnalysisProfile } from '../lib/analysisProgress';
 
 /**
  * 一覧（`/`）の状態セルで「解析中」を表す円環。
@@ -9,20 +10,24 @@ import { type CSSProperties } from 'react';
  * 円環が少しずつ埋まっていくことで保たれる。
  */
 export function AnalyzingRadial({
+  profile,
   analyzed,
   total,
 }: {
+  profile: AnalysisProfile;
   analyzed: number;
   total: number;
 }) {
   const pct = total > 0 ? Math.round((analyzed / total) * 100) : 0;
+  // 円環に文字は入らないので、段階は読み上げ・ホバーの文言で伝える
+  const text = `${analyzingTitle(profile)} ${analyzed}/${total}`;
   return (
     <span
       role="progressbar"
-      aria-label={`解析中 ${analyzed}/${total}`}
+      aria-label={text}
       aria-valuenow={analyzed}
       aria-valuemax={total}
-      title={`解析中 ${analyzed}/${total}`}
+      title={text}
       className="radial-progress text-info"
       style={
         {

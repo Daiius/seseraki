@@ -1,9 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
+  analyzingTitle,
   formatElapsed,
   formatUpdatedAgo,
+  profileBadgeText,
   type AnalysisProgress,
 } from './analysisProgress';
+
+describe('analyzingTitle', () => {
+  it('段階を文言に出す（quick 完了後も解析は続くため）', () => {
+    expect(analyzingTitle('quick')).toBe('簡易解析中');
+    expect(analyzingTitle('full')).toBe('詳細解析中');
+  });
+});
+
+describe('profileBadgeText', () => {
+  it('簡易のみの棋譜・局面に印を付ける', () => {
+    expect(profileBadgeText('quick')).toBe('簡易');
+  });
+
+  it('full と未解析には印を付けない（full が既定の解析）', () => {
+    expect(profileBadgeText('full')).toBeNull();
+    expect(profileBadgeText(null)).toBeNull();
+    expect(profileBadgeText(undefined)).toBeNull();
+  });
+});
 
 describe('formatElapsed', () => {
   it('1 分未満は秒', () => {
@@ -31,6 +52,7 @@ describe('formatUpdatedAgo', () => {
   const progress = (updatedAt: string): AnalysisProgress => ({
     kifuId: 1,
     revision: 0,
+    profile: 'full',
     analyzed: 87,
     total: 154,
     updatedAt,

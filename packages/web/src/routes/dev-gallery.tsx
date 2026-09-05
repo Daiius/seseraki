@@ -59,10 +59,12 @@ function analysisAt(
   scoreValue: number,
   move: string,
   pv: string[] | null = null,
+  profile: 'quick' | 'full' = 'full',
 ) {
   return {
     id: moveNumber + 1,
     moveNumber,
+    profile,
     candidates: [
       {
         id: (moveNumber + 1) * 10,
@@ -188,21 +190,34 @@ function Gallery() {
             他バッジと同居してもモバイル幅で折り返さないかを見る */}
         <div className="flex gap-1 items-center">
           <span className="badge badge-soft badge-success badge-sm">勝</span>
-          <AnalyzingRadial analyzed={12} total={150} />
+          <AnalyzingRadial profile="full" analyzed={12} total={150} />
           <span className="badge badge-sm bg-info/50 text-info-content">●</span>
         </div>
       </Case>
 
       <Case title="一覧・円環の進行度（0% / 25% / 100%）">
         <div className="flex gap-4 items-center">
-          <AnalyzingRadial analyzed={0} total={150} />
-          <AnalyzingRadial analyzed={38} total={150} />
-          <AnalyzingRadial analyzed={150} total={150} />
+          <AnalyzingRadial profile="quick" analyzed={0} total={150} />
+          <AnalyzingRadial profile="full" analyzed={38} total={150} />
+          <AnalyzingRadial profile="full" analyzed={150} total={150} />
         </div>
       </Case>
 
-      <Case title="詳細・解析中 alert（文言と progress の縦中央揃え）">
-        <AnalyzingAlert analyzed={12} total={150} agoText="3秒前に更新" />
+      <Case title="詳細・解析中 alert（段階の文言と progress の縦中央揃え）">
+        <div className="flex flex-col gap-2">
+          <AnalyzingAlert
+            profile="quick"
+            analyzed={12}
+            total={150}
+            agoText="3秒前に更新"
+          />
+          <AnalyzingAlert
+            profile="full"
+            analyzed={12}
+            total={150}
+            agoText="3秒前に更新"
+          />
+        </div>
       </Case>
 
       <Case title="コピーボタン（モバイルはアイコンのみ・sm+ でラベル）">
@@ -240,6 +255,15 @@ function Gallery() {
         <KifuCase
           initialMoveIndex={1}
           analyses={[analysisAt(1, 'cp', -120, '3c3d')]}
+        />
+      </Case>
+
+      <Case title="棋譜・候補手（簡易解析の局面には「簡易」の印）">
+        {/* full の進行中は 1 棋譜の中で quick と full が混在する。これは仕様で、
+            局面ごとの印でどちらの結果を見ているかが分かる（prd/05 §1.1d） */}
+        <KifuCase
+          initialMoveIndex={1}
+          analyses={[analysisAt(1, 'cp', -120, '3c3d', null, 'quick')]}
         />
       </Case>
 

@@ -197,13 +197,23 @@ function Gallery() {
 
       <Case title="一覧・円環の進行度（0% / 25% / 100%）">
         <div className="flex gap-4 items-center">
-          <AnalyzingRadial profile="quick" analyzed={0} total={150} />
+          <AnalyzingRadial profile="full" analyzed={0} total={150} />
           <AnalyzingRadial profile="full" analyzed={38} total={150} />
           <AnalyzingRadial profile="full" analyzed={150} total={150} />
         </div>
       </Case>
 
-      <Case title="詳細・解析中 alert（段階の文言と progress の縦中央揃え）">
+      <Case title="一覧・円環の段階（簡易解析中は半透明 / 詳細解析中は通常）">
+        {/* 🔴 段階は文字で出さず濃さで示す（prd/05 §2.5・決定 2026-09-05 後段）。
+            並べて濃さの差が読めるかを見る（単体で見て分かる必要はない） */}
+        <div className="flex gap-4 items-center">
+          <AnalyzingRadial profile="quick" analyzed={38} total={150} />
+          <AnalyzingRadial profile="full" analyzed={38} total={150} />
+        </div>
+      </Case>
+
+      <Case title="詳細・解析中 alert（文言と progress の縦中央揃え・上が簡易解析中）">
+        {/* 文言は段階で変えず、進捗バーの濃さだけが変わる（決定・2026-09-05 後段） */}
         <div className="flex flex-col gap-2">
           <AnalyzingAlert
             profile="quick"
@@ -255,15 +265,6 @@ function Gallery() {
         <KifuCase
           initialMoveIndex={1}
           analyses={[analysisAt(1, 'cp', -120, '3c3d')]}
-        />
-      </Case>
-
-      <Case title="棋譜・候補手（簡易解析の局面には「簡易」の印）">
-        {/* full の進行中は 1 棋譜の中で quick と full が混在する。これは仕様で、
-            局面ごとの印でどちらの結果を見ているかが分かる（prd/05 §1.1d） */}
-        <KifuCase
-          initialMoveIndex={1}
-          analyses={[analysisAt(1, 'cp', -120, '3c3d', null, 'quick')]}
         />
       </Case>
 

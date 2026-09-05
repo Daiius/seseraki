@@ -1,28 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzingTitle,
   formatElapsed,
   formatUpdatedAgo,
-  profileBadgeText,
+  progressDimClass,
   type AnalysisProgress,
 } from './analysisProgress';
 
-describe('analyzingTitle', () => {
-  it('段階を文言に出す（quick 完了後も解析は続くため）', () => {
-    expect(analyzingTitle('quick')).toBe('簡易解析中');
-    expect(analyzingTitle('full')).toBe('詳細解析中');
-  });
-});
-
-describe('profileBadgeText', () => {
-  it('簡易のみの棋譜・局面に印を付ける', () => {
-    expect(profileBadgeText('quick')).toBe('簡易');
+describe('progressDimClass', () => {
+  it('quick 進行中は半透明（段階は文字で出さない）', () => {
+    expect(progressDimClass('quick')).toBe('opacity-50');
   });
 
-  it('full と未解析には印を付けない（full が既定の解析）', () => {
-    expect(profileBadgeText('full')).toBeNull();
-    expect(profileBadgeText(null)).toBeNull();
-    expect(profileBadgeText(undefined)).toBeNull();
+  it('full 進行中は現行どおりの見え方', () => {
+    expect(progressDimClass('full')).toBe('');
   });
 });
 

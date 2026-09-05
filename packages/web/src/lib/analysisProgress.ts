@@ -13,7 +13,10 @@ export type AnalysisProfile = 'quick' | 'full';
 export interface AnalysisProgress {
   kifuId: number;
   revision: number;
-  /** 実行中の段階。「簡易解析中 / 詳細解析中」の出し分けに使う（prd/05 §2.5） */
+  /**
+   * 実行中の段階。**文字では出さず**、解析中スピナーの見え方（濃さ）の出し分けに使う
+   * （prd/05 §2.5・決定 2026-09-05 後段）。
+   */
   profile: AnalysisProfile;
   analyzed: number;
   total: number;
@@ -21,20 +24,17 @@ export interface AnalysisProgress {
 }
 
 /**
- * 進捗の見出し（「簡易解析中」/「詳細解析中」）。
+ * 解析中の表示を段階で見分けるための不透明度クラス（prd/05 §2.5・決定 2026-09-05 後段）。
  *
- * 段階を文言に出すのは、**quick が終わった後も解析が続く**ため
- * （「解析中」のままだと、済んだはずの棋譜がまた解析中に見える）。prd/05 §2.5
+ * 🔴 **段階は文字で出さない。** 簡易解析だけが終わっている状態は**直後に詳細解析が走る
+ * 一時的な状態**で、そこに「簡易」の語を割くと、**主に使うモバイルで横幅を恒久的に食う**。
+ * 見分けが要るのは「いま動いているのがどちらか」だけなので、**解析中のスピナーの濃さ**で示す
+ * ——quick 進行中は半透明、full 進行中は通常。
+ *
+ * ⚠ **不透明度だけを変える**（大きさ・行の高さ・幅は 1px も動かさない）。
  */
-export function analyzingTitle(profile: AnalysisProfile): string {
-  return profile === 'quick' ? '簡易解析中' : '詳細解析中';
-}
-
-/** 段階の短い印（一覧・候補手欄に添える）。full は無印（それが既定の解析だから） */
-export function profileBadgeText(
-  profile: AnalysisProfile | null | undefined,
-): string | null {
-  return profile === 'quick' ? '簡易' : null;
+export function progressDimClass(profile: AnalysisProfile): string {
+  return profile === 'quick' ? 'opacity-50' : '';
 }
 
 /** 最終更新からの経過を日本語にする（分単位で読めればよいので秒は 1 分未満のみ） */

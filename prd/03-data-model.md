@@ -47,7 +47,8 @@ kifus
 ├── swarsGameKey: varchar(255) UNIQUE?  -- swars 対局キー（重複検知用・nullable）
 ├── playedAt: timestamp?         -- 対局日時（sourceTz で解釈した絶対時刻）
 ├── sourceTz: varchar(8)?        -- playedAt の解釈 TZ（"JST" 既定 / "UTC" は投入時指定。[04](./04-ingestion.md)）
-├── analysisCompletedAt: timestamp?     -- 解析完了日時（INDEX）
+├── analysisCompletedAt: timestamp?     -- 初めて全局面が揃った日時（INDEX。quick 完了で立つ。[05](./05-analysis.md) §1.1d）
+├── analysisProfile: enum?              -- 完了した段階のうち最も高いもの（'quick' | 'full'。[05](./05-analysis.md) §1.1d）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
@@ -68,16 +69,25 @@ kifus
   投入時にユーザーが選択（`auto`/`JST`/`UTC`。**`auto` は JST**。署名からの UTC 推定は廃止＝[04](./04-ingestion.md)）。
   UTC のときは +9h 補正した絶対時刻を保存。
   swars 経路は `gameKey` 由来で常に `"JST"`。reanalyze はこの値を維持する（[04](./04-ingestion.md)）。
-- **`analysisCompletedAt`** に INDEX。worker は「**未解析（`analysisCompletedAt IS NULL`）かつ失敗なし
-  （`analysisError IS NULL`）の最古**」を引く（[05](./05-analysis.md)）。
+- **`analysisCompletedAt`** に INDEX。worker は「**quick 未完（`analysisCompletedAt IS NULL`）かつ失敗なし
+  （`analysisError IS NULL`）の最古**」を優先で引き、無ければ「**quick 完了・full 未完の最古**」を引く
+  （2 段階解析。[05](./05-analysis.md) §1.1d）。
+- **`analysisProfile`**: **完了した段階のうち最も高いもの**（`'quick'` | `'full'`）。quick だけ終わっている棋譜を
+  一覧・詳細で見分けるために持つ（[05](./05-analysis.md) §2.5）。`reanalyze` で null に戻る。
+  **full 完了時刻の列を別に持つかは実装判断**（[05](./05-analysis.md) §1.1d）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
   再試行は `POST /api/kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
-  **`analysisCompletedAt` と `analysisError` は排他**（同時に非 null にならない）: error は未完了時のみ記録し、
-  解析結果のチャンクは error なし時のみ適用する（行ロック下で相互排他。重複取得があっても
-  **この 2 つの状態が矛盾することはない**）。
+  🔴 **`analysisCompletedAt` と `analysisError` の排他は緩めた**（改定・2026-09-05。2 段階解析。
+  [05](./05-analysis.md) §1.1d）。**quick 完了後に full が失敗すると両方が非 null になる**。
+  `analysisError` は「**進行中だった段階の失敗**」を表し、失敗棋譜が poll から除外されることは変わらない。
+  UI は quick の結果を見せたまま「詳細解析に失敗」を示す（[05](./05-analysis.md) §2.5）。
+  error は**その段階が未完了のときだけ**記録し、解析結果のチャンクは error なし時のみ適用する
+  （行ロック下で相互排他）。
   **完了済みの棋譜へのチャンクも受理しない**（＝完了後の解析結果は不変。遅れて届いたチャンクが
   完了済みの結果を部分的に上書きしうるため。作り直しは `reanalyze` の経路だけ。[05](./05-analysis.md) §1.1c）。
+  ⚠ **「完了済み」は段階ごとに読む**——full 完了済みへのチャンクは破棄、quick 完了済みの棋譜への
+  full チャンクは受理する（[05](./05-analysis.md) §1.1d）。
   - ⚠ ただし**完了前のチャンクの混在までは防がない**。`GET /api/worker/kifus` は lease を取らないので、
     2 つの worker が同じ棋譜・同じ世代を掴めば、1 棋譜の解析結果に複数実行の値が混ざる。
     **worker の単一インスタンス運用を前提として受ける**（並行解析には lease 列が要り、
@@ -112,7 +122,7 @@ kifuTactics
   ⚠ **`turn` は表示のための順序であって、絞り込み条件に使わない。** 判定を更新すれば値が変わる
   派生値であり、「N 手目までに成立した棋譜」のような条件で使うと再判定のたびに結果が動く。
 - **判定バージョンの列は持たない。** 判定ロジックを更新したら**全件を一括再判定**する
-  （解析来歴を持たない立場と同じ。§7 決定済み）。
+  （派生値に世代を持たせない立場。§7 決定済み）。
 - **`usiMoves` が変われば必ず作り直す。** 投入時に加えて `reanalyze`（`kifText` の再変換）も対象で、
   **`kifus` の更新と `kifuTactics` の置換は同一トランザクション**に入れる（[01](./01-domain.md) §6.4 /
   [04](./04-ingestion.md) §6）。`usiMoves` が null になったときはラベルを空に置換する。
@@ -207,11 +217,22 @@ moveAnalyses
 ├── id: serial PK
 ├── kifuId: FK → kifus.id (CASCADE)
 ├── moveNumber: int              -- 局面番号（0 = 初期局面）
+├── profile: enum notNull        -- 解析段階（'quick' | 'full'。[05](./05-analysis.md) §1.1d）
+├── engineName: varchar?         -- USI `id name` の文字列（来歴。判定には使わない）
+├── (解析設定)                    -- movetime(ms) / 目標 depth / multiPv（列を分けるか JSON かは実装判断）
 ├── createdAt: timestamp
 └── UNIQUE(kifuId, moveNumber)
 ```
 
-- 1 局面 = 1 レコード。`moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
+- 1 局面 = 1 レコード。**段階が上がっても行は増えず、full が quick を局面単位で上書きする**
+  （改定・2026-09-05。旧「解析来歴は持たない」を改めた。§7 / [05](./05-analysis.md) §1.1d）。
+- **来歴（`profile` / `engineName` / 解析設定）は記録するが、上書き・再開の条件には使わない。**
+  やねうら王は再ビルドで `id name` の版文字列が変わるため、識別子で「別エンジン＝やり直し」と判定すると
+  **全棋譜の意図しない全再解析**が起きる。構成変更時の作り直しは `reanalyze` の運用で受ける
+  （[05](./05-analysis.md) §1.2 / §1.1d）。
+- **移行**: 既存行はすべて `profile='full'`（現行の設定で作ったもの）、`engineName` と解析設定は null。
+  `analysisCompletedAt` が立っている `kifus` は `analysisProfile='full'`。
+- `moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
   偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
 - 解析結果は**チャンクに分けて追記**される（[05](./05-analysis.md) §1.1c）。**一意性と完了の担保は
   次の 3 箇所に分散する**（submit が「DELETE → 全件 INSERT」だった頃は 1 箇所だった。列の追加はない）:
@@ -221,7 +242,8 @@ moveAnalyses
 | 同一 `moveNumber` の重複防止 | `UNIQUE(kifuId, moveNumber)` を使った upsert（再送された局面は既存行を使い回し、`candidateMoves` を入れ直す） |
 | `moveNumber` が棋譜の局面であること | submit 時に **`0 <= moveNumber <= usiMoves.length` を検証**し、外れていれば 1 件でも書かずに 400（下記 ⚠） |
 | 前世代の全消去 | **`reanalyze` の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は DELETE しない） |
-| 完了の確定 | 件数が `usiMoves.length + 1` に達したときの `analysisCompletedAt`（submit と同一トランザクション内で server が判定） |
+| 完了の確定 | **段階ごとの**件数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = 全行数 / full = `profile='full'` の行数（下記） |
+| 段階の後退防止 | submit されたチャンクの段階が**既存行の段階以上**のときだけ書く（既存が full の局面に quick が届いたら無視。[05](./05-analysis.md) §1.1d） |
 
 - ⚠ **完了を件数で決めるので、`moveNumber` の有効範囲は submit 側で担保する必要がある**。範囲外の行を
   受け入れると、**必要な局面が欠けたまま件数だけが `usiMoves.length + 1` に達して完了扱いになる**
@@ -231,7 +253,9 @@ moveAnalyses
 - ⚠ **`reanalyze` の DELETE を落とすと前世代の行が残る**（手数の異なる棋譜に差し替わったときに、
   古い末尾の局面が孤立して残り、件数による完了判定も狂う）。
 - 途中まで入っている件数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。
-  [05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。
+  [05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。**2 段階解析では段階ごとに数える**:
+  quick の完了・再開位置は全行数、**full の完了・再開位置は `profile='full'` の行数**
+  （full は 0 から順に上書きするので、full 行は常に先頭からの連続区間になる。[05](./05-analysis.md) §1.1d）。
 
 ## 4. `candidateMoves`（MultiPV の候補手）
 
@@ -302,9 +326,13 @@ commentaries
 
 ### 決定済み
 
-- ✅ **解析エンジン・評価関数の来歴は持たない**（2026-07-16）。本番は NNUE 単一運用で、開発 MATERIAL の
-  数値は一時的な確認用。異常な評価値は目視で気づけるため、エンジンの自己申告を仕込むのは過剰設計と判断。
-  保持するのは `candidateMoves.depth`（候補手単位）のみ。
+- ~~✅ **解析エンジン・評価関数の来歴は持たない**（2026-07-16）~~ → **2026-09-05 に改定**（下記）。
+  当時の理由は「本番は NNUE 単一運用・異常値は目視で気づける・自己申告は過剰設計」。
+- ✅ **解析は `quick` / `full` の 2 段階。来歴は `moveAnalyses` に持つが、自動判定には使わない**（2026-09-05）。
+  登録直後に概略を見せ、後から詳しい解析で**局面ごとに上書き**する（行は増やさない）。記録する項目は
+  `profile` / `engineName` / 解析設定（movetime・目標 depth・multiPv）。**エンジン識別子で「別エンジン＝
+  やり直し」を判定しない**（再ビルドで版文字列が変わり、全棋譜の意図しない全再解析を招くため）。
+  §3 / [05](./05-analysis.md) §1.1d / [08](./08-roadmap.md)。
 - ✅ **局面単位の再解析は最新 1 世代に上書き**（depth 別の複数世代は持たない。単一エンジン前提。[05](./05-analysis.md) / [08](./08-roadmap.md)）。
 - ✅ **戦型ラベルは派生値・別テーブル・バージョン列なし**（2026-08-04）。`usiMoves` から常に再計算でき、
   判定を更新したら全件を一括再判定する。JSON 列ではなく `kifuTactics` に正規化して SQL の絞り込み・

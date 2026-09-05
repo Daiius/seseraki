@@ -115,7 +115,7 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | PATCH | `/api/kifus/:id` | メモ更新。body `{ memo }`（現状 `memo` のみ。タイトル編集は gap。§3） |
 | POST | `/api/kifus/:id/reanalyze` | `kifText` を再パースし `usiMoves`＋メタ列を再生成、**旧 `moveAnalyses` を削除**し `analysisError`/`analysisCompletedAt` をクリア、**`analysisRevision` を +1** して再キュー（`title`/`memo` は温存）。トランザクション実行。パーサ修正後の既存棋譜の復旧と失敗棋譜の再試行を兼ねる（[05](./05-analysis.md) §1.1a / [03](./03-data-model.md)） |
 | DELETE | `/api/kifus/:id` | 棋譜削除（解析結果も CASCADE） |
-| GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuId, revision, analyzed, total, updatedAt }` または `null`）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
+| GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuId, revision, profile, analyzed, total, updatedAt }` または `null`）。`profile`（`'quick'` \| `'full'`）は web が「簡易解析中 / 詳細解析中」を出し分けるために返す（[05](./05-analysis.md) §1.1b・§2.5）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
 | ~~POST~~ | ~~`/api/swars/import`~~ | **無効（常時 404）**。swars 取り込みジョブ起動だったもの（§4） |
 | ~~GET~~ | ~~`/api/swars/import/status`~~ | **無効（常時 404）**。swars 取り込みジョブ状態だったもの（§4） |
 
@@ -128,7 +128,7 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 |---|---|---|---|
 | `page` | 1〜 | `1` | 50件ページネーション |
 | `q` | 文字列（100字まで） | なし | `title` / `sente` / `gote` の部分一致。LIKE のワイルドカードはエスケープして素の部分一致にする。上限超過は 400（web も同じ上限を持つ。[05](./05-analysis.md) §2.5） |
-| `status` | `all` \| `analyzed` \| `unanalyzed` \| `failed` | `all` | 一覧のバッジと同じ区分（`failed` は `analysisError`、他は `analysisError IS NULL` かつ `analysisCompletedAt` の有無） |
+| `status` | `all` \| `analyzed` \| `unanalyzed` \| `failed` | `all` | 一覧のバッジと同じ区分（`failed` は `analysisError`、他は `analysisCompletedAt` の有無）。🔴 **`analyzed` は quick 完了を含む**（決定・2026-09-05。「見られる結果があること」が解析済みの意味。詳細の有無＝`analysisProfile` は別の印）。簡易のみ / 詳細済みを分ける区分を足すかは実装判断（[05](./05-analysis.md) §1.1d / §2.5） |
 | `outcome` | `all` \| `win` \| `loss` \| `decided` | `all` | 自分から見た勝敗。`self` と組で使う。`decided` は「勝敗がついた」（引き分け・結果不明・自分未確定を外す＝分析ページの対象局と同じ母集団。[09](./09-analytics.md) §4・§7） |
 | `self` | 自分の名前候補（カンマ区切り） | なし | 「自分」は web の `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` が単一の正なので、server は設定を持たず**判定材料を web から受け取る**。両対局者とも候補に一致する対局は側を確定できないため除外する（web の `resolveUserSide` が ambiguous とするのと同じ扱い）。候補が空なら勝敗の絞り込みは 0 件 |
 | `from` / `to` | `YYYY-MM-DD` | なし | `coalesce(playedAt, createdAt)` に対する期間。**両端を含む**（`to` は翌日 0 時未満）。境界は DB セッションのタイムゾーンで解釈 |
@@ -141,12 +141,17 @@ worker からの投入は `Authorization: Bearer <API_KEY>` 必須の別系統�
 
 | Method | Path | 説明 |
 |---|---|---|
-| GET | `/api/worker/kifus` | 未解析かつ失敗なし（`analysisCompletedAt IS NULL AND analysisError IS NULL`）の最古を 1 件取得（なければ null）。`usiMoves`・`analysisRevision`・**`analyzedCount`（既に入っている局面数＝解析の再開位置）**を含む |
-| POST | `/api/worker/analyses` | 解析結果の**チャンク**をトランザクションで登録（`moveNumber` 単位の追記 upsert。同一 `moveNumber` の再送は入れ直し）。`revision` が現在の `analysisRevision` と一致し、かつ**失敗記録なし・未完了**のときだけ適用し、件数が `usiMoves.length + 1` に達したら同トランザクションで `analysisCompletedAt` を立てる（`{ applied, completed }` を返す。[03](./03-data-model.md) §3 / [05](./05-analysis.md) §1.1c）。`moveNumber` が `0..usiMoves.length` を外れるチャンクは 1 件も書かずに **400** |
+| GET | `/api/worker/kifus` | **解析すべき棋譜**を 1 件取得（なければ null）。失敗なし（`analysisError IS NULL`）を前提に、**(1) quick 未完（`analysisCompletedAt IS NULL AND usiMoves IS NOT NULL`）→ (2) quick 完了・full 未完**の順で最古 1 件。`usiMoves`・`analysisRevision`・**実行すべき段階 `profile`（`'quick'` \| `'full'`）**・**`analyzedCount`（その段階の再開位置＝その段階の行数）**を含む。worker は**自分が quick の設定を持つか**を伝え、持たない worker には (1) を `full` として渡す（[05](./05-analysis.md) §1.1d） |
+| POST | `/api/worker/analyses` | 解析結果の**チャンク**をトランザクションで登録（`moveNumber` 単位の追記 upsert。同一 `moveNumber` の再送は入れ直し）。body に**段階 `profile`** を添える。`revision` が現在の `analysisRevision` と一致し、かつ**失敗記録なし・その段階が未完了**のときだけ適用する。🔴 **受理はチャンクの段階が既存行の段階以上のときだけ**（既存が full の局面に quick が届いたら、その局面は書かずに無視）。段階ごとの件数が `usiMoves.length + 1` に達したら同トランザクションで完了を確定する（quick 完了で `analysisCompletedAt`、いずれも `analysisProfile` を更新。[03](./03-data-model.md) §2・§3 / [05](./05-analysis.md) §1.1c・§1.1d）。`moveNumber` が `0..usiMoves.length` を外れるチャンクは 1 件も書かずに **400** |
 | POST | `/api/worker/kifus/:id/error` | 解析失敗を報告し `analysisError` を記録。`revision` 一致時のみ適用（ポイズンピル対策・世代照合。[05](./05-analysis.md) §1.1a） |
-| POST | `/api/worker/analyses/progress` | 解析の進捗を報告。body `{ kifuId, revision, analyzed, total }`。**server のメモリに載せるだけで DB を書かない**。`revision` 一致 かつ 未完了・失敗記録なしのときだけ適用（`{ applied }` を返す。[05](./05-analysis.md) §1.1b） |
+| POST | `/api/worker/analyses/progress` | 解析の進捗を報告。body `{ kifuId, revision, profile, analyzed, total }`（`profile` は UI の「簡易解析中 / 詳細解析中」の出し分けに使う。[05](./05-analysis.md) §1.1b）。**server のメモリに載せるだけで DB を書かない**。`revision` 一致 かつ 失敗記録なし かつ **報告された段階（`profile`）が未完了**のときだけ適用（`{ applied }` を返す）。🔴 **完了は段階ごとに読む**——`analysisCompletedAt` は quick 完了で立つので、**quick 完了後の full 進捗は受理し、full 完了後の報告だけ拒否**する（[05](./05-analysis.md) §1.1b・§1.1d） |
+
+> **`GET /api/worker/position-jobs`**（局面評価ジョブの取得。[12](./12-position-lab.md) §2.1）の応答には
+> **「quick 待ちの棋譜がある」印**を相乗りさせる。worker は局面境界でこの口を既に叩いているので、
+> **full の解析を中断して quick を先に処理する**判断を**通信を増やさずに**下せる（[05](./05-analysis.md) §1.1d）。
 
 `POST /api/worker/analyses` の body（`revision` は `GET /api/worker/kifus` で得た取得時の解析世代。
+`profile` は同じく取得時に指示された段階。
 `analyses` は 1 チャンク分の局面で、**空配列もありうる**——解析を終えた時点で未送信の局面が無ければ、
 完了を確定させるために空のチャンクを送る。[05](./05-analysis.md) §1.1c）:
 
@@ -154,6 +159,7 @@ worker からの投入は `Authorization: Bearer <API_KEY>` 必須の別系統�
 {
   kifuId: number,
   revision: number,
+  profile: "quick" | "full",
   analyses: [{
     moveNumber: number,
     candidates: [{

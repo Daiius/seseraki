@@ -1381,10 +1381,12 @@ const route = app
           .from(kifus)
           .where(eq(kifus.id, kifuId))
           .for('update');
-        // 同一世代 かつ 失敗記録なし かつ 未完了 のときだけ適用。既に error が立っていれば結果は
-        // 保存しない → completedAt と analysisError は排他になる（行ロック下で error 報告と直列化）。
+        // 同一世代 かつ 失敗記録なし かつ **その段階が未完了** のときだけ適用。既に error が
+        // 立っていれば結果は保存しない（行ロック下で error 報告と直列化する）。
         // 完了済みも弾く＝完了後の解析結果は不変（遅れて届いたチャンクで部分的に上書きされない）。
-        // ⚠ 完了の判定は**このチャンクの段階**で行う（quick 完了済みの棋譜への full は受理する）
+        // ⚠ **完了の判定は段階ごと**（prd/05 §1.1d）——full 完了済みへのチャンクは破棄し、
+        // quick 完了済みの棋譜への full チャンクは受理する。`analysisCompletedAt` と
+        // `analysisError` の排他は**意図して緩めた**（quick 完了 + full 失敗で両方が非 null）
         if (!isChunkAcceptable(current, revision, profile)) return;
         // 有効範囲（0..usiMoves.length）を保証してはじめて「件数 = 揃った局面数」が成り立つ
         // （UNIQUE(kifuId, moveNumber) が値の重複を防ぐため）。範囲外は書かずに 400 で返す

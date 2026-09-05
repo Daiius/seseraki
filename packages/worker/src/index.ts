@@ -196,7 +196,8 @@ async function main() {
         if (!(await drainPositionJobs())) return;
 
         // fetch 失敗はインフラ起因（一時）。次の poll で再試行する
-        const kifu = await client.fetchNextKifu(hasQuickProfile(config));
+        const quickCapable = hasQuickProfile(config);
+        const kifu = await client.fetchNextKifu(quickCapable);
         if (!kifu) return;
         if (!kifu.usiMoves) {
           console.warn(`[Worker] Skipping kifu ${kifu.id}: no usiMoves`);
@@ -252,8 +253,13 @@ async function main() {
               await drainEvaluationJobs(engine, positionJobs, goCommand);
               // 🔴 full を解析中に quick 待ちが現れたら、局面境界で中断して quick を先に処理する
               // （未送信チャンクは `analyzeKifu` が送ってから抜ける。prd/05 §1.1d）。
-              // 優先順位は **位置評価ジョブ > quick > full** なので、判定はジョブを捌いた後
-              return profile === "full" && quickPending;
+              // 優先順位は **位置評価ジョブ > quick > full** なので、判定はジョブを捌いた後。
+              //
+              // ⚠ **quick を持たない worker は中断しない。** その構成では quick 未完の棋譜が
+              // `full` として渡ってくる（1 段階運用）ので、**いま解析している棋譜自身が
+              // 「quick 待ち」に数えられる**。中断すると次の poll で同じ棋譜を掴み直し、
+              // 1 局面ごとに中断する堂々巡りになる
+              return quickCapable && profile === "full" && quickPending;
             },
             // 解析結果のチャンクは**完了を待って**送る。失敗は握りつぶさず解析を中断する
             // （続行すると moveNumber に穴が空き、再開位置を件数で決められなくなる）

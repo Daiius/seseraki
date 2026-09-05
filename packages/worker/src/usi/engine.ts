@@ -18,6 +18,14 @@ export class UsiEngine {
    * 「元の値」を知るために使う。
    */
   private options = new Map<string, string>();
+  /**
+   * `usi` に対してエンジンが返す `id name`（例 "YaneuraOu NNUE 8.40 ..."）。
+   *
+   * 🔴 **来歴の記録専用**（prd/03 §3 / prd/05 §1.1d）。**上書き・再開の判定には使わない**——
+   * 本番イメージはやねうら王を最新で clone してビルドするため再ビルドで版文字列が変わり、
+   * 識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**を招く。
+   */
+  private name: string | undefined;
 
   constructor(
     private readonly enginePath: string,
@@ -28,6 +36,8 @@ export class UsiEngine {
     this.dead = false;
     // 新しいプロセスはオプション未設定の状態から始まる（呼び出し側が setOption を再適用する）
     this.options.clear();
+    // 再起動でエンジンが入れ替わりうるので、版文字列も掴み直す
+    this.name = undefined;
     const proc = spawn(this.enginePath, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -68,6 +78,13 @@ export class UsiEngine {
       console.error("[USI stderr]", line);
     });
 
+    // `id name` は usiok より前に流れてくる。恒久リスナーで拾う（後から `getName()` で読む）
+    this.listeners.push((line) => {
+      if (line.startsWith("id name ")) {
+        this.name = line.slice("id name ".length).trim();
+      }
+    });
+
     this.sendCommand("usi");
     await this.waitFor("usiok");
     console.log("[USI] Engine initialized (usiok)");
@@ -92,6 +109,14 @@ export class UsiEngine {
   setOption(name: string, value: string): void {
     this.options.set(name, value);
     this.sendCommand(`setoption name ${name} value ${value}`);
+  }
+
+  /**
+   * エンジンが名乗った `id name`（来歴用）。まだ受け取っていなければ undefined。
+   * 🔒 **判定に使わない**（このクラスのフィールドのコメントを参照）。
+   */
+  getName(): string | undefined {
+    return this.name;
   }
 
   /**

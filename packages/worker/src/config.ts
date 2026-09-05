@@ -39,6 +39,15 @@ export function loadConfig() {
     engineMovetime: process.env.ENGINE_MOVETIME
       ? Number(process.env.ENGINE_MOVETIME)
       : undefined,
+    // quick 段階の設定（prd/05 §1.1d）。**両方とも未設定なら quick は無効**で、
+    // 現状どおり full のみの 1 段階で動く（後方互換）。MultiPV は両段階で共通——
+    // 悪手判定と検討盤の再利用が候補手数に依存するため、quick でも本数は減らさない
+    engineQuickMovetime: process.env.ENGINE_QUICK_MOVETIME
+      ? Number(process.env.ENGINE_QUICK_MOVETIME)
+      : undefined,
+    engineQuickDepth: process.env.ENGINE_QUICK_DEPTH
+      ? Number(process.env.ENGINE_QUICK_DEPTH)
+      : undefined,
     engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
     engineHash: Number(optionalEnv("ENGINE_HASH", "128")),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,
@@ -50,3 +59,30 @@ export function loadConfig() {
 }
 
 export type Config = ReturnType<typeof loadConfig>;
+
+/**
+ * この worker が quick 段階を実行できるか（`ENGINE_QUICK_*` のどちらかが設定されている）。
+ * poll で server に伝え、持たない worker には quick 未完の棋譜が `full` として渡る
+ * （prd/05 §1.1d）。
+ */
+export function hasQuickProfile(config: Config): boolean {
+  return (
+    config.engineQuickMovetime !== undefined ||
+    config.engineQuickDepth !== undefined
+  );
+}
+
+/** 段階ごとの探索設定（`go` コマンドと来歴の記録に使う） */
+export function profileSettings(
+  config: Config,
+  profile: "quick" | "full",
+): { movetime?: number; depth: number } {
+  if (profile === "quick") {
+    return {
+      movetime: config.engineQuickMovetime,
+      // movetime 指定時は depth を使わないが、来歴には「その段階の目標 depth」を残す
+      depth: config.engineQuickDepth ?? config.engineDepth,
+    };
+  }
+  return { movetime: config.engineMovetime, depth: config.engineDepth };
+}

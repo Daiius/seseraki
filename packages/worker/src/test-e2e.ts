@@ -36,7 +36,8 @@ async function main() {
 
   // 1. 未解析の棋譜を取得
   console.log("\n--- Step 1: Fetch next unanalyzed kifu ---");
-  const kifu = await client.fetchNextKifu();
+  // 手検証用スクリプトなので quick は持たない扱いで叩く（段階は server が返す）
+  const kifu = await client.fetchNextKifu(false);
 
   if (!kifu) {
     console.log("No kifus to analyze. Register a kifu first.");
@@ -59,6 +60,7 @@ async function main() {
   // 3. 棋譜を解析し、チャンクごとにサーバーへ送信（本番と同じ経路）
   console.log(`\n--- Step 3: Analyze kifu #${kifu.id}: "${kifu.title}" ---`);
   console.log(`Moves: ${kifu.usiMoves.length}`);
+  console.log(`Profile: ${kifu.profile}`);
   console.log(`Resuming from position ${kifu.analyzedCount}`);
 
   const usiMoves = kifu.usiMoves;
@@ -85,6 +87,12 @@ async function main() {
         kifu.id,
         kifu.analysisRevision,
         chunk,
+        {
+          profile: kifu.profile,
+          engineName: engine.getName() ?? null,
+          targetDepth: 5,
+          multiPv: 3,
+        },
       );
       console.log(
         `  submitted ${chunk.length} positions ->`,

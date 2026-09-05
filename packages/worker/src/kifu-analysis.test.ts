@@ -90,7 +90,7 @@ describe("analyzeKifu のチャンク submit", () => {
       [6, 7, 8],
       [9, 10],
     ]);
-    expect(result).toEqual({ totalMoves: 10, analyzed: 11 });
+    expect(result).toMatchObject({ totalMoves: 10, analyzed: 11, interrupted: false });
   });
 
   it("区切りに達しないうちに解析が終われば最終チャンク 1 回だけ送る", async () => {
@@ -115,7 +115,7 @@ describe("analyzeKifu のチャンク submit", () => {
     });
 
     expect(moveNumbers(chunks)).toEqual([[8, 9, 10]]);
-    expect(result).toEqual({ totalMoves: 10, analyzed: 3 });
+    expect(result).toMatchObject({ totalMoves: 10, analyzed: 3, interrupted: false });
     // 再開直後の局面は「8 手適用後」から始まる
     expect(positions[0]).toBe(
       `position startpos moves ${MOVES.slice(0, 8).join(" ")}`,
@@ -129,6 +129,60 @@ describe("analyzeKifu のチャンク submit", () => {
     ]);
   });
 
+  it("割り込みで中断すると、未送信チャンクを送ってから抜ける（穴を空けない）", async () => {
+    const { engine, positions } = createStubEngine(100);
+    const { chunks, onChunk } = createChunkSink();
+    const progress: [number, number][] = [];
+    let boundary = 0;
+
+    const result = await analyzeKifu(engine, MOVES, {
+      chunkIntervalMs: 30_000,
+      onChunk,
+      onProgress: (analyzed, total) => progress.push([analyzed, total]),
+      // 4 回目の局面境界（= 3 局面を解析し終えた時点）で quick 待ちが現れる
+      onPositionBoundary: async () => ++boundary === 4,
+    });
+
+    expect(result).toMatchObject({ totalMoves: 10, analyzed: 3, interrupted: true });
+    // 中断前に解析した 3 局面はすべて送られる（欠番なく 0,1,2）
+    expect(moveNumbers(chunks)).toEqual([[0, 1, 2]]);
+    expect(positions).toHaveLength(3);
+    // 進捗にも穴は空かない（送った件数と一致する）
+    expect(progress).toEqual([
+      [1, 11],
+      [2, 11],
+      [3, 11],
+    ]);
+  });
+
+  it("送るものが無ければ中断で空チャンクを送らない（完了と誤認させない）", async () => {
+    const { engine } = createStubEngine(100);
+    const { chunks, onChunk } = createChunkSink();
+
+    const result = await analyzeKifu(engine, MOVES, {
+      onChunk,
+      // 最初の局面境界で中断（1 局面も解析していない）
+      onPositionBoundary: async () => true,
+    });
+
+    expect(result).toMatchObject({ analyzed: 0, interrupted: true });
+    expect(chunks).toEqual([]);
+  });
+
+  it("割り込みを求めない境界（false / undefined）では解析を続ける", async () => {
+    const { engine } = createStubEngine(100);
+    const { chunks, onChunk } = createChunkSink();
+
+    const result = await analyzeKifu(engine, MOVES, {
+      chunkIntervalMs: 30_000,
+      onChunk,
+      onPositionBoundary: async () => {},
+    });
+
+    expect(result).toMatchObject({ analyzed: 11, interrupted: false });
+    expect(moveNumbers(chunks)).toEqual([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
+  });
+
   it("再開位置が全局面に達していれば空の最終チャンクを送る（完了を確定させる）", async () => {
     const { engine, positions } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
@@ -140,7 +194,7 @@ describe("analyzeKifu のチャンク submit", () => {
 
     expect(positions).toHaveLength(0);
     expect(chunks).toEqual([[]]);
-    expect(result).toEqual({ totalMoves: 10, analyzed: 0 });
+    expect(result).toMatchObject({ totalMoves: 10, analyzed: 0, interrupted: false });
   });
 
   it("チャンク submit が失敗したらそこで解析を中断する", async () => {

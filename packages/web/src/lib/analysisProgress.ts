@@ -207,3 +207,70 @@ export function estimateAnalyzed(state: PaceState, now: number): number {
     (target - base.analyzed) * (1 - Math.exp(-elapsed / ESTIMATE_TAU_MS))
   );
 }
+
+/**
+ * 進捗を 1 度も観測しないまま待ち続けたときに、ポーリングを長間隔へ戻すまでの時間。
+ *
+ * `pending`（未完了の棋譜が画面にある）はローダーのデータだけで決まるので、**worker が
+ * 止まっていても真のまま**になる。開いたページを放置している間ずっと 3 秒間隔で叩き続ける
+ * 必要はないので、5 分（本番 full の 1 局の所要 ≒ 2 分の倍以上——正常な解析の合間を
+ * バックオフと取り違えない）観測が無ければ頻度を落とす。
+ *
+ * 🔴 **これは stale の閾値ではない**（§2.5 の「stale は閾値で消さない」は撤回しない）。
+ * 「解析が死んでいる」という**判定はしないし、解析中の表示も消さない**。落とすのは
+ * **見に行く頻度だけ**で、**進捗を 1 度でも観測すれば即座に短間隔へ戻る**。
+ */
+export const PENDING_BACKOFF_AFTER_MS = 5 * 60_000;
+
+/**
+ * バックオフ中のローダー作り直し間隔。
+ *
+ * 🔒 **止めずに落とすだけ**にする。完全に止めると「worker が後から動き出したのに画面が
+ * 永久に切り替わらない」——今回直した不具合そのものへ戻る。**戻れること**が要点なので、
+ * 進捗を観測できなくても 60 秒に 1 度はローダーを作り直し、完了していれば表示が入れ替わる。
+ */
+export const BACKOFF_INVALIDATE_INTERVAL_MS = 60_000;
+
+/** 再取得の計画（ポーリング間隔と、ローダーを作り直す間隔。null は作り直さない） */
+export interface PollingPlan {
+  pollIntervalMs: number;
+  invalidateIntervalMs: number | null;
+}
+
+/**
+ * いまの状況から再取得の計画を決める（レベルトリガ。決定・2026-09-07）。
+ *
+ * - **待っている**（未完了の棋譜が画面にある）間は短間隔 + 10 秒ごとの作り直し。
+ *   ただし進捗を 1 度も観測しないまま `PENDING_BACKOFF_AFTER_MS` を超えたら、
+ *   ポーリングを長間隔へ戻す（**作り直しは止めず 60 秒へ落とす**——後から worker が
+ *   動き出しても復帰できる）。
+ * - **待っていない**間は長間隔・作り直しなし。
+ *
+ * `waitingSince` は「**最後に進捗を観測した時刻**、まだ観測していなければ待ち始めた時刻」。
+ * 進捗を 1 度でも観測すれば呼び出し側がここを進めるので、**バックオフからは即座に戻る**。
+ * 解析が動いている間は `pending` も真なので、観測できている限りバックオフには入らない。
+ */
+export function pollingPlan({
+  pending,
+  waitingSince,
+  now,
+}: {
+  pending: boolean;
+  waitingSince: number | null;
+  now: number;
+}): PollingPlan {
+  if (!pending) {
+    return { pollIntervalMs: IDLE_INTERVAL_MS, invalidateIntervalMs: null };
+  }
+  const backedOff =
+    waitingSince !== null && now - waitingSince >= PENDING_BACKOFF_AFTER_MS;
+  return backedOff
+    ? {
+        pollIntervalMs: IDLE_INTERVAL_MS,
+        invalidateIntervalMs: BACKOFF_INVALIDATE_INTERVAL_MS,
+      }
+    : {
+        pollIntervalMs: PENDING_INTERVAL_MS,
+        invalidateIntervalMs: PENDING_INVALIDATE_INTERVAL_MS,
+      };
+}

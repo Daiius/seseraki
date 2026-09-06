@@ -7,9 +7,8 @@ import {
   initialPaceState,
   isSameAnalysisRun,
   nextPaceState,
-  IDLE_INTERVAL_MS,
-  PENDING_INTERVAL_MS,
-  PENDING_INVALIDATE_INTERVAL_MS,
+  pollingPlan,
+  PENDING_BACKOFF_AFTER_MS,
   type AnalysisProgress,
   type PaceState,
 } from './analysisProgress';
@@ -38,6 +37,10 @@ const progressFetcher = async (): Promise<AnalysisProgress | null> => {
  * 収まって 1 度も観測されず、画面が解析前のまま固まる（実測・2026-09-07）。
  * **標本を落としても次の周期で回復する**のがレベルトリガの要点。
  *
+ * 進捗を長く観測できないまま待ち続けたら、**ポーリングだけ**長間隔へ戻す（`pollingPlan`）。
+ * ⚠ **これは stale の判定ではない**——解析中の表示は消さず、ローダーの作り直しも止めない
+ * （間隔を落とすだけ）。進捗を 1 度でも観測すれば即座に短間隔へ戻る。
+ *
  * `now` は経過時間の表示と推定の補間用。SWR は同じ値なら再レンダーしないため、worker が
  * ハングして進捗が止まると経過時間まで止まって見えてしまう。それでは「更新が止まっていること」を
  * 出したい意図と逆になるので、表示用の現在時刻は自前で刻む。
@@ -52,17 +55,50 @@ export function useAnalysisProgress(
   now: number;
   estimated: number;
 } {
+  // 「最後に進捗を観測した時刻、まだ観測していなければ待ち始めた時刻」。
+  // **1 度でも観測すればここが進み、バックオフのタイマーもリセットされる**
+  const [waitingSince, setWaitingSince] = useState<number | null>(null);
+  // バックオフの境界（進捗を観測しないまま 5 分）は時計が進むだけで訪れ、他に再レンダーの
+  // 理由が無い。境界にタイマーを置いて、そこで計画を評価し直す
+  const [planNow, setPlanNow] = useState(() => Date.now());
+
+  // ⚠ `refreshInterval` には**数値**を渡す。SWR のポーリング effect はこの値を依存に持つので、
+  // 関数を渡すと**レンダーのたびに識別子が変わってタイマーが張り直される**（解析中は 500ms
+  // ごとに再レンダーするため、3 秒のポーリングが永遠に発火しなくなりうる）
+  const plan = pollingPlan({ pending, waitingSince, now: planNow });
+
   const { data } = useSWR<AnalysisProgress | null>(
     'analysis-progress',
     progressFetcher,
     {
-      // 進捗エントリが見えている間はもちろん、**見えていなくても待っている間**は短間隔で見る
-      refreshInterval: (latest) =>
-        latest || pending ? PENDING_INTERVAL_MS : IDLE_INTERVAL_MS,
+      refreshInterval: plan.pollIntervalMs,
       revalidateOnFocus: false,
     },
   );
   const progress = data ?? null;
+
+  useEffect(() => {
+    if (progress) {
+      // 観測できた＝ worker は動いている。バックオフの起点を引き直す
+      setWaitingSince(Date.now());
+      return;
+    }
+    if (!pending) {
+      setWaitingSince(null);
+      return;
+    }
+    // 待ち始め。既に待っているなら起点は動かさない（表示中の棋譜が変わって pending が
+    // 偽→真になったときは、上の `!pending` で null に戻っているので起点が引き直される）
+    setWaitingSince((previous) => previous ?? Date.now());
+  }, [progress, pending]);
+
+  useEffect(() => {
+    if (!pending || waitingSince === null) return;
+    const remaining = PENDING_BACKOFF_AFTER_MS - (Date.now() - waitingSince);
+    if (remaining <= 0) return;
+    const timer = setTimeout(() => setPlanNow(Date.now()), remaining);
+    return () => clearTimeout(timer);
+  }, [pending, waitingSince]);
 
   // 標本の受信時刻と実測ペース。SWR は内容が同じなら同じ参照を返すので、この effect は
   // **進捗が実際に動いたときだけ**走る（＝ `receivedAt` は「最後に進捗が動いた時刻」になる）
@@ -109,14 +145,17 @@ export function useAnalysisProgress(
 
   // 🔴 エッジ検出の取りこぼしを塞ぐ本体。**未完了である限り**定期的にローダーを作り直す。
   // 完了の瞬間を観測できなくても次の周期で表示が入れ替わり、解析中はチャンク submit で
-  // 入った部分結果がそのまま画面に育つ（prd/05 §2.5）
+  // 入った部分結果がそのまま画面に育つ（prd/05 §2.5）。
+  // ⚠ バックオフ中も**止めずに間隔を落とすだけ**にする（`pollingPlan`）——止めると
+  // 「worker が後から動き出したのに画面が永久に切り替わらない」が復活する
+  const invalidateIntervalMs = plan.invalidateIntervalMs;
   useEffect(() => {
-    if (!pending) return;
+    if (invalidateIntervalMs === null) return;
     const timer = setInterval(() => {
       void router.invalidate();
-    }, PENDING_INVALIDATE_INTERVAL_MS);
+    }, invalidateIntervalMs);
     return () => clearInterval(timer);
-  }, [pending, router]);
+  }, [invalidateIntervalMs, router]);
 
   return { progress, now, estimated };
 }

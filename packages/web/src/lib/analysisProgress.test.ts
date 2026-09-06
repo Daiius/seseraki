@@ -5,8 +5,13 @@ import {
   formatUpdatedAgo,
   initialPaceState,
   nextPaceState,
+  pollingPlan,
   progressDimClass,
+  BACKOFF_INVALIDATE_INTERVAL_MS,
+  IDLE_INTERVAL_MS,
+  PENDING_BACKOFF_AFTER_MS,
   PENDING_INTERVAL_MS,
+  PENDING_INVALIDATE_INTERVAL_MS,
   type AnalysisProgress,
   type ProgressSample,
 } from './analysisProgress';
@@ -202,5 +207,69 @@ describe('nextPaceState / estimateAnalyzed', () => {
 
   it('基準点が無ければ 0', () => {
     expect(estimateAnalyzed(initialPaceState, 12_345)).toBe(0);
+  });
+});
+
+describe('pollingPlan', () => {
+  const t0 = 1_000_000;
+
+  it('待っていなければ長間隔・ローダーの作り直しもしない', () => {
+    expect(pollingPlan({ pending: false, waitingSince: null, now: t0 })).toEqual({
+      pollIntervalMs: IDLE_INTERVAL_MS,
+      invalidateIntervalMs: null,
+    });
+  });
+
+  it('待っている間は短間隔 + 定期的な作り直し', () => {
+    expect(
+      pollingPlan({ pending: true, waitingSince: t0, now: t0 + 60_000 }),
+    ).toEqual({
+      pollIntervalMs: PENDING_INTERVAL_MS,
+      invalidateIntervalMs: PENDING_INVALIDATE_INTERVAL_MS,
+    });
+  });
+
+  it('進捗を観測しないまま待ち続けたらポーリングを長間隔へ戻す', () => {
+    expect(
+      pollingPlan({
+        pending: true,
+        waitingSince: t0,
+        now: t0 + PENDING_BACKOFF_AFTER_MS,
+      }).pollIntervalMs,
+    ).toBe(IDLE_INTERVAL_MS);
+  });
+
+  it('🔒 バックオフしても作り直しは止めず、間隔を落とすだけ（後から動き出しても戻れる）', () => {
+    const plan = pollingPlan({
+      pending: true,
+      waitingSince: t0,
+      now: t0 + PENDING_BACKOFF_AFTER_MS * 10,
+    });
+    expect(plan.invalidateIntervalMs).toBe(BACKOFF_INVALIDATE_INTERVAL_MS);
+    expect(plan.invalidateIntervalMs).not.toBeNull();
+    // 待っている間の間隔よりは粗い
+    expect(plan.invalidateIntervalMs!).toBeGreaterThan(
+      PENDING_INVALIDATE_INTERVAL_MS,
+    );
+  });
+
+  it('進捗を観測したら（起点が進めば）即座に短間隔へ戻る', () => {
+    const now = t0 + PENDING_BACKOFF_AFTER_MS * 2;
+    expect(
+      pollingPlan({ pending: true, waitingSince: t0, now }).pollIntervalMs,
+    ).toBe(IDLE_INTERVAL_MS);
+    // 直前に観測できた＝起点が今に進む
+    expect(
+      pollingPlan({ pending: true, waitingSince: now, now }),
+    ).toEqual({
+      pollIntervalMs: PENDING_INTERVAL_MS,
+      invalidateIntervalMs: PENDING_INVALIDATE_INTERVAL_MS,
+    });
+  });
+
+  it('待ち始めの起点が未設定なら（まだ待ちに入った直後）バックオフしない', () => {
+    expect(
+      pollingPlan({ pending: true, waitingSince: null, now: t0 }).pollIntervalMs,
+    ).toBe(PENDING_INTERVAL_MS);
   });
 });

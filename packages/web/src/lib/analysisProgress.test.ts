@@ -6,7 +6,7 @@ import {
   initialPaceState,
   nextPaceState,
   progressDimClass,
-  ESTIMATE_HORIZON_MS,
+  PENDING_INTERVAL_MS,
   type AnalysisProgress,
   type ProgressSample,
 } from './analysisProgress';
@@ -77,14 +77,21 @@ describe('nextPaceState / estimateAnalyzed', () => {
     ...over,
   });
 
+  /** 実測ペースを直接与えた状態（漸近の性質だけを見たいケース用） */
+  const stateWith = (
+    latest: ProgressSample,
+    msPerPosition: number | null,
+  ) => ({ latest, msPerPosition });
+
   it('標本が 1 つの間は既定のペース（本番 quick の movetime 由来）で進む', () => {
     const state = nextPaceState(
       initialPaceState,
       sample({ analyzed: 10, receivedAt: 1_000 }),
     );
     expect(state.msPerPosition).toBeNull();
-    // 既定 150ms/局面 なので 1.5 秒で 10 局面ぶん進む
-    expect(estimateAnalyzed(state, 2_500)).toBeCloseTo(20, 6);
+    // 既定 150ms/局面 → 次の標本までの予測は 3000/150 = 20 局面ぶん。
+    // τ ぶん（1.5 秒）経った時点でその 1-e^-1 = 63%
+    expect(estimateAnalyzed(state, 2_500)).toBeCloseTo(10 + 20 * (1 - Math.exp(-1)), 6);
   });
 
   it('2 標本目からは実測（Δanalyzed / Δt）で自己校正する', () => {
@@ -95,7 +102,8 @@ describe('nextPaceState / estimateAnalyzed', () => {
     // 3 秒で 6 局面 = 500ms/局面（既定の 150ms とは大きく違う値に寄せる）
     state = nextPaceState(state, sample({ analyzed: 6, receivedAt: 3_000 }));
     expect(state.msPerPosition).toBeCloseTo(500, 6);
-    expect(estimateAnalyzed(state, 4_000)).toBeCloseTo(8, 6);
+    // 予測は 3000/500 = 6 局面ぶん
+    expect(estimateAnalyzed(state, 4_500)).toBeCloseTo(6 + 6 * (1 - Math.exp(-1)), 6);
   });
 
   it('別の解析（棋譜 / 世代 / 段階が変わる）ではペースを引き継がない', () => {
@@ -126,34 +134,70 @@ describe('nextPaceState / estimateAnalyzed', () => {
     expect(state.latest?.receivedAt).toBe(4_000);
   });
 
-  it('total を超えない', () => {
-    const state = nextPaceState(
-      initialPaceState,
-      sample({ analyzed: 99, receivedAt: 0, total: 100 }),
+  it('標本の間は単調に増加する', () => {
+    const state = stateWith(
+      sample({ analyzed: 20, receivedAt: 0, total: 115 }),
+      35,
     );
-    expect(estimateAnalyzed(state, 1_000_000)).toBe(100);
+    let previous = -1;
+    for (let t = 0; t <= 3_000; t += 250) {
+      const value = estimateAnalyzed(state, t);
+      expect(value).toBeGreaterThan(previous);
+      previous = value;
+    }
   });
 
-  it('実データを追い越さない（基準点より前へは戻らず、経過ぶんしか進まない）', () => {
+  it('次の標本で来るはずの値（ペース × ポーリング間隔）を超えない', () => {
+    const pace = 35;
+    const state = stateWith(
+      sample({ analyzed: 20, receivedAt: 0, total: 10_000 }),
+      pace,
+    );
+    const predicted = 20 + PENDING_INTERVAL_MS / pace;
+    for (let t = 0; t <= 60_000; t += 500) {
+      expect(estimateAnalyzed(state, t)).toBeLessThan(predicted);
+    }
+  });
+
+  it('実データが total 未満の間は推定も total に達しない（dev 実測の再現・35ms/局面・92/115）', () => {
+    // 🔴 かつて線形に外挿していたとき、この条件で 3 秒待たずにバーが満杯になり、
+    // 実データが 92/115 のまま数秒張り付いた（実測・2026-09-07）
+    const state = stateWith(
+      sample({ analyzed: 92, receivedAt: 0, total: 115 }),
+      35,
+    );
+    for (let t = 0; t <= 3_000; t += 500) {
+      expect(estimateAnalyzed(state, t)).toBeLessThan(115);
+    }
+    // 何分放置しても（凍結を含めて）到達しない
+    expect(estimateAnalyzed(state, 600_000)).toBeLessThan(115);
+    // それでいて 3 秒で 8 割方は進んでいる（遅すぎて役に立たない、にはなっていない）
+    expect(estimateAnalyzed(state, 3_000)).toBeGreaterThan(92 + (115 - 92) * 0.8);
+  });
+
+  it('標本が遅れるほど増分が減衰する（止まっていることを隠さない）', () => {
+    const state = stateWith(
+      sample({ analyzed: 10, receivedAt: 0, total: 1_000 }),
+      35,
+    );
+    const at = (t: number) => estimateAnalyzed(state, t);
+    const first = at(500) - at(0);
+    const second = at(1_000) - at(500);
+    const third = at(1_500) - at(1_000);
+    expect(second).toBeLessThan(first);
+    expect(third).toBeLessThan(second);
+    // 標本が来ないまま数秒経てば、増分は最初の 500ms のそれの数 % まで落ちる
+    // （バーは目で見て止まっている）
+    expect(at(9_000) - at(6_000)).toBeLessThan(first * 0.1);
+  });
+
+  it('基準点より手前へは戻らない（時計が戻っても）', () => {
     const state = nextPaceState(
       initialPaceState,
       sample({ analyzed: 10, receivedAt: 1_000 }),
     );
     expect(estimateAnalyzed(state, 1_000)).toBe(10);
-    // 時計が戻っても基準点より手前は出さない
     expect(estimateAnalyzed(state, 0)).toBe(10);
-    // 既定ペースで 300ms = 2 局面ぶん
-    expect(estimateAnalyzed(state, 1_300)).toBeCloseTo(12, 6);
-  });
-
-  it('進捗が止まったら推定も止まる（止まっていることを隠さない）', () => {
-    const state = nextPaceState(
-      initialPaceState,
-      sample({ analyzed: 10, receivedAt: 0, total: 1_000 }),
-    );
-    const frozen = estimateAnalyzed(state, ESTIMATE_HORIZON_MS);
-    expect(estimateAnalyzed(state, ESTIMATE_HORIZON_MS * 10)).toBe(frozen);
-    expect(frozen).toBeLessThan(1_000);
   });
 
   it('基準点が無ければ 0', () => {

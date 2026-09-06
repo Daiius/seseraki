@@ -19,15 +19,22 @@ import {
  *
  * 経過時間の文言（`agoText`）は呼び出し側で組み立てて渡す（`formatUpdatedAgo`）。停止の判断は
  * 経過時間を見せて人に委ねる方針で、ここでは閾値で stale を決めない。
+ *
+ * `estimated`（標本の間を埋めた推定値・小数）は**バーの伸びにだけ**使う。
+ * **文字の N/M は実データ（`analyzed`）のまま**——数字まで推定にすると
+ * 「何局面終わったか」が嘘になる（決定・2026-09-07。prd/05 §2.5）。
  */
 export function AnalyzingAlert({
   profile,
   analyzed,
+  estimated,
   total,
   agoText,
 }: {
   profile: AnalysisProfile;
   analyzed: number;
+  /** バーに出す推定値（省略時は実データのまま） */
+  estimated?: number;
   total: number;
   agoText: string;
 }) {
@@ -43,7 +50,7 @@ export function AnalyzingAlert({
           'progress w-full sm:w-56',
           progressDimClass(profile),
         )}
-        value={analyzed}
+        value={Math.min(estimated ?? analyzed, total)}
         max={total}
       />
     </div>

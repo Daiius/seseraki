@@ -20,13 +20,21 @@ import {
 export function AnalyzingRadial({
   profile,
   analyzed,
+  estimated,
   total,
 }: {
   profile: AnalysisProfile;
   analyzed: number;
+  /**
+   * 円環に出す推定値（省略時は実データのまま）。ポーリングの合間を埋めて滑らかに進める
+   * ためのもので、**読み上げ・title の N/M は実データ（`analyzed`）のまま**にする
+   * （決定・2026-09-07。prd/05 §2.5）。
+   */
+  estimated?: number;
   total: number;
 }) {
-  const pct = total > 0 ? Math.round((analyzed / total) * 100) : 0;
+  const shown = Math.min(estimated ?? analyzed, total);
+  const pct = total > 0 ? Math.round((shown / total) * 100) : 0;
   const text = `解析中 ${analyzed}/${total}`;
   return (
     <span

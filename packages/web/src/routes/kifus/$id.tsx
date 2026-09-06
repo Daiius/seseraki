@@ -44,8 +44,17 @@ function KifuDetailPage() {
   } | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // 🔴 **この画面が解析の完了を待っているか**をローダーのデータから導く（決定・2026-09-07）。
+  // 詳細解析まで終わっていない棋譜（`analysisProfile !== 'full'`）なら待っている。
+  // 失敗記録済みの棋譜は poll から外れて進まないので待たない（prd/05 §1.1a）。
+  // 待っている間は短間隔ポーリング + 定期 invalidate が回り、簡易解析が 20 秒で終わっても
+  // 手で再読み込みせずに結果へ切り替わる（ポーリングの合間に解析全体が収まっても取りこぼさない）
+  const pendingAnalysis =
+    kifu.analysisProfile !== 'full' && !kifu.analysisError;
   // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを id で照合する
-  const { progress, now } = useAnalysisProgress();
+  const { progress, now, estimated } = useAnalysisProgress({
+    pending: pendingAnalysis,
+  });
   const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
 
   // 悪手判定の閾値は localStorage 保持。盤面・グラフ・LLM 解説用テキストで同じ値を使う。
@@ -205,6 +214,7 @@ function KifuDetailPage() {
           <AnalyzingAlert
             profile={analyzing.profile}
             analyzed={analyzing.analyzed}
+            estimated={estimated}
             total={analyzing.total}
             agoText={formatUpdatedAgo(analyzing, now)}
           />

@@ -189,7 +189,16 @@ function KifuListPage() {
   // 解析中の棋譜は高々 1 件。一覧のバッジを「未」から「解析中 N/M」に差し替えるために使う。
   // 進捗はメモリにあり SQL で絞り込めないため、状態フィルタには「解析中」を足さない
   // （絞り込み・件数・ページングを server 側の SQL に揃える方針を崩さない。prd/04 §6.1）
-  const { progress } = useAnalysisProgress();
+  // 🔴 **この画面が解析の完了を待っているか**をローダーのデータから導く（決定・2026-09-07）。
+  // 表示中のページに未完了（詳細解析まで終わっていない・失敗もしていない）の棋譜が 1 件でも
+  // あれば待つ。待っている間は短間隔ポーリング + 定期 invalidate が回るので、解析全体が
+  // ポーリングの合間に収まっても、次の周期でバッジが「解析済み」に入れ替わる
+  const pendingAnalysis = kifus.some(
+    (kifu) => kifu.analysisProfile !== 'full' && !kifu.failed,
+  );
+  const { progress, estimated } = useAnalysisProgress({
+    pending: pendingAnalysis,
+  });
 
   const filtered = isFiltered({ q, status, outcome, tactic, missedMate, from, to });
   // 畳んだままでも「なぜ件数が少ないのか」が読めるように、効いている条件を summary に出す
@@ -477,6 +486,7 @@ function KifuListPage() {
                             <AnalyzingRadial
                               profile={analyzing.profile}
                               analyzed={analyzing.analyzed}
+                              estimated={estimated}
                               total={analyzing.total}
                             />
                           ) : 'failed' in kifu && kifu.failed ? (

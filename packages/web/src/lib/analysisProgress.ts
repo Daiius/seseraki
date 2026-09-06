@@ -56,3 +56,128 @@ export function formatUpdatedAgo(
   if (Number.isNaN(updatedAt)) return '';
   return `${formatElapsed(now - updatedAt)}に更新`;
 }
+
+// ---------------------------------------------------------------------------
+// 進捗の再取得間隔と、標本の間を埋める推定（決定・2026-09-07。prd/05 §2.5）
+// ---------------------------------------------------------------------------
+
+/**
+ * 解析の完了を待っている間のポーリング間隔。
+ *
+ * 🔴 **「待っているか」はローダーのデータから導く**（未完了の棋譜が画面にあるか）。
+ * 進捗エントリの出現・消滅という**エッジ**を粗いサンプリングで捉える設計だと、
+ * 解析全体（本番の quick は 0.15 秒/局面 × 手数 ≒ 20 秒）が**2 回のポーリングの合間に
+ * すっぽり収まり**、1 度も観測されずに画面が解析前のまま固まる（実測・2026-09-07）。
+ * 進捗エンドポイントは server のメモリ参照だけで DB を触らないので、短間隔で叩いても安い（§1.1b）。
+ */
+export const PENDING_INTERVAL_MS = 3_000;
+
+/** 待っていない間のポーリング間隔（他の端末から始まった解析に気づく程度でよい） */
+export const IDLE_INTERVAL_MS = 30_000;
+
+/**
+ * 待っている間にルーターのローダーを作り直す間隔。
+ *
+ * ローダー再実行 = 一覧 / 詳細の API 呼び出しなので、進捗ポーリングより粗くする。
+ * 10 秒は「チャンク submit で入った部分結果が育っていくのが分かる」（§2.5）粒度で、
+ * かつ本番 quick の所要（≒ 20 秒）に対して完了を跨いでも 1 回以内で追いつく値。
+ */
+export const PENDING_INVALIDATE_INTERVAL_MS = 10_000;
+
+/**
+ * 標本が 1 つしか無い間に使う 1 局面あたりの所要時間（ms）。
+ *
+ * 本番 quick の `ENGINE_QUICK_MOVETIME`（150ms）の目安に由来する（prd/05 §1.1d の
+ * 「quick 150ms で 120 局面 ≒ 20 秒」）。⚠ **server の設定値を web に配線しない**——
+ * 2 標本目からは実測（Δanalyzed / Δt）で自己校正するので、この値は最初の数秒だけ効く。
+ */
+export const DEFAULT_MS_PER_POSITION = 150;
+
+/**
+ * 推定を進め続ける上限（最後に進捗が動いてからの経過）。ポーリング間隔の 3 倍。
+ *
+ * 🔴 **推定で「進捗が止まっていること」を隠さない**（§2.5「進捗が動くこと自体が生存確認」）。
+ * これを超えたら推定は**その位置で止まる**。経過時間の表示（`formatUpdatedAgo`）は伸び続けるので、
+ * 「バーは止まっているのに経過だけ伸びる」＝止まっている、と読める。
+ * ⚠ **これは stale の閾値ではない**（解析中の表示を消したり「死んでいる」と判定したりはしない）。
+ */
+export const ESTIMATE_HORIZON_MS = PENDING_INTERVAL_MS * 3;
+
+/** 実測ペースの平滑化係数（直近の観測をこの重みで効かせる指数平滑） */
+const PACE_SMOOTHING = 0.5;
+
+/** 0 除算と桁外れの外れ値を避けるための下限 */
+const MIN_MS_PER_POSITION = 1;
+
+/** 受け取った進捗（クライアント側の受信時刻付き）。推定の**基準点**になる */
+export interface ProgressSample extends AnalysisProgress {
+  /** この標本を受け取った時刻（`Date.now()`）。⚠ server 時計との差を持ち込まないため受信側で採る */
+  receivedAt: number;
+}
+
+/** 推定に使う状態（直近の基準点と、実測から求めた 1 局面あたりの所要時間） */
+export interface PaceState {
+  latest: ProgressSample | null;
+  /** 実測から求めた 1 局面あたりの所要時間（ms）。標本が 1 つしか無い間は null */
+  msPerPosition: number | null;
+}
+
+export const initialPaceState: PaceState = { latest: null, msPerPosition: null };
+
+/** 同じ解析の続きか（棋譜・世代・段階のいずれかが変われば別の解析＝ペースを引き継がない） */
+export function isSameAnalysisRun(a: AnalysisProgress, b: AnalysisProgress): boolean {
+  return (
+    a.kifuId === b.kifuId && a.revision === b.revision && a.profile === b.profile
+  );
+}
+
+/**
+ * 新しい標本を取り込む。連続する標本の Δanalyzed / Δt から 1 局面あたりの所要時間を
+ * 自己校正する（速度をハードコードしない）。
+ */
+export function nextPaceState(
+  prev: PaceState,
+  sample: ProgressSample,
+): PaceState {
+  const previous = prev.latest;
+  if (!previous || !isSameAnalysisRun(previous, sample)) {
+    return { latest: sample, msPerPosition: null };
+  }
+  const deltaAnalyzed = sample.analyzed - previous.analyzed;
+  const deltaMs = sample.receivedAt - previous.receivedAt;
+  if (deltaAnalyzed <= 0 || deltaMs <= 0) {
+    // 進んでいない（または時計が戻った）標本ではペースを更新しない。
+    // 基準点だけ進める——止まっているなら推定も止まってほしい
+    return { latest: sample, msPerPosition: prev.msPerPosition };
+  }
+  const observed = Math.max(MIN_MS_PER_POSITION, deltaMs / deltaAnalyzed);
+  const msPerPosition =
+    prev.msPerPosition === null
+      ? observed
+      : prev.msPerPosition * (1 - PACE_SMOOTHING) + observed * PACE_SMOOTHING;
+  return { latest: sample, msPerPosition };
+}
+
+/**
+ * 基準点からの経過で解析済み局面数を補間する（進捗リング / バーを滑らかに進めるため）。
+ *
+ * 🔒 **実データを追い越さない**: 進み幅は実測ペースぶんに限り、`total` でも頭打ちにする。
+ * 🔒 **止まったら止まる**: 最後に進捗が動いてから `ESTIMATE_HORIZON_MS` を超えたら、
+ * そこで推定を凍結する。
+ *
+ * 返すのは小数（バーの `value` にそのまま渡す）。**文字で出す N/M は実データのまま**にする
+ * ——数字まで推定にすると「何局面終わったか」が嘘になる。
+ */
+export function estimateAnalyzed(state: PaceState, now: number): number {
+  const base = state.latest;
+  if (!base) return 0;
+  const pace = Math.max(
+    MIN_MS_PER_POSITION,
+    state.msPerPosition ?? DEFAULT_MS_PER_POSITION,
+  );
+  const elapsed = Math.min(
+    Math.max(0, now - base.receivedAt),
+    ESTIMATE_HORIZON_MS,
+  );
+  return Math.min(base.analyzed + elapsed / pace, base.total);
+}

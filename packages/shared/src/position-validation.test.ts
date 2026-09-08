@@ -3,6 +3,7 @@ import { createInitialState } from './board';
 import { parseSfen } from './sfen';
 import {
   isAttackedBy,
+  isInCheck,
   validateMoveOnPosition,
   validatePositionForEngine,
   type PositionViolationCode,
@@ -234,5 +235,18 @@ describe('validateMoveOnPosition（適用後の局面も検証する）', () => 
 
   it('王手を外す手は通す', () => {
     expect(moveCodesOf('4k4/9/9/9/4r4/9/9/9/L3K4 b -', '5i4i')).toEqual([]);
+  });
+});
+
+describe('isInCheck', () => {
+  it('王手されている側だけ true（玉が無ければ null）', () => {
+    // 5a の後手玉に 5b の先手金が利いている
+    const state = parseSfen('4k4/4G4/9/9/9/9/9/9/4K4 b - 1');
+    expect(state).not.toBeNull();
+    expect(isInCheck(state!, 'gote')).toBe(true);
+    expect(isInCheck(state!, 'sente')).toBe(false);
+
+    const noKing = parseSfen('9/4G4/9/9/9/9/9/9/4K4 b - 1');
+    expect(isInCheck(noKing!, 'gote')).toBeNull();
   });
 });

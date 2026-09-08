@@ -87,19 +87,39 @@ import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
 import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
 import { getJob, startJob } from './swars/job-store.js';
 import {
+  applyMove,
   attributionOf,
+  buildPositions,
   createInitialState,
   parseSfen,
   positionDiff,
   positionSfen,
   validateMoveOnPosition,
   validatePositionForEngine,
+  type BoardState,
   type PositionDiff,
   type TacticLabel,
 } from 'shared';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
 import { drillConfigFromEnv, syncDrills } from './drills';
+import {
+  DEFAULT_SCORING,
+  isMateAfter,
+  mateStep,
+  scoreFromCandidates,
+  scoreMove,
+  type DrillScoring,
+} from './drill-answer';
+import { forgetLine, recallLine } from './drill-lines';
+import { resolveWithEngine, type ResolveInput } from './drill-engine';
+import {
+  drillCounts,
+  drillSfen,
+  loadDrill,
+  pickNextDrill,
+  recordAttempt,
+} from './drill-query';
 import {
   addAlias,
   countUnresolvedSubjects,
@@ -253,6 +273,42 @@ const swarsDisabled: MiddlewareHandler = async (c, next) => {
   }
   await next();
 };
+
+/** 出題局面（`moveNumber` 手を指す直前の局面）。指し手列が足りなければ null */
+function drillPosition(usiMoves: string[] | null, moveNumber: number): BoardState | null {
+  if (!usiMoves || moveNumber > usiMoves.length) return null;
+  return buildPositions(usiMoves)[moveNumber] ?? null;
+}
+
+/** 出題局面に手順を積む。読めない手が混ざったら null（数字を捏造しない） */
+function applyLine(base: BoardState, moves: string[]): BoardState | null {
+  let state = base;
+  for (const move of moves) {
+    try {
+      state = applyMove(state, move);
+    } catch {
+      return null;
+    }
+  }
+  return state;
+}
+
+/** エンジンの採点結果を HTTP へ写す。**待ちは 202、キュー満杯は 503**（prd/12 §2.4 と同じ流儀） */
+async function answerWithEngine(input: ResolveInput, reveal: Record<string, unknown>) {
+  const answer = await resolveWithEngine(input);
+  switch (answer.status) {
+    case 'pending':
+      return { body: { status: 'pending' as const, jobId: answer.jobId }, status: 202 as const };
+    case 'busy':
+      return { body: { error: '評価キューが一杯です' }, status: 503 as const };
+    case 'failed':
+      return { body: { error: answer.error }, status: 502 as const };
+    case 'continue':
+      return { body: { status: 'continue' as const, reply: answer.reply }, status: 200 as const };
+    case 'done':
+      return { body: { ...answer, ...reveal }, status: 200 as const };
+  }
+}
 
 const route = app
   // --- 認証 ---
@@ -969,6 +1025,138 @@ const route = app
         return c.json({ status: 'pending' as const, jobId });
       }
       return c.json({ jobId, source: 'engine' as const, ...poll.outcome });
+    },
+  )
+  // --- 出題（prd/13）---
+  // 🔴 **答えを含む列は返さない**（`answerMove` / `candidates` / `playedMove`）。
+  // 渡した時点で答えが見えているのと同じで、専用ページにした意味が消える（prd/13 §7）。
+  // 棋譜名・手数・対局者も伏せる——解答後に `POST /drills/:id/answer` が返す
+  .get(
+    '/drills/next',
+    sessionRequired,
+    zv('query', z.object({ kind: z.enum(['mate', 'best']).optional() })),
+    async (c) => {
+      const { kind } = c.req.valid('query');
+      const drill = await pickNextDrill(await currentUserId(), kind);
+      return c.json({ drill });
+    },
+  )
+  .get('/drills/counts', sessionRequired, async (c) =>
+    c.json(await drillCounts(await currentUserId())),
+  )
+  // 「自明だった」で以後の出題から外す（prd/13 §7）。
+  // 🔒 印は**履歴側**に置く——出題を作り直しても残るようにするため（prd/13 §6.2）
+  .post(
+    '/drills/:id/exclude',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const drill = await loadDrill(id, await currentUserId());
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      await recordAttempt(db, {
+        drillId: id,
+        move: null,
+        verdict: null,
+        lossCp: null,
+        excluded: true,
+      });
+      forgetLine(id);
+      return c.json({ ok: true } as const);
+    },
+  )
+  // 解答（prd/13 §5）。**採点は server が持つ**——候補手と正解手をクライアントへ
+  // 先に渡さないための置き場所でもある（上記 `/drills/next`）。
+  // `line` は**出題局面からの全手順**（受方の応手を含み、最後がユーザーの手）。
+  // `best` は 1 手、`mate` は詰み上がりまで積み上がる（prd/13 §5.2）。
+  .post(
+    '/drills/:id/answer',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    zv(
+      'json',
+      z.object({
+        line: z.array(z.string().min(2).max(8)).min(1).max(64),
+        // 採点の線引きは**閲覧者の設定**（prd/13 §5.1）。届かなければ既定
+        correctMargin: z.number().int().min(0).max(10000).optional(),
+        closeMargin: z.number().int().min(0).max(10000).optional(),
+      }),
+    ),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const { line, correctMargin, closeMargin } = c.req.valid('json');
+      const drill = await loadDrill(id, await currentUserId());
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      const scoring: DrillScoring = {
+        correctMargin: correctMargin ?? DEFAULT_SCORING.correctMargin,
+        closeMargin: closeMargin ?? DEFAULT_SCORING.closeMargin,
+      };
+
+      // 出題局面 → `line` の 1 手前まで進めた局面。ここがユーザーの手を指す局面
+      const base = drillPosition(drill.usiMoves, drill.moveNumber);
+      if (!base) return c.json({ error: '出題局面を再現できません' } as const, 409);
+      const move = line[line.length - 1];
+      const state = applyLine(base, line.slice(0, -1));
+      if (!state) return c.json({ error: '手順を再現できません' } as const, 400);
+
+      // エンジンに渡す前の検証（prd/12 §2.5）。合法性は問わないが、
+      // クラッシュ・ハングさせうる手はここで落とす
+      const check = validateMoveOnPosition(state, move);
+      if (!check.ok) {
+        return c.json(
+          { error: 'その手は指せません', violations: check.violations },
+          400,
+        );
+      }
+
+      // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）
+      const reveal = {
+        kifuId: drill.kifuId,
+        moveNumber: drill.moveNumber,
+        reason: drill.reason,
+        answerMove: drill.answerMove,
+        answerPv: drill.answerPv,
+        playedMove: drill.playedMove,
+        playedLossCp: drill.playedLossCp,
+      };
+
+      if (drill.kind === 'mate') {
+        // 覚えている手順（別解に入った後）を優先し、無ければ出題時の pv
+        const expected = recallLine(drill.id) ?? drill.answerPv;
+        const step = mateStep(expected, line);
+        if (step.state === 'match') {
+          if (!step.solved) {
+            // 途中。受方の応手だけ返す（**残りの手順は渡さない**）
+            return c.json({ status: 'continue' as const, reply: step.reply });
+          }
+          await recordAttempt(db, {
+            drillId: id,
+            move,
+            verdict: 'correct',
+            lossCp: null,
+          });
+          forgetLine(id);
+          // ⚠ `lossCp` は必ず載せる（mate では常に null）。応答の形を分岐で変えない
+          return c.json({
+            status: 'done' as const,
+            verdict: 'correct' as const,
+            lossCp: null,
+            ...reveal,
+          });
+        }
+        // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）
+        const deviated = await answerWithEngine({ drill, state, move, line, scoring }, reveal);
+        return c.json(deviated.body, deviated.status);
+      }
+
+      // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
+      const scored = scoreFromCandidates(drill, move, scoring);
+      if (scored) {
+        await recordAttempt(db, { drillId: id, move, ...scored });
+        return c.json({ status: 'done' as const, ...scored, ...reveal });
+      }
+      const resolved = await answerWithEngine({ drill, state, move, line, scoring }, reveal);
+      return c.json(resolved.body, resolved.status);
     },
   )
   // --- 動画解析（prd/10）---

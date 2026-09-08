@@ -151,6 +151,18 @@ export function isAttackedBy(
   return false;
 }
 
+/**
+ * `side` の玉が王手されているか。**玉が盤上に無ければ `null`**（＝追えない）。
+ *
+ * ⚠ **合法手生成ではない**（prd/12 §2.5）。見るのは「相手の駒がその玉のマスを利いているか」の
+ * 1 点だけで、逃げ道の有無は数えない。詰みの証明には使えない。
+ */
+export function isInCheck(state: BoardState, side: Side): boolean | null {
+  const king = findKing(state, side);
+  if (!king) return null;
+  return isAttackedBy(state, side === 'sente' ? 'gote' : 'sente', king[0], king[1]);
+}
+
 function findKing(state: BoardState, side: Side): [row: number, col: number] | null {
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {

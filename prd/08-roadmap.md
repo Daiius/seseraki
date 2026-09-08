@@ -79,6 +79,15 @@
 - Markdown フォーマット改善（戦型ラベル・SFEN 併記・Δ 列・注目局面の絞り込み）。
 - 詳細は [06](./06-llm-commentary.md) §3。
 
+### 出題（次の一手・実戦詰将棋。優先度: 高・未実装）
+
+- 溜め込んだ棋譜と解析から問題を作って解く（`/drills`）。設計は [13](./13-drills.md) に確定済み。
+  **新しいエンジン解析は要らない**——材料は `candidateMoves` / `kifuPositions` / `subjectSide` に揃っている。
+- 段取り: (1) `lib/cpl.ts` を `shared` へ移す（[02](./02-architecture.md) §3 の gap。**これ無しには抽出が書けない**）→
+  (2) `drills` / `drillAttempts` のスキーマと抽出（server）+ 一括生成スクリプト →
+  (3) `/drills` ページ（出題・採点・解答履歴）→ (4) 本番で一括生成を一度流す（[13](./13-drills.md) §8）。
+- 判定は既存の名指し評価（[12](./12-position-lab.md) §2.4）に相乗りし、**server / worker は変更しない**見込み。
+
 ### 評価値の精度向上
 
 - 開発環境は MATERIAL（駒得ベース）のため序盤評価値が大きめに出る。本番 NNUE（評価関数同梱）で

@@ -154,6 +154,7 @@ export function BoardGrid({
   flipped,
   onSquareClick,
   selected,
+  destinations,
 }: {
   state: BoardState;
   lastMoveTo: [number, number] | null;
@@ -166,6 +167,12 @@ export function BoardGrid({
   onSquareClick?: (square: SquareRef) => void;
   /** 選択中のマス（タップ 1 段目）。行き先を選ぶまで強調する */
   selected?: SquareRef | null;
+  /**
+   * 着手可能マス（出題。prd/13 §3）。**渡さなければ何も変わらない**——検討盤は
+   * フル編集で「動けるマス」という概念自体を持たないので渡さない。
+   * 🔒 **盤の見た目の助けであって、合否の判定には使わない**（判定は server。prd/13 §5）。
+   */
+  destinations?: SquareRef[] | null;
 }) {
   const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
   const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
@@ -193,6 +200,10 @@ export function BoardGrid({
           const className = clsx(
             'shogi-square border border-base-300 flex items-center justify-center font-bold',
             isLastMove && 'bg-primary/15',
+            // 行き先の候補。⚠ **選択マスより弱く**——強調が同じ強さだと、
+            // どこを選んでいるのかが読めなくなる
+            destinations?.some((d) => d.row === rowIdx && d.col === colIdx) &&
+              'bg-info/20',
             // 選択中は最後手の強調より優先させる（今まさに操作している場所なので）
             isSelected && 'bg-secondary/40 ring-2 ring-secondary ring-inset',
           );

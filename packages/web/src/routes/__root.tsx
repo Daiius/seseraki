@@ -10,6 +10,7 @@ import {
 import { checkSession, logout } from '../lib/auth';
 import { Logo } from '../components/Logo';
 import {
+  AcademicCapIcon,
   Bars3Icon,
   ChartBarIcon,
   ChevronDownIcon,
@@ -112,6 +113,10 @@ function RootComponent() {
             </Link>
             <Link to="/stats" className={ICON_BTN} aria-label="戦型別成績">
               <ChartBarIcon />
+            </Link>
+            {/* 出題（prd/13）。棋譜詳細からは入れない——あの画面では答えが見えている */}
+            <Link to="/drills" className={ICON_BTN} aria-label="出題">
+              <AcademicCapIcon />
             </Link>
             <Link
               to="/positions"

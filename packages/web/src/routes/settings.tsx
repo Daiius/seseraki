@@ -7,6 +7,7 @@ import {
   useMateMax,
 } from '../lib/mateMax';
 import { useDisplaySize } from '../lib/displaySize';
+import { MAX_MARGIN, MIN_MARGIN, applyMarginInput, useDrillScoring } from '../lib/drillScoring';
 import { ThresholdSettings } from '../components/ThresholdSettings';
 import { DisplaySizeSettings } from '../components/DisplaySizeSettings';
 import { SelfSettings } from '../components/SelfSettings';
@@ -42,6 +43,7 @@ function SettingsPage() {
   const { thresholds, setThresholds } = useThresholds();
   const { mateMax, setMateMax } = useMateMax();
   const { displaySize, setDisplaySize } = useDisplaySize();
+  const { scoring, setScoring } = useDrillScoring();
 
   return (
     <div>
@@ -54,6 +56,41 @@ function SettingsPage() {
       <section className="flex flex-col gap-3 mt-6">
         <h3 className="text-lg font-semibold">悪手判定のしきい値</h3>
         <ThresholdSettings thresholds={thresholds} onChange={setThresholds} />
+      </section>
+      <section className="flex flex-col gap-3 mt-6">
+        <h3 className="text-lg font-semibold">出題の採点</h3>
+        <p className="text-sm text-base-content/70">
+          出題（次の一手）で「正解」「惜しい」と見なす、最善手との差です。
+          <strong>悪手判定のしきい値とは別に持ちます</strong>
+          ——疑問手のしきい値を正解の線にすると、正解がいくつもある局面ができてしまうためです。
+          小さくするほど「実質的に正解が 1 つ」に近づきます。
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+          {(
+            [
+              ['correctMargin', '正解', 'この損失(cp)以内'],
+              ['closeMargin', '惜しい', 'この損失(cp)以内・正解より大きい'],
+            ] as const
+          ).map(([field, label, hint]) => (
+            <label key={field} className="flex items-center gap-2 text-sm">
+              <span className="w-14">{label}</span>
+              <input
+                type="number"
+                className="input input-sm input-bordered w-24"
+                defaultValue={scoring[field]}
+                min={MIN_MARGIN}
+                max={MAX_MARGIN}
+                step={10}
+                onChange={(e) => {
+                  const next = applyMarginInput(scoring, field, e.target.value);
+                  if (next) setScoring(next);
+                }}
+                aria-label={`${label}と見なす損失の上限`}
+              />
+              <span className="text-base-content/70">{hint}</span>
+            </label>
+          ))}
+        </div>
       </section>
       <section className="flex flex-col gap-3 mt-6">
         <h3 className="text-lg font-semibold">取りこぼしの詰み手数</h3>

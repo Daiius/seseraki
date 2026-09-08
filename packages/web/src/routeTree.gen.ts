@@ -14,6 +14,7 @@ import { Route as StatsRouteImport } from './routes/stats'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PositionsRouteImport } from './routes/positions'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as DrillsRouteImport } from './routes/drills'
 import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as KifusNewRouteImport } from './routes/kifus/new'
@@ -44,6 +45,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DrillsRoute = DrillsRouteImport.update({
+  id: '/drills',
+  path: '/drills',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DevGalleryRoute = DevGalleryRouteImport.update({
   id: '/dev-gallery',
   path: '/dev-gallery',
@@ -68,6 +74,7 @@ const KifusIdRoute = KifusIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
+  '/drills': typeof DrillsRoute
   '/login': typeof LoginRoute
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
@@ -79,6 +86,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
+  '/drills': typeof DrillsRoute
   '/login': typeof LoginRoute
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
@@ -91,6 +99,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dev-gallery': typeof DevGalleryRoute
+  '/drills': typeof DrillsRoute
   '/login': typeof LoginRoute
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
@@ -104,6 +113,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/dev-gallery'
+    | '/drills'
     | '/login'
     | '/positions'
     | '/settings'
@@ -115,6 +125,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/dev-gallery'
+    | '/drills'
     | '/login'
     | '/positions'
     | '/settings'
@@ -126,6 +137,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/dev-gallery'
+    | '/drills'
     | '/login'
     | '/positions'
     | '/settings'
@@ -138,6 +150,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DevGalleryRoute: typeof DevGalleryRoute
+  DrillsRoute: typeof DrillsRoute
   LoginRoute: typeof LoginRoute
   PositionsRoute: typeof PositionsRoute
   SettingsRoute: typeof SettingsRoute
@@ -184,6 +197,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/drills': {
+      id: '/drills'
+      path: '/drills'
+      fullPath: '/drills'
+      preLoaderRoute: typeof DrillsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dev-gallery': {
       id: '/dev-gallery'
       path: '/dev-gallery'
@@ -218,6 +238,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DevGalleryRoute: DevGalleryRoute,
+  DrillsRoute: DrillsRoute,
   LoginRoute: LoginRoute,
   PositionsRoute: PositionsRoute,
   SettingsRoute: SettingsRoute,

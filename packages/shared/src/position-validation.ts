@@ -152,6 +152,64 @@ export function isAttackedBy(
 }
 
 /**
+ * `from` の駒が動けるマスを列挙する（**盤上の駒だけ**。打つ手は `dropDestinations`）。
+ *
+ * 🔒 **合法手生成器ではない**（prd/12 §2.5 の決定は動かさない）。ここが答えるのは
+ * 「**選んだ 1 枚がそのマスへ動けるか**」だけで、局面の全合法手を数え上げない。
+ * 自玉が王手放置になる手・打ち歩詰めは**弾かない**——それはエンジンの担当（prd/13 §3）。
+ *
+ * 出題（prd/13 §3）で着手可能マスを見せるために使う。**盤の見た目の助けであって、
+ * 合否の判定には使わない。**
+ */
+export function moveDestinations(
+  state: BoardState,
+  from: { row: number; col: number },
+): { row: number; col: number }[] {
+  const piece = state.board[from.row]?.[from.col];
+  if (!piece) return [];
+  const result: { row: number; col: number }[] = [];
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      if (row === from.row && col === from.col) continue;
+      // 自分の駒がいるマスへは動けない（相手の駒は取れる）
+      if (state.board[row][col]?.side === piece.side) continue;
+      if (attacks(state, from.row, from.col, row, col)) result.push({ row, col });
+    }
+  }
+  return result;
+}
+
+/**
+ * `kind` を打てるマスを列挙する。**空きマスのうち、打った結果が明らかに指せない手を除く**
+ * （二歩・行き所のない駒）。⚠ 打ち歩詰めは**見ない**（判定にはエンジンが要る。prd/13 §3）。
+ */
+export function dropDestinations(
+  state: BoardState,
+  side: Side,
+  kind: PieceKind,
+): { row: number; col: number }[] {
+  const result: { row: number; col: number }[] = [];
+  for (let row = 0; row < 9; row++) {
+    for (let col = 0; col < 9; col++) {
+      if (state.board[row][col]) continue;
+      if (isStuck({ kind, side }, row)) continue;
+      if (kind === 'P' && hasPawnOnFile(state, side, col)) continue;
+      result.push({ row, col });
+    }
+  }
+  return result;
+}
+
+/** その筋に自分の生の歩がいるか（二歩の判定） */
+function hasPawnOnFile(state: BoardState, side: Side, col: number): boolean {
+  for (let row = 0; row < 9; row++) {
+    const piece = state.board[row][col];
+    if (piece && piece.side === side && piece.kind === 'P') return true;
+  }
+  return false;
+}
+
+/**
  * `side` の玉が王手されているか。**玉が盤上に無ければ `null`**（＝追えない）。
  *
  * ⚠ **合法手生成ではない**（prd/12 §2.5）。見るのは「相手の駒がその玉のマスを利いているか」の
@@ -314,6 +372,25 @@ const PROMOTABLE: Partial<Record<PieceKind, true>> = {
 /** 敵陣（自分から見て奥の 3 段）か。成れるのは移動元・移動先のどちらかが敵陣のとき */
 function inPromotionZone(row: number, side: Side): boolean {
   return side === 'sente' ? row <= 2 : row >= 6;
+}
+
+/**
+ * その手が**成れる手か**（盤上の移動で、成れる駒が、成りの領域に出入りする）。
+ *
+ * 出題の盤（prd/13 §3）で「成」を出すかの判定に使う。⚠ **検討盤には使わない**——
+ * あちらはフル編集で、打った駒を後から成らせることまで許す（prd/12 §3.2）。
+ *
+ * 🔒 **規則は `validateMoveOnPosition` の `illegal_promotion` と同じ出所にする。**
+ * 別々に持つと、**押せるのに server が 400 を返すボタン**ができる（実際に踏んだ）。
+ */
+export function canPromoteMove(state: BoardState, move: string): boolean {
+  const match = /^([1-9][a-i])([1-9][a-i])\+?$/.exec(move);
+  if (!match) return false;
+  const [fromRow, fromCol] = usiToIndex(match[1]);
+  const [toRow] = usiToIndex(match[2]);
+  const piece = state.board[fromRow]?.[fromCol];
+  if (!piece || !PROMOTABLE[piece.kind]) return false;
+  return inPromotionZone(fromRow, piece.side) || inPromotionZone(toRow, piece.side);
 }
 
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */

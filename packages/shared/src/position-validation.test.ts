@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createInitialState } from './board';
 import { parseSfen } from './sfen';
 import {
+  canPromoteMove,
+  dropDestinations,
   isAttackedBy,
   isInCheck,
+  moveDestinations,
   validateMoveOnPosition,
   validatePositionForEngine,
   type PositionViolationCode,
@@ -248,5 +251,52 @@ describe('isInCheck', () => {
 
     const noKing = parseSfen('9/4G4/9/9/9/9/9/9/4K4 b - 1');
     expect(isInCheck(noKing!, 'gote')).toBeNull();
+  });
+});
+
+describe('moveDestinations / dropDestinations（着手可能マス。prd/13 §3）', () => {
+  it('走り駒は利きの続く限り。自分の駒は越えられず、相手の駒は取れる', () => {
+    // 5e の先手飛車。5c に先手歩、5g に後手歩
+    const state = parseSfen('4k4/9/4P4/9/4R4/9/4p4/9/4K4 b - 1')!;
+    const to = moveDestinations(state, { row: 4, col: 4 }).map((d) => `${d.row}${d.col}`);
+    // 上は 5d まで（5c の自分の歩は越えられない）
+    expect(to).toContain('34');
+    expect(to).not.toContain('24');
+    // 下は 5g の後手歩まで（取れる）。その先は行けない
+    expect(to).toContain('64');
+    expect(to).not.toContain('74');
+  });
+
+  it('空でない駒を選ばなければ空配列', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b - 1')!;
+    expect(moveDestinations(state, { row: 4, col: 4 })).toEqual([]);
+  });
+
+  it('打てるのは空きマスだけ。二歩と行き所のない駒は外す', () => {
+    // 5e に先手歩がいる筋（col 4）へは打てない
+    const state = parseSfen('4k4/9/9/9/4P4/9/9/9/4K4 b P 1')!;
+    const drops = dropDestinations(state, 'sente', 'P');
+    expect(drops.some((d) => d.col === 4)).toBe(false);
+    // 1 段目（row 0）は行き所がない
+    expect(drops.some((d) => d.row === 0)).toBe(false);
+    expect(drops.some((d) => d.row === 4 && d.col === 0)).toBe(true);
+  });
+});
+
+describe('canPromoteMove（出題の盤で「成」を出すか。prd/13 §3）', () => {
+  // 5四の先手飛車と、5六の後手飛車
+  const state = parseSfen('4k4/9/9/4R4/9/4r4/9/9/4K4 b - 1')!;
+
+  it('成りの領域に出入りする移動だけ true', () => {
+    expect(canPromoteMove(state, '5d5c')).toBe(true); // 敵陣に入る
+    expect(canPromoteMove(state, '5d5e')).toBe(false); // 入らない
+    expect(canPromoteMove(state, '5f5g')).toBe(true); // 後手は下が敵陣
+    expect(canPromoteMove(state, '5f5e')).toBe(false);
+  });
+
+  it('打つ手・空マス・成れない駒は false', () => {
+    expect(canPromoteMove(state, 'P*5c')).toBe(false);
+    expect(canPromoteMove(state, '1a1b')).toBe(false);
+    expect(canPromoteMove(state, '5i5h')).toBe(false); // 玉は成れない
   });
 });

@@ -9,7 +9,7 @@ import { ShogiBoard } from '../components/ShogiBoard';
 import { StudyBoard } from '../components/StudyBoard';
 import { BoardControls } from '../components/BoardControls';
 import type { EvalState } from '../lib/positionEval';
-import { DEFAULT_THRESHOLDS } from '../lib/cpl';
+import { DEFAULT_THRESHOLDS } from 'shared';
 import {
   applyStudyMoves,
   createStudySession,

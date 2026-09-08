@@ -3,9 +3,16 @@ import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 import {
   applyMove,
+  computeMoveLosses,
+  formatLoss,
+  labelOf,
+  labelText,
   positionSfen,
   usiToJapaneseWithPiece,
   type BoardState,
+  type MoveLabel,
+  type MoveLoss,
+  type Thresholds,
 } from 'shared';
 import {
   turnSymbol,
@@ -19,15 +26,6 @@ import { StudyBoard } from './StudyBoard';
 import type { StudySession } from '../lib/study';
 import { BoardControls } from './BoardControls';
 import { ChevronLeftIcon, ChevronRightIcon } from './icons';
-import {
-  computeMoveLosses,
-  formatLoss,
-  labelOf,
-  labelText,
-  type MoveLabel,
-  type MoveLoss,
-  type Thresholds,
-} from '../lib/cpl';
 import { EvalGraph } from './EvalGraph';
 import type { AnalysisProfile } from '../lib/analysisProgress';
 

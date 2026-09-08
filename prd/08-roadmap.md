@@ -67,8 +67,10 @@
 - ✅ **`packages/shared` を新設し、`board.ts` を web から抽出済み**（テスト 19 件ごと移設）。
   盤面追跡に加え、盤面を必要とする USI→日本語表記（`usiToJapaneseWithPiece` / `getPieceName`）も含む。
   戦型判定を server から回すのに必要だったため先行して消化した。
+- ✅ **`cpl.ts`（悪手判定）も `shared` へ抽出済み**（出題の抽出が server 側で同じ判定を要するため。
+  [13](./13-drills.md) §9）。閾値の永続化（localStorage）は web の `lib/thresholds.ts` に残した。
 - **まだ gap**: `lib/usi.ts`（盤面を使わない `usiToJapanese`・`toSenteEval`・`formatScore` 等）、
-  `lib/cpl.ts`（悪手判定）、kifu-export、zod 検証スキーマ。いずれも `packages/web` にある。
+  kifu-export、zod 検証スキーマ。いずれも `packages/web` にある。
 - プロンプト生成を **server エンドポイント化**し、web の「コピー」ボタンもそれを使う（書式の単一真実）。
 - 現状は web の `kifu-export` で自前生成しているため、これが理想との gap（[06](./06-llm-commentary.md) §2.3 / [02](./02-architecture.md) §3.2）。
 
@@ -83,7 +85,7 @@
 
 - 溜め込んだ棋譜と解析から問題を作って解く（`/drills`）。設計は [13](./13-drills.md) に確定済み。
   **新しいエンジン解析は要らない**——材料は `candidateMoves` / `kifuPositions` / `subjectSide` に揃っている。
-- 段取り: (1) `lib/cpl.ts` を `shared` へ移す（[02](./02-architecture.md) §3 の gap。**これ無しには抽出が書けない**）→
+- 段取り: ✅ (1) `lib/cpl.ts` を `shared` へ移す（[02](./02-architecture.md) §3 の gap を消化）→
   (2) `drills` / `drillAttempts` のスキーマと抽出（server）+ 一括生成スクリプト →
   (3) `/drills` ページ（出題・採点・解答履歴）→ (4) 本番で一括生成を一度流す（[13](./13-drills.md) §8）。
 - 判定は既存の名指し評価（[12](./12-position-lab.md) §2.4）に相乗りし、**server / worker は変更しない**見込み。

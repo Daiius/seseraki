@@ -20,7 +20,7 @@ export function mateLineOf(
 /**
  * 保存値（手番視点）を先手視点へ正規化し、±3000 にクランプする。
  * **表示用途に限る**——悪手判定（CPL）は同一局面内で最善手と実手を比べるため
- * 正規化も符号反転も要らない（`lib/cpl.ts`）。
+ * 正規化も符号反転も要らない（`shared` の `cpl.ts`）。
  */
 export function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
   const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;

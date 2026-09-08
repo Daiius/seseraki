@@ -1,4 +1,4 @@
-import { DEFAULT_THRESHOLDS, type Thresholds } from '../lib/cpl';
+import { DEFAULT_THRESHOLDS, type Thresholds } from 'shared';
 import { applyThresholdInput } from '../lib/thresholds';
 
 /**

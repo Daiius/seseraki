@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { DEFAULT_THRESHOLDS, type Thresholds } from './cpl';
+import { DEFAULT_THRESHOLDS, type Thresholds } from 'shared';
 
 const STORAGE_KEY = 'seseraki:thresholds';
 

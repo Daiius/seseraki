@@ -10,6 +10,11 @@
  * ラベル付け（`labelOf`）を分けている。閾値を変えても再計算は要らない。
  *
  * 仕様は prd/01-domain.md §5 / prd/05-analysis.md §2.3。
+ *
+ * 🔒 **web / server の双方が使う**——悪手マーカー・検討盤の採点（web）に加え、
+ * 出題の抽出（server。prd/13-drills.md §4）がここの判定を必要とする。
+ * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。DOM / node の API を使わない。
+ * ⚠ 閾値の**永続化**（localStorage）は web の `lib/thresholds.ts` に残す。
  */
 
 export interface CplCandidate {

@@ -66,8 +66,11 @@
 - **消費者**: web（対話盤面）/ server（プロンプト生成・投入検証）/ 将来の commentator は server 経由で薄く保つ。
 - **実装状況**: 1 のうち **`board.ts` は移設済み**（盤面追跡 + `getPieceName` /
   `usiToJapaneseWithPiece`。**盤面を必要とする USI→日本語表記**もここに含まれる）。
+  **`cpl.ts`（悪手判定）も移設済み**——出題（[13](./13-drills.md) §4）の抽出が server 側で
+  同じ判定を要するため。⚠ 閾値の**永続化**（localStorage + React hook）は web の
+  `lib/thresholds.ts` に残す（環境依存なので `shared` に入れない）。
   まだ `packages/web` にあるのは `lib/usi.ts`（盤面を使わない `usiToJapanese`・`toSenteEval`・
-  `formatScore` 等）、`lib/cpl.ts`（悪手判定）と、2・3（[08](./08-roadmap.md) の gap）。
+  `formatScore` 等）と、2・3（[08](./08-roadmap.md) の gap）。
 - ⚠ **環境非依存を tsconfig で強制する**（`lib: ["esnext"]` / `types: []`）。web（ブラウザ）と
   server / worker（node）の両方が消費するため、**どちらの前提も置かない**。
   `structuredClone` のように型が `lib.dom` / `@types/node` にしか無い API も使えない

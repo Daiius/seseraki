@@ -533,7 +533,9 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
 ### 2.3 悪手判定（centipawn loss ベース・決定 2026-07-21）
 
 **CPL = 最善手の評価 − 実手の評価**（手番側視点。[01](./01-domain.md) §5）を第一級の指標にする。
-実装は `packages/web/src/lib/cpl.ts`（`computeMoveLosses` / `labelOf`）。
+実装は `packages/shared/src/cpl.ts`（`computeMoveLosses` / `labelOf`）。**web と server の双方が使う**
+（悪手マーカー・検討盤の採点と、出題の抽出。[13](./13-drills.md) §4）。閾値の永続化は web
+（`lib/thresholds.ts`・§2.5）。
 
 - **実手の評価の取り方**:
   - 実手が候補手に含まれる → **その候補の `scoreValue`**。同一局面・同一手番なので符号処理は要らない。

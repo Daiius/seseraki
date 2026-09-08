@@ -7,3 +7,4 @@ export * from './sfen';
 export * from './position-validation';
 export * from './position-edit';
 export * from './mate-line';
+export * from './cpl';

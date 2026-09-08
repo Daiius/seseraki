@@ -124,6 +124,39 @@ pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定�
 > ⚠️ **`:dev` は `DB_HOST=localhost` に繋ぐ。cloudflared tunnel を上げていると localhost が本番を指しうる**（127.0.0.1:3306 の
 > 取り合い）。`:dev` 実行前に `lsof -nP -iTCP:3306 -sTCP:LISTEN` で localhost の実体を確認し、tunnel は落としておく。
 
+### 本番イメージ同梱のエントリ
+
+server の本番イメージ（`packages/server/Dockerfile.prod`）には、常駐プロセス（`server.js`）のほかに
+**使い捨てコンテナとして明示的に実行する**エントリを同梱している。distroless は `ENTRYPOINT=node` なので
+**command はパスだけでよい**。
+
+| エントリ | 何をするか | 既定 | 実書込 |
+|---|---|---|---|
+| `/app/migrate.js` | 未適用のマイグレーションを適用（[prd/03](./prd/03-data-model.md)） | 適用する | — |
+| `/app/generate-drills.js` | 出題の一括生成（[prd/13](./prd/13-drills.md) §8） | dry-run | `GENERATE_DRILLS_APPLY=1` |
+| `/app/rebuild-positions.js` | 局面索引の一括再構築（[prd/10](./prd/10-video-analysis.md) §3.2） | dry-run | `REBUILD_POSITIONS_APPLY=1` |
+| `/app/redetect-tactics.js` | 戦型ラベルの一括再判定（[prd/01](./prd/01-domain.md) §6.4） | dry-run | `REDETECT_APPLY=1` |
+| `/app/rebuild-subjects.js` | 主体側の一括再導出（[prd/11](./prd/11-users.md) §4.2） | dry-run | `REBUILD_SUBJECTS_APPLY=1` |
+| `/app/backfill-user.js` | 表示名と名前候補の設定（移行時に 1 回。[prd/11](./prd/11-users.md) §6.2） | dry-run | `--apply`（引数を取る） |
+
+```bash
+docker compose run --rm --no-deps <server サービス> /app/<entry>.js
+docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービス> /app/generate-drills.js
+docker compose run --rm --no-deps <server サービス> /app/backfill-user.js --display "..." --names "..." --apply
+```
+
+- 🔒 **起動時の自動適用にはしない。** 失敗時の挙動と、将来インスタンスを増やしたときの競合が読めなくなる。
+- 🔴 **`migrate.js` は server の入れ替えより先に流す。** 新しい server は列やテーブルが無いと動かない
+  （`analysisProfile` が無いと poll が落ちる／`drills` が無いと解析報告・reanalyze・名前候補の編集が落ちる）。
+  **DDL 権限の管理ユーザで流す**——常駐 server の DB ユーザには権限が無い。
+- 🔴 **新しいテーブルを作るマイグレーションの後は、対応する一括生成を一度流す**（`generate-drills.js` /
+  `rebuild-positions.js`）。**マイグレーションは空のテーブルを作るだけ**なので、流さないと
+  **既存棋譜ぶんが 1 行も入らない**（局面検索なら 404、出題なら 1 問も出ない）。**発現するのは画面を見たとき。**
+- ⚠ **`Dockerfile.prod` は `dist` を丸ごとではなく 1 本ずつ COPY する。** エントリを足したら COPY も足す
+  ——書き忘れると**本番でだけファイルが無い**。実際に踏んだので、`esbuild.config.ts` が
+  **Dockerfile.prod と照合してビルドを落とす**ようにしてある。
+- ⚠ `baseline.js` は**同梱していない**（下記）。
+
 > **本番のマイグレーションはイメージに同梱したエントリで流す**（`dist/migrate.js`）:
 > ```bash
 > docker compose run --rm --no-deps <server サービス> /app/migrate.js

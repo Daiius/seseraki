@@ -11,6 +11,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { db } from './db';
 import { kifus, userAliases, users, videoKifuSources } from './db/schema';
 import type { Tx } from './tactics';
+import { drillConfigFromEnv, syncDrills } from './drills';
 
 export type SubjectSide = 'sente' | 'gote';
 
@@ -123,6 +124,15 @@ export interface SubjectInput {
   bottomIsSente: boolean | null;
 }
 
+/** 保存済みの主体側を添えた 1 局ぶん（`subjectInputOf` の戻り） */
+export interface SubjectRow extends SubjectInput {
+  /**
+   * いま保存されている主体側。**導出には使わない**——変化の検出にだけ使う
+   * （変わったときだけ出題を引き直すため。`replaceSubjectSide`）。
+   */
+  current: SubjectSide | null;
+}
+
 /**
  * 主体側を導出する（**書き込まない純関数**。prd/11 §4.1）。
  *
@@ -151,7 +161,7 @@ export function computeSubjectSide(
 export async function subjectInputOf(
   tx: Tx | typeof db,
   kifuId: number,
-): Promise<SubjectInput | null> {
+): Promise<SubjectRow | null> {
   const [row] = await tx
     .select({
       source: kifus.source,
@@ -160,6 +170,8 @@ export async function subjectInputOf(
       playedAt: kifus.playedAt,
       sourceTz: kifus.sourceTz,
       bottomIsSente: videoKifuSources.bottomIsSente,
+      // 出題の追随に使う（下記 replaceSubjectSide）。導出そのものには使わない
+      current: kifus.subjectSide,
     })
     .from(kifus)
     .leftJoin(videoKifuSources, eq(videoKifuSources.kifuId, kifus.id))
@@ -180,7 +192,14 @@ export async function replaceSubjectSide(
   const row = await subjectInputOf(tx, kifuId);
   if (!row) return null;
   const side = computeSubjectSide(row, aliases);
+  if (side === row.current) return side;
   await tx.update(kifus).set({ subjectSide: side }).where(eq(kifus.id, kifuId));
+  // 🔴 **主体側が変わったら出題も引き直す**（レビュー `OCL-20A343B8`）。出題は
+  // 「自分の手番の局面」だけを拾う（prd/13 §4.1）ので、名前候補をいじって主体側が
+  // 動くと**相手側の局面が問題として残る**。主体側が null になった棋譜の問題も消える。
+  // 🔒 **変わったときだけ呼ぶ**——名前候補の変更は所有者の全棋譜を舐めるため、
+  // 毎回呼ぶと解析結果の読み直しが棋譜数ぶん走る
+  await syncDrills(tx, kifuId, drillConfigFromEnv());
   return side;
 }
 

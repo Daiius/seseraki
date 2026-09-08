@@ -22,6 +22,11 @@ const entryPoints = {
     // ⚠ backfill-user は引数を取る:
     //   docker compose run --rm <service> /app/backfill-user.js --display "..." --names "..." --apply
     "rebuild-subjects": "./rebuild-subjects.ts",
+    // 出題の一括生成。**同梱しないと本番で出題が 1 問も出ない**——マイグレーションは
+    // 空の drills を作るだけで、既存棋譜ぶんの問題は生成を流すまで 1 行も入らない
+    // （kifu_positions と同じ罠。prd/13 §8）。
+    //   docker compose run --rm <service>  # command: ["/app/generate-drills.js"]
+    "generate-drills": "./generate-drills.ts",
     "backfill-user": "./backfill-user.ts",
     // マイグレーションの適用。**同梱する理由はポートを開けずに済むことではなく、
     // 適用する SQL とコードのバージョンが構造的に一致すること。**

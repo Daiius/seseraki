@@ -341,6 +341,105 @@ export const candidateMoves = mysqlTable(
   ],
 );
 
+/**
+ * 出題（prd/13 §6.1）。`moveAnalyses` / `candidateMoves` から導く**派生値**で、正は解析結果。
+ *
+ * 🔴 **正解の材料を焼き付けて持つ**（`answer*` / `candidates`）。解析が再実行されても、
+ * 出題中の問題の答えが黙って変わらないため（prd/13 §6.1）。
+ * 🔴 **再生成は upsert で、DELETE → INSERT にしない。** `drillAttempts` が CASCADE で
+ * ぶら下がっているので、作り直すと**解答履歴が道連れで消える**。
+ */
+export const drills = mysqlTable(
+  'drills',
+  {
+    id: serial().primaryKey(),
+    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 出題局面（= その手を指す前の局面。`moveAnalyses.moveNumber` と同じ数え方） */
+    moveNumber: int().notNull(),
+    /**
+     * 出題の種類（prd/13 §2）。`mate` は詰み上がりまで指し継ぎ、`best` は初手のみ。
+     * 🔒 **rank1 が `mate` の局面を `best` にしない**（prd/13 §4.1）——cp 差の採点が成立しない。
+     */
+    kind: mysqlEnum(['mate', 'best']).notNull(),
+    /**
+     * 拾った理由（prd/13 §4.1）。出題の絞り込みと、解答後の文言に使う。
+     * ⚠ **「相手の悪手を咎める」は持たない**——咎め損ねれば評価値が落ちるので
+     * `own_blunder` が同じ局面を拾う（prd/13 §4.2）。
+     */
+    reason: mysqlEnum(['missed_mate', 'own_blunder']).notNull(),
+    /** 正解手（rank1）。USI */
+    answerMove: varchar({ length: 16 }).notNull(),
+    answerScoreType: varchar({ length: 16 }).notNull(),
+    answerScoreValue: int().notNull(),
+    /** 正解手の読み筋。`mate` では**指し継ぎの正解手順**そのもの（prd/13 §5.2） */
+    answerPv: json().$type<string[]>(),
+    /**
+     * 出題時点の候補手（rank 順・pv を除く）。**採点はここを引く**ので、
+     * `candidateMoves` の再解析に影響されない（prd/13 §5.1）。
+     */
+    candidates: json()
+      .$type<{ rank: number; move: string; scoreType: string; scoreValue: number }[]>()
+      .notNull(),
+    /** エンジンの詰み距離（plies）。`kind='mate'` のときのみ。⚠ 詰将棋の「N手詰」ではない */
+    matePlies: int(),
+    /** 実戦で指された手（解答後の表示に使う）。棋譜の最終手より後は null */
+    playedMove: varchar({ length: 16 }),
+    /** 実戦の手の損失（cp）。mate が絡む変化では null（prd/01 §5） */
+    playedLossCp: int(),
+    /** 生成来歴（prd/13 §6.1）。取得時の解析世代と、生成に使った閾値 */
+    analysisRevision: int().notNull(),
+    blunderCp: int().notNull(),
+    mateMaxPlies: int().notNull(),
+    /** 生成器の版。抽出規則を変えたら上げる（一括再生成の対象を絞るための印） */
+    generatorRev: varchar({ length: 16 }).notNull(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    uniqueIndex('drills_kifu_id_move_number_kind_uq').on(
+      table.kifuId,
+      table.moveNumber,
+      table.kind,
+    ),
+    foreignKey({
+      columns: [table.kifuId],
+      foreignColumns: [kifus.id],
+    }).onDelete('cascade'),
+    // 出題順（未出題 > 間違えた > 正解済み。prd/13 §6.3）は種類で絞ってから引く
+    index('drills_kind_idx').on(table.kind),
+  ],
+);
+
+/**
+ * 解答履歴（prd/13 §6.2）。
+ *
+ * 🔒 **除外フラグ（「自明だった」）もここに持つ。** 出題側に持つと再生成で消えうる（prd/13 §7）。
+ */
+export const drillAttempts = mysqlTable(
+  'drill_attempts',
+  {
+    id: serial().primaryKey(),
+    drillId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    /** 解答した手（USI）。除外だけを記録する行では null */
+    move: varchar({ length: 16 }),
+    verdict: mysqlEnum(['correct', 'close', 'wrong']),
+    /**
+     * 最善との差（cp）。**null 可**——mate が絡む回答は損失を持たない（prd/13 §5.1）。
+     */
+    lossCp: int(),
+    /** 「自明だった」（prd/13 §7）。立っている行が 1 つでもあれば以後出題しない */
+    excluded: boolean().notNull().default(false),
+    createdAt: timestamp().notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.drillId],
+      foreignColumns: [drills.id],
+    }).onDelete('cascade'),
+    index('drill_attempts_drill_id_idx').on(table.drillId),
+  ],
+);
+
 export const relations = defineRelations(
   {
     kifus,
@@ -351,6 +450,8 @@ export const relations = defineRelations(
     kifuPositions,
     users,
     userAliases,
+    drills,
+    drillAttempts,
   },
   (r) => ({
     kifus: {
@@ -378,6 +479,13 @@ export const relations = defineRelations(
         from: r.candidateMoves.moveAnalysisId,
         to: r.moveAnalyses.id,
       }),
+    },
+    drills: {
+      kifu: r.one.kifus({ from: r.drills.kifuId, to: r.kifus.id }),
+      attempts: r.many.drillAttempts(),
+    },
+    drillAttempts: {
+      drill: r.one.drills({ from: r.drillAttempts.drillId, to: r.drills.id }),
     },
   }),
 );

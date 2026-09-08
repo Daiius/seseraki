@@ -21,6 +21,8 @@
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
 | `videoKifuSources` | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
 | `kifuPositions` | 局面索引（`kifus` に紐付く派生値。[10](./10-video-analysis.md) §3.2） |
+| `drills` | 出題（`kifus` に紐付く派生値。[13](./13-drills.md) §6.1） |
+| `drillAttempts` | 解答履歴と「自明だった」の除外（`drills` に紐付く。[13](./13-drills.md) §6.2） |
 | `users`（計画中） | 自分（将来は招待したユーザー。[11](./11-users.md) §2） |
 | `userAliases`（計画中） | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
 
@@ -300,6 +302,33 @@ MoveAnalysis  = { moveNumber, candidates: CandidateMove[] }
 - **submit の単位は `MoveAnalysis[]`（チャンク）**。worker は棋譜 1 局分を貯めず、経過時間で区切って
   送る（[05](./05-analysis.md) §1.1c）。解析を終えたときに worker が持つのはサマリ
   （`KifuAnalysisSummary = { totalMoves, analyzed }`）だけで、局面ごとの結果は送信済み。
+
+## 5.5 `drills` / `drillAttempts`（出題・解答履歴）
+
+出題（[13](./13-drills.md)）で使う。**正は解析結果**（`moveAnalyses` / `candidateMoves`）で、
+この 2 表は**そこから導く派生値と、それに対する人の応答**。
+
+```
+drills
+├── (kifuId, moveNumber, kind): UNIQUE  -- 1 局面 1 問
+├── kifuId: FK → kifus.id (CASCADE)
+├── kind: 'mate' | 'best' / reason: 'missed_mate' | 'own_blunder'
+├── answerMove / answerScoreType / answerScoreValue / answerPv  -- 正解（rank1）
+├── candidates: json                     -- 出題時点の候補手（採点はここを引く）
+├── matePlies / playedMove / playedLossCp
+└── analysisRevision / blunderCp / mateMaxPlies / generatorRev  -- 生成来歴
+
+drillAttempts
+├── drillId: FK → drills.id (CASCADE)
+├── move / verdict: 'correct' | 'close' | 'wrong' / lossCp（**null 可**）
+└── excluded: boolean                     -- 「自明だった」（[13](./13-drills.md) §7）
+```
+
+- 🔴 **正解の材料を焼き付けて持つ**（`answer*` / `candidates`）。解析が再実行されても、
+  出題中の問題の答えが黙って変わらないため（[13](./13-drills.md) §6.1）。
+- 🔴 **再生成は upsert で、DELETE → INSERT にしない。** `drillAttempts` が CASCADE で
+  ぶら下がっているので、作り直すと**解答履歴が道連れで消える**。条件から外れた行だけを消す。
+- 🔒 **除外フラグは履歴側に置く**——出題側に持つと再生成で消えうる。
 
 ## 6. `commentaries`（LLM 解説・計画中）
 

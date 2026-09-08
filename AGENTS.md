@@ -87,6 +87,7 @@ pnpm --filter shared test   # shared のユニットテスト（vitest・将棋�
 pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run / REDETECT_APPLY=1 で実書込）
 pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
 pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
+pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
 pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定（移行時に 1 回・既定 dry-run / --apply で実書込）
 ```
 
@@ -164,6 +165,19 @@ pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定�
 > ```bash
 > docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 <server サービス> /app/rebuild-positions.js
 > ```
+
+> **出題の一括生成**（`prd/13` §8）: 抽出規則や閾値（`DRILL_BLUNDER_CP` / `DRILL_MATE_MAX_PLIES`）を
+> 変えたら流す。**既定は dry-run**（種類ごとの件数を表示）、`GENERATE_DRILLS_APPLY=1` で実書込。
+> ```bash
+> docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 server pnpm --filter server exec tsx generate-drills.ts
+> ```
+> 🔴 **`drills` を作るマイグレーションの直後に、本番でも一度流す**（`dist/generate-drills.js`）。
+> マイグレーションは**空のテーブルを作るだけ**で、既存棋譜ぶんの問題は 1 問も入らない。
+> 流し忘れると**出題が 1 問も出ない**（`kifu_positions` と同じ罠）。
+> ```bash
+> docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービス> /app/generate-drills.js
+> ```
+> 🔒 **作り直しは upsert なので解答履歴は消えない**（条件から外れた問題だけが履歴ごと消える）。
 
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

@@ -7,7 +7,15 @@
  * 🔴 **`cpl.ts` の閾値を流用しない**（prd/13 §5.1）。疑問手閾値（既定 300）を正解の線にすると
  * 正解がいくつもある局面ができる。**許容差は閲覧者の設定**として要求ごとに届く。
  */
-import { applyMove, isInCheck, type BoardState, type Side } from 'shared';
+import {
+  applyMove,
+  dropDestinations,
+  isInCheck,
+  moveDestinations,
+  type BoardState,
+  type PieceKind,
+  type Side,
+} from 'shared';
 
 export type DrillVerdict = 'correct' | 'close' | 'wrong';
 
@@ -129,6 +137,42 @@ export function mateStep(pv: string[] | null, line: string[]): MateStep {
   const reply = pv[line.length] ?? null;
   // 読み筋を使い切った ＝ 詰み上がり。⚠ 受方の応手が残っているなら詰みではない
   return { state: 'match', reply, solved: reply === null };
+}
+
+/** USI の升表記 → 盤の添字（`1a` = 右上） */
+function squareIndex(usi: string): { row: number; col: number } | null {
+  const file = Number(usi[0]);
+  const rank = usi.charCodeAt(1) - 'a'.charCodeAt(0);
+  if (!Number.isInteger(file) || file < 1 || file > 9) return null;
+  if (rank < 0 || rank > 8) return null;
+  return { row: rank, col: 9 - file };
+}
+
+/**
+ * その手が**駒の動き方として指せるか**（レビュー `OCL-1A2B07B9`）。
+ *
+ * 🔴 **`validateMoveOnPosition` に足さない。** あちらは検討盤（フル編集）も通る道で、
+ * **合法性を問わないのが仕様**（prd/12 §2.5）。歩を横に動かせることは検討盤では正しい。
+ * 出題の解答は「実際に指せた手」でなければ意味がないので、**この経路だけ**で見る。
+ *
+ * 🔒 **合法手生成器ではない**——選んだ 1 枚の行き先を見るだけで、王手放置も打ち歩詰めも見ない
+ * （prd/13 §3。そこはエンジンの担当）。
+ */
+export function isReachableMove(state: BoardState, move: string): boolean {
+  const drop = /^([PLNSGBR])\*([1-9][a-i])$/.exec(move);
+  if (drop) {
+    const to = squareIndex(drop[2]);
+    if (!to) return false;
+    return dropDestinations(state, state.sideToMove, drop[1] as PieceKind).some(
+      (d) => d.row === to.row && d.col === to.col,
+    );
+  }
+  const board = /^([1-9][a-i])([1-9][a-i])\+?$/.exec(move);
+  if (!board) return false;
+  const from = squareIndex(board[1]);
+  const to = squareIndex(board[2]);
+  if (!from || !to) return false;
+  return moveDestinations(state, from).some((d) => d.row === to.row && d.col === to.col);
 }
 
 /**

@@ -106,6 +106,7 @@ import { drillConfigFromEnv, syncDrills } from './drills';
 import {
   DEFAULT_SCORING,
   isPrefixOf,
+  isReachableMove,
   mateStep,
   scoreFromCandidates,
   type DrillScoring,
@@ -1116,6 +1117,12 @@ const route = app
           { error: 'その手は指せません', violations: check.violations },
           400,
         );
+      }
+      // 🔴 **駒の動き方も見る**（レビュー `OCL-1A2B07B9`）。上の検証は**合法性を問わない**
+      // （検討盤のフル編集も同じ道を通るため）ので、歩を横に動かす手は素通りしてエンジンまで届く。
+      // **出題の解答は実際に指せた手でなければ意味が無い**ので、この経路だけで足す
+      if (!isReachableMove(state, move)) {
+        return c.json({ error: 'その手は指せません' } as const, 400);
       }
 
       // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）

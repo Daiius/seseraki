@@ -34,7 +34,8 @@
 - **計画中**: 局面単位の再解析 / LLM 解説の自動生成（commentator）/
   動画解析（録画から復元した棋譜の保存・局面索引・ツリー検索。[10](./10-video-analysis.md)）/
   ユーザー（自分）の server 側への移行（[11](./11-users.md)）/
-  検討モードと局面評価（[12](./12-position-lab.md)）。
+  検討モードと局面評価（[12](./12-position-lab.md)）/
+  出題（次の一手・実戦詰将棋。[13](./13-drills.md)）。
   詳細は [08-roadmap.md](./08-roadmap.md)。
 
 ## アーキ概観
@@ -82,3 +83,4 @@
 10. [10-video-analysis.md](./10-video-analysis.md) — 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索）
 11. [11-users.md](./11-users.md) — ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出
 12. [12-position-lab.md](./12-position-lab.md) — 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP）
+13. [13-drills.md](./13-drills.md) — 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴）

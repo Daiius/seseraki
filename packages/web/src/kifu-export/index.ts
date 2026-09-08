@@ -8,20 +8,18 @@
 import { turnSymbol } from '../lib/usi';
 import {
   DEFAULT_THRESHOLDS,
+  applyMove,
+  buildPositions,
   computeMoveLosses,
   formatLoss,
   labelOf,
   labelText,
-  type MoveLabel,
-  type MoveLoss,
-  type Thresholds,
-} from '../lib/cpl';
-import {
-  applyMove,
-  buildPositions,
   usiToJapaneseWithPiece,
   type BoardState,
+  type MoveLabel,
+  type MoveLoss,
   type PieceKind,
+  type Thresholds,
 } from 'shared';
 
 export interface ExportCandidate {

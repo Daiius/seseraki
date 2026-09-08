@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
+  DEFAULT_THRESHOLDS,
   applyMove,
+  lossLabel,
   usiToJapaneseWithPiece,
   type BoardState,
   type HandPieceKind,
@@ -9,6 +11,7 @@ import {
   type PieceKind,
   type Side,
   type SquareRef,
+  type Thresholds,
 } from 'shared';
 import { BoardGrid, HandDisplay } from './BoardGrid';
 import {
@@ -18,7 +21,6 @@ import {
   ChevronRightIcon,
 } from './icons';
 import { formatTurnScore, mateLineOf, moveDestination } from '../lib/usi';
-import { DEFAULT_THRESHOLDS, lossLabel, type Thresholds } from '../lib/cpl';
 import {
   canPutSelectionOnHand,
   canRedo,

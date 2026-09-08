@@ -195,9 +195,9 @@
 
 ## 9. 実装が要求する前提
 
-- 🔴 **`packages/web/src/lib/cpl.ts` を `shared` へ移す。** 出題の抽出は server 側で走るのに、
-  CPL の判定は web にしかない（[02](./02-architecture.md) §3 の gap）。**この機能はそれ無しには書けない**ので、
-  積み残しを実利のある形で消化する機会になる。
+- ✅ **`cpl.ts` を `shared` へ移した**（[02](./02-architecture.md) §3 の gap を消化）。出題の抽出は
+  server 側で走るのに、CPL の判定は web にしかなかった。⚠ 閾値の**永続化**（localStorage +
+  React hook）は web の `lib/thresholds.ts` に残す——**環境依存を `shared` に持ち込まない**ため。
 - `classifyMateLine` は既に `shared` にあるのでそのまま使える。
 - 名指し評価は [12](./12-position-lab.md) §2.4 の API をそのまま使う（**server / worker の変更は不要**の見込み）。
 

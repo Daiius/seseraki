@@ -8,7 +8,7 @@ import {
   labelText,
   type MoveLoss,
   type Thresholds,
-} from '../lib/cpl';
+} from 'shared';
 import { useDisplaySize } from '../lib/displaySize';
 
 interface EvalPoint {

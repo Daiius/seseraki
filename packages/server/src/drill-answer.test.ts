@@ -4,6 +4,7 @@ import {
   DEFAULT_SCORING,
   isMateAfter,
   isPrefixOf,
+  isReachableMove,
   mateStep,
   scoreFromCandidates,
   scoreMove,
@@ -124,6 +125,32 @@ describe('isPrefixOf（手順が問いのものか。prd/13 §5.3）', () => {
     expect(isPrefixOf(['G*5b', '5a4a'], expected)).toBe(false);
     expect(isPrefixOf([...expected, 'P*5c'], expected)).toBe(false);
     expect(isPrefixOf(['7g7f'], [])).toBe(false);
+  });
+});
+
+describe('isReachableMove（駒の動き方として指せるか。prd/13 §3）', () => {
+  // 5五の先手歩、5三の先手飛、持ち駒に金
+  const state = parseSfen('4k4/9/4R4/9/4P4/9/9/9/4K4 b G 1')!;
+
+  it('動ける手は true', () => {
+    expect(isReachableMove(state, '5e5d')).toBe(true);
+    expect(isReachableMove(state, '5c5b')).toBe(true);
+    expect(isReachableMove(state, 'G*5d')).toBe(true);
+  });
+
+  it('🔴 歩を横に動かす手は false（検討盤では通るが、出題では答えにならない）', () => {
+    expect(isReachableMove(state, '5e4e')).toBe(false);
+  });
+
+  it('駒を飛び越える手・駒の無いマスからの手・壊れた表記は false', () => {
+    expect(isReachableMove(state, '5c5f')).toBe(false); // 5e の歩を飛び越える
+    expect(isReachableMove(state, '1a1b')).toBe(false);
+    expect(isReachableMove(state, 'zzz')).toBe(false);
+  });
+
+  it('埋まっているマス・二歩になるマスへは打てない', () => {
+    expect(isReachableMove(state, 'G*5e')).toBe(false);
+    expect(isReachableMove(state, 'P*5d')).toBe(false);
   });
 });
 

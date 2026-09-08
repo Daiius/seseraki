@@ -77,7 +77,9 @@ function SettingsPage() {
               <input
                 type="number"
                 className="input input-sm input-bordered w-24"
-                defaultValue={scoring[field]}
+                // ⚠ **制御入力にする**（`defaultValue` にしない）。片方を動かすと
+                // もう片方が追従するので、非制御だと**画面の値と送る値が食い違う**
+                value={scoring[field]}
                 min={MIN_MARGIN}
                 max={MAX_MARGIN}
                 step={10}

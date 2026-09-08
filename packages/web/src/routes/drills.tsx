@@ -86,9 +86,25 @@ const VERDICT_TEXT = {
 const POLL_INTERVAL_MS = 1500;
 const POLL_BUDGET_MS = 240_000;
 
+/**
+ * 🔴 **種類を変えたら中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。出題は loader が
+ * 引いた 1 問を state に持って進めるので、`key` を変えずに loader だけ走らせると
+ * **「詰み」に切り替えたのに直前の次の一手が残る**。`key` で作り直せば、
+ * 盤・手順・判定が**まとめて**新しい問題のものになる。
+ */
 function DrillsPage() {
   const initial = Route.useLoaderData() as NextResponse;
   const { kind } = Route.useSearch();
+  return <DrillRunner key={kind ?? 'all'} initial={initial} kind={kind} />;
+}
+
+function DrillRunner({
+  initial,
+  kind,
+}: {
+  initial: NextResponse;
+  kind: 'mate' | 'best' | undefined;
+}) {
   const { scoring } = useDrillScoring();
   const [drill, setDrill] = useState<Drill | null>(initial.drill);
   const [error, setError] = useState<string | null>(initial.error);
@@ -119,13 +135,34 @@ function DrillsPage() {
     reset(loaded.drill, loaded.error);
   }
 
-  /** 盤を叩く。⚠ **動かせるのは手番側の駒だけ**（出題は自分の手番の局面。prd/13 §4.1） */
+  /**
+   * 盤を叩く。⚠ **動かせるのは手番側の駒だけ**（出題は自分の手番の局面。prd/13 §4.1）。
+   *
+   * 🔴 **行き先も候補に無ければ受け付けない**（レビュー `OCL-1A2B07B9`）。塗るだけだと
+   * **歩を横に動かす・飛車が駒を飛び越える**といった手を盤から作れてしまい、
+   * server の検証（`validateMoveOnPosition`）は駒の動き方を見ないので**エンジンまで届く**。
+   * ⚠ 検討盤（フル編集）はこの制限を持たない——**出題だけの規則**。
+   */
   function onSquare(square: SquareRef) {
-    if (!session || reveal || judging) return;
+    if (!session || reveal || judging || pending) return;
     const current = currentState(session);
     const piece = current.board[square.row][square.col];
-    if (session.selection === null && piece?.side !== current.sideToMove) return;
-    if (pending) return;
+    if (session.selection === null) {
+      if (piece?.side !== current.sideToMove) return;
+      setSession(tapSquare(session, square));
+      return;
+    }
+    // 選択の解除（同じマスをもう一度叩く）は候補の外でも通す
+    if (
+      session.selection.kind === 'square' &&
+      session.selection.square.row === square.row &&
+      session.selection.square.col === square.col
+    ) {
+      setSession(tapSquare(session, square));
+      return;
+    }
+    const allowed = destinationsOf(session) ?? [];
+    if (!allowed.some((d) => d.row === square.row && d.col === square.col)) return;
     setSession(tapSquare(session, square));
   }
 

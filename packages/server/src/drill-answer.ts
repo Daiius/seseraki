@@ -93,6 +93,18 @@ export function scoreFromCandidates(
   return scoreMove(key, found, scoring);
 }
 
+/**
+ * `moves` が `expected` の先頭と一致するか（**受方の応手まで含めて**照合する）。
+ *
+ * 🔴 **解答で受け取った手順が、その問いのものかを確かめるのに使う**（レビュー `OCL-41F41851`）。
+ * 任意の派生局面を作らせると、**別の局面で採点して出題局面の最善値と比べる**ことになり、
+ * 採点も解答履歴も問いと噛み合わなくなる。
+ */
+export function isPrefixOf(moves: string[], expected: string[]): boolean {
+  if (moves.length > expected.length) return false;
+  return moves.every((move, i) => move === expected[i]);
+}
+
 export type MateStep =
   /** 正解手順どおり。`reply` は受方の応手（無ければ詰み上がり） */
   | { state: 'match'; reply: string | null; solved: boolean }

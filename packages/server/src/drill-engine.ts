@@ -22,8 +22,12 @@ import { lookupKifuEvaluation } from './position-kifu-reuse';
 export type EngineAnswer =
   /** まだ出ていない。要求側は `GET /positions/evaluate/:jobId` で取りに来て、同じ body を投げ直す */
   | { status: 'pending'; jobId: string }
-  /** 詰みが続いている。受方の応手（`null` なら詰み上がり） */
-  | { status: 'continue'; reply: string | null }
+  /**
+   * 詰みが続いている。`reply` は**受方の応手**。
+   * 🔒 **詰み上がりをここで返さない**（`done` で返す）——`continue` は「まだ続く」の意味に
+   * 限る。混ぜると route が解答後の情報を付けられない（レビュー `OCL-0007A49D`）。
+   */
+  | { status: 'continue'; reply: string }
   | {
       status: 'done';
       verdict: 'correct' | 'close' | 'wrong';
@@ -105,21 +109,26 @@ async function mateAnswer(
   // `searchmoves` 非対応の worker はフォールバックで手を適用した局面を評価するため、
   // **その手が即詰みなら相手に指す手が無く候補が空で返る**
   if (!best) {
-    if (isMateAfter(state, move, attacker)) {
-      await recordAttempt(db, { drillId: drill.id, move, verdict: 'correct', lossCp: null });
-      return { status: 'continue', reply: null };
-    }
-    return { status: 'done', verdict: 'wrong', lossCp: null };
+    // 🔴 **詰み上がりは `done`。** `continue` で返すと route が解答後の情報を付けられず、
+    // **同じ解答を投げ直しても永久に `continue` が返る**（レビュー `OCL-0007A49D`）
+    const solved = isMateAfter(state, move, attacker);
+    const verdict = solved ? ('correct' as const) : ('wrong' as const);
+    // 🔒 **不正解も記録する。** 記録を落とすと `wrongBefore`・解答済み件数・復習順の
+    // どれにも表れない（レビュー `OCL-2652C1DA`）
+    await recordAttempt(db, { drillId: drill.id, move, verdict, lossCp: null });
+    return { status: 'done', verdict, lossCp: null };
   }
 
   if (best.scoreType === 'mate' && best.scoreValue > 0) {
     // 別解として正解。**返ってきた pv を以降の正解手順として引き継ぐ**（prd/13 §5.2）。
     // pv の先頭は名指しした手なので、手順は「ここまでの line + pv の残り」になる
-    rememberLine(drill.id, [...line, ...best.pv.slice(1)]);
     const reply = best.pv[1] ?? null;
     if (reply === null) {
+      // 読み筋がこの手で終わっている ＝ 詰み上がり。**`done` で返す**（上と同じ理由）
       await recordAttempt(db, { drillId: drill.id, move, verdict: 'correct', lossCp: null });
+      return { status: 'done', verdict: 'correct', lossCp: null };
     }
+    rememberLine(drill.id, [...line, ...best.pv.slice(1)]);
     return { status: 'continue', reply };
   }
   // 詰まない。咎め筋（受けの手）を見せる

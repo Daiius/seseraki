@@ -105,10 +105,9 @@ import { replacePositions } from './positions';
 import { drillConfigFromEnv, syncDrills } from './drills';
 import {
   DEFAULT_SCORING,
-  isMateAfter,
+  isPrefixOf,
   mateStep,
   scoreFromCandidates,
-  scoreMove,
   type DrillScoring,
 } from './drill-answer';
 import { forgetLine, recallLine } from './drill-lines';
@@ -1092,11 +1091,21 @@ const route = app
         closeMargin: closeMargin ?? DEFAULT_SCORING.closeMargin,
       };
 
+      // 🔴 **手順が問いに対応していることを、局面を作る前に確かめる**
+      // （レビュー `OCL-41F41851`）。任意の派生局面を作らせると、**別の局面で採点して
+      // 出題局面の最善値と比べる**ことになり、採点も解答履歴も問いと噛み合わなくなる。
+      // 覚えている手順（別解に入った後）を優先し、無ければ出題時の pv（prd/13 §5.2）
+      const expected = drill.kind === 'mate' ? (recallLine(id) ?? drill.answerPv ?? []) : [];
+      const prefix = line.slice(0, -1);
+      if (drill.kind === 'best' ? line.length !== 1 : !isPrefixOf(prefix, expected)) {
+        return c.json({ error: '手順が出題と噛み合いません' } as const, 400);
+      }
+
       // 出題局面 → `line` の 1 手前まで進めた局面。ここがユーザーの手を指す局面
       const base = drillPosition(drill.usiMoves, drill.moveNumber);
       if (!base) return c.json({ error: '出題局面を再現できません' } as const, 409);
       const move = line[line.length - 1];
-      const state = applyLine(base, line.slice(0, -1));
+      const state = applyLine(base, prefix);
       if (!state) return c.json({ error: '手順を再現できません' } as const, 400);
 
       // エンジンに渡す前の検証（prd/12 §2.5）。合法性は問わないが、
@@ -1121,8 +1130,6 @@ const route = app
       };
 
       if (drill.kind === 'mate') {
-        // 覚えている手順（別解に入った後）を優先し、無ければ出題時の pv
-        const expected = recallLine(drill.id) ?? drill.answerPv;
         const step = mateStep(expected, line);
         if (step.state === 'match') {
           if (!step.solved) {

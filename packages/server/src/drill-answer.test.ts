@@ -3,6 +3,7 @@ import { parseSfen } from 'shared';
 import {
   DEFAULT_SCORING,
   isMateAfter,
+  isPrefixOf,
   mateStep,
   scoreFromCandidates,
   scoreMove,
@@ -106,6 +107,23 @@ describe('mateStep（指し継ぎ。prd/13 §5.2）', () => {
     expect(mateStep(pv, ['G*5a'])).toEqual({ state: 'deviated' });
     expect(mateStep(pv, ['G*5b', '5a6a', 'G5b5c'])).toEqual({ state: 'deviated' });
     expect(mateStep(null, ['G*5b'])).toEqual({ state: 'deviated' });
+  });
+});
+
+describe('isPrefixOf（手順が問いのものか。prd/13 §5.3）', () => {
+  const expected = ['G*5b', '5a6a', 'G5b6b'];
+
+  it('先頭が一致していれば true（空も先頭）', () => {
+    expect(isPrefixOf([], expected)).toBe(true);
+    expect(isPrefixOf(['G*5b'], expected)).toBe(true);
+    expect(isPrefixOf(['G*5b', '5a6a'], expected)).toBe(true);
+  });
+
+  it('食い違う手順・長すぎる手順は false（別局面で採点させない）', () => {
+    expect(isPrefixOf(['G*5a'], expected)).toBe(false);
+    expect(isPrefixOf(['G*5b', '5a4a'], expected)).toBe(false);
+    expect(isPrefixOf([...expected, 'P*5c'], expected)).toBe(false);
+    expect(isPrefixOf(['7g7f'], [])).toBe(false);
   });
 });
 

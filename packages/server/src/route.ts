@@ -99,6 +99,7 @@ import {
 } from 'shared';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
+import { drillConfigFromEnv, syncDrills } from './drills';
 import {
   addAlias,
   countUnresolvedSubjects,
@@ -1115,6 +1116,9 @@ const route = app
         await replacePositions(tx, id, usiMoves);
         // 再変換で対局者名が変わりうるので、主体側も引き直す（prd/11 §4.2）
         await refreshSubjectSide(tx, id);
+        // 出題は解析結果からの派生値（prd/13 §6.1）。解析を消した以上ここも空になる
+        // ——古い指し手列で作った問題を残すと、盤面と答えが噛み合わない
+        await syncDrills(tx, id, drillConfigFromEnv());
       });
       // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
       clearProgress(id);
@@ -1486,6 +1490,10 @@ const route = app
           quick: quickDone,
           full: fullDone,
         });
+        // 🔴 **full が揃った時点で出題を生成する**（prd/13 §8）。quick では作らない
+        // ——出題の答えが探索の浅さで揺れると問題として成立しない（prd/13 §2）。
+        // upsert なので、既に解いた問題の履歴は再生成でも消えない（prd/13 §6.1）
+        if (fullDone) await syncDrills(tx, kifuId, drillConfigFromEnv());
         if (profileAfter !== current.analysisProfile) {
           await tx
             .update(kifus)

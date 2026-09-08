@@ -86,7 +86,7 @@
 - 溜め込んだ棋譜と解析から問題を作って解く（`/drills`）。設計は [13](./13-drills.md) に確定済み。
   **新しいエンジン解析は要らない**——材料は `candidateMoves` / `kifuPositions` / `subjectSide` に揃っている。
 - 段取り: ✅ (1) `lib/cpl.ts` を `shared` へ移す（[02](./02-architecture.md) §3 の gap を消化）→
-  (2) `drills` / `drillAttempts` のスキーマと抽出（server）+ 一括生成スクリプト →
+  ✅ (2) `drills` / `drillAttempts` のスキーマと抽出（server）+ 一括生成スクリプト →
   (3) `/drills` ページ（出題・採点・解答履歴）→ (4) 本番で一括生成を一度流す（[13](./13-drills.md) §8）。
 - 判定は既存の名指し評価（[12](./12-position-lab.md) §2.4）に相乗りし、**server / worker は変更しない**見込み。
 

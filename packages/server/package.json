@@ -13,7 +13,8 @@
     "db:migrate": "tsx migrate.ts",
     "db:baseline": "tsx baseline.ts",
     "db:push": "drizzle-kit push --force",
-    "tactics:redetect": "tsx redetect-tactics.ts"
+    "tactics:redetect": "tsx redetect-tactics.ts",
+    "drills:generate": "tsx generate-drills.ts"
   },
   "exports": {
     ".": {

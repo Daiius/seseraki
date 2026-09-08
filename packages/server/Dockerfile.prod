@@ -42,6 +42,12 @@ COPY --from=build /workspace/packages/server/dist/redetect-tactics.js ./redetect
 #   docker compose run --rm <service>   # command: ["/app/rebuild-positions.js"]
 COPY --from=build /workspace/packages/server/dist/rebuild-positions.js ./rebuild-positions.js
 
+# 出題の一括生成のエントリ。**マイグレーション直後に一度流す必要がある**——
+# マイグレーションは空の drills を作るだけなので、これを流さないと
+# 既存棋譜ぶんの問題が 1 問も入らず、/drills に何も出ない（kifu_positions と同じ罠）。
+#   docker compose run --rm -e GENERATE_DRILLS_APPLY=1 <service>  # command: ["/app/generate-drills.js"]
+COPY --from=build /workspace/packages/server/dist/generate-drills.js ./generate-drills.js
+
 # 主体側の一括再導出（prd/11 §4.2）と、移行時に 1 回だけ流す名前の設定（同 §6.2）。
 #   docker compose run --rm <service>   # command: ["/app/rebuild-subjects.js"]
 #   docker compose run --rm <service> /app/backfill-user.js --display "..." --names "..." --apply

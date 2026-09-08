@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { build } from "esbuild";
 
 // ⚠ **エントリは名前付きで渡す。** 配列で渡すと出力先が入力の共通ベースからの相対になり、
@@ -70,6 +71,21 @@ const __dirname = __esbuildDirname(__filename);
 `,
   },
 });
+
+// 🔴 **本番イメージが全エントリを COPY しているかを照合する。**
+// `Dockerfile.prod` は dist を丸ごとではなく**1 本ずつ**コピーするので、エントリを足して
+// COPY を書き忘れると**本番でだけファイルが無い**。実際に踏んだ（`generate-drills.js`）。
+// 発現するのは「そのスクリプトを流そうとした時」＝**一番流したいタイミング**なので、ここで落とす。
+const dockerfile = readFileSync("./Dockerfile.prod", "utf8");
+const missing = Object.keys(entryPoints).filter(
+  (name) => !dockerfile.includes(`dist/${name}.js`),
+);
+if (missing.length > 0) {
+  console.error(
+    `Dockerfile.prod が COPY していないエントリがあります: ${missing.join(", ")}`,
+  );
+  process.exit(1);
+}
 
 // 生成物を Node の構文解析に通す。**banner の衝突は esbuild が検出できない**ので、
 // ここで落としておかないと本番の使い捨てコンテナを起動するまで気づけない。

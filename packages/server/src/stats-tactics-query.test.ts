@@ -60,8 +60,10 @@ describe('statsTacticsPeriodWhere', () => {
       statsTacticsPeriodWhere(parse({ ...SELF, from: '2026-07-01', to: '2026-07-31' })),
     );
     expect(sql).toContain('coalesce(`kifus`.`playedAt`, `kifus`.`createdAt`) >=');
-    expect(sql).toContain('date_add(?, interval 1 day)');
-    expect(params).toEqual(['video', '2026-07-01', '2026-07-31']);
+    // 🔴 **境界は一覧とまったく同じ**（JST の 0 時。prd/04 §6.1 / prd/09 §5）——
+    // 分析の数字から一覧へ飛ぶ導線があるので、母集団がずれると約束が崩れる
+    expect(sql).not.toContain('date_add');
+    expect(params).toEqual(['video', '2026-06-30 15:00:00', '2026-07-31 15:00:00']);
   });
 });
 
@@ -82,7 +84,7 @@ describe('statsTacticsWhere', () => {
   it('期間は対象局の条件と AND で結合される', () => {
     const { params } = render(statsTacticsWhere(parse({ ...SELF, from: '2026-01-01' })));
     expect(params[0]).toBe('video');
-    expect(params[1]).toBe('2026-01-01');
+    expect(params[1]).toBe('2025-12-31 15:00:00'); // JST 2026-01-01 00:00
   });
 
   it('⭐ 主体側で絞る（名前候補が無ければ subjectSide が NULL になり自然に 0 件）', () => {

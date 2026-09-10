@@ -54,6 +54,12 @@ COPY --from=build /workspace/packages/server/dist/generate-drills.js ./generate-
 COPY --from=build /workspace/packages/server/dist/rebuild-subjects.js ./rebuild-subjects.js
 COPY --from=build /workspace/packages/server/dist/backfill-user.js ./backfill-user.js
 
+# playedAt の作り直しのエントリ。接続のセッションを UTC に固定した回に流し、既存行が
+# 正しい絶対時刻を持っているかを確かめる（ずれていれば出どころから計算し直す）。
+# 絶対値の再計算なので何度流しても同じ結果になる。
+#   docker compose run --rm -e REDERIVE_PLAYED_AT_APPLY=1 <service>  # command: ["/app/rederive-played-at.js"]
+COPY --from=build /workspace/packages/server/dist/rederive-played-at.js ./rederive-played-at.js
+
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
 #   docker compose run --rm <service>   # command: ["/app/migrate.js"]

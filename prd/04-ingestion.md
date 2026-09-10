@@ -131,7 +131,7 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | `status` | `all` \| `analyzed` \| `unanalyzed` \| `failed` | `all` | 一覧のバッジと同じ区分（`failed` は `analysisError`、他は `analysisCompletedAt` の有無）。🔴 **`analyzed` は quick 完了を含む**（決定・2026-09-05。「見られる結果があること」が解析済みの意味。詳細の有無は画面に出さない）。🔴 **簡易のみ / 詳細済みを分ける区分は足さない**（決定・2026-09-05・後段。UI が段階を文字で示さない以上、絞り込みの軸としても要らない。[05](./05-analysis.md) §1.1d / §2.5） |
 | `outcome` | `all` \| `win` \| `loss` \| `decided` | `all` | 自分から見た勝敗。`self` と組で使う。`decided` は「勝敗がついた」（引き分け・結果不明・自分未確定を外す＝分析ページの対象局と同じ母集団。[09](./09-analytics.md) §4・§7） |
 | `self` | 自分の名前候補（カンマ区切り） | なし | 「自分」は web の `VITE_SELF_NAMES` ∪ `VITE_SWARS_USER_ID` が単一の正なので、server は設定を持たず**判定材料を web から受け取る**。両対局者とも候補に一致する対局は側を確定できないため除外する（web の `resolveUserSide` が ambiguous とするのと同じ扱い）。候補が空なら勝敗の絞り込みは 0 件 |
-| `from` / `to` | `YYYY-MM-DD` | なし | `coalesce(playedAt, createdAt)` に対する期間。**両端を含む**（`to` は翌日 0 時未満）。境界は DB セッションのタイムゾーンで解釈 |
+| `from` / `to` | `YYYY-MM-DD` | なし | `coalesce(playedAt, createdAt)` に対する期間。**両端を含む**（`to` は翌日 0 時未満）。🔴 **境界は JST の 0 時**。DB セッションは UTC 固定（[03](./03-data-model.md) §1.1）なので、日付をそのまま渡すと UTC の 0 時で切れて**日本時間 0:00〜9:00 ぶんが落ちる**。`periodConditions` が境界側を JST → UTC に直してから渡す（`from=2026-09-10` → `2026-09-09 15:00:00` 以上、`to=2026-09-10` → `2026-09-10 15:00:00` 未満）。⚠ **`sourceTz` ごとに境界を変えない**——同じ絞り込みが棋譜によって別の日を指すと一覧として読めなくなる。境界は**画面の時刻帯（JST 固定）で一本**。実在しない日付（`2026-02-31`）は 400 |
 | `sort` | `playedAt` \| `createdAt` \| `title` | `playedAt` | `playedAt` は `coalesce(playedAt, createdAt)`（一覧の日時列と同じ基準値。[05](./05-analysis.md) §2.5） |
 | `order` | `asc` \| `desc` | `desc` | 同値が並んでもページ間で行が重複・欠落しないよう `id` を副キーに添える |
 

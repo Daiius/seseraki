@@ -29,6 +29,11 @@ const entryPoints = {
     //   docker compose run --rm <service>  # command: ["/app/generate-drills.js"]
     "generate-drills": "./generate-drills.ts",
     "backfill-user": "./backfill-user.ts",
+    // playedAt の作り直し。セッションを UTC に固定した回に、既存行が正しい絶対時刻を
+    // 持っているかを確かめ、ずれていれば出どころ（swarsGameKey / kifText + sourceTz）から
+    // 計算し直す。**絶対値の再計算なので何度流しても同じ**（prd/03 §1.1）。
+    //   docker compose run --rm -e REDERIVE_PLAYED_AT_APPLY=1 <service>  # command: ["/app/rederive-played-at.js"]
+    "rederive-played-at": "./rederive-played-at.ts",
     // マイグレーションの適用。**同梱する理由はポートを開けずに済むことではなく、
     // 適用する SQL とコードのバージョンが構造的に一致すること。**
     // ホストから流す方式は「手元にある SQL を、本番で動いているイメージへ流す」ことになり、

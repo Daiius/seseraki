@@ -46,6 +46,27 @@ export const LAST_ANSWERED_AT = sql<
   Date | string | null
 >`max(case when ${drillAttempts.move} is not null then ${drillAttempts.createdAt} end)`;
 
+/**
+ * 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない）。
+ *
+ * 🔴 **文字列は必ず UTC として読む**（レビュー `OCL-94744330`）。`sql` 断片の戻り値には
+ * **列の日時変換（drizzle の `mapFromDriverValue`）が適用されない**——生の壁時計文字列が
+ * そのまま来る。DB セッションは UTC 固定（prd/03 §1.1）なのでその壁時計は UTC だが、
+ * `new Date('2026-09-10 12:00:00')` はタイムゾーン無しの文字列を**実行環境のローカル時刻**
+ * として解釈する。server は `TZ=Asia/Tokyo` で動くので、そのままでは 9h ずれる
+ * （一覧の最終解答日時だけが履歴と食い違う）。
+ * ⚠ **セッションが JST だった頃は DB もサーバも JST で偶然一致していた**ので、
+ * UTC 固定にした側の変更で初めて表に出る。
+ */
+export function isoOf(value: Date | string | null): string | null {
+  if (value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  // 'YYYY-MM-DD HH:MM:SS[.fff]' → ISO 8601 の UTC 表記へ。既にオフセットが付いていれば触らない
+  const hasZone = /(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(value.trim());
+  const normalized = value.trim().replace(' ', 'T');
+  return new Date(hasZone ? normalized : `${normalized}Z`).toISOString();
+}
+
 /** 出題順の段（prd/13 §6.3）。**未出題 > 間違えた > 正解済み** */
 export const DRILL_TIER = sql`case
   when ${ANSWER_COUNT} = 0 then 0

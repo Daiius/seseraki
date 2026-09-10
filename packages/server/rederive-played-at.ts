@@ -19,6 +19,11 @@
 // 🔎 **dry-run の出力がそのまま「ずれているのか」の答えになる。**
 //   変更 0 件なら既存行は元から正しい。全行が同じ幅（例 +9h）で動くなら、その幅だけずれていた。
 //
+// 🔴 **`playedAt` を動かしたら主体側も作り直す**（レビュー `OCL-C5089CA3`）。主体側は
+//   名前候補の有効期間と `playedAt` の突き合わせで決まる（prd/11 §5.3）ので、日時が境界を
+//   またぐと変わる。放っておくと成績と出題が古い主体側のまま残る。日時の更新と同じ
+//   トランザクションで `replaceSubjectSide` を呼び、出題まで追随させる（`reanalyze` と同じ姿勢）。
+//
 // ⚠ **`sourceTz` 未設定の行は触らない。** 何 tz で解釈すべきかが決まらないため。
 //   先に `db:backfill-tz` を流して `sourceTz` を埋めること。
 // ⚠ `analysisCompletedAt` は出どころが無いので再計算できない（解析の完了時刻。表示にも
@@ -36,6 +41,13 @@ import { db } from './src/db/index.js';
 import { kifus } from './src/db/schema.js';
 import { parseKif, type KifTimezone } from './src/kif/parser.js';
 import { parsePlayedAt } from './src/swars/csa-to-kif.js';
+import {
+  aliasesOf,
+  computeSubjectSide,
+  replaceSubjectSide,
+  subjectInputOf,
+  type Alias,
+} from './src/users.js';
 
 const APPLY = process.env.REDERIVE_PLAYED_AT_APPLY === '1';
 /** 出力が長くなりすぎないよう、明細はこの件数まで */
@@ -64,6 +76,7 @@ try {
       swarsGameKey: kifus.swarsGameKey,
       sourceTz: kifus.sourceTz,
       playedAt: kifus.playedAt,
+      ownerId: kifus.ownerId,
     })
     .from(kifus)
     .where(isNotNull(kifus.sourceTz));
@@ -76,6 +89,18 @@ try {
   let unchanged = 0;
   let skipped = 0;
   let shown = 0;
+  /** 主体側まで動く行の数（`playedAt` が名前候補の有効期間の境界をまたいだとき） */
+  let subjectMoved = 0;
+
+  // 所有者ごとの名前候補。**棋譜ごとに読み直さない**（N+1 を避ける。users.ts の注意書き）
+  const aliasCache = new Map<number, Alias[]>();
+  const aliasesFor = async (ownerId: number): Promise<Alias[]> => {
+    const cached = aliasCache.get(ownerId);
+    if (cached) return cached;
+    const aliases = await aliasesOf(db, ownerId);
+    aliasCache.set(ownerId, aliases);
+    return aliases;
+  };
 
   for (const row of rows) {
     // 出どころから絶対値を作り直す
@@ -105,8 +130,28 @@ try {
           `${row.playedAt?.toISOString() ?? 'null'} -> ${derived.toISOString()} [${delta}]`,
       );
     }
+    // 🔴 **主体側は `playedAt` から導出される**（名前候補の有効期間との突き合わせ。prd/11 §5.3）。
+    // 日時が動くと境界をまたいで主体側が変わりうるので、**同じトランザクションで作り直す**
+    // （`reanalyze` が既にそうしている。レビュー `OCL-C5089CA3`）。放っておくと成績と
+    // 出題（自分の手番の局面だけを拾う。prd/13 §4.1）が古い主体側のまま残る。
+    const aliases = await aliasesFor(row.ownerId);
+    const input = await subjectInputOf(db, row.id);
+    const nextSide =
+      input === null ? null : computeSubjectSide({ ...input, playedAt: derived }, aliases);
+    const sideMoves = input !== null && nextSide !== input.current;
+    if (sideMoves) {
+      subjectMoved++;
+      console.log(
+        `  └ 主体側: ${input?.current ?? 'null'} -> ${nextSide ?? 'null'}（出題も引き直す）`,
+      );
+    }
+
     if (APPLY) {
-      await db.update(kifus).set({ playedAt: derived }).where(eq(kifus.id, row.id));
+      await db.transaction(async (tx) => {
+        await tx.update(kifus).set({ playedAt: derived }).where(eq(kifus.id, row.id));
+        // 変わったときだけ書き、出題まで追随させる（`replaceSubjectSide` が中でやる）
+        await replaceSubjectSide(tx, row.id, aliases);
+      });
     }
   }
   if (changed > shown) console.log(`… ほか ${changed - shown} 件`);

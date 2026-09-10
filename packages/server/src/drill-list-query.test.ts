@@ -10,6 +10,7 @@ import {
   drillAttemptQuerySchema,
   drillAttemptWhere,
   drillListHaving,
+  isoOf,
   drillListOrderBy,
   drillListQuerySchema,
 } from './drill-list-query.js';
@@ -170,5 +171,35 @@ describe('drillAttemptOrderBy', () => {
     expect(order).toHaveLength(2);
     expect(render(order[0]).sql).toContain('`createdAt` desc');
     expect(render(order[1]).sql).toContain('`id` desc');
+  });
+});
+
+describe('isoOf（集計 SQL が返す日時のデコード）', () => {
+  // 🔴 `sql` 断片の戻り値には**列の日時変換が適用されない**（生の壁時計文字列が来る）。
+  // DB セッションは UTC 固定（prd/03 §1.1）なので、UTC として読まないと
+  // 実行環境の TZ（server は Asia/Tokyo）で解釈されて 9h ずれる（レビュー OCL-94744330）。
+  it('タイムゾーンの無い DB 文字列を UTC として読む', () => {
+    expect(isoOf('2026-09-10 12:00:00')).toBe('2026-09-10T12:00:00.000Z');
+  });
+
+  it('server の TZ に引きずられない', () => {
+    // ⚠ ここが `new Date(value)` だと TZ=Asia/Tokyo で 03:00Z になっていた
+    expect(isoOf('2026-09-10 12:00:00')).not.toBe('2026-09-10T03:00:00.000Z');
+  });
+
+  it('小数秒つきも読める', () => {
+    expect(isoOf('2026-09-10 12:00:00.500')).toBe('2026-09-10T12:00:00.500Z');
+  });
+
+  it('既にオフセットが付いていれば尊重する', () => {
+    expect(isoOf('2026-09-10T12:00:00+09:00')).toBe('2026-09-10T03:00:00.000Z');
+  });
+
+  it('Date で返ってきたらそのまま（ドライバ依存）', () => {
+    expect(isoOf(new Date('2026-09-10T12:00:00Z'))).toBe('2026-09-10T12:00:00.000Z');
+  });
+
+  it('未解答は null', () => {
+    expect(isoOf(null)).toBeNull();
   });
 });

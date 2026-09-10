@@ -20,6 +20,7 @@ import {
   drillAttemptWhere,
   drillListHaving,
   drillListOrderBy,
+  isoOf,
   type DrillAttemptQuery,
   type DrillListQuery,
 } from './drill-list-query';
@@ -203,11 +204,6 @@ export async function loadDrillQuestion(
     matePlies: row.matePlies,
     wrongBefore: row.wrongBefore > 0,
   };
-}
-
-/** 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない） */
-function isoOf(value: Date | string | null): string | null {
-  return value === null ? null : new Date(value).toISOString();
 }
 
 /**

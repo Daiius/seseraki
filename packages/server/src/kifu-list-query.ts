@@ -19,6 +19,23 @@ import { z } from 'zod';
 import { NON_SIDE_ATTRIBUTED_LABELS } from 'shared';
 import { candidateMoves, kifus, kifuTactics, moveAnalyses } from './db/schema.js';
 
+/**
+ * 期間の入力に使う暦日（`YYYY-MM-DD`）。
+ *
+ * ⚠ **形だけでなく実在する日付かも見る。** `2026-02-31` は正規表現を通ってしまい、
+ * 境界の変換（[jstDayStartUtc]）で初めて落ちる——**入力の誤りが 500 になる**。
+ * ここで弾けば 400 になる。
+ */
+export const calendarDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((v) => {
+    const at = Date.parse(`${v}T00:00:00Z`);
+    // ⚠ `Date.parse` は `2026-02-31` を 3/3 へ**正規化して受理する**ので、
+    // 往復させて入力どおりの暦日かを確かめる（NaN 判定だけでは足りない）
+    return !Number.isNaN(at) && new Date(at).toISOString().startsWith(v);
+  }, { message: '実在しない日付' });
+
 /** 一覧の基準日時。表示・並びとも `coalesce(playedAt, createdAt)`（prd/04 §6.1） */
 export const playedOrCreatedAt = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`;
 
@@ -60,8 +77,8 @@ export const kifuListQuerySchema = z.object({
   // ⚠ **負け条件を内包する**ので `outcome=loss` を別途付ける必要はない（prd/09 §3.1）
   missedMate: z.coerce.number().int().min(1).optional(),
   /** 期間の下限・上限（`YYYY-MM-DD`・両端を含む）。基準は `playedOrCreatedAt` */
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  from: calendarDay.optional(),
+  to: calendarDay.optional(),
   sort: z.enum(['playedAt', 'createdAt', 'title']).default('playedAt'),
   order: z.enum(['asc', 'desc']).default('desc'),
 });
@@ -139,21 +156,45 @@ export function analyzedCondition(): SQL {
 }
 
 /**
+ * 画面の時刻帯。**個人用サービスなので JST 固定**（prd/04 §6.1）。
+ *
+ * 🔒 **`sourceTz` ごとに境界を変えない。** 同じ絞り込みが棋譜によって別の日を指すと、
+ * 一覧として読めなくなる（「9/10 で絞ったのに 9/10 でない行が混ざる」）。
+ * 境界は**画面の時刻帯で一本**にする。`sourceTz` は 1 局の `playedAt` を絶対時刻へ
+ * 直すための情報であって、利用者が入力する日付の意味ではない。
+ * ⚠ 日本標準時は DST を持たないので**固定オフセットでよい**（IANA の tz データは要らない）。
+ */
+const DISPLAY_TZ_OFFSET = '+09:00';
+
+/**
+ * JST の暦日の 0 時を、DB へ渡す壁時計文字列（**UTC**）にする。
+ *
+ * 🔴 **DB セッションは UTC 固定**（prd/03 §1.1）なので、`'2026-09-10'` をそのまま渡すと
+ * **UTC の 0 時**として比較される。JST の 0〜9 時にあたる対局・登録がその日から落ちるので、
+ * **境界の側を JST → UTC に直してから渡す**。`2026-09-10`（JST 0 時）→ `2026-09-09 15:00:00`。
+ *
+ * @param addDays 加算する日数（`to` の「翌日 0 時未満」に使う）
+ */
+export function jstDayStartUtc(day: string, addDays = 0): string {
+  const at = Date.parse(`${day}T00:00:00${DISPLAY_TZ_OFFSET}`);
+  if (Number.isNaN(at)) throw new Error(`日付として読めない: ${day}`);
+  return new Date(at + addDays * 86_400_000)
+    .toISOString()
+    .slice(0, 19)
+    .replace('T', ' ');
+}
+
+/**
  * 期間の絞り込み（基準は `playedOrCreatedAt`）。一覧と分析で同じ境界を使う。
  *
- * ⚠ **境界は UTC の 0 時。** `from` / `to` は日付文字列のまま DB へ渡り、DB セッションの
- * タイムゾーン（**UTC 固定**。`src/db/index.ts` / prd/03 §1.1）で解釈される。
- * つまり**日本時間の日付では絞れていない**（JST 0:00〜9:00 の対局は前日に入る）。
- * 🔴 **これは既知の回帰**（レビュー `OCL-85A77255`）——`playedAt` が NULL の棋譜は
- * 従来 JST の登録日で絞れていた。境界側の変換が要るが**今回のスコープ外**（prd/04 §6.1）。
- * `to` は指定日を含めたいので「翌日 0 時未満」とする。
+ * **境界は JST の 0 時**（[jstDayStartUtc]）。`to` は指定日を含めたいので「翌日 0 時未満」。
+ * ⚠ **`date_add` を SQL 側で足さない。** 加算まで JST の暦日で閉じないと、
+ * 境界の変換と加算が別の時刻帯で行われて 1 日ぶんずれる。
  */
 export function periodConditions(from?: string, to?: string): SQL[] {
   const conditions: SQL[] = [];
-  if (from) conditions.push(sql`${playedOrCreatedAt} >= ${from}`);
-  if (to) {
-    conditions.push(sql`${playedOrCreatedAt} < date_add(${to}, interval 1 day)`);
-  }
+  if (from) conditions.push(sql`${playedOrCreatedAt} >= ${jstDayStartUtc(from)}`);
+  if (to) conditions.push(sql`${playedOrCreatedAt} < ${jstDayStartUtc(to, 1)}`);
   return conditions;
 }
 

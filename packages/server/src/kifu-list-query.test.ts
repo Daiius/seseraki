@@ -3,9 +3,11 @@ import { MySqlDialect } from 'drizzle-orm/mysql-core';
 import type { SQL } from 'drizzle-orm';
 import {
   escapeLike,
+  jstDayStartUtc,
   kifuListOrderBy,
   kifuListQuerySchema,
   kifuListWhere,
+  periodConditions,
 } from './kifu-list-query.js';
 
 const dialect = new MySqlDialect();
@@ -166,9 +168,11 @@ describe('kifuListWhere', () => {
       kifuListWhere(parse({ from: '2026-07-01', to: '2026-07-31' })),
     );
     expect(sql).toContain('coalesce(`kifus`.`playedAt`, `kifus`.`createdAt`) >=');
-    // 終了日を含めるため「翌日 0 時未満」で切る
-    expect(sql).toContain('date_add(?, interval 1 day)');
-    expect(params).toEqual([OWN, '2026-07-01', '2026-07-31']);
+    // 🔴 **境界は JST の 0 時**（prd/04 §6.1）。DB セッションが UTC 固定なので、
+    // 日付をそのまま渡すと UTC の 0 時で切れて JST 0〜9 時ぶんが落ちる。
+    // 終了日を含めるため上限は「翌日の JST 0 時」未満。加算は JST の暦日で閉じる
+    expect(sql).not.toContain('date_add');
+    expect(params).toEqual([OWN, '2026-06-30 15:00:00', '2026-07-31 15:00:00']);
   });
 
   it('戦型は kifu_tactics への相関 EXISTS になる（JOIN しない）', () => {
@@ -266,5 +270,60 @@ describe('kifuListOrderBy', () => {
     const keys = kifuListOrderBy(parse({ order: 'asc' }));
     expect(keys).toHaveLength(2);
     expect(render(keys[1]).sql).toBe('`kifus`.`id` asc');
+  });
+});
+
+describe('期間の絞り込みの境界（prd/04 §6.1）', () => {
+  // 🔴 **利用者が入れる日付は JST の暦日**。DB セッションは UTC 固定（prd/03 §1.1）なので、
+  // 日付をそのまま渡すと UTC の 0 時で切れてしまい、**JST の 0〜9 時にあたる対局・登録が
+  // その日から落ちる**。ここが実際に踏んだ回帰（レビュー OCL-85A77255）なので、
+  // 境界の値を直接固定する。
+
+  it('from は JST の 0 時 ＝ 前日 15:00 UTC になる', () => {
+    expect(jstDayStartUtc('2026-09-10')).toBe('2026-09-09 15:00:00');
+  });
+
+  it('to は「翌日の JST 0 時」未満 ＝ 当日 15:00 UTC になる（両端を含む）', () => {
+    expect(jstDayStartUtc('2026-09-10', 1)).toBe('2026-09-10 15:00:00');
+  });
+
+  it('月またぎ・年またぎでも暦日で 1 日進む', () => {
+    expect(jstDayStartUtc('2026-08-31', 1)).toBe('2026-08-31 15:00:00');
+    expect(jstDayStartUtc('2026-12-31', 1)).toBe('2026-12-31 15:00:00');
+  });
+
+  it('うるう日を跨いでもずれない', () => {
+    expect(jstDayStartUtc('2028-02-28', 1)).toBe('2028-02-28 15:00:00');
+    expect(jstDayStartUtc('2028-02-29')).toBe('2028-02-28 15:00:00');
+  });
+
+  it('境界の値が SQL のパラメータに乗る', () => {
+    const conditions = periodConditions('2026-09-10', '2026-09-10');
+    expect(conditions).toHaveLength(2);
+    expect(render(conditions[0]).params).toEqual(['2026-09-09 15:00:00']);
+    expect(render(conditions[1]).params).toEqual(['2026-09-10 15:00:00']);
+    // ⚠ 加算は JST の暦日で閉じる。SQL 側で date_add してはいけない（時刻帯が混ざる）
+    expect(render(conditions[1]).sql).not.toContain('date_add');
+  });
+
+  it('JST の 0〜9 時の対局がその日の絞り込みに入る（今回の回帰そのもの）', () => {
+    const [fromCond, toCond] = periodConditions('2026-09-10', '2026-09-10');
+    const lower = render(fromCond).params[0] as string;
+    const upper = render(toCond).params[0] as string;
+    // JST 2026-09-10 00:30 ＝ UTC 2026-09-09 15:30。UTC 境界のままだと下限から外れていた
+    const earlyMorningJst = '2026-09-09 15:30:00';
+    expect(lower <= earlyMorningJst).toBe(true);
+    expect(earlyMorningJst < upper).toBe(true);
+    // JST 2026-09-10 23:50 ＝ UTC 2026-09-10 14:50。上限のすぐ内側に入る
+    const lateNightJst = '2026-09-10 14:50:00';
+    expect(lateNightJst < upper).toBe(true);
+    // JST 2026-09-11 00:10 ＝ UTC 2026-09-10 15:10。翌日なので入らない
+    expect('2026-09-10 15:10:00' < upper).toBe(false);
+  });
+
+  it('実在しない日付は 400 になる（500 にしない）', () => {
+    expect(() => parse({ from: '2026-02-31' })).toThrow();
+    expect(() => parse({ from: '2026-13-01' })).toThrow();
+    expect(parse({ from: '2026-02-28' }).from).toBe('2026-02-28');
   });
 });

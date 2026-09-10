@@ -14,6 +14,7 @@ import {
   alwaysTrue,
   analyzedCondition,
   bySelfSide,
+  calendarDay,
   missedMateCondition,
   ownGamesOnly,
   periodConditions,
@@ -25,8 +26,8 @@ export const statsTacticsQuerySchema = z.object({
   /** 取りこぼしと見なす詰み手数の上限（prd/09 §3.1）。既定 10 */
   mateMax: z.coerce.number().int().min(1).max(99).default(10),
   /** 期間の下限・上限（`YYYY-MM-DD`・両端を含む）。基準は一覧と同じ `playedOrCreatedAt` */
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  from: calendarDay.optional(),
+  to: calendarDay.optional(),
 });
 
 export type StatsTacticsQuery = z.infer<typeof statsTacticsQuerySchema>;

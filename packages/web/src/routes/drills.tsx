@@ -196,6 +196,8 @@ function DrillsPage() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: '/drills' });
   const router = useRouter();
+  /** 「戻す」の結果（prd/13 §7.2）。**失敗を黙って飲まない**——押しても何も起きないと読める */
+  const [actionError, setActionError] = useState<string | null>(null);
 
   /** 絞り込みを変えたら 1 ページ目に戻す（棋譜一覧と同じ姿勢。prd/05 §2.5） */
   function setSearch(patch: Partial<DrillsSearch>) {
@@ -208,8 +210,20 @@ function DrillsPage() {
   }
 
   async function unexclude(id: number) {
-    await client.api.drills[':id'].unexclude.$post({ param: { id: String(id) } });
-    await router.invalidate();
+    // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
+    // GET が成功すると、**除外されたままの一覧が普通に描き直される**——押した側からは
+    // 「効かなかった」ことも理由も分からない
+    try {
+      const res = await client.api.drills[':id'].unexclude.$post({ param: { id: String(id) } });
+      if (!res.ok) {
+        setActionError(`除外を戻せませんでした (${res.status})`);
+        return;
+      }
+      setActionError(null);
+      await router.invalidate();
+    } catch {
+      setActionError('サーバーに接続できません');
+    }
   }
 
   return (
@@ -269,6 +283,7 @@ function DrillsPage() {
             )}
           </div>
           {data.error && <p className="text-error text-sm">{data.error}</p>}
+          {actionError && <p className="text-error text-sm">{actionError}</p>}
           {data.list && (
             <DrillList
               rows={data.list.drills}

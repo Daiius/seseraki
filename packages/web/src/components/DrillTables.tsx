@@ -97,6 +97,32 @@ export function Pager({
   );
 }
 
+/**
+ * ページの範囲外（件数が減って今のページに何も無い）ときの案内（レビュー `OCL-19F01A13`）。
+ *
+ * 🔴 **0 件の案内で早期に返さない。** 返すとページ送りごと消えるので、**まだ 50 件以上
+ * 残っていても前のページへ戻れなくなる**（除外を戻した直後・保存した URL を開いた直後に起きる）。
+ */
+function OutOfRange({
+  pagination,
+  onPage,
+}: {
+  pagination: Pagination;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <>
+      <p className="text-base-content/70 p-2">
+        このページには表示するものがありません（全 {pagination.total} 件）。
+        <button className="link link-primary" onClick={() => onPage(pagination.totalPages)}>
+          最後のページへ
+        </button>
+      </p>
+      <Pager pagination={pagination} onPage={onPage} />
+    </>
+  );
+}
+
 /** 問題の一覧（prd/13 §7.2）。行から**その問題を解きに行ける** */
 export function DrillList({
   rows,
@@ -126,6 +152,8 @@ export function DrillList({
   onUnexclude: (id: number) => void;
 }) {
   if (rows.length === 0) {
+    // 条件に合う問題はあるのに、このページには無い（件数が減った・URL が範囲外）
+    if (pagination.total > 0) return <OutOfRange pagination={pagination} onPage={onPage} />;
     // ⚠ **「問題がまだ無い」と「絞り込みの結果が空」を同じ文言にしない**——
     // 記録はあるのに「まだありません」と出ると、事実と違うことを言うことになる
     return filtered ? (
@@ -256,6 +284,7 @@ export function DrillHistory({
   onClearFilters: () => void;
 }) {
   if (rows.length === 0) {
+    if (pagination.total > 0) return <OutOfRange pagination={pagination} onPage={onPage} />;
     return filtered ? (
       <p className="text-base-content/70 p-2">
         条件に合う解答がありません。

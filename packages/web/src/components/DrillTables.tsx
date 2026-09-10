@@ -103,6 +103,7 @@ export function DrillList({
   pagination,
   kind,
   filtered,
+  excludedOnly,
   onPage,
   onClearFilters,
   onUnexclude,
@@ -112,6 +113,14 @@ export function DrillList({
   kind: 'mate' | 'best' | undefined;
   /** 絞り込みが掛かっているか。**0 件の案内を出し分ける**（prd/05 §2.5 と同じ姿勢） */
   filtered: boolean;
+  /**
+   * 除外した問題だけを見ている状態。
+   *
+   * ⚠ **この表示のときは列を減らす。** 操作が 2 つ並ぶぶん横に伸び、既定の位置で
+   * 「戻す」が隠れる（実測: 一覧の枠は 720px で、全列だと表は 777px になる）。
+   * 全行が除外なので「除外」バッジは重複であり、最終解答も除外の判断には要らない。
+   */
+  excludedOnly: boolean;
   onPage: (page: number) => void;
   onClearFilters: () => void;
   onUnexclude: (id: number) => void;
@@ -144,7 +153,7 @@ export function DrillList({
               <th>種類</th>
               <th>状態</th>
               <th>解答</th>
-              <th>最終解答</th>
+              {!excludedOnly && <th>最終解答</th>}
               {/* ⚠ **操作列は内容ぶんの幅を確保する。** `w-px` + `whitespace-nowrap` で
                   min-content まで広がる（除外表示のときはボタンが 2 つ並ぶ） */}
               <th className="w-px" />
@@ -182,7 +191,7 @@ export function DrillList({
                     <span className={`badge badge-sm whitespace-nowrap ${status.className}`}>
                       {status.label}
                     </span>
-                    {row.excluded && (
+                    {row.excluded && !excludedOnly && (
                       <span className="badge badge-sm badge-outline whitespace-nowrap ml-1">
                         除外
                       </span>
@@ -191,9 +200,11 @@ export function DrillList({
                   <td className="whitespace-nowrap">
                     {row.answers === 0 ? '—' : `${row.correct} / ${row.answers}`}
                   </td>
-                  <td className="whitespace-nowrap">
-                    {row.lastAnsweredAt ? timeText(row.lastAnsweredAt) : '—'}
-                  </td>
+                  {!excludedOnly && (
+                    <td className="whitespace-nowrap">
+                      {row.lastAnsweredAt ? timeText(row.lastAnsweredAt) : '—'}
+                    </td>
+                  )}
                   <td className="w-px whitespace-nowrap">
                     <div className="flex gap-1 justify-end">
                       <Link
@@ -208,9 +219,10 @@ export function DrillList({
                         <button
                           type="button"
                           className="btn btn-xs btn-ghost"
+                          title="除外を戻す"
                           onClick={() => onUnexclude(row.id)}
                         >
-                          除外を戻す
+                          戻す
                         </button>
                       )}
                     </div>

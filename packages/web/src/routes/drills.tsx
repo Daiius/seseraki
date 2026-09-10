@@ -275,6 +275,7 @@ function DrillsPage() {
               pagination={data.list.pagination}
               kind={search.kind}
               filtered={Boolean(search.kind || search.solved || search.excluded)}
+              excludedOnly={search.excluded === 'only'}
               onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
               onClearFilters={clearFilters}
               onUnexclude={unexclude}

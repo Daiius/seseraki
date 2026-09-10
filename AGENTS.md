@@ -89,7 +89,18 @@ pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / 
 pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
 pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
 pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定（移行時に 1 回・既定 dry-run / --apply で実書込）
+pnpm db:shift-timestamps    # JS が書いた日時の是正（一度きり・既定 dry-run / SHIFT_TIMESTAMPS_APPLY=1 で実書込）
 ```
+
+> 🔴 **DB 接続のセッションは UTC に固定する**（`packages/server/src/db/index.ts`）。**外すと日時が
+> 黙って 9h ずれる。** drizzle の mysql2 ドライバは自前の `typeCast` で `TIMESTAMP` / `DATETIME` /
+> `DATE` を**文字列のまま**受け取り（mysql2 の日時変換を通さない）、その壁時計を
+> `new Date(value + "+0000")` で読む——**「DB の壁時計 ＝ UTC」を前提にしている**。
+> MySQL の `time_zone` が `SYSTEM`（＝ JST）だと `now()` 由来の `createdAt` / `updatedAt` が
+> **+9h 未来に見え**、逆に JS が書いた `playedAt` は**保存された instant が 9h 手前**にずれる
+> （読み書きの誤解釈が打ち消し合うので**画面上は正しく見え、気づけない**）。実際に踏んだ。
+> ⚠ **`mysql.createPool({ timezone })` を足しても直らない**——その経路を drizzle が潰している。
+> 詳細と既存行の是正は [prd/03](./prd/03-data-model.md) §1.1。
 
 > **マイグレーション方式**: dev は `db:push`（強制同期・使い捨て）、本番は **generate/migrate 方式**（`packages/server/drizzle/`
 > にバージョン管理、`db:generate` で生成し `db:migrate` で未適用分だけ適用）。既存 DB を初めて管理下に載せる時は一度だけ
@@ -138,6 +149,7 @@ server の本番イメージ（`packages/server/Dockerfile.prod`）には、常�
 | `/app/redetect-tactics.js` | 戦型ラベルの一括再判定（[prd/01](./prd/01-domain.md) §6.4） | dry-run | `REDETECT_APPLY=1` |
 | `/app/rebuild-subjects.js` | 主体側の一括再導出（[prd/11](./prd/11-users.md) §4.2） | dry-run | `REBUILD_SUBJECTS_APPLY=1` |
 | `/app/backfill-user.js` | 表示名と名前候補の設定（移行時に 1 回。[prd/11](./prd/11-users.md) §6.2） | dry-run | `--apply`（引数を取る） |
+| `/app/shift-js-timestamps.js` | JS が書いた日時の是正（**一度きり**。[prd/03](./prd/03-data-model.md) §1.1） | dry-run | `SHIFT_TIMESTAMPS_APPLY=1` |
 
 ```bash
 docker compose run --rm --no-deps <server サービス> /app/<entry>.js
@@ -172,6 +184,15 @@ docker compose run --rm --no-deps <server サービス> /app/backfill-user.js --
 > を指す。**`migrate.ts` をパッケージルート直下から動かすとこの対応が壊れる。**
 > ⚠ `baseline` は同梱していない。既存 DB を初めて管理下へ載せる一度きりの操作で、**中身を確かめずに
 > 「適用済み」と記録してしまう**性質があるため、使い捨てコンテナから気軽に叩けるべきではない。
+
+> **日時の是正**（`prd/03` §1.1）: 接続のセッションを UTC に固定した回に**一度だけ**流す。
+> **既定は dry-run**、`SHIFT_TIMESTAMPS_APPLY=1` で実書込。
+> ```bash
+> docker compose run --rm --no-deps -e SHIFT_TIMESTAMPS_APPLY=1 <server サービス> /app/shift-js-timestamps.js
+> ```
+> 🔴 **二度流すと 18h ずれる。** `maintenance_marks` の印で 2 回目は中止するので、
+> **印を作るマイグレーション（`maintenance_marks`）を先に適用しておくこと**。
+> 切り戻しは `SHIFT_TIMESTAMPS_UNDO=1 SHIFT_TIMESTAMPS_APPLY=1`（印を消して逆向きに戻す）。
 
 > **戦型ラベルの一括再判定**（`prd/01` §6.4「判定ロジックを更新したら一括再判定する」）:
 > 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。

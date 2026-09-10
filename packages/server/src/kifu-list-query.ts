@@ -141,7 +141,10 @@ export function analyzedCondition(): SQL {
 /**
  * 期間の絞り込み（基準は `playedOrCreatedAt`）。一覧と分析で同じ境界を使う。
  *
- * 日付の境界は DB セッションのタイムゾーンで解釈される（playedAt の保存と同じ基準）。
+ * ⚠ **境界は UTC の 0 時。** `from` / `to` は日付文字列のまま DB へ渡り、DB セッションの
+ * タイムゾーン（**UTC 固定**。`src/db/index.ts` / prd/03 §1.1）で解釈される。
+ * つまり**日本時間の日付では絞れていない**（JST 0:00〜9:00 の対局は前日に入る）。
+ * JST 境界にするには境界側の変換が要る——**未確認・未実装**（prd/04 §6.1）。
  * `to` は指定日を含めたいので「翌日 0 時未満」とする。
  */
 export function periodConditions(from?: string, to?: string): SQL[] {

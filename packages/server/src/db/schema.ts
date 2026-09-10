@@ -451,6 +451,25 @@ export const drillAttempts = mysqlTable(
   ],
 );
 
+/**
+ * 一度きりの保守作業の「実施済み」印（prd/03）。
+ *
+ * 🔴 **二度流すと壊れる作業のための台帳。** 既存行の日時を一律にずらす
+ * `shift-js-timestamps.ts` のように、**冪等に書けない**（もう一度流すと二重にずれる）
+ * バックフィルは、ここに印を打ってから書き、印があれば以後は必ず中止する。
+ * マイグレーションと違って**任意の時点に dry-run で回せる**必要があるので、
+ * `__drizzle_migrations` には相乗りさせない。
+ *
+ * ⚠ 印と本体の更新は**同じトランザクション**で書く（片方だけ残ると次の実行が判断できない）。
+ */
+export const maintenanceMarks = mysqlTable('maintenance_marks', {
+  /** 作業の識別子（例 `shift-js-timestamps-to-utc`） */
+  markKey: varchar({ length: 64 }).primaryKey(),
+  appliedAt: timestamp().notNull().defaultNow(),
+  /** 何をどれだけ変えたか。後から人が読んで判断できるように残す */
+  note: text(),
+});
+
 export const relations = defineRelations(
   {
     kifus,

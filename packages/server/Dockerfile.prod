@@ -54,6 +54,12 @@ COPY --from=build /workspace/packages/server/dist/generate-drills.js ./generate-
 COPY --from=build /workspace/packages/server/dist/rebuild-subjects.js ./rebuild-subjects.js
 COPY --from=build /workspace/packages/server/dist/backfill-user.js ./backfill-user.js
 
+# 日時の是正のエントリ（一度きり）。接続のセッションを UTC に固定した回に一度だけ流す——
+# JS が書いた playedAt / analysisCompletedAt だけが 9h 手前にずれて残るため。
+# 🔴 二度流すと 18h ずれる（maintenance_marks の印で止まる）。
+#   docker compose run --rm -e SHIFT_TIMESTAMPS_APPLY=1 <service>  # command: ["/app/shift-js-timestamps.js"]
+COPY --from=build /workspace/packages/server/dist/shift-js-timestamps.js ./shift-js-timestamps.js
+
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
 #   docker compose run --rm <service>   # command: ["/app/migrate.js"]

@@ -70,14 +70,14 @@ describe('セッション時刻帯が JST（＝修正前）', () => {
     expect(fromDriver(column.read()).toISOString()).toBe('2026-09-10T21:34:56.000Z');
   });
 
-  it('JS が書いた列は往復すると一致するが、保存された instant は 9h 手前', () => {
+  it('JS が書いた列は instant が 9h 手前にずれて保存される', () => {
     const column = new TimestampColumn(JST);
     column.write(toDriver(NOW));
 
-    // 画面上は正しく見える（読み書きの誤解釈が打ち消し合う）
-    expect(fromDriver(column.read()).toISOString()).toBe(NOW.toISOString());
-    // ⚠ 中身はずれている。ここが「切替と同時に +9h の是正が要る」理由
+    // 送った壁時計（UTC）を DB が JST として解釈するので、instant が 9h 手前になる
     expect(column.instant().toISOString()).toBe('2026-09-10T03:34:56.000Z');
+    // 読み出しの誤解釈と打ち消し合うので、**JS から見た往復だけは一致してしまう**
+    expect(fromDriver(column.read()).toISOString()).toBe(NOW.toISOString());
   });
 });
 
@@ -97,19 +97,26 @@ describe("セッション時刻帯が UTC（＝修正後: SET time_zone = '+00:0
     expect(fromDriver(column.read()).toISOString()).toBe(NOW.toISOString());
   });
 
-  it('切替前に JS が書いた既存行は 9h 手前に見える → +9h の是正で戻る', () => {
-    // 旧セッション（JST）で書いた行を、そのまま新セッション（UTC）で読む
-    const written = new TimestampColumn(9);
-    written.write(toDriver(NOW));
-    const legacyInstant = written.instant();
-
-    const read = new TimestampColumn(UTC);
-    read.writeNow(legacyInstant);
-    expect(fromDriver(read.read()).toISOString()).toBe('2026-09-10T03:34:56.000Z');
-
-    // shift-js-timestamps.ts が流す `+ INTERVAL 9 HOUR` に相当
-    const shifted = new Date(legacyInstant.getTime() + 9 * 3_600_000);
-    expect(shifted.toISOString()).toBe(NOW.toISOString());
+  it('出どころから書き直せば、保存済みの値がどうずれていても正しくなる', () => {
+    // 🔴 **既存行を「一律 +9h」で直さない**理由がこれ。ずれ幅は行がいつ・どの経路で
+    // 書かれたかに依存し、外から一律には決められない（実測で正しい行があった）。
+    // `playedAt` は出どころ（swarsGameKey / kifText + sourceTz）から絶対値を計算し直せるので、
+    // **今の値が何であっても**同じ結果に収束する＝冪等になる。
+    const trueInstant = NOW;
+    for (const legacy of [
+      new Date('2026-09-10T03:34:56.000Z'), // 9h 手前にずれていた行
+      new Date('2026-09-10T12:34:56.000Z'), // たまたま正しかった行
+      new Date('2026-09-10T21:34:56.000Z'), // 9h 先にずれていた行
+    ]) {
+      const column = new TimestampColumn(UTC);
+      column.write(toDriver(legacy));
+      // 出どころから計算し直した絶対値で上書きする
+      column.write(toDriver(trueInstant));
+      expect(fromDriver(column.read()).toISOString()).toBe(trueInstant.toISOString());
+      // もう一度流しても同じ（冪等）
+      column.write(toDriver(trueInstant));
+      expect(fromDriver(column.read()).toISOString()).toBe(trueInstant.toISOString());
+    }
   });
 });
 

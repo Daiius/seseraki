@@ -15,7 +15,7 @@
     "db:push": "drizzle-kit push --force",
     "tactics:redetect": "tsx redetect-tactics.ts",
     "drills:generate": "tsx generate-drills.ts",
-    "db:shift-timestamps": "tsx shift-js-timestamps.ts"
+    "db:rederive-played-at": "tsx rederive-played-at.ts"
   },
   "exports": {
     ".": {

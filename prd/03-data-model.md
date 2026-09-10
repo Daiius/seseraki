@@ -25,7 +25,6 @@
 | `drillAttempts` | 解答履歴と「自明だった」の除外（`drills` に紐付く。[13](./13-drills.md) §6.2） |
 | `users`（計画中） | 自分（将来は招待したユーザー。[11](./11-users.md) §2） |
 | `userAliases`（計画中） | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
-| `maintenanceMarks` | 一度きりの保守作業の「実施済み」印（§1.1） |
 
 - リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
@@ -41,23 +40,30 @@
 
 理由は drizzle の日時の読み書きにある。`drizzle-orm/mysql2` は自前の `typeCast` で
 `TIMESTAMP` / `DATETIME` / `DATE` を**文字列のまま**受け取り（mysql2 の日時変換を通さない）、
-その壁時計を `new Date(value + "+0000")` で組み立てる。書くときも `toISOString()` を送る。
+その壁時計を `new Date(value + "+0000")` で読む。書くときも `toISOString()` の壁時計を送る。
 つまり **drizzle は「DB の壁時計 ＝ UTC」を前提にしている**。DB 側のセッションが JST だと、
-書き手によって中身の意味が食い違う:
+書き手によって食い違いの出方が変わる:
 
-| 書き手 | 保存される壁時計 | セッションが JST だとどうなるか |
-|---|---|---|
-| MySQL の `now()`（`createdAt` / `updatedAt`） | JST | **読むと +9h 未来に見える**（instant は正しい） |
-| JS の `Date`（`playedAt` / `analysisCompletedAt`） | UTC | 往復は一致するが、**保存された instant が 9h 手前**にずれる |
+| 書き手 | セッションが JST だと何が起きるか |
+|---|---|
+| MySQL の `now()`（`createdAt` / `updatedAt`） | 保存される instant は正しいが、**読むと +9h 未来に見える**（＝実際に出た症状） |
+| JS の `Date`（`playedAt`） | 送った壁時計を JST として保存するので、**保存される instant が JS の `Date` より 9h 手前**になる |
 
 - ⚠ **`mysql.createPool({ timezone })` では直らない。** drizzle が `typeCast` で mysql2 の
   変換経路を潰しているため、このオプションはこの経路で効かない。効くのは**セッションの時刻帯**だけ。
 - `TIMESTAMP` は内部 UTC 保持なので、セッションを UTC にすれば **`now()` 由来の列は既存行も含めて直る**
-  （backfill 不要）。一方 **JS が書いた列は一度だけ `+9h` の是正が要る**
-  → `shift-js-timestamps.ts`（AGENTS.md「本番イメージ同梱のエントリ」）。
-- 🔴 **二度流すと 18h ずれる。** 絶対値を再計算できないので冪等に書けない。`maintenanceMarks` に
-  印（`markKey = 'shift-js-timestamps-to-utc'`）を打ち、**印があれば APPLY を中止**する。
-  印と本体の更新は**同じトランザクション**で書く。
+  （backfill 不要）。
+- **`playedAt` の既存行が正しいかは、行ごとに実物で確かめる。**
+  「JS の `Date` が真の絶対時刻を持っていたか」は、その行を書いた時点の `sourceTz` の解釈次第で変わり、
+  外から一律には決められない。実測では**正しい絶対時刻を持っている行があった**（2026-09-10・dev）。
+  🔴 **だから「一律 `+9h`」のような是正はしない**——正しい行を壊すうえ、二度流せば二重にずれる。
+- **直し方は「出どころからの作り直し」**（`rederive-played-at.ts`。AGENTS.md「本番イメージ同梱のエントリ」）。
+  `playedAt` は絶対値を計算し直せる: swars 経路は `swarsGameKey`（常に JST）、手動貼り付けは
+  `kifText` の開始日時を保存済み `sourceTz` で解釈する（`reanalyze` が既にやっているのと同じ）。
+  **絶対値の再計算なので何度流しても同じ**（冪等・適用済みの印が要らない）。
+  **dry-run の出力（ずれ幅の内訳）がそのまま「ずれていたのか」の答えになる。**
+- ⚠ `sourceTz` 未設定の行は解釈が決まらないので触らない（先に `db:backfill-tz`）。
+  `analysisCompletedAt` は出どころが無く再計算できないが、**有無しか使っていない**ので放置する。
 - **日付での絞り込みの境界も UTC の 0 時**になる（[04](./04-ingestion.md) §6.1）。
   JST の日付で絞るには境界側の変換が別途要る——**未確認・未実装**。
 

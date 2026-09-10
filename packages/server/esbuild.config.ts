@@ -29,12 +29,11 @@ const entryPoints = {
     //   docker compose run --rm <service>  # command: ["/app/generate-drills.js"]
     "generate-drills": "./generate-drills.ts",
     "backfill-user": "./backfill-user.ts",
-    // 日時の是正（一度きり）。セッションを UTC に固定したことで、JS が書いた
-    // `playedAt` / `analysisCompletedAt` だけが 9h 手前にずれた状態で残るため、
-    // **切替と同じ回に一度だけ**流して instant を戻す。
-    // 🔴 二度流すと 18h ずれる。`maintenance_marks` の印で二重適用を止めている。
-    //   docker compose run --rm -e SHIFT_TIMESTAMPS_APPLY=1 <service>  # command: ["/app/shift-js-timestamps.js"]
-    "shift-js-timestamps": "./shift-js-timestamps.ts",
+    // playedAt の作り直し。セッションを UTC に固定した回に、既存行が正しい絶対時刻を
+    // 持っているかを確かめ、ずれていれば出どころ（swarsGameKey / kifText + sourceTz）から
+    // 計算し直す。**絶対値の再計算なので何度流しても同じ**（prd/03 §1.1）。
+    //   docker compose run --rm -e REDERIVE_PLAYED_AT_APPLY=1 <service>  # command: ["/app/rederive-played-at.js"]
+    "rederive-played-at": "./rederive-played-at.ts",
     // マイグレーションの適用。**同梱する理由はポートを開けずに済むことではなく、
     // 適用する SQL とコードのバージョンが構造的に一致すること。**
     // ホストから流す方式は「手元にある SQL を、本番で動いているイメージへ流す」ことになり、

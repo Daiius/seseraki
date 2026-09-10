@@ -20,7 +20,29 @@ import { LazyDetails } from '../../components/LazyDetails';
 import { TacticTags } from '../../components/TacticTags';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../../lib/touchTargets';
 
+/** 棋譜詳細の URL 検索条件 */
+export interface KifuDetailSearch {
+  /**
+   * 表示を開始する手数（初期局面からの手数 = 盤面の `moveIndex`）。
+   *
+   * 出題の解答表示・出題の一覧・局面検索から「その手」へ直接飛ぶための入口
+   * （prd/13 §7.1・prd/10 §3.2）。**入口としてだけ効く**——閲覧中に手を進めても
+   * URL は書き換えない（1 手ごとに履歴が積まると戻る操作の意味が変わるため）。
+   * 範囲外の値は盤側で端に丸める。
+   */
+  ply?: number;
+}
+
+/** `ply` は 0（初期局面）以上の整数だけ受ける。それ以外は指定なしと同じ扱い */
+function plyParam(raw: unknown): number | undefined {
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 export const Route = createFileRoute('/kifus/$id')({
+  validateSearch: (search: Record<string, unknown>): KifuDetailSearch => ({
+    ply: plyParam(search.ply),
+  }),
   loader: async ({ params }) => {
     const res = await client.api.kifus[':id'].$get({
       param: { id: params.id },
@@ -33,6 +55,7 @@ export const Route = createFileRoute('/kifus/$id')({
 
 function KifuDetailPage() {
   const kifu = Route.useLoaderData();
+  const { ply } = Route.useSearch();
   const navigate = useNavigate();
   const router = useRouter();
 
@@ -243,6 +266,13 @@ function KifuDetailPage() {
 
         {usiMoves.length > 0 && (
           <ShogiBoard
+            /*
+              ⚠ **`ply` が変わったら盤を作り直す**（`initialMoveIndex` は
+              `useState` の初期値なので、再レンダリングでは効かない）。棋譜を跨ぐ
+              移動でも手数が持ち越されないよう、id も key に含める
+            */
+            key={`${kifu.id}-${ply ?? 0}`}
+            initialMoveIndex={ply ?? 0}
             usiMoves={usiMoves}
             positions={positions}
             analyses={kifu.analyses}

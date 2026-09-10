@@ -265,9 +265,12 @@ function SubjectSection({ sfen }: { sfen: string }) {
                       <td className="w-full">{g.title}</td>
                       <td className="text-right whitespace-nowrap">{g.moveNumber} 手目</td>
                       <td className="whitespace-nowrap">
+                        {/* 到達した手数まで進めて開く（`moveNumber` は初期局面からの
+                            手数で、盤の手数と同じ意味。prd/10 §3.2） */}
                         <Link
                           to="/kifus/$id"
                           params={{ id: String(g.kifuId) }}
+                          search={{ ply: g.moveNumber }}
                           className="btn btn-ghost btn-xs"
                         >
                           開く
@@ -408,9 +411,12 @@ function PositionView({ position }: { position: Position }) {
                         {g.moveNumber} 手目
                       </td>
                       <td className="whitespace-nowrap">
+                        {/* 到達した手数まで進めて開く（`moveNumber` は初期局面からの
+                            手数で、盤の手数と同じ意味。prd/10 §3.2） */}
                         <Link
                           to="/kifus/$id"
                           params={{ id: String(g.kifuId) }}
+                          search={{ ply: g.moveNumber }}
                           className="btn btn-ghost btn-xs"
                         >
                           開く

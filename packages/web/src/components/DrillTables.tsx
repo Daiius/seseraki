@@ -199,12 +199,13 @@ export function DrillList({
                     <Link
                       to="/kifus/$id"
                       params={{ id: String(row.kifuId) }}
+                      search={{ ply: row.moveNumber + 1 }}
                       className="link link-hover"
                     >
                       {row.title}
                     </Link>
                   </td>
-                  {/* ⚠ 棋譜詳細は手数を URL に持たない（prd/13 §7.1）ので、手数は数字だけ出す */}
+                  {/* 棋譜名のリンクがこの手数まで進めて開く（prd/13 §7.1） */}
                   <td className="whitespace-nowrap">{row.moveNumber + 1} 手目</td>
                   <td className="whitespace-nowrap">
                     {KIND_LABEL[row.kind]}
@@ -323,6 +324,7 @@ export function DrillHistory({
                     <Link
                       to="/kifus/$id"
                       params={{ id: String(row.kifuId) }}
+                      search={{ ply: row.moveNumber + 1 }}
                       className="link link-hover"
                     >
                       {row.title}

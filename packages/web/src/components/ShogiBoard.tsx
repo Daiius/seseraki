@@ -94,6 +94,13 @@ interface Props {
    */
   initialMoveIndex?: number;
   /**
+   * 本筋の手数が変わったときに呼ぶ（棋譜詳細が URL の `ply` を追随させる。prd/05 §2.6）。
+   *
+   * ⚠ **分岐（読み筋の再生）と検討盤では呼ばれない**——本筋上に無い局面は手数で表せない。
+   * その間は呼び出し側の値が据え置きになる（本筋へ戻った時点でまた追随する）。
+   */
+  onMoveIndexChange?: (moveIndex: number) => void;
+  /**
    * 検討セッションの初期状態。**DEV ギャラリー用**（`initialMoveIndex` と同じ趣旨）。
    * 検討中の見え方——候補手を出さない・評価値グラフから手送りできない
    * （prd/12 §3.1・決定 2026-08-29）——を実物のまま並べるための入口で、通常は渡さない。
@@ -102,7 +109,7 @@ interface Props {
 }
 
 
-export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0, initialStudySession }: Props) {
+export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subjectSide, thresholds, initialMoveIndex = 0, initialStudySession, onMoveIndexChange }: Props) {
   const sortedAnalyses = [...analyses].sort((a, b) => a.moveNumber - b.moveNumber);
   const losses = computeMoveLosses(sortedAnalyses, usiMoves);
   const userSide = subjectSide ?? null;
@@ -118,6 +125,9 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
 
   const goToMain = (newIndex: number) => {
     setMoveIndex(newIndex);
+    // 本筋の手数が動いたことだけを伝える。分岐の解除で同じ手数へ戻る場合も呼ぶが、
+    // 受け取る側が同じ値を弾く（prd/05 §2.6）
+    onMoveIndexChange?.(newIndex);
     setBranchRank(null);
     setBranchDepth(0);
     // 本筋を進めたら、開いている候補手 details は内容が変わるので自動で閉じる

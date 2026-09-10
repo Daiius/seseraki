@@ -11,6 +11,7 @@ import { buildPositions } from 'shared';
 import { formatUpdatedAgo } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';
+import { usePlyUrlSync } from '../../lib/usePlyUrlSync';
 import { ShogiBoard } from '../../components/ShogiBoard';
 import { AnalyzingAlert } from '../../components/AnalyzingAlert';
 import { CopyButton } from '../../components/CopyButton';
@@ -26,8 +27,8 @@ export interface KifuDetailSearch {
    * 表示を開始する手数（初期局面からの手数 = 盤面の `moveIndex`）。
    *
    * 出題の解答表示・出題の一覧・局面検索から「その手」へ直接飛ぶための入口
-   * （prd/13 §7.1・prd/10 §3.2）。**入口としてだけ効く**——閲覧中に手を進めても
-   * URL は書き換えない（1 手ごとに履歴が積まると戻る操作の意味が変わるため）。
+   * （prd/13 §7.1・prd/10 §3.2）であり、**閲覧中の手送りにも追随する**
+   * （prd/05 §2.6）。追随は `replace` + throttle で書く——理由は `usePlyUrlSync`。
    * 範囲外の値は盤側で端に丸める。
    */
   ply?: number;
@@ -56,6 +57,7 @@ export const Route = createFileRoute('/kifus/$id')({
 function KifuDetailPage() {
   const kifu = Route.useLoaderData();
   const { ply } = Route.useSearch();
+  const syncPly = usePlyUrlSync();
   const navigate = useNavigate();
   const router = useRouter();
 
@@ -267,12 +269,15 @@ function KifuDetailPage() {
         {usiMoves.length > 0 && (
           <ShogiBoard
             /*
-              ⚠ **`ply` が変わったら盤を作り直す**（`initialMoveIndex` は
-              `useState` の初期値なので、再レンダリングでは効かない）。棋譜を跨ぐ
-              移動でも手数が持ち越されないよう、id も key に含める
+              🔴 **key に `ply` を入れない。** `ply` は手送りのたびに変わるので、
+              入れると**毎手盤が作り直され、反転・分岐の再生位置・検討中の手順が消える**。
+              URL → 盤の向きは初期表示の 1 回だけで、以後は盤が真実の側
+              （`onMoveIndexChange` で URL を追随させる。prd/05 §2.6）。
+              棋譜を跨ぐ移動で手数が持ち越されないよう、id だけを key にする
             */
-            key={`${kifu.id}-${ply ?? 0}`}
+            key={kifu.id}
             initialMoveIndex={ply ?? 0}
+            onMoveIndexChange={syncPly}
             usiMoves={usiMoves}
             positions={positions}
             analyses={kifu.analyses}

@@ -1,0 +1,1 @@
+ALTER TABLE `drill_attempts` ADD `line` json;

@@ -1,0 +1,1 @@
+CREATE INDEX `drill_attempts_created_at_idx` ON `drill_attempts` (`createdAt`);

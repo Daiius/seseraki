@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
 import {
   canPromoteMove,
   dropDestinations,
@@ -25,6 +25,7 @@ import {
   type StudySession,
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
+import { DrillHistory, DrillList } from '../components/DrillTables';
 
 /**
  * 出題（prd/13）。溜め込んだ棋譜と解析から作った問題を解く。
@@ -35,21 +36,72 @@ import { useDrillScoring } from '../lib/drillScoring';
  * 🔒 **採点は server**。ここがやるのは盤の操作と、返ってきた判定の表示だけ。
  */
 export interface DrillsSearch {
-  /** 出題の種類で絞る。未指定なら両方から選ぶ */
+  /** タブ（prd/13 §7.4）。`solve` は既定なので URL に載せない */
+  tab?: 'list' | 'history';
+  /** 出題の種類で絞る。未指定なら両方から選ぶ。**タブをまたいで効く** */
   kind?: 'mate' | 'best';
+  /** 一覧から名指しで開いた問題（`tab` が解くときだけ見る。prd/13 §7.4） */
+  drill?: number;
+  /** 一覧・履歴のページ（1 は既定なので載せない） */
+  page?: number;
+  /** 一覧の解答状況（`all` は既定）。⚠ 名前は棋譜一覧の `status` と**衝突させない**
+   * （検索パラメータの型はルート間で突き合わされる） */
+  solved?: 'unanswered' | 'wrong' | 'correct';
+  /** 一覧で除外した問題だけを見る（既定は隠す） */
+  excluded?: 'only';
+  /** 一覧の並び（`played` は既定）。⚠ 棋譜一覧の `sort` と衝突させない */
+  sortBy?: 'status';
+  /** 履歴の判定（`all` は既定） */
+  verdict?: 'correct' | 'close' | 'wrong' | 'excluded';
+}
+
+const TABS = ['list', 'history'] as const;
+const KINDS = ['mate', 'best'] as const;
+const STATUSES = ['unanswered', 'wrong', 'correct'] as const;
+const VERDICTS = ['correct', 'close', 'wrong', 'excluded'] as const;
+
+/** 許可値でなければ落とす（URL 直入力の未知の値は既定に戻す） */
+function option<T extends string>(values: readonly T[], raw: unknown): T | undefined {
+  return values.find((v) => v === raw);
+}
+
+/** 正の整数だけを受ける。1 は既定なので URL に載せない */
+function pageParam(raw: unknown): number | undefined {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 1 ? value : undefined;
+}
+
+function idParam(raw: unknown): number | undefined {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 export const Route = createFileRoute('/drills')({
   validateSearch: (search: Record<string, unknown>): DrillsSearch => ({
-    kind: search.kind === 'mate' || search.kind === 'best' ? search.kind : undefined,
+    tab: option(TABS, search.tab),
+    kind: option(KINDS, search.kind),
+    drill: idParam(search.drill),
+    page: pageParam(search.page),
+    solved: option(STATUSES, search.solved),
+    excluded: search.excluded === 'only' ? 'only' : undefined,
+    sortBy: search.sortBy === 'status' ? 'status' : undefined,
+    verdict: option(VERDICTS, search.verdict),
   }),
-  loaderDeps: ({ search }) => ({ kind: search.kind }),
-  loader: ({ deps }) => loadNext(deps.kind),
+  loaderDeps: ({ search }) => search,
+  loader: ({ deps }) => loadTab(deps),
   component: DrillsPage,
 });
 
-type NextResponse = Awaited<ReturnType<typeof loadNext>>;
-type Drill = NonNullable<NextResponse['drill']>;
+type SolveResponse = Awaited<ReturnType<typeof loadNext>>;
+type Drill = NonNullable<SolveResponse['drill']>;
+
+/** タブごとに引くものが違う（prd/13 §7.4）。**タブは URL の検索パラメータ**なので loader で分ける */
+async function loadTab(search: DrillsSearch) {
+  if (search.tab === 'list') return { tab: 'list' as const, ...(await loadList(search)) };
+  if (search.tab === 'history') return { tab: 'history' as const, ...(await loadHistory(search)) };
+  const solve = search.drill ? await loadOne(search.drill) : await loadNext(search.kind);
+  return { tab: 'solve' as const, ...solve };
+}
 
 async function loadNext(kind?: 'mate' | 'best') {
   try {
@@ -59,6 +111,53 @@ async function loadNext(kind?: 'mate' | 'best') {
     return { drill: body.drill, error: null };
   } catch {
     return { drill: null, error: 'サーバーに接続できません' };
+  }
+}
+
+/** 一覧から名指しで開いた 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
+async function loadOne(id: number) {
+  try {
+    const res = await client.api.drills[':id'].$get({ param: { id: String(id) } });
+    if (res.status === 404) return { drill: null, error: '出題が見つかりません' };
+    if (!res.ok) return { drill: null, error: `サーバーエラー (${res.status})` };
+    const body = await res.json();
+    return { drill: body.drill, error: null };
+  } catch {
+    return { drill: null, error: 'サーバーに接続できません' };
+  }
+}
+
+async function loadList(search: DrillsSearch) {
+  try {
+    const res = await client.api.drills.$get({
+      query: {
+        page: search.page ?? 1,
+        ...(search.kind ? { kind: search.kind } : {}),
+        ...(search.solved ? { status: search.solved } : {}),
+        ...(search.excluded ? { excluded: search.excluded } : {}),
+        ...(search.sortBy ? { sort: search.sortBy } : {}),
+      },
+    });
+    if (!res.ok) return { list: null, error: `サーバーエラー (${res.status})` };
+    return { list: await res.json(), error: null };
+  } catch {
+    return { list: null, error: 'サーバーに接続できません' };
+  }
+}
+
+async function loadHistory(search: DrillsSearch) {
+  try {
+    const res = await client.api.drills.attempts.$get({
+      query: {
+        page: search.page ?? 1,
+        ...(search.kind ? { kind: search.kind } : {}),
+        ...(search.verdict ? { verdict: search.verdict } : {}),
+      },
+    });
+    if (!res.ok) return { history: null, error: `サーバーエラー (${res.status})` };
+    return { history: await res.json(), error: null };
+  } catch {
+    return { history: null, error: 'サーバーに接続できません' };
   }
 }
 
@@ -93,17 +192,213 @@ const POLL_BUDGET_MS = 240_000;
  * 盤・手順・判定が**まとめて**新しい問題のものになる。
  */
 function DrillsPage() {
-  const initial = Route.useLoaderData() as NextResponse;
-  const { kind } = Route.useSearch();
-  return <DrillRunner key={kind ?? 'all'} initial={initial} kind={kind} />;
+  const data = Route.useLoaderData();
+  const search = Route.useSearch();
+  const navigate = useNavigate({ from: '/drills' });
+  const router = useRouter();
+  /** 「戻す」の結果（prd/13 §7.2）。**失敗を黙って飲まない**——押しても何も起きないと読める */
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  /** 絞り込みを変えたら 1 ページ目に戻す（棋譜一覧と同じ姿勢。prd/05 §2.5） */
+  function setSearch(patch: Partial<DrillsSearch>) {
+    navigate({ search: (prev) => ({ ...prev, page: undefined, ...patch }) });
+  }
+
+  /** 絞り込みをすべて外す（タブは保つ）。0 件のときの案内から呼ぶ */
+  function clearFilters() {
+    navigate({ search: { tab: search.tab } });
+  }
+
+  async function unexclude(id: number) {
+    // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
+    // GET が成功すると、**除外されたままの一覧が普通に描き直される**——押した側からは
+    // 「効かなかった」ことも理由も分からない
+    try {
+      const res = await client.api.drills[':id'].unexclude.$post({ param: { id: String(id) } });
+      if (!res.ok) {
+        setActionError(`除外を戻せませんでした (${res.status})`);
+        return;
+      }
+      setActionError(null);
+      await router.invalidate();
+    } catch {
+      setActionError('サーバーに接続できません');
+    }
+  }
+
+  return (
+    <div className="p-2 space-y-2">
+      <DrillTabs search={search} />
+
+      {data.tab === 'solve' && (
+        // 🔴 **問題が変わったら中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
+        // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る
+        <DrillRunner
+          key={`${search.kind ?? 'all'}-${search.drill ?? 'next'}`}
+          initial={data}
+          kind={search.kind}
+          pinned={search.drill !== undefined}
+          onUnpin={() => navigate({ search: (prev) => ({ ...prev, drill: undefined }) })}
+        />
+      )}
+
+      {data.tab === 'list' && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              className="select select-sm"
+              value={search.solved ?? 'all'}
+              onChange={(e) =>
+                setSearch({ solved: option(STATUSES, e.target.value) })
+              }
+            >
+              <option value="all">すべての状態</option>
+              <option value="unanswered">未解答</option>
+              <option value="wrong">間違えた</option>
+              <option value="correct">正解した</option>
+            </select>
+            <select
+              className="select select-sm"
+              value={search.sortBy ?? 'played'}
+              onChange={(e) =>
+                setSearch({ sortBy: e.target.value === 'status' ? 'status' : undefined })
+              }
+            >
+              <option value="played">対局日順</option>
+              <option value="status">出題順</option>
+            </select>
+            <label className="label cursor-pointer gap-1 text-sm">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-sm"
+                checked={search.excluded === 'only'}
+                onChange={(e) => setSearch({ excluded: e.target.checked ? 'only' : undefined })}
+              />
+              除外した問題
+            </label>
+            {data.list && (
+              <span className="text-sm text-base-content/70 ms-auto">
+                {data.list.pagination.total} 問
+              </span>
+            )}
+          </div>
+          {data.error && <p className="text-error text-sm">{data.error}</p>}
+          {actionError && <p className="text-error text-sm">{actionError}</p>}
+          {data.list && (
+            <DrillList
+              rows={data.list.drills}
+              pagination={data.list.pagination}
+              kind={search.kind}
+              filtered={Boolean(search.kind || search.solved || search.excluded)}
+              excludedOnly={search.excluded === 'only'}
+              onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
+              onClearFilters={clearFilters}
+              onUnexclude={unexclude}
+            />
+          )}
+        </>
+      )}
+
+      {data.tab === 'history' && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              className="select select-sm"
+              value={search.verdict ?? 'all'}
+              onChange={(e) => setSearch({ verdict: option(VERDICTS, e.target.value) })}
+            >
+              <option value="all">すべての判定</option>
+              <option value="correct">正解</option>
+              <option value="close">惜しい</option>
+              <option value="wrong">不正解</option>
+              <option value="excluded">除外</option>
+            </select>
+            {data.history && (
+              <span className="text-sm text-base-content/70 ms-auto">
+                {data.history.pagination.total} 件
+              </span>
+            )}
+          </div>
+          {data.error && <p className="text-error text-sm">{data.error}</p>}
+          {data.history && (
+            <DrillHistory
+              rows={data.history.attempts}
+              pagination={data.history.pagination}
+              kind={search.kind}
+              filtered={Boolean(search.kind || search.verdict)}
+              onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
+              onClearFilters={clearFilters}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * タブと種類の絞り込み（prd/13 §7.4）。
+ *
+ * 🔒 **`kind` はタブをまたいで効く**（3 つとも種類で絞る意味がある）。
+ * ⚠ **タブを移ったらタブ固有のつまみは落とす**（`page` / `solved` / `verdict` など）。
+ */
+function DrillTabs({ search }: { search: DrillsSearch }) {
+  const tab = search.tab ?? 'solve';
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <div role="tablist" className="tabs tabs-box tabs-sm">
+        {(
+          [
+            [undefined, '解く'],
+            ['list', '一覧'],
+            ['history', '履歴'],
+          ] as const
+        ).map(([value, label]) => (
+          <Link
+            key={label}
+            role="tab"
+            to="/drills"
+            search={{ tab: value, kind: search.kind }}
+            className={`tab ${tab === (value ?? 'solve') ? 'tab-active' : ''}`}
+          >
+            {label}
+          </Link>
+        ))}
+      </div>
+      {/* 種類の絞り込み。**答えの手掛かりにはならない**ので出題中に出してよい */}
+      <div className="join ms-auto">
+        {(
+          [
+            [undefined, 'すべて'],
+            ['mate', '詰み'],
+            ['best', '次の一手'],
+          ] as const
+        ).map(([value, label]) => (
+          <Link
+            key={label}
+            to="/drills"
+            search={{ ...search, kind: value, page: undefined, drill: undefined }}
+            className={`btn btn-xs join-item ${search.kind === value ? 'btn-active' : ''}`}
+          >
+            {label}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function DrillRunner({
   initial,
   kind,
+  pinned,
+  onUnpin,
 }: {
-  initial: NextResponse;
+  initial: SolveResponse;
   kind: 'mate' | 'best' | undefined;
+  /** 一覧から名指しで開いた問題か（prd/13 §7.4）。次の問題へ進むときに `drill` を落とす */
+  pinned: boolean;
+  onUnpin: () => void;
 }) {
   const { scoring } = useDrillScoring();
   const [drill, setDrill] = useState<Drill | null>(initial.drill);
@@ -131,6 +426,11 @@ function DrillRunner({
   }
 
   async function nextDrill() {
+    // ⚠ **一覧から開いた問題は URL に残っている**（prd/13 §7.4）。落とさないと同じ問題が出続ける
+    if (pinned) {
+      onUnpin();
+      return;
+    }
     const loaded = await loadNext(kind);
     reset(loaded.drill, loaded.error);
   }
@@ -226,21 +526,18 @@ function DrillRunner({
   }
 
   if (error && !drill) {
-    return <p className="p-4 text-error">{error}</p>;
+    return <p className="text-error p-2">{error}</p>;
   }
   if (!drill || !state) {
     return (
-      <div className="p-4 space-y-2">
-        <h1 className="text-lg font-bold">出題</h1>
-        <p className="text-base-content/70">
-          出題できる問題がありません。解析済みの棋譜が増えると問題が作られます。
-        </p>
-      </div>
+      <p className="text-base-content/70 p-2">
+        出題できる問題がありません。解析済みの棋譜が増えると問題が作られます。
+      </p>
     );
   }
 
   return (
-    <div className="p-2 space-y-2">
+    <div className="space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
         <h1 className="text-lg font-bold">
           {drill.kind === 'mate' ? '詰ませてください' : 'ここで何を指すべきでしたか'}
@@ -251,25 +548,6 @@ function DrillRunner({
         {drill.wrongBefore && !reveal && (
           <span className="badge badge-warning badge-outline">以前間違えた</span>
         )}
-        {/* 種類の絞り込み。**答えの手掛かりにはならない**ので出題中に出してよい */}
-        <div className="join ms-auto">
-          {(
-            [
-              [undefined, 'すべて'],
-              ['mate', '詰み'],
-              ['best', '次の一手'],
-            ] as const
-          ).map(([value, label]) => (
-            <Link
-              key={label}
-              to="/drills"
-              search={{ kind: value }}
-              className={`btn btn-xs join-item ${kind === value ? 'btn-active' : ''}`}
-            >
-              {label}
-            </Link>
-          ))}
-        </div>
       </div>
 
       <HandDisplay

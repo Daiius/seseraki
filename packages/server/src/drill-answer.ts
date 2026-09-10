@@ -194,3 +194,32 @@ export function isMateAfter(state: BoardState, move: string, attacker: Side): bo
   }
   return isInCheck(next, attacker === 'sente' ? 'gote' : 'sente') === true;
 }
+
+/** USI の指し手の形（打ち・移動・成り）。`applyMove` に渡す前の形の確認に使う */
+const USI_MOVE = /^(?:[PLNSGBR]\*\d[a-i]|\d[a-i]\d[a-i]\+?)$/;
+
+/**
+ * その手を指した局面（prd/13 §5.4）。**出題局面に `line` の 1 手前までを積む**。
+ *
+ * - `line` があれば手順どおりに進める。読めない手が混ざったら `null`（数字を捏造しない）。
+ * - `line` を持たない既存の行は、**次の一手だけ**出題局面をそのまま使える（1 手なので同じ）。
+ *   🔒 **詰将棋は `null` を返す**——どの局面で指した手か分からないまま表記を作らない。
+ */
+export function stateOfAnswer(
+  base: BoardState,
+  line: string[] | null,
+  move: string,
+  kind: 'mate' | 'best',
+): BoardState | null {
+  if (!line || line.length === 0) return kind === 'best' ? base : null;
+  // 手順の最後は記録された手そのもの。食い違う行は表記を作らない
+  if (line[line.length - 1] !== move) return null;
+  let state = base;
+  for (const step of line.slice(0, -1)) {
+    // ⚠ **`applyMove` は読めない手で例外を投げない**（壊さないよう手番だけ進める）。
+    // 形を先に確かめないと、**黙って違う盤面の上で表記を作る**ことになる
+    if (!USI_MOVE.test(step)) return null;
+    state = applyMove(state, step);
+  }
+  return state;
+}

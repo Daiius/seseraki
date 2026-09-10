@@ -116,10 +116,15 @@ import { resolveWithEngine, type ResolveInput } from './drill-engine';
 import {
   drillCounts,
   drillSfen,
+  listDrillAttempts,
+  listDrills,
   loadDrill,
+  loadDrillQuestion,
   pickNextDrill,
   recordAttempt,
+  unexcludeDrill,
 } from './drill-query';
+import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query';
 import {
   addAlias,
   countUnresolvedSubjects,
@@ -1044,6 +1049,43 @@ const route = app
   .get('/drills/counts', sessionRequired, async (c) =>
     c.json(await drillCounts(await currentUserId())),
   )
+  // 解答履歴の一覧（prd/13 §7.3）。⚠ **`/drills/:id` より先に登録する**——
+  // `:id` を先に置くと固定の口を飲み込む
+  .get(
+    '/drills/attempts',
+    sessionRequired,
+    zv('query', drillAttemptQuerySchema),
+    async (c) => c.json(await listDrillAttempts(await currentUserId(), c.req.valid('query'))),
+  )
+  // 問題の一覧（prd/13 §7.2）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
+  .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>
+    c.json(await listDrills(await currentUserId(), c.req.valid('query'))),
+  )
+  // 一覧から名指しで開いた 1 問（prd/13 §5.4）。返す形は `/drills/next` と同じ
+  .get(
+    '/drills/:id',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const drill = await loadDrillQuestion(id, await currentUserId());
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      return c.json({ drill });
+    },
+  )
+  // 「自明だった」の取り消し（prd/13 §7.2）。除外の行そのものを消すので解答履歴は残る
+  .post(
+    '/drills/:id/unexclude',
+    sessionRequired,
+    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    async (c) => {
+      const { id } = c.req.valid('param');
+      const drill = await loadDrill(id, await currentUserId());
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      await unexcludeDrill(id);
+      return c.json({ ok: true } as const);
+    },
+  )
   // 「自明だった」で以後の出題から外す（prd/13 §7）。
   // 🔒 印は**履歴側**に置く——出題を作り直しても残るようにするため（prd/13 §6.2）
   .post(
@@ -1146,6 +1188,7 @@ const route = app
           await recordAttempt(db, {
             drillId: id,
             move,
+            line,
             verdict: 'correct',
             lossCp: null,
           });
@@ -1166,7 +1209,7 @@ const route = app
       // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
       const scored = scoreFromCandidates(drill, move, scoring);
       if (scored) {
-        await recordAttempt(db, { drillId: id, move, ...scored });
+        await recordAttempt(db, { drillId: id, move, line, ...scored });
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
       const resolved = await answerWithEngine({ drill, state, move, line, scoring }, reveal);

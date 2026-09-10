@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSfen } from 'shared';
+import { parseSfen, usiToJapaneseWithPiece } from 'shared';
 import {
   DEFAULT_SCORING,
   isMateAfter,
@@ -8,6 +8,7 @@ import {
   mateStep,
   scoreFromCandidates,
   scoreMove,
+  stateOfAnswer,
   verdictOf,
   type DrillAnswerKey,
 } from './drill-answer';
@@ -168,5 +169,37 @@ describe('isMateAfter（候補なしの終局判定。prd/13 §5.2）', () => {
 
   it('読めない手は false（数字を捏造しない）', () => {
     expect(isMateAfter(state, 'zzz', 'sente')).toBe(false);
+  });
+});
+
+describe('stateOfAnswer（表記を作る盤面。prd/13 §5.4・レビュー OCL-A1E622FE）', () => {
+  // 5五の先手歩、5三の先手飛、5一の後手玉
+  const base = parseSfen('4k4/9/4R4/9/4P4/9/9/9/4K4 b G 1')!;
+  /** 詰将棋の指し継ぎ。最後の 5b4b を指すのは**出題局面ではなく 2 手進んだ局面** */
+  const line = ['5c5b', '5a4a', '5b4b'];
+
+  it('🔴 詰将棋は手順を積んだ局面を返す（出題局面から読むと駒が居ない）', () => {
+    const state = stateOfAnswer(base, line, '5b4b', 'mate')!;
+    expect(state).not.toBeNull();
+    // 出題局面では 5b は空なので駒名が出ない。手順を積めば飛として読める
+    expect(usiToJapaneseWithPiece(state, '5b4b')).toContain('飛');
+    expect(usiToJapaneseWithPiece(base, '5b4b')).not.toContain('飛');
+  });
+
+  it('次の一手は手順が無くても出題局面でよい（1 手なので同じ）', () => {
+    expect(stateOfAnswer(base, null, '5c5b', 'best')).toBe(base);
+    expect(stateOfAnswer(base, ['5c5b'], '5c5b', 'best')).toBe(base);
+  });
+
+  it('🔒 手順を持たない既存の詰将棋の行は null（復元できない表記を作らない）', () => {
+    expect(stateOfAnswer(base, null, '5b4b', 'mate')).toBeNull();
+  });
+
+  it('手順の最後が記録された手と食い違う行は null', () => {
+    expect(stateOfAnswer(base, line, '5c5b', 'mate')).toBeNull();
+  });
+
+  it('読めない手が混ざった手順は null（数字を捏造しない）', () => {
+    expect(stateOfAnswer(base, ['zzz', '5b4b'], '5b4b', 'mate')).toBeNull();
   });
 });

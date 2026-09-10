@@ -102,19 +102,33 @@ export function DrillList({
   rows,
   pagination,
   kind,
+  filtered,
   onPage,
+  onClearFilters,
   onUnexclude,
 }: {
   rows: DrillListRow[];
   pagination: Pagination;
   kind: 'mate' | 'best' | undefined;
+  /** 絞り込みが掛かっているか。**0 件の案内を出し分ける**（prd/05 §2.5 と同じ姿勢） */
+  filtered: boolean;
   onPage: (page: number) => void;
+  onClearFilters: () => void;
   onUnexclude: (id: number) => void;
 }) {
   if (rows.length === 0) {
-    return (
+    // ⚠ **「問題がまだ無い」と「絞り込みの結果が空」を同じ文言にしない**——
+    // 記録はあるのに「まだありません」と出ると、事実と違うことを言うことになる
+    return filtered ? (
       <p className="text-base-content/70 p-2">
-        条件に合う問題がありません。絞り込みを変えるか、棋譜の解析が進むのを待ってください。
+        条件に合う問題がありません。
+        <button className="link link-primary" onClick={onClearFilters}>
+          条件をクリア
+        </button>
+      </p>
+    ) : (
+      <p className="text-base-content/70 p-2">
+        問題がまだありません。解析済みの棋譜が増えると問題が作られます。
       </p>
     );
   }
@@ -131,7 +145,9 @@ export function DrillList({
               <th>状態</th>
               <th>解答</th>
               <th>最終解答</th>
-              <th />
+              {/* ⚠ **操作列は内容ぶんの幅を確保する。** `w-px` + `whitespace-nowrap` で
+                  min-content まで広がる（除外表示のときはボタンが 2 つ並ぶ） */}
+              <th className="w-px" />
             </tr>
           </thead>
           <tbody>
@@ -178,24 +194,26 @@ export function DrillList({
                   <td className="whitespace-nowrap">
                     {row.lastAnsweredAt ? timeText(row.lastAnsweredAt) : '—'}
                   </td>
-                  <td className="whitespace-nowrap">
-                    <Link
-                      to="/drills"
-                      search={{ kind, drill: row.id }}
-                      className="btn btn-xs btn-primary"
-                    >
-                      解く
-                    </Link>
-                    {/* 除外の取り消し（prd/13 §7.2）。外した理由を後から見直せるようにする */}
-                    {row.excluded && (
-                      <button
-                        type="button"
-                        className="btn btn-xs btn-ghost ml-1"
-                        onClick={() => onUnexclude(row.id)}
+                  <td className="w-px whitespace-nowrap">
+                    <div className="flex gap-1 justify-end">
+                      <Link
+                        to="/drills"
+                        search={{ kind, drill: row.id }}
+                        className="btn btn-xs btn-primary"
                       >
-                        除外を戻す
-                      </button>
-                    )}
+                        解く
+                      </Link>
+                      {/* 除外の取り消し（prd/13 §7.2）。外した理由を後から見直せるようにする */}
+                      {row.excluded && (
+                        <button
+                          type="button"
+                          className="btn btn-xs btn-ghost"
+                          onClick={() => onUnexclude(row.id)}
+                        >
+                          除外を戻す
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -213,15 +231,29 @@ export function DrillHistory({
   rows,
   pagination,
   kind,
+  filtered,
   onPage,
+  onClearFilters,
 }: {
   rows: DrillAttemptRow[];
   pagination: Pagination;
   kind: 'mate' | 'best' | undefined;
+  /** 絞り込みが掛かっているか（`DrillList` と同じ理由） */
+  filtered: boolean;
   onPage: (page: number) => void;
+  onClearFilters: () => void;
 }) {
   if (rows.length === 0) {
-    return <p className="text-base-content/70 p-2">まだ解答の記録がありません。</p>;
+    return filtered ? (
+      <p className="text-base-content/70 p-2">
+        条件に合う解答がありません。
+        <button className="link link-primary" onClick={onClearFilters}>
+          条件をクリア
+        </button>
+      </p>
+    ) : (
+      <p className="text-base-content/70 p-2">まだ解答の記録がありません。</p>
+    );
   }
   return (
     <>
@@ -237,7 +269,7 @@ export function DrillHistory({
               <th>判定</th>
               <th>損失</th>
               <th>回数</th>
-              <th />
+              <th className="w-px" />
             </tr>
           </thead>
           <tbody>
@@ -275,7 +307,7 @@ export function DrillHistory({
                   <td className="whitespace-nowrap">
                     {row.attemptNo === null ? '—' : `${row.attemptNo} 回目`}
                   </td>
-                  <td className="whitespace-nowrap">
+                  <td className="w-px whitespace-nowrap">
                     <Link
                       to="/drills"
                       search={{ kind, drill: row.drillId }}

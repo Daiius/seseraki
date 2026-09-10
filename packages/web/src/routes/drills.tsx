@@ -202,6 +202,11 @@ function DrillsPage() {
     navigate({ search: (prev) => ({ ...prev, page: undefined, ...patch }) });
   }
 
+  /** 絞り込みをすべて外す（タブは保つ）。0 件のときの案内から呼ぶ */
+  function clearFilters() {
+    navigate({ search: { tab: search.tab } });
+  }
+
   async function unexclude(id: number) {
     await client.api.drills[':id'].unexclude.$post({ param: { id: String(id) } });
     await router.invalidate();
@@ -269,7 +274,9 @@ function DrillsPage() {
               rows={data.list.drills}
               pagination={data.list.pagination}
               kind={search.kind}
+              filtered={Boolean(search.kind || search.solved || search.excluded)}
               onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
+              onClearFilters={clearFilters}
               onUnexclude={unexclude}
             />
           )}
@@ -302,7 +309,9 @@ function DrillsPage() {
               rows={data.history.attempts}
               pagination={data.history.pagination}
               kind={search.kind}
+              filtered={Boolean(search.kind || search.verdict)}
               onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
+              onClearFilters={clearFilters}
             />
           )}
         </>

@@ -23,6 +23,7 @@ import {
   type DrillAttemptQuery,
   type DrillListQuery,
 } from './drill-list-query';
+import { stateOfAnswer } from './drill-answer';
 import type { Tx } from './tactics';
 
 /** 出題 1 問（クライアントに返す形。**答えは含まない**） */
@@ -130,6 +131,8 @@ export async function recordAttempt(
   attempt: {
     drillId: number;
     move: string | null;
+    /** 解答の手順（出題局面から・最後が `move`）。表記を作る盤面がこれで決まる（prd/13 §6.2） */
+    line?: string[] | null;
     verdict: 'correct' | 'close' | 'wrong' | null;
     lossCp: number | null;
     excluded?: boolean;
@@ -138,6 +141,7 @@ export async function recordAttempt(
   await tx.insert(drillAttempts).values({
     drillId: attempt.drillId,
     move: attempt.move,
+    line: attempt.line ?? null,
     verdict: attempt.verdict,
     lossCp: attempt.lossCp,
     excluded: attempt.excluded ?? false,
@@ -311,6 +315,7 @@ export async function listDrillAttempts(ownerId: number, query: DrillAttemptQuer
       verdict: drillAttempts.verdict,
       lossCp: drillAttempts.lossCp,
       excluded: drillAttempts.excluded,
+      line: drillAttempts.line,
       createdAt: drillAttempts.createdAt,
       kind: drills.kind,
       moveNumber: drills.moveNumber,
@@ -338,12 +343,16 @@ export async function listDrillAttempts(ownerId: number, query: DrillAttemptQuer
   };
 
   return {
-    attempts: rows.map(({ usiMoves, move, ...row }) => {
-      const state = move ? stateOf(row.kifuId, usiMoves, row.moveNumber) : null;
+    attempts: rows.map(({ usiMoves, move, line, ...row }) => {
+      const base = move ? stateOf(row.kifuId, usiMoves, row.moveNumber) : null;
+      // 🔴 **表記を作る盤面は「その手を指した局面」**（prd/13 §5.4・レビュー `OCL-A1E622FE`）。
+      // 詰将棋は指し継ぎなので、出題局面から読むと**駒名が欠ける・別の駒として表示される**
+      const state = base && move ? stateOfAnswer(base, line, move, row.kind) : null;
       return {
         ...row,
         move,
-        // 盤面を作れない棋譜（`usiMoves` を作り直した直後など）は USI のまま出す
+        // 盤面を作れない行（`line` を持たない既存の詰将棋・作り直した `usiMoves`）は
+        // **USI のまま出す**——復元できない表記を作らない
         moveText: state && move ? usiToJapaneseWithPiece(state, move) : move,
         attemptNo: move ? row.attemptNo : null,
       };

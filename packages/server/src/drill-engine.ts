@@ -83,12 +83,12 @@ export async function resolveWithEngine(input: ResolveInput): Promise<EngineAnsw
     // **その手で詰んでいる**ことを意味するので、詰みと同じ扱いで正解にする（prd/13 §5.2）
     const solved = isMateAfter(state, move, state.sideToMove);
     const scored = { verdict: solved ? ('correct' as const) : ('wrong' as const), lossCp: null };
-    await recordAttempt(db, { drillId: drill.id, move, ...scored });
+    await recordAttempt(db, { drillId: drill.id, move, line, ...scored });
     return { status: 'done', ...scored };
   }
 
   const scored = scoreMove(drill, best, scoring);
-  await recordAttempt(db, { drillId: drill.id, move, ...scored });
+  await recordAttempt(db, { drillId: drill.id, move, line, ...scored });
   return {
     status: 'done',
     ...scored,
@@ -115,7 +115,7 @@ async function mateAnswer(
     const verdict = solved ? ('correct' as const) : ('wrong' as const);
     // 🔒 **不正解も記録する。** 記録を落とすと `wrongBefore`・解答済み件数・復習順の
     // どれにも表れない（レビュー `OCL-2652C1DA`）
-    await recordAttempt(db, { drillId: drill.id, move, verdict, lossCp: null });
+    await recordAttempt(db, { drillId: drill.id, move, line, verdict, lossCp: null });
     return { status: 'done', verdict, lossCp: null };
   }
 
@@ -125,13 +125,13 @@ async function mateAnswer(
     const reply = best.pv[1] ?? null;
     if (reply === null) {
       // 読み筋がこの手で終わっている ＝ 詰み上がり。**`done` で返す**（上と同じ理由）
-      await recordAttempt(db, { drillId: drill.id, move, verdict: 'correct', lossCp: null });
+      await recordAttempt(db, { drillId: drill.id, move, line, verdict: 'correct', lossCp: null });
       return { status: 'done', verdict: 'correct', lossCp: null };
     }
     rememberLine(drill.id, [...line, ...best.pv.slice(1)]);
     return { status: 'continue', reply };
   }
   // 詰まない。咎め筋（受けの手）を見せる
-  await recordAttempt(db, { drillId: drill.id, move, verdict: 'wrong', lossCp: null });
+  await recordAttempt(db, { drillId: drill.id, move, line, verdict: 'wrong', lossCp: null });
   return { status: 'done', verdict: 'wrong', lossCp: null, refutation: best.pv.slice(1) };
 }

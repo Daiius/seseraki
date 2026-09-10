@@ -1188,6 +1188,7 @@ const route = app
           await recordAttempt(db, {
             drillId: id,
             move,
+            line,
             verdict: 'correct',
             lossCp: null,
           });
@@ -1208,7 +1209,7 @@ const route = app
       // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
       const scored = scoreFromCandidates(drill, move, scoring);
       if (scored) {
-        await recordAttempt(db, { drillId: id, move, ...scored });
+        await recordAttempt(db, { drillId: id, move, line, ...scored });
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
       const resolved = await answerWithEngine({ drill, state, move, line, scoring }, reveal);

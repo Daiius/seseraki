@@ -422,6 +422,15 @@ export const drillAttempts = mysqlTable(
     drillId: bigint({ mode: 'number', unsigned: true }).notNull(),
     /** 解答した手（USI）。除外だけを記録する行では null */
     move: varchar({ length: 16 }),
+    /**
+     * 解答の手順（出題局面からの全手順・受方の応手を含み、最後が `move`。prd/13 §6.2）。
+     *
+     * 🔴 **日本語表記を作る盤面はこれでしか決まらない**（レビュー `OCL-A1E622FE`）。詰将棋は
+     * 指し継ぎ（prd/13 §5.2）なので、`move` だけでは**どの局面で指した手かが分からず**、
+     * 出題局面から読むと駒名が欠ける・別の駒として表示される。
+     * ⚠ **既存の行は null**（`line` を持たない行は USI のまま出す。prd/13 §5.4）。
+     */
+    line: json().$type<string[]>(),
     verdict: mysqlEnum(['correct', 'close', 'wrong']),
     /**
      * 最善との差（cp）。**null 可**——mate が絡む回答は損失を持たない（prd/13 §5.1）。

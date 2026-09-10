@@ -677,11 +677,17 @@ function Result({
           次の問題
         </button>
         {/*
-          ⚠ **手数までは飛べない**（棋譜詳細は手数を URL に持たない）。
-          「N 手目を見る」と書くとその手に飛ぶと読めるので、**手数は文の中に留める**
+          出題局面の**次の手**（＝この問題の手）まで進めた状態で開く。
+          `moveNumber` は 0 始まりの指し手番号なので、盤の手数（初期局面からの手数）は +1。
+          こうすると開いた瞬間にその手の評価値・候補手が出る（prd/13 §7.1）
         */}
-        <Link to="/kifus/$id" params={{ id: String(reveal.kifuId) }} className="btn btn-sm">
-          この対局を見る（{reveal.moveNumber + 1} 手目）
+        <Link
+          to="/kifus/$id"
+          params={{ id: String(reveal.kifuId) }}
+          search={{ ply: reveal.moveNumber + 1 }}
+          className="btn btn-sm"
+        >
+          この対局の {reveal.moveNumber + 1} 手目を見る
         </Link>
         {/* 🔒 自動判定は作らない（「取り返し」の定義から詰まる。prd/13 §4.2） */}
         <button type="button" className="btn btn-sm btn-ghost" onClick={onExclude}>

@@ -161,10 +161,15 @@ export function DrillList({
                       </span>
                     )}
                   </td>
-                  <td>
-                    <span className={`badge badge-sm ${status.className}`}>{status.label}</span>
+                  {/* ⚠ **バッジを折り返させない**。折り返すと行の高さが崩れる */}
+                  <td className="whitespace-nowrap">
+                    <span className={`badge badge-sm whitespace-nowrap ${status.className}`}>
+                      {status.label}
+                    </span>
                     {row.excluded && (
-                      <span className="badge badge-sm badge-outline ml-1">除外</span>
+                      <span className="badge badge-sm badge-outline whitespace-nowrap ml-1">
+                        除外
+                      </span>
                     )}
                   </td>
                   <td className="whitespace-nowrap">
@@ -253,9 +258,9 @@ export function DrillHistory({
                   <td className="whitespace-nowrap">{row.moveNumber + 1} 手目</td>
                   <td className="whitespace-nowrap">{KIND_LABEL[row.kind]}</td>
                   <td className="whitespace-nowrap">{row.moveText ?? '—'}</td>
-                  <td>
+                  <td className="whitespace-nowrap">
                     {verdict ? (
-                      <span className={`badge badge-sm ${verdict.className}`}>
+                      <span className={`badge badge-sm whitespace-nowrap ${verdict.className}`}>
                         {verdict.label}
                       </span>
                     ) : (

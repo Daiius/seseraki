@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { MySqlDialect } from 'drizzle-orm/mysql-core';
-import type { SQL } from 'drizzle-orm';
+import { MySqlDialect, QueryBuilder } from 'drizzle-orm/mysql-core';
+import { eq, type SQL } from 'drizzle-orm';
+import { drillAttempts, drills, kifus } from './db/schema.js';
 import {
+  ANSWER_COUNT,
+  ATTEMPT_NO,
+  LAST_ANSWERED_AT,
   drillAttemptOrderBy,
   drillAttemptQuerySchema,
   drillAttemptWhere,
@@ -112,6 +116,51 @@ describe('drillAttemptWhere', () => {
   it('kind は出題の種類で絞る', () => {
     const { params } = render(drillAttemptWhere(7, parse({ kind: 'mate' })));
     expect(params).toEqual([7, 'mate']);
+  });
+});
+
+/**
+ * 🔴 **選択リストに入れた状態で SQL を組み立てて見る**（実際に踏んだ）。
+ * 断片だけを見るテストでは、**選択リストの中でだけ壊れる**種類の欠陥を捕まえられない
+ * ——`alias()` したテーブルを `sql` テンプレートに差し込むと、選択リストでは
+ * **別名だけが出力されて元のテーブル名が消え**、`Table 'prior' doesn't exist` で 500 になる。
+ */
+describe('選択リストの中で組み立てた SQL', () => {
+  /** 履歴の一覧（`listDrillAttempts`）と同じ結合で組み立てる */
+  function renderAttemptsSelect() {
+    const query = new QueryBuilder()
+      .select({ attemptNo: ATTEMPT_NO, createdAt: drillAttempts.createdAt })
+      .from(drillAttempts)
+      .innerJoin(drills, eq(drills.id, drillAttempts.drillId))
+      .innerJoin(kifus, eq(kifus.id, drills.kifuId));
+    return dialect.sqlToQuery(query.getSQL()).sql;
+  }
+
+  it('「何回目か」は副問い合わせの本体ごと出力される', () => {
+    expect(renderAttemptsSelect()).toContain('select count(*) from `drill_attempts` `prior`');
+  });
+
+  it('相関の外側は必ず修飾する（内側の同名列に解決されると常に真になる）', () => {
+    const sql = renderAttemptsSelect();
+    expect(sql).toContain('`prior`.`drillId` = `drill_attempts`.`drillId`');
+    expect(sql).toContain('`prior`.`id` <= `drill_attempts`.`id`');
+    expect(sql).toContain('`prior`.`move` is not null');
+  });
+
+  it('一覧の集計は列をテーブルで修飾する（`createdAt` は kifus にもある）', () => {
+    const query = new QueryBuilder()
+      .select({
+        id: drills.id,
+        kifuCreatedAt: kifus.createdAt,
+        answers: ANSWER_COUNT,
+        lastAnsweredAt: LAST_ANSWERED_AT,
+      })
+      .from(drills)
+      .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+      .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
+      .groupBy(drills.id, kifus.createdAt);
+    const sql = dialect.sqlToQuery(query.getSQL()).sql;
+    expect(sql).toContain('max(case when `drill_attempts`.`move` is not null then `drill_attempts`.`createdAt` end)');
   });
 });
 

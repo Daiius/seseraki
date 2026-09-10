@@ -1,7 +1,7 @@
 // 出題の一覧（`GET /api/drills`）と解答履歴（`GET /api/drills/attempts`）の
 // 絞り込み・並べ替え（prd/13 §5.4）。
 // DB 接続を持たない組み立てだけを置き、`drill-query.ts` から使う（単体テスト可能に保つため）。
-import { and, asc, desc, eq, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableName, isNotNull, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { drillAttempts, drills, kifus } from './db/schema.js';
 
@@ -86,6 +86,28 @@ export function drillAttemptWhere(ownerId: number, query: DrillAttemptQuery): SQ
         : and(eq(drillAttempts.verdict, query.verdict), isNotNull(drillAttempts.move)),
   );
 }
+
+/**
+ * その解答が**その問題の何回目か**（prd/13 §7.3）。除外だけの行（`move` が null）は数えない。
+ *
+ * 🔴 **`alias()` したテーブルを `sql` テンプレートに差し込まない**（実際に踏んだ）。
+ * 選択リストの中では**別名だけが出力されて元のテーブル名が消える**ため、
+ * `Table 'prior_attempts' doesn't exist` で 500 になる。
+ * 🔒 **識別子はスキーマから組み立てる**——手書きの文字列にすると列名を変えたときに黙って壊れる。
+ * ⚠ **外側の参照も明示的に修飾する**。修飾を落とすと副問い合わせの内側の同名列に解決され、
+ * **相関が消えて常に真になる**（エラーにならないまま数字だけが狂う）。
+ */
+export const ATTEMPT_NO = sql<number>`${sql.raw(
+  (() => {
+    const table = getTableName(drillAttempts);
+    const outer = (column: { name: string }) => `\`${table}\`.\`${column.name}\``;
+    const inner = (column: { name: string }) => `\`prior\`.\`${column.name}\``;
+    return `(select count(*) from \`${table}\` \`prior\`
+      where ${inner(drillAttempts.drillId)} = ${outer(drillAttempts.drillId)}
+        and ${inner(drillAttempts.move)} is not null
+        and ${inner(drillAttempts.id)} <= ${outer(drillAttempts.id)})`;
+  })(),
+)}`;
 
 /** 履歴の並び。**新しい順**で、同値は `id` 降順（prd/13 §5.4） */
 export function drillAttemptOrderBy(): SQL[] {

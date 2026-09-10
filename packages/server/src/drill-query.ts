@@ -6,12 +6,12 @@
  * 意味（prd/13 §7）が消える。返すのは**盤面と問いだけ**。
  */
 import { and, count, eq, sql } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/mysql-core';
 import { buildPositions, positionSfen, usiToJapaneseWithPiece, type BoardState } from 'shared';
 import { db } from './db';
 import { drillAttempts, drills, kifus } from './db/schema';
 import {
   ANSWER_COUNT,
+  ATTEMPT_NO,
   CORRECT_COUNT,
   DRILL_PAGE_SIZE,
   EXCLUDED_COUNT,
@@ -201,9 +201,6 @@ export async function loadDrillQuestion(
   };
 }
 
-/** 「その問題の何回目か」を数えるための自己結合用の別名（prd/13 §7.3） */
-const priorAttempts = alias(drillAttempts, 'prior_attempts');
-
 /** 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない） */
 function isoOf(value: Date | string | null): string | null {
   return value === null ? null : new Date(value).toISOString();
@@ -322,11 +319,7 @@ export async function listDrillAttempts(ownerId: number, query: DrillAttemptQuer
       playedAt: kifus.playedAt,
       usiMoves: kifus.usiMoves,
       // その問題の何回目の解答か（除外だけの行は数えない。prd/13 §6.2）
-      attemptNo: sql<number>`(
-        select count(*) from ${priorAttempts}
-        where ${priorAttempts.drillId} = ${drillAttempts.drillId}
-          and ${priorAttempts.move} is not null
-          and ${priorAttempts.id} <= ${drillAttempts.id})`.mapWith(Number),
+      attemptNo: ATTEMPT_NO.mapWith(Number),
     })
     .from(drillAttempts)
     .innerJoin(drills, eq(drills.id, drillAttempts.drillId))

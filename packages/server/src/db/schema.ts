@@ -437,6 +437,8 @@ export const drillAttempts = mysqlTable(
       foreignColumns: [drills.id],
     }).onDelete('cascade'),
     index('drill_attempts_drill_id_idx').on(table.drillId),
+    // 解答履歴の一覧は**新しい順**に 50 件ずつ引く（prd/13 §7.3）
+    index('drill_attempts_created_at_idx').on(table.createdAt),
   ],
 );
 

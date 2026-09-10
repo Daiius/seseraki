@@ -5,10 +5,24 @@
  * クライアントへ渡した時点で答えが見えているのと同じで、`/drills` を専用ページにした
  * 意味（prd/13 §7）が消える。返すのは**盤面と問いだけ**。
  */
-import { and, eq, sql } from 'drizzle-orm';
-import { buildPositions, positionSfen } from 'shared';
+import { and, count, eq, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/mysql-core';
+import { buildPositions, positionSfen, usiToJapaneseWithPiece, type BoardState } from 'shared';
 import { db } from './db';
 import { drillAttempts, drills, kifus } from './db/schema';
+import {
+  ANSWER_COUNT,
+  CORRECT_COUNT,
+  DRILL_PAGE_SIZE,
+  EXCLUDED_COUNT,
+  LAST_ANSWERED_AT,
+  drillAttemptOrderBy,
+  drillAttemptWhere,
+  drillListHaving,
+  drillListOrderBy,
+  type DrillAttemptQuery,
+  type DrillListQuery,
+} from './drill-list-query';
 import type { Tx } from './tactics';
 
 /** 出題 1 問（クライアントに返す形。**答えは含まない**） */
@@ -147,4 +161,216 @@ export async function drillCounts(ownerId: number) {
     .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
     .where(eq(kifus.ownerId, ownerId));
   return row ?? { total: 0, answered: 0, correct: 0 };
+}
+
+/**
+ * 一覧から名指しで開いた 1 問（prd/13 §5.4）。**返す形は `/drills/next` と同じ**で、
+ * 答えは含まない。🔒 **除外した問題も返す**——出題順（prd/13 §6.3）の除外とは別の話で、
+ * 一覧から明示的に開いた問題を「無い」と言うのは筋が通らない。
+ */
+export async function loadDrillQuestion(
+  id: number,
+  ownerId: number,
+): Promise<DrillQuestion | null> {
+  const [row] = await db
+    .select({
+      id: drills.id,
+      kind: drills.kind,
+      moveNumber: drills.moveNumber,
+      matePlies: drills.matePlies,
+      usiMoves: kifus.usiMoves,
+      wrongBefore: sql<number>`sum(case when ${drillAttempts.verdict} in ('wrong', 'close') then 1 else 0 end)`.mapWith(
+        Number,
+      ),
+    })
+    .from(drills)
+    .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+    .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
+    .where(and(eq(drills.id, id), eq(kifus.ownerId, ownerId)))
+    .groupBy(drills.id, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves);
+
+  if (!row) return null;
+  const sfen = drillSfen(row.usiMoves, row.moveNumber);
+  if (!sfen) return null;
+  return {
+    id: row.id,
+    kind: row.kind,
+    sfen,
+    matePlies: row.matePlies,
+    wrongBefore: row.wrongBefore > 0,
+  };
+}
+
+/** 「その問題の何回目か」を数えるための自己結合用の別名（prd/13 §7.3） */
+const priorAttempts = alias(drillAttempts, 'prior_attempts');
+
+/** 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない） */
+function isoOf(value: Date | string | null): string | null {
+  return value === null ? null : new Date(value).toISOString();
+}
+
+/**
+ * 問題の一覧（prd/13 §7.2）。**1 問 1 行**にまとめ、解答状況は履歴側の集計から出す。
+ *
+ * 🔴 **答えを含む列は返さない**（`answerMove` / `answerPv` / `candidates` / `playedMove`）。
+ * ⚠ **棋譜名・手数は未解答の問題でも返す**（決定・2026-09-10。prd/13 §5.4）——伏せるのは
+ * 解く画面の規則で、一覧は解く画面ではない。
+ */
+export async function listDrills(ownerId: number, query: DrillListQuery) {
+  const where = and(
+    eq(kifus.ownerId, ownerId),
+    query.kind ? eq(drills.kind, query.kind) : undefined,
+  );
+  const having = drillListHaving(query);
+
+  // 件数は**同じ条件で数える**（prd/04 §6.1 と同じ姿勢）。集計に対する条件なので、
+  // 絞り込み済みの行を副問い合わせにしてから数える
+  const grouped = db
+    .select({ id: drills.id })
+    .from(drills)
+    .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+    .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
+    .where(where)
+    .groupBy(drills.id)
+    .having(having)
+    .as('grouped');
+  const [totals] = await db.select({ total: count() }).from(grouped);
+  const total = totals?.total ?? 0;
+
+  const rows = await db
+    .select({
+      id: drills.id,
+      kind: drills.kind,
+      moveNumber: drills.moveNumber,
+      matePlies: drills.matePlies,
+      kifuId: drills.kifuId,
+      title: kifus.title,
+      playedAt: kifus.playedAt,
+      kifuCreatedAt: kifus.createdAt,
+      answers: ANSWER_COUNT.mapWith(Number),
+      correct: CORRECT_COUNT.mapWith(Number),
+      excludedCount: EXCLUDED_COUNT.mapWith(Number),
+      lastAnsweredAt: LAST_ANSWERED_AT,
+    })
+    .from(drills)
+    .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+    .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
+    .where(where)
+    .groupBy(
+      drills.id,
+      drills.kind,
+      drills.moveNumber,
+      drills.matePlies,
+      drills.kifuId,
+      kifus.title,
+      kifus.playedAt,
+      kifus.createdAt,
+    )
+    .having(having)
+    .orderBy(...drillListOrderBy(query))
+    .limit(DRILL_PAGE_SIZE)
+    .offset((query.page - 1) * DRILL_PAGE_SIZE);
+
+  return {
+    drills: rows.map(({ excludedCount, lastAnsweredAt, ...row }) => ({
+      ...row,
+      excluded: excludedCount > 0,
+      lastAnsweredAt: isoOf(lastAnsweredAt),
+      // 解答状況は 3 段（prd/13 §6.3 の段と同じ読み方）
+      status: row.answers === 0 ? ('unanswered' as const)
+        : row.correct > 0 ? ('correct' as const)
+        : ('wrong' as const),
+    })),
+    pagination: {
+      page: query.page,
+      totalPages: Math.ceil(total / DRILL_PAGE_SIZE),
+      total,
+    },
+  };
+}
+
+/**
+ * 解答履歴の一覧（prd/13 §7.3）。**1 行 1 解答**で新しい順。
+ *
+ * 🔒 **同じ問題の複数回はまとめない**——間違えた後に正解した経過が読めなくなる。
+ * ⚠ **「自明だった」の行（`move` / `verdict` が null）も出す**（prd/13 §6.2）。
+ */
+export async function listDrillAttempts(ownerId: number, query: DrillAttemptQuery) {
+  const where = drillAttemptWhere(ownerId, query);
+
+  const [totals] = await db
+    .select({ total: count() })
+    .from(drillAttempts)
+    .innerJoin(drills, eq(drills.id, drillAttempts.drillId))
+    .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+    .where(where);
+  const total = totals?.total ?? 0;
+
+  const rows = await db
+    .select({
+      id: drillAttempts.id,
+      drillId: drillAttempts.drillId,
+      move: drillAttempts.move,
+      verdict: drillAttempts.verdict,
+      lossCp: drillAttempts.lossCp,
+      excluded: drillAttempts.excluded,
+      createdAt: drillAttempts.createdAt,
+      kind: drills.kind,
+      moveNumber: drills.moveNumber,
+      kifuId: drills.kifuId,
+      title: kifus.title,
+      playedAt: kifus.playedAt,
+      usiMoves: kifus.usiMoves,
+      // その問題の何回目の解答か（除外だけの行は数えない。prd/13 §6.2）
+      attemptNo: sql<number>`(
+        select count(*) from ${priorAttempts}
+        where ${priorAttempts.drillId} = ${drillAttempts.drillId}
+          and ${priorAttempts.move} is not null
+          and ${priorAttempts.id} <= ${drillAttempts.id})`.mapWith(Number),
+    })
+    .from(drillAttempts)
+    .innerJoin(drills, eq(drills.id, drillAttempts.drillId))
+    .innerJoin(kifus, eq(kifus.id, drills.kifuId))
+    .where(where)
+    .orderBy(...drillAttemptOrderBy())
+    .limit(DRILL_PAGE_SIZE)
+    .offset((query.page - 1) * DRILL_PAGE_SIZE);
+
+  // 日本語表記は**盤面が要る**（`shared` の `board.ts`）。履歴の画面は盤を持たないので
+  // server 側で作る。同じ棋譜が並ぶことが多いため局面列は棋譜ごとに 1 度だけ作る
+  const positions = new Map<number, BoardState[] | null>();
+  const stateOf = (kifuId: number, usiMoves: string[] | null, moveNumber: number) => {
+    if (!positions.has(kifuId)) positions.set(kifuId, usiMoves ? buildPositions(usiMoves) : null);
+    return positions.get(kifuId)?.[moveNumber] ?? null;
+  };
+
+  return {
+    attempts: rows.map(({ usiMoves, move, ...row }) => {
+      const state = move ? stateOf(row.kifuId, usiMoves, row.moveNumber) : null;
+      return {
+        ...row,
+        move,
+        // 盤面を作れない棋譜（`usiMoves` を作り直した直後など）は USI のまま出す
+        moveText: state && move ? usiToJapaneseWithPiece(state, move) : move,
+        attemptNo: move ? row.attemptNo : null,
+      };
+    }),
+    pagination: {
+      page: query.page,
+      totalPages: Math.ceil(total / DRILL_PAGE_SIZE),
+      total,
+    },
+  };
+}
+
+/**
+ * 「自明だった」の取り消し（prd/13 §7.2）。
+ *
+ * 🔒 **除外の行そのものを消す**——印を取り消す操作なので、印を残さない。
+ * 解答の行（`move` を持つ行）は触らないので、**解答履歴は消えない**。
+ */
+export async function unexcludeDrill(drillId: number): Promise<void> {
+  await db
+    .delete(drillAttempts)
+    .where(and(eq(drillAttempts.drillId, drillId), eq(drillAttempts.excluded, true)));
 }

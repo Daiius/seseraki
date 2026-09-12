@@ -79,6 +79,16 @@ export function usePlyUrlSync(): (ply: number) => void {
 
     document.addEventListener('click', onAnchorActivate, true);
     document.addEventListener('keydown', onKeyDown, true);
+    /*
+      ⚠ **ブラウザの戻る／進むは事前に捉えられない。** `popstate` は**遷移した後**に
+      来るうえ、`beforepopstate` に当たるものは無い（ルータの blocker も pop では
+      location が変わった後に呼ばれるので、書き込み先が次のエントリになる）。
+      ボタンを押すと**まず文書からフォーカスが外れる**ので、そこで吐き出しておく。
+      🔒 キーボード（Alt+←）やジェスチャは blur を伴わず取りこぼす。**残る取りこぼしは
+      「最後の 1 手を指してから throttle の待ち時間内（52ms・Safari 310ms）に
+      戻るを押した場合に 1 手古い局面が残る」**だけで、実害は小さい（prd/05 §2.6）
+    */
+    window.addEventListener('blur', flushNow);
     // ⚠ `beforeunload` ではなく `pagehide` を使う（iOS Safari は
     // `beforeunload` が発火しないことがあり、bfcache とも相性が悪い）
     window.addEventListener('pagehide', flushNow);
@@ -86,6 +96,7 @@ export function usePlyUrlSync(): (ply: number) => void {
     return () => {
       document.removeEventListener('click', onAnchorActivate, true);
       document.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('blur', flushNow);
       window.removeEventListener('pagehide', flushNow);
       document.removeEventListener('visibilitychange', onVisibility);
       // アンマウント後に navigate すると**次の画面**の URL を書き換えてしまうので捨てる

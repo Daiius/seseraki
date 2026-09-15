@@ -152,12 +152,8 @@ function selectNotablePositions(
 
   const entries: NotablePosition[] = [];
   for (const loss of losses.values()) {
-    // 勝負が決した局面のぬるい手は注目から外す（詰み系は cp の量ではないので対象外）。
-    // 判定側と同じ基準に揃えてあり、グラフのマーカーと食い違わない
-    if (!loss.mate && loss.bestCp !== null && Math.abs(loss.bestCp) >= thresholds.decided) {
-      continue;
-    }
-
+    // 🔒 局面の評価値の大きさでは除外しない（決着閾値は 2026-09-16 に削除）。
+    // ラベルは `labelOf` に委ねてあり、グラフのマーカーと食い違わない
     const currBest = byMoveNumber.get(loss.moveNumber)?.candidates.find((c) => c.rank === 1);
     if (!currBest) continue;
     const nextBest = byMoveNumber

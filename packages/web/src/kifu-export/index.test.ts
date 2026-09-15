@@ -82,7 +82,7 @@ describe('generateKifuMarkdown', () => {
 
   it('閾値を上げると段階ラベルが消える（CPL の数値は判定に使われ続ける）', () => {
     const md = markdown({
-      thresholds: { blunder: 1000, dubious: 800, decided: 3000 },
+      thresholds: { blunder: 1000, dubious: 800 },
     });
 
     expect(tableRow(md, 2)).not.toContain('疑問手');
@@ -91,13 +91,17 @@ describe('generateKifuMarkdown', () => {
     expect(notableMoveNumbers(md)).toContain(6);
   });
 
-  it('決着した局面にはラベルを付けない', () => {
-    const md = markdown({
-      thresholds: { blunder: 300, dubious: 150, decided: 100 },
-    });
+  it('大差の局面でも悪手は注目局面になる（決着閾値で除外しない）', () => {
+    // 4 手目の局面を大差（最善 +3100、実手 +2400）に差し替える。損失 700cp は悪手
+    const analyses = ANALYSES.map((a) =>
+      a.moveNumber === 3
+        ? { moveNumber: 3, candidates: [candidate(1, '4a3b', 3100), candidate(2, '8c8d', 2400)] }
+        : a,
+    );
+    const md = markdown({ analyses });
 
-    // 4 手目の局面の最善は +100 で決着閾値に達するため悪手にしない
-    expect(tableRow(md, 4)).not.toContain('悪手');
+    expect(tableRow(md, 4)).toContain('⚠悪手（700cp 損）');
+    expect(notableMoveNumbers(md)).toContain(4);
   });
 });
 

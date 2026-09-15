@@ -36,7 +36,6 @@ describe('computeMoveLosses', () => {
 
     expect(losses.get(0)).toEqual({
       moveNumber: 0,
-      bestCp: 100,
       loss: 700,
       approximate: false,
       mate: null,
@@ -54,7 +53,6 @@ describe('computeMoveLosses', () => {
 
     expect(losses.get(0)).toEqual({
       moveNumber: 0,
-      bestCp: 100,
       loss: 350,
       approximate: true,
       mate: null,
@@ -111,7 +109,6 @@ describe('computeMoveLosses', () => {
 
     expect(losses.get(0)).toEqual({
       moveNumber: 0,
-      bestCp: null,
       loss: null,
       approximate: false,
       mate: { kind: 'missed', moves: 5 },
@@ -151,7 +148,7 @@ describe('computeMoveLosses', () => {
 });
 
 describe('labelOf', () => {
-  const base = { moveNumber: 0, bestCp: 0, approximate: false, mate: null };
+  const base = { moveNumber: 0, approximate: false, mate: null };
 
   it('閾値の境界で段階が切り替わる', () => {
     expect(labelOf({ ...base, loss: 600 }, DEFAULT_THRESHOLDS)).toBe('blunder');
@@ -165,7 +162,7 @@ describe('labelOf', () => {
       analysis(0, ['7g7f', 100], ['2g2f', -300]),
       analysis(1, ['3c3d', 100]),
     ];
-    const loose: Thresholds = { blunder: 1000, dubious: 500, decided: 3000 };
+    const loose: Thresholds = { blunder: 1000, dubious: 500 };
     const l = computeMoveLosses(analyses, ['2g2f', '3c3d']).get(0)!;
 
     expect(l.loss).toBe(400);
@@ -173,17 +170,23 @@ describe('labelOf', () => {
     expect(labelOf(l, loose)).toBeNull();
   });
 
-  it('勝負が決した局面にはラベルを付けない（CPL は保持する）', () => {
-    const decided = { ...base, bestCp: 3200, loss: 800 };
-    expect(labelOf(decided, DEFAULT_THRESHOLDS)).toBeNull();
-    expect(labelOf(decided, { ...DEFAULT_THRESHOLDS, decided: 5000 })).toBe('blunder');
-    expect(labelOf({ ...base, bestCp: -3200, loss: 800 }, DEFAULT_THRESHOLDS)).toBeNull();
+  /** 🔒 決着閾値は 2026-09-16 に削除した。大差の局面の悪手も自分の弱点として拾う */
+  it('局面の評価値が大差でも損失で判定する', () => {
+    const analyses = [
+      analysis(0, ['7g7f', 3500], ['2g2f', 2700]),
+      analysis(1, ['3c3d', -2700]),
+      analysis(2, ['2g2f', -3200], ['6i7h', -4000]),
+      analysis(3, ['8c8d', 4000]),
+    ];
+    const losses = computeMoveLosses(analyses, ['2g2f', '3c3d', '6i7h', '8c8d']);
+
+    expect(labelOf(losses.get(0)!, DEFAULT_THRESHOLDS)).toBe('blunder');
+    expect(labelOf(losses.get(2)!, DEFAULT_THRESHOLDS)).toBe('blunder');
   });
 
-  it('詰み系は決着閾値に関係なくラベルが付く', () => {
+  it('詰み系は損失に関係なくラベルが付く', () => {
     const missed = {
       ...base,
-      bestCp: null,
       loss: null,
       mate: { kind: 'missed' as const, moves: 3 },
     };
@@ -192,7 +195,7 @@ describe('labelOf', () => {
 });
 
 describe('labelText / formatLoss', () => {
-  const base = { moveNumber: 0, bestCp: 0, approximate: false, mate: null };
+  const base = { moveNumber: 0, approximate: false, mate: null };
 
   it('詰み系は手数を添える', () => {
     const missed = { ...base, loss: null, mate: { kind: 'missed' as const, moves: 5 } };
@@ -238,7 +241,6 @@ describe('lossLabel', () => {
     expect(lossLabel(100, strict)).toBe('blunder');
   });
 
-  /** ⚠ 決着閾値は掛からない（検討局面は棋譜の一手ではない） */
   it('大きな損失は評価値の大小によらず blunder のまま', () => {
     expect(lossLabel(5000, DEFAULT_THRESHOLDS)).toBe('blunder');
   });

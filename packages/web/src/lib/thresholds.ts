@@ -24,6 +24,9 @@ function toPositive(value: unknown, fallback: number): number {
  * 生き残った値と既定値が組み合わさる）。この状態だと `labelOf` が悪手を先に判定するため
  * 疑問手が一切出なくなり、設定画面にも矛盾した値が並ぶ。UI の変更処理と同じく
  * **`dubious <= blunder` に正規化**して不整合な状態をロード直後にも作らせない。
+ *
+ * ⚠ 旧版が保存した `decided`（決着閾値。2026-09-16 に削除）は**読み捨てる**。
+ * 知らないキーは拾わないので、残っていても壊れない（次の保存で消える）。
  */
 export function parseThresholds(raw: string | null): Thresholds {
   if (!raw) return DEFAULT_THRESHOLDS;
@@ -39,7 +42,6 @@ export function parseThresholds(raw: string | null): Thresholds {
   return {
     blunder,
     dubious: Math.min(toPositive(v.dubious, DEFAULT_THRESHOLDS.dubious), blunder),
-    decided: toPositive(v.decided, DEFAULT_THRESHOLDS.decided),
   };
 }
 
@@ -64,7 +66,7 @@ function saveThresholds(thresholds: Thresholds): void {
  * 入力欄の生の文字列を閾値に反映する。反映しない入力では **null** を返す。
  *
  * - **空欄は無視する。** `Number('')` は 0 になるため素直に変換すると、値を消して打ち直すだけの操作が
- *   「閾値 0 の保存」になる（決着 0 なら全局面が決着扱いでラベルが消える）。
+ *   「閾値 0 の保存」になる（悪手 0 なら全ての手が悪手になる）。
  * - 数値でない・負値も無視する。
  * - **`dubious <= blunder` を保つ**ため、片方を動かしたらもう片方を追従させる
  *   （疑問手 > 悪手 だと `labelOf` が悪手を先に判定し、疑問手が一切出なくなる）。
@@ -84,8 +86,6 @@ export function applyThresholdInput(
       return { ...thresholds, blunder: value, dubious: Math.min(thresholds.dubious, value) };
     case 'dubious':
       return { ...thresholds, dubious: value, blunder: Math.max(thresholds.blunder, value) };
-    case 'decided':
-      return { ...thresholds, decided: value };
   }
 }
 

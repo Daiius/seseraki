@@ -35,19 +35,19 @@ export interface Thresholds {
   blunder: number;
   /** CPL がこの値以上・悪手閾値未満なら疑問手 */
   dubious: number;
-  /** 局面の最善評価値の絶対値がこの値以上なら勝負が決したとみなしラベルを付けない */
-  decided: number;
 }
 
 /**
- * 実運用の感触に合わせた既定値（2026-07-22 に 300 / 150 / 1000 から引き上げ）。
- * 低い値ではラベルが付きすぎて目印として機能せず、決着 1000cp は逆転しうる局面のラベルを消していた。
+ * 実運用の感触に合わせた既定値（2026-07-22 に 300 / 150 から引き上げ）。
+ * 低い値ではラベルが付きすぎて目印として機能しなかった。
  * **保存済みの値は移行しない**（既定は「まだ設定していない人に出す初期値」）。
+ *
+ * ⚠ かつてあった**決着閾値（`decided`）は 2026-09-16 に判定ごと削除した**（prd/05 §2.3）。
+ * 大差の局面の悪手も自分の弱点として拾う。localStorage に残った旧値は読み捨てる。
  */
 export const DEFAULT_THRESHOLDS: Thresholds = {
   blunder: 600,
   dubious: 300,
-  decided: 3000,
 };
 
 /**
@@ -68,8 +68,6 @@ export interface MateEvent {
 export interface MoveLoss {
   /** 実手を指す前の局面（= その手の moveNumber） */
   moveNumber: number;
-  /** 局面の最善評価値（手番側視点 cp）。mate なら null。決着判定には絶対値だけを使う */
-  bestCp: number | null;
   /** 手番側の損失（cp）。mate が絡む手では null */
   loss: number | null;
   /** 実手が候補手リスト外で、次局面の最善値から近似したか */
@@ -151,7 +149,6 @@ export function computeMoveLosses(
     const mateInvolved = best.scoreType === 'mate' || playedType === 'mate';
     result.set(moveNumber, {
       moveNumber,
-      bestCp: best.scoreType === 'mate' ? null : best.scoreValue,
       loss: mateInvolved ? null : best.scoreValue - playedValue,
       approximate,
       mate: mateInvolved ? classifyMate(best, playedType, playedValue) : null,
@@ -163,14 +160,13 @@ export function computeMoveLosses(
 /**
  * CPL に段階ラベルを付ける。
  *
- * 勝負が決した局面（|最善評価値| ≧ 決着閾値）にはラベルを付けない——挽回不能な局面のぬるい手に
- * 学びは薄く、平均 CPL に混ぜると指標が汚れる。**詰み系は cp の量ではないので決着閾値の対象外**で、
- * 常にラベルが付く（詰み逃しは勝勢の局面でこそ起きる）。
+ * 🔒 **局面の評価値の大きさでは除外しない**（2026-09-16 に決着閾値を削除）。大差の局面でも
+ * 悪手は自分の弱点であり、除外すると検出したいものが見えなくなる。
+ * 詰み系は cp の量ではないので常に `mate` になる（詰み逃しは勝勢の局面でこそ起きる）。
  */
 export function labelOf(l: MoveLoss, thresholds: Thresholds): MoveLabel {
   if (l.mate) return 'mate';
   if (l.loss === null) return null;
-  if (l.bestCp !== null && Math.abs(l.bestCp) >= thresholds.decided) return null;
   if (l.loss >= thresholds.blunder) return 'blunder';
   if (l.loss >= thresholds.dubious) return 'dubious';
   return null;
@@ -183,14 +179,11 @@ export function labelOf(l: MoveLoss, thresholds: Thresholds): MoveLabel {
  * 同じ画面に並ぶ以上、**「損失」の基準が 2 つあってはいけない**（実機で「損失 5」が
  * 警告色になり、探索誤差を咎めているように見えた）。閾値も同じ {@link Thresholds} を使う。
  *
- * ⚠ **決着判定（`decided`）は掛からない**（`bestCp: null` で渡す）。検討局面は棋譜の一手では
- * ないので「勝負が決した局面のぬるい手を平均から除く」という決着閾値の動機が当てはまらず、
- * ユーザが自分で並べた局面の採点を黙って消す方が分かりにくい。
  * ⚠ 損失が null（`mate` が絡む）/ 負（2 回の探索は深さが別）のときは null（＝色を付けない）。
  */
 export function lossLabel(loss: number | null, thresholds: Thresholds): MoveLabel {
   return labelOf(
-    { moveNumber: 0, bestCp: null, loss, approximate: false, mate: null },
+    { moveNumber: 0, loss, approximate: false, mate: null },
     thresholds,
   );
 }

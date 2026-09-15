@@ -40,12 +40,6 @@ export function ThresholdSettings({
           value={thresholds.dubious}
           onInput={(raw) => handleInput('dubious', raw)}
         />
-        <ThresholdField
-          label="決着"
-          hint="評価値がこの絶対値(cp)以上ならラベルを付けない"
-          value={thresholds.decided}
-          onInput={(raw) => handleInput('decided', raw)}
-        />
       </div>
       <button
         className="btn btn-outline btn-sm self-start"
@@ -53,7 +47,6 @@ export function ThresholdSettings({
         disabled={
           thresholds.blunder === DEFAULT_THRESHOLDS.blunder
           && thresholds.dubious === DEFAULT_THRESHOLDS.dubious
-          && thresholds.decided === DEFAULT_THRESHOLDS.decided
         }
       >
         既定に戻す

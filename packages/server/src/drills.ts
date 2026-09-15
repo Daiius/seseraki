@@ -23,8 +23,10 @@ import type { Tx } from './tactics';
 /**
  * 抽出規則の版。**規則を変えたら上げる**（prd/13 §6.1）。
  * 行に焼き付けるので、一括再生成の対象を「古い版だけ」に絞れる。
+ *
+ * - `2`（2026-09-16）: 決着閾値を削除し、大差の局面の悪手も拾う（prd/05 §2.3）
  */
-export const GENERATOR_REV = '1';
+export const GENERATOR_REV = '2';
 
 /** 出題に使う閾値（prd/13 §4.1）。既定は `shared` の `DEFAULT_THRESHOLDS` に合わせる */
 export interface DrillThresholds {
@@ -161,7 +163,7 @@ export function extractDrills(input: ExtractInput): ExtractedDrill[] {
     if (best.scoreType === 'mate') continue;
 
     // --- 自分の悪手（prd/13 §4.1） ---
-    // 🔒 決着判定を含めて `labelOf` に委ねる（閾値の解釈を 2 つ持たない）
+    // 🔒 判定は `labelOf` に委ねる（閾値の解釈を 2 つ持たない）
     if (loss && labelOf(loss, config.thresholds) === 'blunder') {
       result.push({ ...base, kind: 'best', reason: 'own_blunder', matePlies: null });
       continue;

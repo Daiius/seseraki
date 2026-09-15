@@ -11,31 +11,40 @@ describe('parseThresholds', () => {
   });
 
   it('値ごとにフォールバックする', () => {
-    expect(parseThresholds('{"blunder":500,"dubious":"x","decided":-1}')).toEqual({
+    expect(parseThresholds('{"blunder":500,"dubious":"x"}')).toEqual({
       blunder: 500,
       dubious: DEFAULT_THRESHOLDS.dubious,
-      decided: DEFAULT_THRESHOLDS.decided,
+    });
+  });
+
+  it('旧版が保存した決着閾値（decided）は読み捨てる', () => {
+    // 2026-09-16 に判定ごと削除した。残った値で壊れず、結果にも持ち込まない
+    expect(parseThresholds('{"blunder":500,"dubious":200,"decided":3000}')).toEqual({
+      blunder: 500,
+      dubious: 200,
+    });
+    expect(parseThresholds('{"blunder":500,"dubious":200,"decided":"x"}')).toEqual({
+      blunder: 500,
+      dubious: 200,
     });
   });
 
   it('値ごとのフォールバックで疑問手 > 悪手 になっても正規化する', () => {
     // blunder だけ壊れると既定に戻り、生き残った dubious 900 が上回ってしまう
-    expect(parseThresholds('{"blunder":"broken","dubious":900,"decided":1000}')).toEqual({
+    expect(parseThresholds('{"blunder":"broken","dubious":900}')).toEqual({
       blunder: DEFAULT_THRESHOLDS.blunder,
       dubious: DEFAULT_THRESHOLDS.blunder,
-      decided: 1000,
     });
     // 保存値そのものが不整合な場合も同じ
-    expect(parseThresholds('{"blunder":200,"dubious":400,"decided":1000}')).toEqual({
+    expect(parseThresholds('{"blunder":200,"dubious":400}')).toEqual({
       blunder: 200,
       dubious: 200,
-      decided: 1000,
     });
   });
 
   it('正規化した閾値では悪手が先に判定される', () => {
-    const t = parseThresholds('{"blunder":"broken","dubious":900,"decided":1000}');
-    const loss = { moveNumber: 0, bestCp: 0, loss: 700, approximate: false, mate: null };
+    const t = parseThresholds('{"blunder":"broken","dubious":900}');
+    const loss = { moveNumber: 0, loss: 700, approximate: false, mate: null };
 
     expect(labelOf(loss, t)).toBe('blunder');
     expect(t.dubious).toBeLessThanOrEqual(t.blunder);
@@ -46,10 +55,9 @@ describe('applyThresholdInput', () => {
   const base = DEFAULT_THRESHOLDS;
 
   it('空欄は無視する（Number("") の 0 を保存しない）', () => {
-    // 値を消して打ち直す操作で「決着 0 ＝全局面が決着扱い」になってしまうため
-    expect(applyThresholdInput(base, 'decided', '')).toBeNull();
-    expect(applyThresholdInput(base, 'decided', '   ')).toBeNull();
+    // 値を消して打ち直す操作で「悪手 0 ＝全ての手が悪手」になってしまうため
     expect(applyThresholdInput(base, 'blunder', '')).toBeNull();
+    expect(applyThresholdInput(base, 'blunder', '   ')).toBeNull();
     expect(applyThresholdInput(base, 'dubious', '')).toBeNull();
   });
 
@@ -62,13 +70,11 @@ describe('applyThresholdInput', () => {
     expect(applyThresholdInput(base, 'blunder', '100')).toEqual({
       blunder: 100,
       dubious: 100,
-      decided: 3000,
     });
     // 疑問手を上回ったままなら動かさない
     expect(applyThresholdInput(base, 'blunder', '400')).toEqual({
       blunder: 400,
       dubious: 300,
-      decided: 3000,
     });
   });
 
@@ -76,15 +82,6 @@ describe('applyThresholdInput', () => {
     expect(applyThresholdInput(base, 'dubious', '900')).toEqual({
       blunder: 900,
       dubious: 900,
-      decided: 3000,
-    });
-  });
-
-  it('決着は他の閾値に影響しない', () => {
-    expect(applyThresholdInput(base, 'decided', '2000')).toEqual({
-      blunder: 600,
-      dubious: 300,
-      decided: 2000,
     });
   });
 });

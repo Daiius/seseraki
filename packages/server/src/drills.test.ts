@@ -60,14 +60,25 @@ describe('extractDrills', () => {
     expect(drills).toEqual([]);
   });
 
-  it('勝負が決した局面は拾わない（決着判定は labelOf に委ねる）', () => {
-    const drills = extractDrills({
+  /** 🔒 決着閾値は 2026-09-16 に削除した。大差でも悪手は自分の弱点として拾う */
+  it('大差の局面でも悪手なら拾う（判定は labelOf に委ねる）', () => {
+    const winning = extractDrills({
       usiMoves: MOVES,
       subjectSide: 'sente',
       analyses: [analysis(0, ['2g2f', 4000], ['7g7f', 3000])],
       config: CONFIG,
     });
-    expect(drills).toEqual([]);
+    expect(winning).toHaveLength(1);
+    expect(winning[0]).toMatchObject({ moveNumber: 0, reason: 'own_blunder', playedLossCp: 1000 });
+
+    const losing = extractDrills({
+      usiMoves: MOVES,
+      subjectSide: 'sente',
+      analyses: [analysis(0, ['2g2f', -3000], ['7g7f', -4000])],
+      config: CONFIG,
+    });
+    expect(losing).toHaveLength(1);
+    expect(losing[0]).toMatchObject({ moveNumber: 0, reason: 'own_blunder', playedLossCp: 1000 });
   });
 
   it('相手の悪手を咎め損ねた局面は「自分の悪手」として拾う（咎め条件は持たない）', () => {

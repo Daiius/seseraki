@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   createFileRoute,
   Link,
@@ -8,18 +8,25 @@ import {
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { buildPositions } from 'shared';
-import { formatUpdatedAgo } from '../../lib/analysisProgress';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { useThresholds } from '../../lib/thresholds';
 import { usePlyUrlSync } from '../../lib/usePlyUrlSync';
 import { ShogiBoard } from '../../components/ShogiBoard';
-import { AnalyzingAlert } from '../../components/AnalyzingAlert';
+import {
+  ActionResultToast,
+  AnalysisErrorToast,
+  AnalyzingToast,
+  ToastStack,
+} from '../../components/KifuToasts';
 import { CopyButton } from '../../components/CopyButton';
 import { KifuExport } from '../../components/KifuExport';
 import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
 import { TacticTags } from '../../components/TacticTags';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../../lib/touchTargets';
+
+/** 成功・情報の通知を自動で消すまでの時間（読み切れる長さ。エラーは自動で消さない） */
+const INFO_TOAST_MS = 5_000;
 
 /** 棋譜詳細の URL 検索条件 */
 export interface KifuDetailSearch {
@@ -69,6 +76,30 @@ function KifuDetailPage() {
   } | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // 成功・情報の通知は数秒で消す。エラーは見落とすと「押しても何も起きない」に見えるので、
+  // × で閉じるまで残す
+  useEffect(() => {
+    if (!actionResult || actionResult.kind === 'error') return;
+    const timer = setTimeout(() => setActionResult(null), INFO_TOAST_MS);
+    return () => clearTimeout(timer);
+  }, [actionResult]);
+
+  // 解析失敗の通知を × で閉じた記録。**棋譜と失敗内容の組**で持ち、別の棋譜へ移ったときや
+  // 失敗内容が変わったときは再表示する（再解析を押したときも記録を捨てる——同じ文言で
+  // 失敗し直しても出す）
+  const [dismissedError, setDismissedError] = useState<{
+    kifuId: number;
+    error: string;
+  } | null>(null);
+  const analysisError =
+    kifu.analysisError &&
+    !(
+      dismissedError?.kifuId === kifu.id &&
+      dismissedError.error === kifu.analysisError
+    )
+      ? kifu.analysisError
+      : null;
+
   // 🔴 **この画面が解析の完了を待っているか**をローダーのデータから導く（決定・2026-09-07）。
   // 詳細解析まで終わっていない棋譜（`analysisProfile !== 'full'`）なら待っている。
   // 失敗記録済みの棋譜は poll から外れて進まないので待たない（prd/05 §1.1a）。
@@ -77,7 +108,7 @@ function KifuDetailPage() {
   const pendingAnalysis =
     kifu.analysisProfile !== 'full' && !kifu.analysisError;
   // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを id で照合する
-  const { progress, now, estimated } = useAnalysisProgress({
+  const { progress, estimated } = useAnalysisProgress({
     pending: pendingAnalysis,
   });
   const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
@@ -128,6 +159,7 @@ function KifuDetailPage() {
   // パーサ修正後の既存棋譜の復旧・失敗棋譜の再試行を兼ねる。
   const handleReanalyze = async () => {
     setActionResult(null);
+    setDismissedError(null);
     setBusy(true);
     try {
       const res = await client.api.kifus[':id'].reanalyze.$post({
@@ -222,50 +254,40 @@ function KifuDetailPage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-6">
+      {/* 通知は本文の列の右上（このヘッダーの直下）に浮かせる。本文に場所を取らせない。
+          位置はここに置くことで決まるので、ヘッダーの直後から動かさない（`ToastStack`） */}
+      <ToastStack>
         {actionResult && (
-          <div
-            role="alert"
-            className={clsx(
-              'alert',
-              actionResult.kind === 'error' ? 'alert-error' : 'alert-info',
-            )}
-          >
-            <span>{actionResult.message}</span>
-          </div>
+          <ActionResultToast
+            kind={actionResult.kind}
+            message={actionResult.message}
+            onClose={() => setActionResult(null)}
+          />
         )}
-
         {analyzing && (
-          <AnalyzingAlert
+          <AnalyzingToast
             profile={analyzing.profile}
             analyzed={analyzing.analyzed}
             estimated={estimated}
             total={analyzing.total}
-            agoText={formatUpdatedAgo(analyzing, now)}
           />
         )}
-
-        {kifu.analysisError && (
-          <div className="alert alert-error flex items-start gap-3">
-            <div className="flex-1">
-              {/* ⚠ `analysisCompletedAt` と `analysisError` の排他は意図して緩めてある
-                  （prd/05 §1.1d）。quick 完了後に詳細解析が失敗した棋譜は、**quick の結果を
-                  見せたまま**この失敗表示が出る。文言は段階で変えない（決定・2026-09-05 後段） */}
-              <div className="font-semibold">解析失敗</div>
-              <div className="text-sm font-mono break-all opacity-90">
-                {kifu.analysisError}
-              </div>
-            </div>
-            <button
-              className="btn btn-sm"
-              onClick={handleReanalyze}
-              disabled={busy}
-            >
-              再解析
-            </button>
-          </div>
+        {/* ⚠ `analysisCompletedAt` と `analysisError` の排他は意図して緩めてある
+            （prd/05 §1.1d）。quick 完了後に詳細解析が失敗した棋譜は、**quick の結果を
+            見せたまま**この失敗表示が出る。文言は段階で変えない（決定・2026-09-05 後段） */}
+        {analysisError && (
+          <AnalysisErrorToast
+            error={analysisError}
+            onReanalyze={() => void handleReanalyze()}
+            onClose={() =>
+              setDismissedError({ kifuId: kifu.id, error: analysisError })
+            }
+            busy={busy}
+          />
         )}
+      </ToastStack>
 
+      <div className="flex flex-col gap-6">
         {usiMoves.length > 0 && (
           <ShogiBoard
             /*

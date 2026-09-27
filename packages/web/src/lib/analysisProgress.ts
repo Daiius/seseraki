@@ -1,10 +1,11 @@
 // 解析の進捗表示（`GET /api/analysis/progress` の整形）。
 //
-// 進捗は N/M と「最終更新からの経過」を必ず組で出す。2 値の「解析中」だけでは worker が
-// ハングしても「解析中」のままになり、**進捗が動くこと自体が生存確認になる**という利点が消える。
+// 進捗は N/M（とその割合）で出す。2 値の「解析中」だけでは worker がハングしても「解析中」の
+// ままになり、**進捗が動くこと自体が生存確認になる**という利点が消える。
 // 一方で「何分更新が無ければ死んでいる」の閾値は置かない。1 局面あたりの所要時間は
 // エンジン構成（MATERIAL/NNUE・depth/byoyomi）で桁が変わり、根拠のある値を選べないため
-// （prd/05-analysis.md §1.3・§2.5）。経過時間を出して判断は人に委ねる。
+// （prd/05-analysis.md §1.3・§2.5）。止まっていることは進捗が止まって見えることで読ませ、判断は人に委ねる。
+// ⚠ 「◯前に更新」の経過時間表示は細かすぎるので出さない（決定・2026-09-27。prd/05 §2.5）。
 
 /** 解析の段階（prd/05 §1.1d）。**2 つ固定**で、名前に強さの順序を持たせる（quick < full） */
 export type AnalysisProfile = 'quick' | 'full';
@@ -37,24 +38,31 @@ export function progressDimClass(profile: AnalysisProfile): string {
   return profile === 'quick' ? 'opacity-50' : '';
 }
 
-/** 最終更新からの経過を日本語にする（分単位で読めればよいので秒は 1 分未満のみ） */
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}秒前`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}分前`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}時間${minutes % 60}分前`;
+/**
+ * `progressDimClass` の、円環の**弧だけ**を薄くする版（中央に文字を持つ円環用）。
+ *
+ * daisyUI の `radial-progress` は弧を `::before`（弧）と `::after`（先端の点）で描くので、
+ * 擬似要素にだけ不透明度を掛ける。要素全体に掛けると中央の % まで薄くなって読みにくい。
+ */
+export function progressArcDimClass(profile: AnalysisProfile): string {
+  return profile === 'quick' ? 'before:opacity-50 after:opacity-50' : '';
 }
 
-/** 「3分前に更新」。`updatedAt` が読めないときは空文字（経過を出さない） */
-export function formatUpdatedAgo(
-  progress: AnalysisProgress,
-  now: number,
-): string {
-  const updatedAt = Date.parse(progress.updatedAt);
-  if (Number.isNaN(updatedAt)) return '';
-  return `${formatElapsed(now - updatedAt)}に更新`;
+/**
+ * 解析中の円環の中央に出す割合（整数 %）。
+ *
+ * 🔒 **文字にするのは実データ（`analyzed`）から**（決定・2026-09-07。prd/05 §2.5）。
+ * 推定値（`estimateAnalyzed`）を使うのは円環の伸びだけで、数字まで推定にすると
+ * 「何局面終わったか」が嘘になる。`total` が 0 以下なら 0、`total` を超えたら 100 に丸める。
+ *
+ * 🔒 **切り捨てる**。四捨五入だと 200 局面以上の棋譜で未完了（199/200）でも「100%」になり、
+ * 最後の局面が長引くと完了を示す表示のまま残る。**100% は実データが `total` に達したときだけ**。
+ */
+export function progressPercent(analyzed: number, total: number): number {
+  if (total <= 0) return 0;
+  // 先に 100 倍してから割る。割ってから掛けると浮動小数の誤差で整数の直前（29/100 → 28.999…）に
+  // なり、切り捨てで 1% 低く出る。局面数は整数なので 100 倍は誤差なく表せる
+  return Math.floor((Math.min(Math.max(analyzed, 0), total) * 100) / total);
 }
 
 // ---------------------------------------------------------------------------
@@ -101,8 +109,7 @@ export const DEFAULT_MS_PER_POSITION = 150;
  * 残差が浮動小数の下でつぶれ、**予測値そのもの（＝ `total` に達しうる値）に届く**のを防ぐため。
  *
  * 🔴 **「進捗が止まっていること」を隠さない**（§2.5「進捗が動くこと自体が生存確認」）のは
- * 漸近そのものが担う——標本が遅れるほど増分が減衰し、バーは目に見えて止まる。経過時間の表示
- * （`formatUpdatedAgo`）は伸び続けるので「バーは止まっているのに経過だけ伸びる」と読める。
+ * 漸近そのものが担う——標本が遅れるほど増分が減衰し、円環は目に見えて止まる。
  * ⚠ **これは stale の閾値ではない**（解析中の表示を消したり「死んでいる」と判定したりはしない）。
  */
 export const ESTIMATE_HORIZON_MS = PENDING_INTERVAL_MS * 3;

@@ -2,7 +2,12 @@ import { type ReactNode } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { buildPositions } from 'shared';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
-import { AnalyzingAlert } from '../components/AnalyzingAlert';
+import {
+  ActionResultToast,
+  AnalysisErrorToast,
+  AnalyzingToast,
+  ToastStack,
+} from '../components/KifuToasts';
 import { CopyButton } from '../components/CopyButton';
 import { ClipboardIcon } from '../components/icons';
 import { ShogiBoard } from '../components/ShogiBoard';
@@ -212,21 +217,69 @@ function Gallery() {
         </div>
       </Case>
 
-      <Case title="詳細・解析中 alert（文言と progress の縦中央揃え・上が簡易解析中）">
-        {/* 文言は段階で変えず、進捗バーの濃さだけが変わる（決定・2026-09-05 後段） */}
-        <div className="flex flex-col gap-2">
-          <AnalyzingAlert
-            profile="quick"
-            analyzed={12}
-            total={150}
-            agoText="3秒前に更新"
+      {/*
+        棋譜詳細の通知 toast。実際は `ToastStack` が本文の列の右上（ヘッダーの直下）に浮かせるが、
+        ギャラリーでは `floating={false}` で浮かせずに、右寄せでその場に並べる
+      */}
+      <Case title="詳細・解析中 toast（上が簡易解析中＝弧が半透明 / 下が詳細解析中。sm 未満は円だけ）">
+        {/* 段階は文字で出さず円環の濃さだけで示す（決定・2026-09-05 後段）。
+            N/M は title / aria-label にだけ入る（hover で確認） */}
+        <ToastStack floating={false}>
+          <AnalyzingToast profile="quick" analyzed={38} estimated={40.6} total={150} />
+          <AnalyzingToast profile="full" analyzed={38} estimated={40.6} total={150} />
+        </ToastStack>
+      </Case>
+
+      <Case title="詳細・解析中 toast の進行度（0% / 100%）">
+        <ToastStack floating={false}>
+          <AnalyzingToast profile="full" analyzed={0} total={150} />
+          <AnalyzingToast profile="full" analyzed={150} total={150} />
+        </ToastStack>
+      </Case>
+
+      <Case title="詳細・操作結果 toast（情報は数秒で消える / エラーは × まで残る）">
+        <ToastStack floating={false}>
+          <ActionResultToast
+            kind="info"
+            message="再解析を開始しました。完了までしばらくかかります"
+            onClose={() => {}}
           />
-          <AnalyzingAlert
-            profile="full"
-            analyzed={12}
-            total={150}
-            agoText="3秒前に更新"
+          <ActionResultToast
+            kind="error"
+            message="再解析に失敗しました (500)"
+            onClose={() => {}}
           />
+        </ToastStack>
+      </Case>
+
+      <Case title="詳細・解析失敗 toast（長いエラー文字列の折り返し）">
+        <ToastStack floating={false}>
+          <AnalysisErrorToast
+            error="engine exited unexpectedly: position startpos moves 7g7f 3c3d 8h2b+ 3a2b (code=134, signal=SIGABRT)"
+            onReanalyze={() => {}}
+            onClose={() => {}}
+            busy={false}
+          />
+        </ToastStack>
+      </Case>
+
+      <Case title="詳細・toast が同時に出たとき（縦に積む・幅 320px 相当）">
+        {/* 実際の最大幅は min(24rem, 本文の列の幅)。320px 幅の画面なら列は 288px */}
+        <div className="ms-auto w-[288px]">
+          <ToastStack floating={false}>
+            <ActionResultToast
+              kind="error"
+              message="サーバーに接続できません"
+              onClose={() => {}}
+            />
+            <AnalyzingToast profile="full" analyzed={87} total={154} />
+            <AnalysisErrorToast
+              error="timeout after 600s"
+              onReanalyze={() => {}}
+              onClose={() => {}}
+              busy
+            />
+          </ToastStack>
         </div>
       </Case>
 

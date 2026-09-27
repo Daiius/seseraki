@@ -1,5 +1,6 @@
 // 本物の runner: システムの ssh / rsync を子プロセスとして呼ぶ。
 // ライブラリ（ssh2 など）を使わないのは、~/.ssh/config・鍵・known_hosts の検証をそのまま効かせるため。
+// 前提: rsync はローカルだけでなくリモート側にも必要（リモートに POSIX sh があること）。
 
 import { spawn } from 'node:child_process';
 import type { Runner } from './deploy.js';

@@ -111,24 +111,15 @@ function RootComponent() {
             <Link to="/" className={ICON_BTN} aria-label="棋譜一覧">
               <ListBulletIcon />
             </Link>
-            <Link to="/stats" className={ICON_BTN} aria-label="戦型別成績">
-              <ChartBarIcon />
-            </Link>
             {/* 出題（prd/13）。棋譜詳細からは入れない——あの画面では答えが見えている */}
             <Link to="/drills" className={ICON_BTN} aria-label="出題">
               <AcademicCapIcon />
             </Link>
-            <Link
-              to="/positions"
-              search={{ pos: undefined }}
-              className={ICON_BTN}
-              aria-label="局面検索"
-            >
-              <MagnifyingGlassIcon />
-            </Link>
             {/*
-              動画解析・設定・ログアウトはたまにしか使わないのでメニューへ。幅では出し分けない
-              （デスクトップでも同じ場所にある方が探しやすい）。
+              戦型別成績・局面検索・動画解析・設定・ログアウトはたまにしか使わないのでメニューへ。
+              幅では出し分けない（デスクトップでも同じ場所にある方が探しやすい）。
+              表のアイコンを増やすと 375px 幅で navbar が横にあふれる（5 個で 415px になった）。
+              表に出す項目を選べるようにする件は Issue #139。
 
               「押すと開く」ことを伝えるために 3 つ重ねている:
               (1) 左に余白を足して他のボタンから離す（gap 8px に対し ms-3 で計 20px）。
@@ -138,7 +129,7 @@ function RootComponent() {
               (3) 開いている間はトリガーを押下状態にし、chevron を 180° 回す
 
               記号は ☰ のままにした。この中身はページ固有の操作ではなくヘッダーの行き先
-              （動画解析・設定・ログアウト）なので ☰ の方が意味に合い、︙ は kifus/$id の
+              （戦型別成績・局面検索・動画解析・設定・ログアウト）なので ☰ の方が意味に合い、︙ は kifus/$id の
               ページ内操作メニューで既に使っているため、同じ記号を別の階層に当てたくない
             */}
             <details ref={menuRef} className="dropdown dropdown-end group ms-3">
@@ -160,6 +151,23 @@ function RootComponent() {
               */}
               <ul className={`${MENU_LIST} w-48`}>
                 {/* 項目を押しても dropdown は閉じないので、遷移・実行の前に明示的に閉じる */}
+                <li>
+                  <Link to="/stats" onClick={closeMenu} className={MENU_ITEM}>
+                    <ChartBarIcon />
+                    戦型別成績
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    to="/positions"
+                    search={{ pos: undefined }}
+                    onClick={closeMenu}
+                    className={MENU_ITEM}
+                  >
+                    <MagnifyingGlassIcon />
+                    局面検索
+                  </Link>
+                </li>
                 <li>
                   <Link to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>
                     <VideoCameraIcon />

@@ -218,10 +218,10 @@ function Gallery() {
       </Case>
 
       {/*
-        棋譜詳細の通知 toast。実際は `ToastStack` が画面右上に fixed で浮かせるが、
-        ギャラリーでは `floating={false}` で fixed を外し、右寄せでその場に並べる
+        棋譜詳細の通知 toast。実際は `ToastStack` が本文の列の右上（ヘッダーの直下）に浮かせるが、
+        ギャラリーでは `floating={false}` で浮かせずに、右寄せでその場に並べる
       */}
-      <Case title="詳細・解析中 toast（上が簡易解析中＝半透明 / 下が詳細解析中）">
+      <Case title="詳細・解析中 toast（上が簡易解析中＝弧が半透明 / 下が詳細解析中。sm 未満は円だけ）">
         {/* 段階は文字で出さず円環の濃さだけで示す（決定・2026-09-05 後段）。
             N/M は title / aria-label にだけ入る（hover で確認） */}
         <ToastStack floating={false}>
@@ -264,8 +264,8 @@ function Gallery() {
       </Case>
 
       <Case title="詳細・toast が同時に出たとき（縦に積む・幅 320px 相当）">
-        {/* 実際の最大幅は min(24rem, 100vw - 5.25rem)。320px 幅の画面なら約 236px */}
-        <div className="ms-auto w-[236px]">
+        {/* 実際の最大幅は min(24rem, 本文の列の幅)。320px 幅の画面なら列は 288px */}
+        <div className="ms-auto w-[288px]">
           <ToastStack floating={false}>
             <ActionResultToast
               kind="error"

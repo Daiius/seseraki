@@ -254,7 +254,8 @@ function KifuDetailPage() {
         </div>
       </div>
 
-      {/* 通知は画面右上に浮かせる（本文に場所を取らせない。位置と z-index は `ToastStack`） */}
+      {/* 通知は本文の列の右上（このヘッダーの直下）に浮かせる。本文に場所を取らせない。
+          位置はここに置くことで決まるので、ヘッダーの直後から動かさない（`ToastStack`） */}
       <ToastStack>
         {actionResult && (
           <ActionResultToast

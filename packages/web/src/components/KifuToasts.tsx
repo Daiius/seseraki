@@ -4,23 +4,27 @@ import { type AnalysisProfile } from '../lib/analysisProgress';
 import { AnalyzingRadial } from './AnalyzingRadial';
 
 /**
- * 棋譜詳細（`/kifus/$id`）の通知を画面右上に浮かせる器（daisyUI `toast`）。
+ * 棋譜詳細（`/kifus/$id`）の通知を本文の列の右上に浮かせる器。
  *
  * 🔒 **本文のレイアウトに場所を取らせない**（決定・2026-09-27。prd/05 §2.5）。通知を本文に
  * インラインで置くと、出たり消えたりするたびに盤や再生コントロールが上下にずれる。
- * 複数が同時に出たら daisyUI の toast のとおり縦に積む。
+ * 複数が同時に出たら縦に積む。
  *
- * 位置と重なりの決め方:
- * - **top**: navbar（`__root.tsx`・`min-height: 4rem`・fixed ではない）の高さ + 本文の上余白
- *   （`main` の `p-4`）= `5rem`。スクロールしていない状態で本文の上端に揃う。
- * - **右端**: 詳細ヘッダーのケバブ「⋯」（44px・本文の右端）を避けて、その左に置く
- *   （`1rem` + `2.75rem` + 隙間 `0.5rem` = `4.25rem`）。解析中の pill は数分出続けるので、
- *   取り返しのつかない操作の入口を覆わないことを優先した。幅は `max-width` で画面内に収め、
+ * **詳細ヘッダー（← 一覧・タイトル・⋯）の直後に置く**こと。位置はその置き場所で決まる:
+ * - **高さ 0 の `sticky top-2` の錨**を置き、toast はそこから `absolute` で下へ垂らす。
+ *   錨は高さを持たないので本文を押し下げない。スクロールしていない間は**ヘッダーの直下**
+ *   （＝ケバブ「⋯」の下）に出て、スクロールすると画面上端の少し下に張り付く。
+ *   ⚠ ビューポート基準（fixed）にしない。本文は `max-w-3xl` で中央寄せなので、広い幅では
+ *   画面の右端と本文の右端が離れ、固定値の余白ではケバブを避けられなかった（1280px で
+ *   幅 24rem の通知がケバブを覆った）。ヘッダーの高さも題名の長さで変わるので、固定の top でも
+ *   「ケバブの下」は保証できない。
+ * - **右端は本文の列の右端**（錨は本文の列と同じ幅）。幅は `min(24rem, 列の幅)` で、
  *   狭い幅でも横スクロールを生まない。
  * - **z-index**: `15`。盤のまとまり（`ShogiBoard` の `sticky top-0 z-10`）より上、ケバブの
  *   ドロップダウン（`z-20`）と navbar（`z-30`）のメニューより下——開いたメニューは覆わない。
+ * - 積みの器そのものはクリックを奪わない（`pointer-events-none`）。toast だけが受ける。
  *
- * `floating={false}` は DEV ギャラリー用で、fixed を外してその場に並べる。
+ * `floating={false}` は DEV ギャラリー用で、浮かせずにその場に並べる。
  */
 export function ToastStack({
   children,
@@ -29,17 +33,20 @@ export function ToastStack({
   children: ReactNode;
   floating?: boolean;
 }) {
-  return (
+  const stack = (
     <div
       className={clsx(
+        'flex flex-col gap-2 pointer-events-none *:pointer-events-auto',
         floating
-          ? 'toast toast-top toast-end z-[15] top-20 end-[4.25rem] max-w-[min(24rem,calc(100vw_-_5.25rem))]'
-          : 'flex flex-col items-end gap-2',
+          ? 'absolute end-0 top-0 w-max max-w-[min(24rem,100%)]'
+          : 'items-end',
       )}
     >
       {children}
     </div>
   );
+  if (!floating) return stack;
+  return <div className="sticky top-2 z-[15] h-0">{stack}</div>;
 }
 
 /** 閉じるボタン（× ）。エラーは自動で消さないので、利用者が閉じる手段を置く */
@@ -87,7 +94,7 @@ export function AnalyzingToast({
       role="status"
       aria-label={text}
       title={text}
-      className="flex items-center gap-2 self-end rounded-full bg-base-100 py-1 ps-1 pe-3 text-sm shadow-lg border border-base-300"
+      className="flex items-center gap-2 self-end rounded-full bg-base-100 p-1 sm:pe-3 text-sm shadow-lg border border-base-300"
     >
       <AnalyzingRadial
         profile={profile}
@@ -96,7 +103,11 @@ export function AnalyzingToast({
         total={total}
         size="toast"
       />
-      <span aria-hidden>解析中</span>
+      {/* 狭い幅では円だけにする（題名や盤に被る面積を最小にする。決定・2026-09-27）。
+          読み上げと title は常に N/M を持つ */}
+      <span aria-hidden className="max-sm:hidden">
+        解析中
+      </span>
     </div>
   );
 }

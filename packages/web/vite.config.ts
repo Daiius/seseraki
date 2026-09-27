@@ -16,9 +16,14 @@ const isRemote = !!allowedHost && allowedHost !== 'localhost';
 
 // メモ化は React Compiler に委ねる（AGENTS.md）。babel は react() の後に置き、
 // JSX 変換後のコードへコンパイラを掛ける。
+//
+// 画面ごとにチャンクを分ける（autoCodeSplitting。各ルートの component だけが遅延読み込みになり、
+// loader / validateSearch は分割されない）。⚠ router プラグインは react() より**前**に置く
+// （逆順だと router-plugin が configResolved で落とす）。分割後のモジュール（`?tsr-split=…`）にも
+// babel の既定 include が当たるので、React Compiler は分割された画面にも掛かる。
 export default defineConfig({
   plugins: [
-    TanStackRouterVite(),
+    TanStackRouterVite({ autoCodeSplitting: true }),
     react(),
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),

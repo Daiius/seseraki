@@ -65,7 +65,7 @@ export type DeployOptions = {
 
 /**
  * 1. リモートの世代の一覧と assets/ の一覧を読む
- * 2. 今回の一覧を pending.txt に書く（公開しかけた世代の記録）
+ * 2. 既存の pending.txt ∪ 今回を pending.txt に書く（公開しかけた世代の記録）
  * 3. assets/ を送る（削除なし）→ index.html などトップレベルを最後に送る
  * 4. prev.txt・current.txt を書き、pending.txt を消す
  * 5. 今回 ∪ 1 つ前に無い assets/ のファイルを消す（初回は消さない）

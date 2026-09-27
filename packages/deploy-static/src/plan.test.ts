@@ -137,6 +137,7 @@ describe('computePlan', () => {
       current: ['a.js', 'b.js'],
       previous: null,
       recoveredPending: false,
+      pending: ['a.js', 'b.js'],
       toDelete: [],
       ignoredRemote: [],
     });
@@ -237,6 +238,7 @@ describe('コマンドの組み立て', () => {
       current: ['v2.js'],
       previous: ['v1.js'],
       recoveredPending: false,
+      pending: [],
       toDelete: ["it's.js", 'old.js'],
       ignoredRemote: [],
     });
@@ -253,6 +255,7 @@ describe('コマンドの組み立て', () => {
         current: ['a'],
         previous: null,
         recoveredPending: false,
+        pending: [],
         toDelete: [],
         ignoredRemote: [],
       }),
@@ -265,6 +268,7 @@ describe('コマンドの組み立て', () => {
         current: ['a'],
         previous: [],
         recoveredPending: false,
+        pending: [],
         toDelete: ['../x'],
         ignoredRemote: [],
       }),
@@ -302,6 +306,7 @@ describe('コマンドの組み立て', () => {
       current: ['a.js', 'b.js'],
       previous: ["it's.js"],
       recoveredPending: false,
+      pending: [],
       toDelete: [],
       ignoredRemote: [],
     }).argv.at(-1)!;
@@ -320,17 +325,19 @@ describe('コマンドの組み立て', () => {
       current: ['a.js'],
       previous: null,
       recoveredPending: false,
+      pending: [],
       toDelete: [],
       ignoredRemote: [],
     }).argv.at(-1)!;
     expect(cmd).not.toContain('prev.txt');
   });
 
-  it('pending.txt には今回の一覧を書く', () => {
+  it('pending.txt には plan.pending を書く', () => {
     const step = writePendingStep(cfg, {
       current: ['a.js', 'b.js'],
       previous: null,
       recoveredPending: false,
+      pending: ['a.js', 'b.js'],
       toDelete: [],
       ignoredRemote: [],
     });
@@ -349,6 +356,32 @@ describe('コマンドの組み立て', () => {
 });
 
 describe('computePlan（pending.txt が残っているとき）', () => {
+  it('pending.txt に書く一覧は、既存の pending ∪ 今回（再試行が失敗しても記録を失わない）', () => {
+    const plan = computePlan({
+      local: ['v4.js'],
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: ['v3.js'] },
+      remote: [],
+    });
+    expect(plan.pending).toEqual(['v3.js', 'v4.js']);
+    expect(
+      computePlan({
+        local: ['v2.js'],
+        state: { current: ['v1.js'], prev: null, pending: null },
+        remote: [],
+      }).pending,
+    ).toEqual(['v2.js']);
+  });
+
+  it('pending ⊂ 今回（再試行）なら取り戻すものは無い', () => {
+    const plan = computePlan({
+      local: ['v3.js', 'x.js'],
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: ['v3.js'] },
+      remote: ['v1.js', 'v2.js', 'v3.js'],
+    });
+    expect(plan.recoveredPending).toBe(false);
+    expect(plan.previous).toEqual(['v2.js']);
+  });
+
   it('前回の公開しかけた世代も 1 つ前として残し、prev.txt に書く', () => {
     // v1 → v2 と公開済みで、v3 の index.html を出した後に一覧の更新が失敗した状態。
     const plan = computePlan({

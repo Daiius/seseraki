@@ -345,14 +345,23 @@ describe.skipIf(!hasRsync)('deploy（ローカルの一時ディレクトリで�
     expect(readFileSync(join(root, 'index.html'), 'utf8')).toBe('v3');
     expect(readFileSync(join(state, 'pending.txt'), 'utf8')).toBe('v3.js\n');
 
-    // 次の v4 では、公開済みの v3 を 1 つ前として残す（v2 も一覧上の current なので残る）。
+    // 再試行の v3b も公開後に落ちた。先に公開された v3 の記録は失わない。
+    build(dist, ['v3b.js'], 'v3b');
+    failWriteState = true;
+    await expect(run(['v3b.js'])).rejects.toBeInstanceOf(StepFailedError);
+    failWriteState = false;
+    expect(readFileSync(join(state, 'pending.txt'), 'utf8')).toBe(
+      'v3.js\nv3b.js\n',
+    );
+
+    // 次の v4 では、公開済みの v3・v3b を 1 つ前として残す（v2 も一覧上の current なので残る）。
     build(dist, ['v4.js'], 'v4');
     const plan = await run(['v4.js']);
     expect(plan.recoveredPending).toBe(true);
-    expect(remoteAssets()).toEqual(['v2.js', 'v3.js', 'v4.js']);
+    expect(remoteAssets()).toEqual(['v2.js', 'v3.js', 'v3b.js', 'v4.js']);
     expect(existsSync(join(state, 'pending.txt'))).toBe(false);
     expect(readFileSync(join(state, 'prev.txt'), 'utf8')).toBe(
-      'v2.js\nv3.js\n',
+      'v2.js\nv3.js\nv3b.js\n',
     );
 
     // その次は通常どおり、今回と 1 つ前（v4）だけが残る。

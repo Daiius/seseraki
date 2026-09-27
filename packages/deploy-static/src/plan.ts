@@ -167,6 +167,11 @@ export type Plan = {
   previous: string[] | null;
   /** 前回の公開しかけた世代（pending.txt）を「1 つ前」に含めたか。 */
   recoveredPending: boolean;
+  /**
+   * 転送の前に pending.txt へ書く一覧（整列済み）。既存の pending.txt ∪ 今回。
+   * 既存分を落とすと、再試行も一覧の更新前に失敗したとき、先に公開された世代の記録が消える。
+   */
+  pending: string[];
   /** 消す `assets/` のファイル名（整列済み）。 */
   toDelete: string[];
   /** リモートにあるが名前が不正なので触らないもの。 */
@@ -207,10 +212,13 @@ export function computePlan(input: PlanInput): Plan {
   else if (sameSet(old, current)) previous = prev;
   else previous = old;
 
-  const recoveredPending = pending !== null && !sameSet(pending, current);
+  const currentSet = new Set(current);
+  const recoveredPending =
+    pending !== null && pending.some((n) => !currentSet.has(n));
   if (recoveredPending) {
     previous = [...new Set([...(previous ?? []), ...pending])].sort();
   }
+  const pendingToWrite = [...new Set([...(pending ?? []), ...current])].sort();
 
   const ignoredRemote = input.remote.filter((n) => !isValidAssetName(n)).sort();
   let toDelete: string[] = [];
@@ -221,7 +229,14 @@ export function computePlan(input: PlanInput): Plan {
       .filter((n) => isValidAssetName(n) && !keep.has(n))
       .sort();
   }
-  return { current, previous, recoveredPending, toDelete, ignoredRemote };
+  return {
+    current,
+    previous,
+    recoveredPending,
+    pending: pendingToWrite,
+    toDelete,
+    ignoredRemote,
+  };
 }
 
 /** current.txt に書く内容。 */
@@ -364,13 +379,14 @@ function writeListCommand(file: string, names: readonly string[]): string {
 }
 
 /**
- * 今回の一覧を「公開しかけた世代」として pending.txt に書く。転送より前に呼ぶ。
+ * 「公開しかけた世代」（既存の pending ∪ 今回）を pending.txt に書く。転送より前に呼ぶ。
  * index.html の公開後に一覧の更新が失敗しても、次回がこの世代を消さずに済む。
+ * 既存分を残すのは、再試行も一覧の更新前に失敗したとき、先に公開された世代の記録を失わないため。
  */
 export function writePendingStep(cfg: DeployConfig, plan: Plan): Step {
   const cmd = [
     `mkdir -p -- ${shellQuote(cfg.state)}`,
-    writeListCommand(`${cfg.state}/pending.txt`, plan.current),
+    writeListCommand(`${cfg.state}/pending.txt`, plan.pending),
   ].join(' && ');
   return { label: 'write-pending', kind: 'write', argv: sshArgv(cfg, cmd) };
 }

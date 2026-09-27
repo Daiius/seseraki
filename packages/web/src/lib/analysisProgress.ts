@@ -60,7 +60,9 @@ export function progressArcDimClass(profile: AnalysisProfile): string {
  */
 export function progressPercent(analyzed: number, total: number): number {
   if (total <= 0) return 0;
-  return Math.floor((Math.min(Math.max(analyzed, 0), total) / total) * 100);
+  // 先に 100 倍してから割る。割ってから掛けると浮動小数の誤差で整数の直前（29/100 → 28.999…）に
+  // なり、切り捨てで 1% 低く出る。局面数は整数なので 100 倍は誤差なく表せる
+  return Math.floor((Math.min(Math.max(analyzed, 0), total) * 100) / total);
 }
 
 // ---------------------------------------------------------------------------

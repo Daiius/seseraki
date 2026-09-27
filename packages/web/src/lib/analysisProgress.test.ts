@@ -48,6 +48,12 @@ describe('progressPercent', () => {
     expect(progressPercent(200, 200)).toBe(100);
   });
 
+  it('ちょうど整数になる割合を 1% 低く出さない（浮動小数の誤差）', () => {
+    expect(progressPercent(29, 100)).toBe(29);
+    expect(progressPercent(57, 100)).toBe(57);
+    expect(progressPercent(58, 200)).toBe(29);
+  });
+
   it('total が 0 なら 0（0 除算しない）', () => {
     expect(progressPercent(0, 0)).toBe(0);
   });

@@ -42,6 +42,12 @@ describe('progressPercent', () => {
     expect(progressPercent(150, 150)).toBe(100);
   });
 
+  it('未完了のうちは 100% にしない（切り捨て）', () => {
+    expect(progressPercent(199, 200)).toBe(99);
+    expect(progressPercent(999, 1000)).toBe(99);
+    expect(progressPercent(200, 200)).toBe(100);
+  });
+
   it('total が 0 なら 0（0 除算しない）', () => {
     expect(progressPercent(0, 0)).toBe(0);
   });

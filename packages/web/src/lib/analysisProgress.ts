@@ -54,10 +54,13 @@ export function progressArcDimClass(profile: AnalysisProfile): string {
  * 🔒 **文字にするのは実データ（`analyzed`）から**（決定・2026-09-07。prd/05 §2.5）。
  * 推定値（`estimateAnalyzed`）を使うのは円環の伸びだけで、数字まで推定にすると
  * 「何局面終わったか」が嘘になる。`total` が 0 以下なら 0、`total` を超えたら 100 に丸める。
+ *
+ * 🔒 **切り捨てる**。四捨五入だと 200 局面以上の棋譜で未完了（199/200）でも「100%」になり、
+ * 最後の局面が長引くと完了を示す表示のまま残る。**100% は実データが `total` に達したときだけ**。
  */
 export function progressPercent(analyzed: number, total: number): number {
   if (total <= 0) return 0;
-  return Math.round((Math.min(Math.max(analyzed, 0), total) / total) * 100);
+  return Math.floor((Math.min(Math.max(analyzed, 0), total) / total) * 100);
 }
 
 // ---------------------------------------------------------------------------

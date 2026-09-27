@@ -115,8 +115,9 @@
     （再試行も失敗したときに、先に公開された世代の記録を失わないため）。
   - 接続と転送はシステムの `ssh` / `rsync` を呼ぶ（`~/.ssh/config`・鍵・known_hosts の検証をそのまま効かせる）。
     ControlMaster で接続を 1 本にまとめ、パスフレーズの入力を 1 回で済ませる。
-  - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと最初の手順が
-    `rsync: command not found` で失敗する）。リモートのシェルは POSIX sh を前提にする。
+  - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
+    最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
+    リモートのシェルは POSIX sh を前提にする。
 - 認証は server 側のログインフォーム（[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
 - **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する

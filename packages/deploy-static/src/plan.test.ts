@@ -11,6 +11,7 @@ import {
   rsyncRsh,
   shellQuote,
   uploadTopLevelStep,
+  writePendingStep,
   writeStateStep,
   type DeployConfig,
 } from './plan.js';
@@ -95,7 +96,11 @@ describe('shellQuote', () => {
 
 describe('parseStateOutput', () => {
   it('どちらも無ければ初回', () => {
-    expect(parseStateOutput('')).toEqual({ current: null, prev: null });
+    expect(parseStateOutput('')).toEqual({
+      current: null,
+      prev: null,
+      pending: null,
+    });
   });
   it('current と prev を読む（空行・末尾改行なしも許す）', () => {
     expect(
@@ -103,12 +108,14 @@ describe('parseStateOutput', () => {
     ).toEqual({
       current: ['a.js', 'b.css'],
       prev: ['old.js'],
+      pending: null,
     });
   });
   it('空の current.txt は空の一覧', () => {
     expect(parseStateOutput('/current\n\n')).toEqual({
       current: [],
       prev: null,
+      pending: null,
     });
   });
   it('不正な名前があれば投げる', () => {
@@ -118,7 +125,7 @@ describe('parseStateOutput', () => {
 });
 
 describe('computePlan', () => {
-  const none = { current: null, prev: null };
+  const none = { current: null, prev: null, pending: null };
 
   it('初回（1 つ前が無い）は何も消さない', () => {
     const plan = computePlan({
@@ -129,7 +136,7 @@ describe('computePlan', () => {
     expect(plan).toEqual({
       current: ['a.js', 'b.js'],
       previous: null,
-      rotate: false,
+      recoveredPending: false,
       toDelete: [],
       ignoredRemote: [],
     });
@@ -138,18 +145,17 @@ describe('computePlan', () => {
   it('2 世代目: 1 つ前を残し、どちらにも無いものを消す', () => {
     const plan = computePlan({
       local: ['v2.js'],
-      state: { current: ['v1.js'], prev: null },
+      state: { current: ['v1.js'], prev: null, pending: null },
       remote: ['v1.js', 'v2.js', 'legacy.js'],
     });
     expect(plan.previous).toEqual(['v1.js']);
-    expect(plan.rotate).toBe(true);
     expect(plan.toDelete).toEqual(['legacy.js']);
   });
 
   it('3 世代目: 2 つ前（prev.txt の中身）を消す', () => {
     const plan = computePlan({
       local: ['v3.js'],
-      state: { current: ['v2.js'], prev: ['v1.js'] },
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: null },
       remote: ['v1.js', 'v2.js', 'v3.js'],
     });
     expect(plan.previous).toEqual(['v2.js']);
@@ -159,7 +165,11 @@ describe('computePlan', () => {
   it('今回と 1 つ前が重なるファイルは残る', () => {
     const plan = computePlan({
       local: ['shared.js', 'v3.js'],
-      state: { current: ['shared.js', 'v2.js'], prev: ['shared.js', 'v1.js'] },
+      state: {
+        current: ['shared.js', 'v2.js'],
+        prev: ['shared.js', 'v1.js'],
+        pending: null,
+      },
       remote: ['shared.js', 'v1.js', 'v2.js', 'v3.js'],
     });
     expect(plan.toDelete).toEqual(['v1.js']);
@@ -168,10 +178,9 @@ describe('computePlan', () => {
   it('同じビルドの再デプロイは世代を進めず、prev.txt を 1 つ前として残す', () => {
     const plan = computePlan({
       local: ['v2.js'],
-      state: { current: ['v2.js'], prev: ['v1.js'] },
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: null },
       remote: ['v1.js', 'v2.js', 'v0.js'],
     });
-    expect(plan.rotate).toBe(false);
     expect(plan.previous).toEqual(['v1.js']);
     expect(plan.toDelete).toEqual(['v0.js']);
   });
@@ -179,7 +188,7 @@ describe('computePlan', () => {
   it('同じビルドの再デプロイで prev.txt も無ければ消さない', () => {
     const plan = computePlan({
       local: ['v1.js'],
-      state: { current: ['v1.js'], prev: null },
+      state: { current: ['v1.js'], prev: null, pending: null },
       remote: ['x.js'],
     });
     expect(plan.previous).toBeNull();
@@ -190,7 +199,7 @@ describe('computePlan', () => {
     expect(() =>
       computePlan({
         local: [],
-        state: { current: ['v1.js'], prev: null },
+        state: { current: ['v1.js'], prev: null, pending: null },
         remote: ['v1.js'],
       }),
     ).toThrow(/空/);
@@ -205,7 +214,7 @@ describe('computePlan', () => {
   it('リモートの不正な名前は消さずに報告する', () => {
     const plan = computePlan({
       local: ['v2.js'],
-      state: { current: ['v1.js'], prev: null },
+      state: { current: ['v1.js'], prev: null, pending: null },
       remote: ['-rf', 'v1.js', 'old.js'],
     });
     expect(plan.toDelete).toEqual(['old.js']);
@@ -215,7 +224,7 @@ describe('computePlan', () => {
   it('1 つ前の一覧が空でも、今回に無いものは消す', () => {
     const plan = computePlan({
       local: ['v2.js'],
-      state: { current: [], prev: null },
+      state: { current: [], prev: null, pending: null },
       remote: ['v2.js', 'x.js'],
     });
     expect(plan.toDelete).toEqual(['x.js']);
@@ -227,7 +236,7 @@ describe('コマンドの組み立て', () => {
     const step = deleteAssetsStep(cfg, {
       current: ['v2.js'],
       previous: ['v1.js'],
-      rotate: true,
+      recoveredPending: false,
       toDelete: ["it's.js", 'old.js'],
       ignoredRemote: [],
     });
@@ -243,7 +252,7 @@ describe('コマンドの組み立て', () => {
       deleteAssetsStep(cfg, {
         current: ['a'],
         previous: null,
-        rotate: false,
+        recoveredPending: false,
         toDelete: [],
         ignoredRemote: [],
       }),
@@ -255,7 +264,7 @@ describe('コマンドの組み立て', () => {
       deleteAssetsStep(cfg, {
         current: ['a'],
         previous: [],
-        rotate: true,
+        recoveredPending: false,
         toDelete: ['../x'],
         ignoredRemote: [],
       }),
@@ -288,20 +297,88 @@ describe('コマンドの組み立て', () => {
     ]);
   });
 
-  it('一覧の更新は、ずらすときだけ current → prev の mv を含む', () => {
-    const base = {
+  it('一覧の更新は prev → current の順に書き、最後に pending を消す', () => {
+    const cmd = writeStateStep(cfg, {
       current: ['a.js', 'b.js'],
-      previous: null,
+      previous: ["it's.js"],
+      recoveredPending: false,
       toDelete: [],
       ignoredRemote: [],
-    };
-    const rotated = writeStateStep(cfg, { ...base, rotate: true });
-    expect(rotated.argv.at(-1)).toContain(
-      `mv -f -- '/srv/deploy-state/app/current.txt' '/srv/deploy-state/app/prev.txt'`,
+    }).argv.at(-1)!;
+    const prevAt = cmd.indexOf(`'/srv/deploy-state/app/prev.txt'`);
+    const curAt = cmd.indexOf(`'/srv/deploy-state/app/current.txt'`);
+    const rmAt = cmd.indexOf(`rm -f -- '/srv/deploy-state/app/pending.txt'`);
+    expect(prevAt).toBeGreaterThan(0);
+    expect(curAt).toBeGreaterThan(prevAt);
+    expect(rmAt).toBeGreaterThan(curAt);
+    expect(cmd).toContain(`printf '%s\\n' 'it'\\''s.js' >`);
+    expect(cmd).toContain(`printf '%s\\n' 'a.js' 'b.js' >`);
+  });
+
+  it('1 つ前が無ければ prev.txt に触らない', () => {
+    const cmd = writeStateStep(cfg, {
+      current: ['a.js'],
+      previous: null,
+      recoveredPending: false,
+      toDelete: [],
+      ignoredRemote: [],
+    }).argv.at(-1)!;
+    expect(cmd).not.toContain('prev.txt');
+  });
+
+  it('pending.txt には今回の一覧を書く', () => {
+    const step = writePendingStep(cfg, {
+      current: ['a.js', 'b.js'],
+      previous: null,
+      recoveredPending: false,
+      toDelete: [],
+      ignoredRemote: [],
+    });
+    expect(step.kind).toBe('write');
+    expect(step.argv.at(-1)).toContain(
+      `printf '%s\\n' 'a.js' 'b.js' > '/srv/deploy-state/app/pending.txt.tmp' && mv -f -- '/srv/deploy-state/app/pending.txt.tmp' '/srv/deploy-state/app/pending.txt'`,
     );
-    expect(rotated.stdin).toBe(formatList(['a.js', 'b.js']));
-    expect(rotated.stdin).toBe('a.js\nb.js\n');
-    const first = writeStateStep(cfg, { ...base, rotate: false });
-    expect(first.argv.at(-1)).not.toContain('prev.txt');
+  });
+
+  it('一覧の出力は formatList と同じ形で読み戻せる', () => {
+    expect(formatList(['a.js', 'b.js'])).toBe('a.js\nb.js\n');
+    expect(
+      parseStateOutput(`/pending\n${formatList(['a.js'])}\n`).pending,
+    ).toEqual(['a.js']);
+  });
+});
+
+describe('computePlan（pending.txt が残っているとき）', () => {
+  it('前回の公開しかけた世代も 1 つ前として残し、prev.txt に書く', () => {
+    // v1 → v2 と公開済みで、v3 の index.html を出した後に一覧の更新が失敗した状態。
+    const plan = computePlan({
+      local: ['v4.js'],
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: ['v3.js'] },
+      remote: ['v1.js', 'v2.js', 'v3.js', 'v4.js'],
+    });
+    expect(plan.recoveredPending).toBe(true);
+    expect(plan.previous).toEqual(['v2.js', 'v3.js']);
+    expect(plan.toDelete).toEqual(['v1.js']);
+  });
+
+  it('pending が今回と同じ（失敗したビルドの再試行）なら、ふつうの世代交代', () => {
+    const plan = computePlan({
+      local: ['v3.js'],
+      state: { current: ['v2.js'], prev: ['v1.js'], pending: ['v3.js'] },
+      remote: ['v1.js', 'v2.js', 'v3.js'],
+    });
+    expect(plan.recoveredPending).toBe(false);
+    expect(plan.previous).toEqual(['v2.js']);
+    expect(plan.toDelete).toEqual(['v1.js']);
+  });
+
+  it('初回が失敗した後でも、current.txt が無ければ消さない', () => {
+    const plan = computePlan({
+      local: ['v2.js'],
+      state: { current: null, prev: null, pending: ['v1.js'] },
+      remote: ['legacy.js', 'v1.js'],
+    });
+    expect(plan.previous).toEqual(['v1.js']);
+    expect(plan.toDelete).toEqual([]);
   });
 });

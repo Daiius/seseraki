@@ -66,10 +66,19 @@ async function main(argv: string[]): Promise<number> {
   const controlDir = mkdtempSync(join(tmpdir(), 'deploy-static-'));
   const cfg: DeployConfig = { ...checked, controlPath: join(controlDir, 'cm') };
 
-  // Ctrl+C は子の ssh / rsync にも届いて失敗として返ってくるので、ここでは即終了せず
-  // finally の後片付け（ControlMaster を閉じる）まで走らせる。
-  const onSignal = () =>
-    console.error('\n中断を受け付けた。後片付けをして終わる');
+  // 中断を受けたら、実行中の子を止めて次の手順へ進まない（deploy が signal を見る）。
+  // 即終了はせず、finally の後片付け（ControlMaster を閉じる）まで走らせてから非ゼロで終わる。
+  // 親だけに SIGTERM が届いた場合も、子は signal 経由で止まる。
+  const abort = new AbortController();
+  let exitCodeOnAbort = 1;
+  const onSignal = (sig: NodeJS.Signals) => {
+    if (abort.signal.aborted) return;
+    exitCodeOnAbort = sig === 'SIGINT' ? 130 : 143;
+    console.error(
+      `\n${sig} を受けた。実行中の手順を止め、後片付けをして終わる`,
+    );
+    abort.abort();
+  };
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
 
@@ -83,9 +92,14 @@ async function main(argv: string[]): Promise<number> {
       apply,
       runner: spawnRunner,
       log: (m) => console.log(m),
+      signal: abort.signal,
     });
     return 0;
   } catch (e) {
+    if (abort.signal.aborted) {
+      console.error('中断したので、以降の手順は行っていない');
+      return exitCodeOnAbort;
+    }
     if (e instanceof StepFailedError) {
       console.error(e.message);
       return 1;

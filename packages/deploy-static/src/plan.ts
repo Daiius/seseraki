@@ -101,23 +101,37 @@ export function parseLines(text: string): string[] {
     .filter((l) => l !== '');
 }
 
-/** 世代の一覧。無ければ `null`（初回・または 1 つ前が無い）。 */
-export type StateLists = { current: string[] | null; prev: string[] | null };
+/**
+ * 世代の一覧。無ければ `null`（初回・または 1 つ前が無い）。
+ * `pending` は「公開しかけた世代」。転送の前に書き、一覧の更新が済んだら消す。
+ * 残っていれば、前回は index.html を公開した後に一覧を更新できずに終わった可能性がある。
+ */
+export type StateLists = {
+  current: string[] | null;
+  prev: string[] | null;
+  pending: string[] | null;
+};
+
+type Section = keyof StateLists;
 
 // ファイル名に `/` は入りえないので、区切りの行として曖昧にならない。
-const CURRENT_MARKER = '/current';
-const PREV_MARKER = '/prev';
+const MARKERS: Record<string, Section> = {
+  '/current': 'current',
+  '/prev': 'prev',
+  '/pending': 'pending',
+};
 
 /**
  * `readStateStep` の出力を読む。一覧に不正な名前があれば投げる
  * （一覧が壊れているときに、それを根拠に削除を決めない）。
  */
 export function parseStateOutput(stdout: string): StateLists {
-  const result: StateLists = { current: null, prev: null };
-  let section: 'current' | 'prev' | null = null;
+  const result: StateLists = { current: null, prev: null, pending: null };
+  let section: Section | null = null;
   for (const line of parseLines(stdout)) {
-    if (line === CURRENT_MARKER || line === PREV_MARKER) {
-      section = line === CURRENT_MARKER ? 'current' : 'prev';
+    const marker = MARKERS[line];
+    if (marker !== undefined) {
+      section = marker;
       result[section] = [];
       continue;
     }
@@ -149,10 +163,10 @@ export type PlanInput = {
 export type Plan = {
   /** 今回の一覧（整列・重複なし）。current.txt に書く。 */
   current: string[];
-  /** デプロイ後に「1 つ前」として残る一覧。無ければ `null`（削除しない）。 */
+  /** デプロイ後に「1 つ前」として残る一覧（prev.txt に書く）。無ければ `null`。 */
   previous: string[] | null;
-  /** current.txt を prev.txt にずらすか。 */
-  rotate: boolean;
+  /** 前回の公開しかけた世代（pending.txt）を「1 つ前」に含めたか。 */
+  recoveredPending: boolean;
   /** 消す `assets/` のファイル名（整列済み）。 */
   toDelete: string[];
   /** リモートにあるが名前が不正なので触らないもの。 */
@@ -169,9 +183,11 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
  * 残すもの・消すものを決める。
  *
  * - 初回（current.txt が無い）は何も消さない。前からあったファイルが何者か分からないため。
- * - 2 回目以降は current.txt を prev.txt にずらし、「今回 ∪ 1 つ前」に無いものを消す。
+ * - 2 回目以降は current.txt を「1 つ前」とし、「今回 ∪ 1 つ前」に無いものを消す。
  * - 今回が current.txt と同じ（同じビルドの再デプロイ）なら世代を進めない。進めると
  *   1 つ前が今回と同じになり、本当の 1 つ前を開いているタブの旧チャンクを消してしまう。
+ * - pending.txt が残っていれば（前回が公開後・一覧の更新前に失敗した）、その世代も
+ *   公開された可能性があるので「1 つ前」に合わせて残す。
  */
 export function computePlan(input: PlanInput): Plan {
   if (input.local.length === 0) {
@@ -184,30 +200,28 @@ export function computePlan(input: PlanInput): Plan {
     );
   }
   const current = [...new Set(input.local)].sort();
-  const old = input.state.current;
+  const { current: old, prev, pending } = input.state;
 
   let previous: string[] | null;
-  let rotate: boolean;
-  if (old === null) {
-    previous = null;
-    rotate = false;
-  } else if (sameSet(old, current)) {
-    previous = input.state.prev;
-    rotate = false;
-  } else {
-    previous = old;
-    rotate = true;
+  if (old === null) previous = null;
+  else if (sameSet(old, current)) previous = prev;
+  else previous = old;
+
+  const recoveredPending = pending !== null && !sameSet(pending, current);
+  if (recoveredPending) {
+    previous = [...new Set([...(previous ?? []), ...pending])].sort();
   }
 
   const ignoredRemote = input.remote.filter((n) => !isValidAssetName(n)).sort();
   let toDelete: string[] = [];
-  if (previous !== null) {
+  // 初回（current.txt が無い）は、pending があっても消さない。
+  if (old !== null && previous !== null) {
     const keep = new Set([...current, ...previous]);
     toDelete = [...new Set(input.remote)]
       .filter((n) => isValidAssetName(n) && !keep.has(n))
       .sort();
   }
-  return { current, previous, rotate, toDelete, ignoredRemote };
+  return { current, previous, recoveredPending, toDelete, ignoredRemote };
 }
 
 /** current.txt に書く内容。 */
@@ -221,10 +235,16 @@ export function describePlan(plan: Plan, cfg: DeployConfig): string {
     `転送: assets/ ${plan.current.length} ファイル → ${cfg.host}:${cfg.root}/assets/（削除なしで上書き）`,
     `転送: トップレベル（index.html など）を最後に → ${cfg.host}:${cfg.root}/`,
     `1 つ前の一覧: ${plan.previous === null ? 'なし（初回扱い・何も消さない）' : `あり（${plan.previous.length} ファイル）`}`,
-    `世代: ${plan.rotate ? 'current.txt → prev.txt にずらして今回を current.txt へ' : '世代は進めない（current.txt を今回で書く）'}`,
+  ];
+  if (plan.recoveredPending) {
+    lines.push(
+      '前回のデプロイが一覧の更新前に終わっている（pending.txt が残っている）。その世代も 1 つ前として残す',
+    );
+  }
+  lines.push(
     `削除: ${plan.toDelete.length} ファイル`,
     ...plan.toDelete.map((n) => `  - assets/${n}`),
-  ];
+  );
   if (plan.ignoredRemote.length > 0) {
     lines.push(`名前が不正なので触らない: ${plan.ignoredRemote.length} 件`);
     lines.push(...plan.ignoredRemote.map((n) => `  ? ${JSON.stringify(n)}`));
@@ -273,12 +293,13 @@ export function rsyncRsh(cfg: DeployConfig): string {
 }
 
 export function readStateStep(cfg: DeployConfig): Step {
-  const cur = shellQuote(`${cfg.state}/current.txt`);
-  const prev = shellQuote(`${cfg.state}/prev.txt`);
   // cat の後の echo は、末尾に改行の無いファイルでも次の区切りと繋がらないようにするため。
-  const cmd =
-    `{ if [ -f ${cur} ]; then echo ${CURRENT_MARKER} && cat -- ${cur} && echo; fi; } && ` +
-    `{ if [ -f ${prev} ]; then echo ${PREV_MARKER} && cat -- ${prev} && echo; fi; }`;
+  const cmd = Object.entries(MARKERS)
+    .map(([marker, name]) => {
+      const file = shellQuote(`${cfg.state}/${name}.txt`);
+      return `{ if [ -f ${file} ]; then echo ${marker} && cat -- ${file} && echo; fi; }`;
+    })
+    .join(' && ');
   return { label: 'read-state', kind: 'read', argv: sshArgv(cfg, cmd) };
 }
 
@@ -328,19 +349,44 @@ export function uploadTopLevelStep(cfg: DeployConfig): Step {
   };
 }
 
+/** 名前の一覧をファイルへ書くシェル断片（一時ファイルに書いてから mv で置き換える）。 */
+function writeListCommand(file: string, names: readonly string[]): string {
+  for (const n of names) {
+    if (!isValidAssetName(n))
+      throw new Error(`一覧に不正なファイル名: ${JSON.stringify(n)}`);
+  }
+  const tmp = shellQuote(`${file}.tmp`);
+  const body =
+    names.length === 0
+      ? `: > ${tmp}`
+      : `printf '%s\\n' ${names.map(shellQuote).join(' ')} > ${tmp}`;
+  return `${body} && mv -f -- ${tmp} ${shellQuote(file)}`;
+}
+
+/**
+ * 今回の一覧を「公開しかけた世代」として pending.txt に書く。転送より前に呼ぶ。
+ * index.html の公開後に一覧の更新が失敗しても、次回がこの世代を消さずに済む。
+ */
+export function writePendingStep(cfg: DeployConfig, plan: Plan): Step {
+  const cmd = [
+    `mkdir -p -- ${shellQuote(cfg.state)}`,
+    writeListCommand(`${cfg.state}/pending.txt`, plan.current),
+  ].join(' && ');
+  return { label: 'write-pending', kind: 'write', argv: sshArgv(cfg, cmd) };
+}
+
+/** prev.txt・current.txt を書き、最後に pending.txt を消す。 */
 export function writeStateStep(cfg: DeployConfig, plan: Plan): Step {
-  const dir = shellQuote(cfg.state);
-  const cur = shellQuote(`${cfg.state}/current.txt`);
-  const tmp = shellQuote(`${cfg.state}/current.txt.tmp`);
-  const prev = shellQuote(`${cfg.state}/prev.txt`);
-  const parts = [`mkdir -p -- ${dir}`, `cat > ${tmp}`];
-  if (plan.rotate) parts.push(`mv -f -- ${cur} ${prev}`);
-  parts.push(`mv -f -- ${tmp} ${cur}`);
+  const parts = [`mkdir -p -- ${shellQuote(cfg.state)}`];
+  if (plan.previous !== null) {
+    parts.push(writeListCommand(`${cfg.state}/prev.txt`, plan.previous));
+  }
+  parts.push(writeListCommand(`${cfg.state}/current.txt`, plan.current));
+  parts.push(`rm -f -- ${shellQuote(`${cfg.state}/pending.txt`)}`);
   return {
     label: 'write-state',
     kind: 'write',
     argv: sshArgv(cfg, parts.join(' && ')),
-    stdin: formatList(plan.current),
   };
 }
 

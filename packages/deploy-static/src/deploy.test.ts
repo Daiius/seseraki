@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -59,6 +60,7 @@ describe('deploy（偽の runner）', () => {
     expect(calls.map((c) => c.label)).toEqual([
       'read-state',
       'list-assets',
+      'write-pending',
       'upload-assets',
       'upload-top-level',
       'write-state',
@@ -101,6 +103,7 @@ describe('deploy（偽の runner）', () => {
   it.each([
     'read-state',
     'list-assets',
+    'write-pending',
     'upload-assets',
     'upload-top-level',
     'write-state',
@@ -111,6 +114,60 @@ describe('deploy（偽の runner）', () => {
       deploy({ cfg, localAssets: ['v2.js'], apply: true, runner, log: quiet }),
     ).rejects.toBeInstanceOf(StepFailedError);
     expect(calls.at(-1)?.label).toBe(failAt);
+  });
+
+  it('中断を受けたら、実行中の手順の後へは進まない', async () => {
+    const abort = new AbortController();
+    const calls: string[] = [];
+    const runner: Runner = async (step) => {
+      calls.push(step.label);
+      // 転送中に中断が来た（子は止められて非ゼロで返る）。
+      if (step.label === 'upload-assets') {
+        abort.abort();
+        return { code: 143, stdout: '' };
+      }
+      if (step.label === 'read-state')
+        return { code: 0, stdout: secondGen.state };
+      if (step.label === 'list-assets')
+        return { code: 0, stdout: secondGen.remote };
+      return { code: 0, stdout: '' };
+    };
+    await expect(
+      deploy({
+        cfg,
+        localAssets: ['v2.js'],
+        apply: true,
+        runner,
+        log: quiet,
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow();
+    expect(calls.at(-1)).toBe('upload-assets');
+  });
+
+  it('中断が手順の成功と重なっても、次の手順へは進まない', async () => {
+    const abort = new AbortController();
+    const calls: string[] = [];
+    const runner: Runner = async (step) => {
+      calls.push(step.label);
+      if (step.label === 'upload-top-level') abort.abort();
+      if (step.label === 'read-state')
+        return { code: 0, stdout: secondGen.state };
+      if (step.label === 'list-assets')
+        return { code: 0, stdout: secondGen.remote };
+      return { code: 0, stdout: '' };
+    };
+    await expect(
+      deploy({
+        cfg,
+        localAssets: ['v2.js'],
+        apply: true,
+        runner,
+        log: quiet,
+        signal: abort.signal,
+      }),
+    ).rejects.toThrow();
+    expect(calls.at(-1)).toBe('upload-top-level');
   });
 
   it('今回の一覧が空なら、書き込む前に中止する', async () => {
@@ -130,6 +187,20 @@ describe('deploy（偽の runner）', () => {
       deploy({ cfg, localAssets: ['v2.js'], apply: true, runner, log: quiet }),
     ).rejects.toThrow(/不正/);
     expect(calls.every((c) => c.kind === 'read')).toBe(true);
+  });
+});
+
+describe('spawnRunner', () => {
+  it('中断されたら実行中の子を止めて reject する', async () => {
+    const abort = new AbortController();
+    const started = Date.now();
+    const p = spawnRunner(
+      { label: 'sleep', kind: 'read', argv: ['sleep', '10'] },
+      abort.signal,
+    );
+    setTimeout(() => abort.abort(), 50);
+    await expect(p).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });
 
@@ -236,5 +307,57 @@ describe.skipIf(!hasRsync)('deploy（ローカルの一時ディレクトリで�
     expect(readFileSync(join(state, 'prev.txt'), 'utf8')).toBe(
       'shared.js\nv2.js\n',
     );
+  });
+
+  it('公開後に一覧の更新が失敗しても、次回はその世代を消さない', async () => {
+    work = mkdtempSync(join(tmpdir(), 'deploy-static-test-'));
+    const root = join(work, 'www');
+    const state = join(work, 'state');
+    const dist = join(work, 'dist');
+    const c: DeployConfig = {
+      host: 'local',
+      root,
+      state,
+      distDir: dist,
+      controlPath: join(work, 'cm'),
+    };
+    mkdirSync(root, { recursive: true });
+    const local = localRunner('local');
+    let failWriteState = false;
+    const runner: Runner = (step, signal) =>
+      failWriteState && step.label === 'write-state'
+        ? Promise.resolve({ code: 1, stdout: '' })
+        : local(step, signal);
+    const run = (assets: string[]) =>
+      deploy({ cfg: c, localAssets: assets, apply: true, runner, log: quiet });
+    const remoteAssets = () => readdirSync(join(root, 'assets')).sort();
+
+    build(dist, ['v1.js'], 'v1');
+    await run(['v1.js']);
+    build(dist, ['v2.js'], 'v2');
+    await run(['v2.js']);
+
+    // v3 の index.html は公開されたが、一覧の更新で落ちた。
+    build(dist, ['v3.js'], 'v3');
+    failWriteState = true;
+    await expect(run(['v3.js'])).rejects.toBeInstanceOf(StepFailedError);
+    failWriteState = false;
+    expect(readFileSync(join(root, 'index.html'), 'utf8')).toBe('v3');
+    expect(readFileSync(join(state, 'pending.txt'), 'utf8')).toBe('v3.js\n');
+
+    // 次の v4 では、公開済みの v3 を 1 つ前として残す（v2 も一覧上の current なので残る）。
+    build(dist, ['v4.js'], 'v4');
+    const plan = await run(['v4.js']);
+    expect(plan.recoveredPending).toBe(true);
+    expect(remoteAssets()).toEqual(['v2.js', 'v3.js', 'v4.js']);
+    expect(existsSync(join(state, 'pending.txt'))).toBe(false);
+    expect(readFileSync(join(state, 'prev.txt'), 'utf8')).toBe(
+      'v2.js\nv3.js\n',
+    );
+
+    // その次は通常どおり、今回と 1 つ前（v4）だけが残る。
+    build(dist, ['v5.js'], 'v5');
+    await run(['v5.js']);
+    expect(remoteAssets()).toEqual(['v4.js', 'v5.js']);
   });
 });

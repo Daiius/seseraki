@@ -7,15 +7,20 @@ import type { Runner } from './deploy.js';
 /**
  * 標準出力は受け取って返し、標準エラーは端末へそのまま流す。
  * パスフレーズやホスト鍵の確認は ssh が /dev/tty で直接行うので、標準入力をパイプにしても妨げない。
+ * `signal` が中断されたら子に SIGTERM を送り、AbortError で reject する。
  */
-export const spawnRunner: Runner = (step) =>
+export const spawnRunner: Runner = (step, signal) =>
   new Promise((resolve, reject) => {
     const [cmd, ...args] = step.argv;
     if (cmd === undefined) {
       reject(new Error(`手順 ${step.label} の argv が空`));
       return;
     }
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+    const child = spawn(cmd, args, {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      signal,
+      killSignal: 'SIGTERM',
+    });
     const chunks: Buffer[] = [];
     child.stdout.on('data', (c: Buffer) => chunks.push(c));
     child.on('error', reject);

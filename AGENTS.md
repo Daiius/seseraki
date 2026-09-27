@@ -52,6 +52,7 @@
 | [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
+| [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
 
@@ -90,6 +91,7 @@ pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REB
 pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
 pnpm db:backfill-user       # ユーザーの表示名と名前候補を設定（移行時に 1 回・既定 dry-run / --apply で実書込）
 pnpm db:rederive-played-at  # playedAt を出どころから作り直す（冪等・既定 dry-run / REDERIVE_PLAYED_AT_APPLY=1 で実書込）
+pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）
 ```
 
 > 🔴 **DB 接続のセッションは UTC に固定する**（`packages/server/src/db/index.ts`）。**外すと日時が

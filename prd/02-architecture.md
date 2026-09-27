@@ -99,6 +99,17 @@
   - server: esbuild でバンドル → distroless で実行（コンテナレジストリへ発行。レジストリ/namespace の具体は `.claude-personal/`）。
   - worker: `packages/worker/Dockerfile.prod` で本番ホスト上でビルド。やねうら王 NNUE + 評価関数 +
     定跡を同梱し、esbuild バンドルで実行（[05](./05-analysis.md) §エンジン構成）。
+- **web**: Vite の静的ビルド（`index.html` + ハッシュ付きの `assets/*`）を配信ディレクトリへ置く
+  （`pnpm deploy:web`・`packages/deploy-static`。接続先は `.env.deploy`、既定 dry-run / `--apply` で書き込む）。
+  - **`assets/` には「今回」と「1 つ前」のデプロイのファイルだけを残す。** 上書きだけだと古いチャンクが
+    溜まり続け、全部消すとデプロイ前から開いていたタブが旧チャンクを取りに来て 404 になる。
+    1 つ前まで残せば、開きっぱなしのタブも次の画面遷移までは動く。
+  - 世代の一覧（`current.txt` / `prev.txt`）は**配信外**のディレクトリに置く。初回（一覧が無い）は何も消さない
+    ——前からあったファイルが何者か分からないため。同じビルドの再デプロイでは世代を進めない。
+  - 順序は `assets/` → `index.html` などトップレベル → 一覧の更新 → 削除。新しい `index.html` が未着の
+    チャンクを指す瞬間を作らないためで、途中で失敗したら一覧の更新と削除は行わない。
+  - 接続と転送はシステムの `ssh` / `rsync` を呼ぶ（`~/.ssh/config`・鍵・known_hosts の検証をそのまま効かせる）。
+    ControlMaster で接続を 1 本にまとめ、パスフレーズの入力を 1 回で済ませる。
 - 認証は server 側のログインフォーム（[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
 - **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する

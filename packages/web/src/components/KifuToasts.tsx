@@ -147,18 +147,29 @@ export function AnalysisErrorToast({
   busy: boolean;
 }) {
   return (
+    // 狭い幅でも本文に横幅を回すため、ボタンは本文の下に置く（横に並べると 320px 幅で
+    // 本文が 1 語ずつに割れた）
     <div
       role="alert"
-      className="alert alert-error shadow-lg py-2 flex items-start gap-2"
+      className="alert alert-error shadow-lg py-2 flex flex-col items-stretch gap-1"
     >
-      <div className="flex-1 min-w-0">
-        <div className="font-semibold">解析失敗</div>
-        <div className="text-sm font-mono break-all opacity-90">{error}</div>
+      <div className="flex items-start gap-2">
+        <div className="flex-1 min-w-0 font-semibold">解析失敗</div>
+        <CloseButton onClick={onClose} />
       </div>
-      <button className="btn btn-sm" onClick={onReanalyze} disabled={busy}>
+      {/* `break-all` は短い語まで途中で割るので使わない。長い一語（パスや指し手列）だけを
+          折り返す `overflow-wrap: anywhere` にする */}
+      <div className="text-sm font-mono [overflow-wrap:anywhere] opacity-90">
+        {error}
+      </div>
+      {/* 押せない間も赤地の上で読めるよう、daisyUI の既定（背景に溶ける薄い灰色）を上書きする */}
+      <button
+        className="btn btn-sm self-end disabled:bg-base-100/70 disabled:text-base-content/70 disabled:border-transparent"
+        onClick={onReanalyze}
+        disabled={busy}
+      >
         再解析
       </button>
-      <CloseButton onClick={onClose} />
     </div>
   );
 }

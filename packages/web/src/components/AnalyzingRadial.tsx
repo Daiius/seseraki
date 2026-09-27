@@ -1,6 +1,7 @@
 import { type CSSProperties } from 'react';
 import clsx from 'clsx';
 import {
+  progressArcDimClass,
   progressDimClass,
   progressPercent,
   type AnalysisProfile,
@@ -12,8 +13,8 @@ type RadialSize = 'badge' | 'toast';
 const SIZE_STYLE: Record<RadialSize, { size: string; thickness: string }> = {
   // 他の状態バッジ（済 / 未 / 勝 / 負）と同じ一文字幅
   badge: { size: '1.1rem', thickness: '2px' },
-  // 中央に「100%」が収まる最小限
-  toast: { size: '2.25rem', thickness: '3px' },
+  // 中央に「100%」が収まる大きさ（2.25rem では 100% が弧に掛かった）
+  toast: { size: '2.5rem', thickness: '3px' },
 };
 
 /**
@@ -57,7 +58,13 @@ export function AnalyzingRadial({
       aria-valuenow={analyzed}
       aria-valuemax={total}
       title={text}
-      className={clsx('radial-progress text-info', progressDimClass(profile))}
+      className={clsx(
+        'radial-progress text-info',
+        // 中央に文字を持つ toast は弧だけを薄くする（% まで薄くすると読みにくい）
+        size === 'toast'
+          ? progressArcDimClass(profile)
+          : progressDimClass(profile),
+      )}
       style={
         {
           '--value': shown,
@@ -69,7 +76,7 @@ export function AnalyzingRadial({
       {size === 'toast' && (
         <span
           aria-hidden
-          className="text-[0.625rem] leading-none font-semibold tabular-nums text-base-content"
+          className="text-[0.5625rem] leading-none font-semibold tabular-nums tracking-tighter text-base-content"
         >
           {progressPercent(analyzed, total)}%
         </span>

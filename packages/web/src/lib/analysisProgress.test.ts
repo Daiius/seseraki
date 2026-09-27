@@ -4,6 +4,7 @@ import {
   initialPaceState,
   nextPaceState,
   pollingPlan,
+  progressArcDimClass,
   progressDimClass,
   progressPercent,
   BACKOFF_INVALIDATE_INTERVAL_MS,
@@ -21,6 +22,16 @@ describe('progressDimClass', () => {
 
   it('full 進行中は現行どおりの見え方', () => {
     expect(progressDimClass('full')).toBe('');
+  });
+});
+
+describe('progressArcDimClass', () => {
+  it('quick 進行中は弧（擬似要素）だけ半透明', () => {
+    expect(progressArcDimClass('quick')).toBe('before:opacity-50 after:opacity-50');
+  });
+
+  it('full 進行中は現行どおりの見え方', () => {
+    expect(progressArcDimClass('full')).toBe('');
   });
 });
 

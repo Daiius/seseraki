@@ -39,6 +39,16 @@ export function progressDimClass(profile: AnalysisProfile): string {
 }
 
 /**
+ * `progressDimClass` の、円環の**弧だけ**を薄くする版（中央に文字を持つ円環用）。
+ *
+ * daisyUI の `radial-progress` は弧を `::before`（弧）と `::after`（先端の点）で描くので、
+ * 擬似要素にだけ不透明度を掛ける。要素全体に掛けると中央の % まで薄くなって読みにくい。
+ */
+export function progressArcDimClass(profile: AnalysisProfile): string {
+  return profile === 'quick' ? 'before:opacity-50 after:opacity-50' : '';
+}
+
+/**
  * 解析中の円環の中央に出す割合（整数 %）。
  *
  * 🔒 **文字にするのは実データ（`analyzed`）から**（決定・2026-09-07。prd/05 §2.5）。

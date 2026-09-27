@@ -14,8 +14,8 @@ import {
 } from './analysisProgress';
 
 /**
- * 表示用の現在時刻を刻む間隔。推定でリング / バーを滑らかに進めるため、進捗があるときは
- * この粒度で再レンダーする（経過時間の表示は秒単位でしか変わらないのでこれで足りる）。
+ * 表示用の現在時刻を刻む間隔。推定でリングを滑らかに進めるため、進捗があるときは
+ * この粒度で再レンダーする。
  * 刻むのは進捗エントリがあるときだけなので、解析していない間の再レンダーは増えない。
  */
 const TICK_INTERVAL_MS = 500;
@@ -41,9 +41,8 @@ const progressFetcher = async (): Promise<AnalysisProgress | null> => {
  * ⚠ **これは stale の判定ではない**——解析中の表示は消さず、ローダーの作り直しも止めない
  * （間隔を落とすだけ）。進捗を 1 度でも観測すれば即座に短間隔へ戻る。
  *
- * `now` は経過時間の表示と推定の補間用。SWR は同じ値なら再レンダーしないため、worker が
- * ハングして進捗が止まると経過時間まで止まって見えてしまう。それでは「更新が止まっていること」を
- * 出したい意図と逆になるので、表示用の現在時刻は自前で刻む。
+ * 推定の補間に使う現在時刻は自前で刻む（SWR は同じ値なら再レンダーしないため、標本の合間に
+ * 円環を進めるには別に再レンダーの契機が要る）。
  *
  * `estimated` は標本の間を埋めた解析済み局面数（小数）。**リング / バーの値にだけ使い、
  * 文字で出す N/M は実データのまま**にする。
@@ -52,7 +51,6 @@ export function useAnalysisProgress(
   { pending = false }: { pending?: boolean } = {},
 ): {
   progress: AnalysisProgress | null;
-  now: number;
   estimated: number;
 } {
   // 「最後に進捗を観測した時刻、まだ観測していなければ待ち始めた時刻」。
@@ -157,5 +155,5 @@ export function useAnalysisProgress(
     return () => clearInterval(timer);
   }, [invalidateIntervalMs, router]);
 
-  return { progress, now, estimated };
+  return { progress, estimated };
 }

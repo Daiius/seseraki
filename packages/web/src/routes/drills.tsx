@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createFileRoute, Link, useNavigate, useRouter } from '@tanstack/react-router';
+import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
   canPromoteMove,
   dropDestinations,
@@ -26,6 +26,15 @@ import {
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillHistory, DrillList } from '../components/DrillTables';
+import {
+  nextDrillSearch,
+  option,
+  pinnedSearch,
+  STATUSES,
+  validateDrillsSearch,
+  VERDICTS,
+  type DrillsSearch,
+} from '../lib/drillSearch';
 
 /**
  * 出題（prd/13）。溜め込んだ棋譜と解析から作った問題を解く。
@@ -35,72 +44,44 @@ import { DrillHistory, DrillList } from '../components/DrillTables';
  *
  * 🔒 **採点は server**。ここがやるのは盤の操作と、返ってきた判定の表示だけ。
  */
-export interface DrillsSearch {
-  /** タブ（prd/13 §7.4）。`solve` は既定なので URL に載せない */
-  tab?: 'list' | 'history';
-  /** 出題の種類で絞る。未指定なら両方から選ぶ。**タブをまたいで効く** */
-  kind?: 'mate' | 'best';
-  /** 一覧から名指しで開いた問題（`tab` が解くときだけ見る。prd/13 §7.4） */
-  drill?: number;
-  /** 一覧・履歴のページ（1 は既定なので載せない） */
-  page?: number;
-  /** 一覧の解答状況（`all` は既定）。⚠ 名前は棋譜一覧の `status` と**衝突させない**
-   * （検索パラメータの型はルート間で突き合わされる） */
-  solved?: 'unanswered' | 'wrong' | 'correct';
-  /** 一覧で除外した問題だけを見る（既定は隠す） */
-  excluded?: 'only';
-  /** 一覧の並び（`played` は既定）。⚠ 棋譜一覧の `sort` と衝突させない */
-  sortBy?: 'status';
-  /** 履歴の判定（`all` は既定） */
-  verdict?: 'correct' | 'close' | 'wrong' | 'excluded';
-}
-
-const TABS = ['list', 'history'] as const;
-const KINDS = ['mate', 'best'] as const;
-const STATUSES = ['unanswered', 'wrong', 'correct'] as const;
-const VERDICTS = ['correct', 'close', 'wrong', 'excluded'] as const;
-
-/** 許可値でなければ落とす（URL 直入力の未知の値は既定に戻す） */
-function option<T extends string>(values: readonly T[], raw: unknown): T | undefined {
-  return values.find((v) => v === raw);
-}
-
-/** 正の整数だけを受ける。1 は既定なので URL に載せない */
-function pageParam(raw: unknown): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 1 ? value : undefined;
-}
-
-function idParam(raw: unknown): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 export const Route = createFileRoute('/drills')({
-  validateSearch: (search: Record<string, unknown>): DrillsSearch => ({
-    tab: option(TABS, search.tab),
-    kind: option(KINDS, search.kind),
-    drill: idParam(search.drill),
-    page: pageParam(search.page),
-    solved: option(STATUSES, search.solved),
-    excluded: search.excluded === 'only' ? 'only' : undefined,
-    sortBy: search.sortBy === 'status' ? 'status' : undefined,
-    verdict: option(VERDICTS, search.verdict),
-  }),
+  validateSearch: validateDrillsSearch,
   loaderDeps: ({ search }) => search,
-  loader: ({ deps }) => loadTab(deps),
+  loader: {
+    handler: ({ deps }) => loadTab(deps),
+    // 🔒 **読み直しを裏で走らせない**（prd/13 §7.4）。既定の stale-while-revalidate だと、
+    // 戻るボタンで**古い読み込み結果を描いたあとに**新しい結果が届き、解きかけの盤が
+    // 作り直される（`key` が読み込みごとに変わるため）。待ってから 1 度だけ描く
+    staleReloadMode: 'blocking',
+  },
   component: DrillsPage,
 });
 
 type SolveResponse = Awaited<ReturnType<typeof loadNext>>;
 type Drill = NonNullable<SolveResponse['drill']>;
 
+/**
+ * 解くタブの読み込みの通し番号。**読み込むたびに盤を作り直す**ための `key`。
+ * ⚠ 問題の id だけを `key` にすると、「次の問題」で**同じ問題がまた選ばれた**とき
+ * （出題順は段の中でランダム。prd/13 §6.3）に作り直されず、解答後の表示が残る
+ */
+let solveLoads = 0;
+
 /** タブごとに引くものが違う（prd/13 §7.4）。**タブは URL の検索パラメータ**なので loader で分ける */
 async function loadTab(search: DrillsSearch) {
   if (search.tab === 'list') return { tab: 'list' as const, ...(await loadList(search)) };
   if (search.tab === 'history') return { tab: 'history' as const, ...(await loadHistory(search)) };
-  const solve = search.drill ? await loadOne(search.drill) : await loadNext(search.kind);
-  return { tab: 'solve' as const, ...solve };
+  if (search.drill) {
+    return { tab: 'solve' as const, load: ++solveLoads, ...(await loadOne(search.drill)) };
+  }
+  const next = await loadNext(search.kind);
+  // 🔒 **選んだ問題を URL に載せる**（prd/13 §7.4）。載せないと、棋譜詳細から戻ったときに
+  // loader が**別の問題を選び直す**。loader の redirect は router が **replace** で扱うので
+  // 履歴は積まれない。置き換え先は `drill` を持つので 2 度目は `loadOne` に入り、ループしない
+  // ⚠ 取得は 2 回になる（next → :id）が、**取得経路を loader の 1 本に保つ**方を取る
+  const pinned = next.drill ? pinnedSearch(search, next.drill.id) : null;
+  if (pinned) throw redirect({ to: '/drills', search: pinned });
+  return { tab: 'solve' as const, load: ++solveLoads, ...next };
 }
 
 async function loadNext(kind?: 'mate' | 'best') {
@@ -231,14 +212,15 @@ function DrillsPage() {
       <DrillTabs search={search} />
 
       {data.tab === 'solve' && (
-        // 🔴 **問題が変わったら中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
-        // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る
+        // 🔴 **読み込むたびに中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
+        // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る。
+        // 種類の切り替え・次の問題・戻るボタンのどれも loader を通るので、ここ 1 か所で揃う
         <DrillRunner
-          key={`${search.kind ?? 'all'}-${search.drill ?? 'next'}`}
+          key={data.load}
           initial={data}
-          kind={search.kind}
-          pinned={search.drill !== undefined}
-          onUnpin={() => navigate({ search: (prev) => ({ ...prev, drill: undefined }) })}
+          // 🔒 **次の問題も loader に選ばせる**（prd/13 §7.4）。`drill` を落として replace で
+          // 移ると、loader が次の 1 問を選んでその id を URL に載せ直す（履歴は積まない）
+          onNext={() => navigate({ search: nextDrillSearch, replace: true })}
         />
       )}
 
@@ -390,18 +372,15 @@ function DrillTabs({ search }: { search: DrillsSearch }) {
 
 function DrillRunner({
   initial,
-  kind,
-  pinned,
-  onUnpin,
+  onNext,
 }: {
   initial: SolveResponse;
-  kind: 'mate' | 'best' | undefined;
-  /** 一覧から名指しで開いた問題か（prd/13 §7.4）。次の問題へ進むときに `drill` を落とす */
-  pinned: boolean;
-  onUnpin: () => void;
+  /** 次の問題へ進む。**取得は loader が持つ**ので、ここは URL を変えるだけ（prd/13 §7.4） */
+  onNext: () => void;
 }) {
   const { scoring } = useDrillScoring();
-  const [drill, setDrill] = useState<Drill | null>(initial.drill);
+  // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない
+  const [drill] = useState<Drill | null>(initial.drill);
   const [error, setError] = useState<string | null>(initial.error);
   /** 出題局面からの確定した手順（受方の応手を含む。prd/13 §5.3） */
   const [line, setLine] = useState<string[]>([]);
@@ -416,24 +395,6 @@ function DrillRunner({
   /** 確定前の 1 手（盤で動かしたが、まだ答えていない手） */
   const pending = session && session.steps.length > line.length + 1 ? lastMove(session) : null;
 
-  function reset(next: Drill | null, message: string | null = null) {
-    setDrill(next);
-    setError(message);
-    setLine([]);
-    setSession(sessionOf(next, []));
-    setReveal(null);
-    setJudging(false);
-  }
-
-  async function nextDrill() {
-    // ⚠ **一覧から開いた問題は URL に残っている**（prd/13 §7.4）。落とさないと同じ問題が出続ける
-    if (pinned) {
-      onUnpin();
-      return;
-    }
-    const loaded = await loadNext(kind);
-    reset(loaded.drill, loaded.error);
-  }
 
   /**
    * 盤を叩く。⚠ **動かせるのは手番側の駒だけ**（出題は自分の手番の局面。prd/13 §4.1）。
@@ -522,7 +483,7 @@ function DrillRunner({
   async function exclude() {
     if (!drill) return;
     await client.api.drills[':id'].exclude.$post({ param: { id: String(drill.id) } });
-    await nextDrill();
+    onNext();
   }
 
   if (error && !drill) {
@@ -617,7 +578,7 @@ function DrillRunner({
           base={base!}
           // 咎め筋は**答えた手を指した後**の局面から読む（相手の応手から始まるため）
           answered={state}
-          onNext={nextDrill}
+          onNext={onNext}
           onExclude={exclude}
         />
       )}

@@ -1684,6 +1684,10 @@ PR #122 のレビューで、採点の契約に 2 つの穴が見つかった。
 - 既定として決めた: cookie cache は使わない（失効が遅れる）。cookie は同一オリジンの `/api` 配下。worker の API_KEY は変えない。
   退会は Better Auth の `deleteUser`（即時削除）を使わず、`deletionRequestedAt` とバッチで作る（後の段階）。
 - 未決: 新規登録の閉じ方、移行手順の流し方（提案はイメージ同梱のエントリ・既定 dry-run）。
+- **決定（同日・上の未決 2 点）: 新規登録は作らせない。** `databaseHooks.user.create.before` で拒否し、移行の間だけ
+  `AUTH_ALLOW_SIGNUP=true` で開ける（dev は常に許す）。作らせると目的の無い他人の個人情報を溜め込み、窓を閉じる条件は明示の方が読める。
+- **決定: 移行はイメージ同梱のエントリ `/app/link-owner-account.js`（既定 dry-run・`LINK_OWNER_APPLY=1`）で流す。**
+  確認をコードで強制でき、dev ログインの付け替えと同じ関数で本番のコードが dev で毎回通る。
 
 **帰結**: [07](../07-auth-and-privacy.md) を Google ログインを正とする内容に書き直した。
 [11](../11-users.md) §2・§3・[03](../03-data-model.md) §1 の型の記述と、[14](../14-multi-user.md) §3・§10 を合わせた。

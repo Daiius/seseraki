@@ -44,7 +44,7 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 | `emailAndPassword.enabled` | **`NODE_ENV === 'development'` のときだけ `true`** | dev の抜け道の土台（§6） |
 | `session.cookieCache.enabled` | `false`（明示） | 🔒 cookie cache を使うと、**失効してもキャッシュの期限まで通ってしまう** |
 | `session.expiresIn` / `updateAge` | 30 日 / 1 日（仮置き） | 今の 30 日を踏襲し、使っている間は延びる |
-| `user.additionalFields.displayName` | `input: false` | 表示名（§3.1）。登録時の入力から書かせない |
+| `user.additionalFields.displayName` | `input: false` | 表示名（§3.1）。登録時の入力から書かせない。作成時の値は `databaseHooks.user.create.before` で補う |
 | `advanced.database.generateId` | UUID（36 文字） | ID を `varchar(36)` に揃え、大文字小文字の混ざらない形にする（§3.2） |
 | `advanced.cookiePrefix` | `seseraki` | 他のアプリの cookie と取り違えない |
 | `trustedOrigins` | `BETTER_AUTH_URL`（+ `CORS_ORIGINS`） | リダイレクト先・`Origin` の検査 |
@@ -114,6 +114,14 @@ verification                     -- OAuth の state など、短命の値
   （[11](./11-users.md) §3 で `ownerId` を先に入れておいた理由）
 - 🔒 **`displayName` は独自列として残し、Google の `name` と分けて持つ。** `name` は Google が決める値で、
   ログインのたびに上書きされうる。画面に出す名前は利用者が `/settings` で決める（[11](./11-users.md) §6.3）
+- 🔴 **`displayName` は NOT NULL のまま、user の作成時に `databaseHooks.user.create.before` で初期値を補う。**
+  `input: false` の列には OAuth のプロフィールも登録の入力も渡らないので、補わないと**新規 user の INSERT が落ちる**——
+  初回 Google ログインの X（§4）も dev ログインの user（§6.1）も作れず、**移行を始められない**。
+  初期値は **作成時の `name`**（Google の表示名 / dev ログインの固定名。空なら `(未設定)`）。
+  - **作成時に 1 回写すだけ**で、以後のログインでは触らない。「Google の `name` で上書きしない」はこれで保たれる
+  - nullable にして表示時に `name` で補う案は採らない。`displayName` が「利用者が決めていないと Google 次第で変わる値」になり、
+    [11](./11-users.md) §2 の「画面に出す名前。対局者名とも Google の name とも別」がぼやける。全読み出し箇所に補完が要るのも避けたい
+  - 移行の X は消える（§4）ので、`"1"` の `displayName` は既存の値のまま
 - ⚠ **`"1"` の行にも `name` / `email`（NOT NULL・UNIQUE）が要る。** マイグレーションで
   `name = displayName`、`email` は**予約済みドメインのプレースホルダ**（例: `owner-1@example.invalid`）で埋める。
   🔴 **所有者の本物の Gmail アドレスを先に入れてはいけない**——Better Auth は `sub` で見つからないとき

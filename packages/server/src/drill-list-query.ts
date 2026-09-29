@@ -96,7 +96,7 @@ export function drillListOrderBy(query: DrillListQuery): SQL[] {
 }
 
 /** 履歴の絞り込み（prd/13 §7.3） */
-export function drillAttemptWhere(ownerId: number, query: DrillAttemptQuery): SQL | undefined {
+export function drillAttemptWhere(ownerId: string, query: DrillAttemptQuery): SQL | undefined {
   return and(
     eq(kifus.ownerId, ownerId),
     query.kind ? eq(drills.kind, query.kind) : undefined,

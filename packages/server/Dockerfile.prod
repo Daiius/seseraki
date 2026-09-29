@@ -29,6 +29,11 @@ FROM gcr.io/distroless/nodejs22-debian12:debug
 
 WORKDIR /app
 
+# 🔒 本番であることを明示する（prd/07 §6.1）。dev ログインの抜け道・email+password・秘密の固定値は
+# NODE_ENV=development のときだけ開く許可リスト方式なので、未設定でも閉じる（fail-closed）が、
+# 付け忘れに頼らない。esbuild.config.ts とテスト（src/dockerfile-check.test.ts）が照合する
+ENV NODE_ENV=production
+
 COPY --from=build /workspace/packages/server/dist/server.js ./server.js
 
 # 一括再判定のエントリ。**使い捨てコンテナとして明示的に実行する**（起動時の自動適用にはしない）。
@@ -59,6 +64,11 @@ COPY --from=build /workspace/packages/server/dist/backfill-user.js ./backfill-us
 # 絶対値の再計算なので何度流しても同じ結果になる。
 #   docker compose run --rm -e REDERIVE_PLAYED_AT_APPLY=1 <service>  # command: ["/app/rederive-played-at.js"]
 COPY --from=build /workspace/packages/server/dist/rederive-played-at.js ./rederive-played-at.js
+
+# 所有者のログイン手段の付け替え（Google ログインへの移行で 1 回。prd/07 §4.1）。既定は dry-run。
+#   docker compose run --rm --no-deps <service> /app/link-owner-account.js
+#   docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <service> /app/link-owner-account.js
+COPY --from=build /workspace/packages/server/dist/link-owner-account.js ./link-owner-account.js
 
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。

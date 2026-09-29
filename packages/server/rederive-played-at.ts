@@ -93,8 +93,8 @@ try {
   let subjectMoved = 0;
 
   // 所有者ごとの名前候補。**棋譜ごとに読み直さない**（N+1 を避ける。users.ts の注意書き）
-  const aliasCache = new Map<number, Alias[]>();
-  const aliasesFor = async (ownerId: number): Promise<Alias[]> => {
+  const aliasCache = new Map<string, Alias[]>();
+  const aliasesFor = async (ownerId: string): Promise<Alias[]> => {
     const cached = aliasCache.get(ownerId);
     if (cached) return cached;
     const aliases = await aliasesOf(db, ownerId);

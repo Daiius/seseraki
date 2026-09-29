@@ -25,6 +25,7 @@
   "dependencies": {
     "@hono/node-server": "^2.0.12",
     "@hono/zod-validator": "^0.7.6",
+    "better-auth": "~1.6.33",
     "drizzle-orm": "1.0.0-rc.3",
     "hono": "^4.12.25",
     "mysql2": "^3.22.2",

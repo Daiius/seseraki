@@ -7,7 +7,7 @@ import {
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
-import { checkSession, logout } from '../lib/auth';
+import { fetchMe, logout } from '../lib/auth';
 import { Logo } from '../components/Logo';
 import {
   AcademicCapIcon,
@@ -32,9 +32,12 @@ export const Route = createRootRoute({
     // DEV 専用の UI ギャラリーは認証を通さず開けるようにする（props で状態を固定して
     // スクショ確認するための置き場。本番ではルート自体が中身を出さない）
     if (import.meta.env.DEV && location.pathname === '/dev-gallery') return;
-    const authed = await checkSession();
-    if (!authed) {
-      throw redirect({ to: '/login', search: { redirect: location.href } });
+    // `GET /api/me`: 401 は未ログイン、403 は所有者以外（prd/07 §5.3）。
+    // どちらもログイン画面へ送り、403 はそこで「このアカウントでは利用できません」とログアウトを出す。
+    // サーバーに届かないときもログイン画面で知らせる
+    const me = await fetchMe().catch(() => null);
+    if (me?.kind !== 'owner') {
+      throw redirect({ to: '/login', search: { redirect: location.href, error: undefined } });
     }
   },
   component: RootComponent,
@@ -77,7 +80,7 @@ function RootComponent() {
 
   const handleLogout = async () => {
     await logout();
-    navigate({ to: '/login', search: { redirect: undefined } });
+    navigate({ to: '/login', search: { redirect: undefined, error: undefined } });
   };
 
   return (

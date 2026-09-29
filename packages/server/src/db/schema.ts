@@ -20,17 +20,111 @@ import {
 import { defineRelations } from 'drizzle-orm';
 
 /**
- * ユーザー（自分）。**認証は単一アカウントのまま**（prd/07）で、セッションは常に
- * ただ一人のこの行を指す。招待の本体（ユーザーごとの資格情報・セッションへの userId・
- * 所有者スコープ）は prd/11 §1 のスコープ外。
+ * ユーザー。**Better Auth の user 表を兼ねる**（prd/07 §3.1。`user.modelName: 'users'`）。
+ *
+ * 🔒 **既存の所有者の行は ID `"1"`**（bigint から varchar(36) へ作り替えたときの値そのまま）。
+ * 新規は UUID。所有者スコープ（prd/14 §4）が入るまでは `"1"` 以外のセッションを通さない
+ * （所有者ゲート。prd/07 §5.1）。
+ *
+ * 🔒 **本人の同定は `account.accountId`（Google の `sub`）で行う。** `email` は同定に使わない
+ * （メールは変わりうる。prd/07 §1）。
  */
 export const users = mysqlTable('users', {
-  id: serial().primaryKey(),
-  /** 画面に出す名前。**対局者名とは別**（対局者名は `userAliases`） */
+  id: varchar({ length: 36 }).primaryKey(),
+  /** Google の表示名（Better Auth が書く）。画面には出さない——出すのは `displayName` */
+  name: varchar({ length: 255 }).notNull(),
+  /**
+   * Google のメール。UNIQUE だが**同定には使わない**。
+   * ⚠ 所有者の行は移行（prd/07 §4）まで予約ドメインの仮アドレス。**本物を先に入れない**——
+   * Better Auth がメールで行を見つけると、連携が無効なので初回ログインを拒否する
+   */
+  email: varchar({ length: 255 }).notNull().unique(),
+  emailVerified: boolean().notNull().default(false),
+  image: text(),
+  /**
+   * 画面に出す名前。**対局者名とも Google の `name` とも別**（対局者名は `userAliases`）。
+   * 作成時に `databaseHooks.user.create.before` が `name` から補う（prd/07 §3.1）。以後は触らない
+   */
   displayName: varchar({ length: 100 }).notNull(),
   createdAt: timestamp().notNull().defaultNow(),
   updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
 });
+
+/**
+ * Better Auth のセッション（prd/07 §3）。**行を消せばその場で失効する**。
+ *
+ * 🔴 **`token` の照合順序は `utf8mb4_bin`**（大文字小文字を区別する）。既定の
+ * `utf8mb4_0900_ai_ci` では大文字小文字だけが違う token が同じ値として照合される。
+ * drizzle は照合順序を扱えないので**マイグレーション SQL で指定している**（`db:push` で作り直すと既定に戻る）。
+ * 🔴 `userId` の FK は `ON DELETE CASCADE`。drizzle-kit は新規テーブルの CASCADE を SQL に出さないので、
+ * マイグレーション SQL を手で直してある（AGENTS.md）。
+ */
+export const session = mysqlTable(
+  'session',
+  {
+    id: varchar({ length: 36 }).primaryKey(),
+    token: varchar({ length: 255 }).notNull(),
+    userId: varchar({ length: 36 }).notNull(),
+    expiresAt: timestamp().notNull(),
+    ipAddress: text(),
+    userAgent: text(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    uniqueIndex('session_token_uq').on(table.token),
+    index('session_user_id_idx').on(table.userId),
+    foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
+  ],
+);
+
+/**
+ * Better Auth のアカウント（ログイン手段）。`(providerId, accountId)` で本人を同定する。
+ * `providerId` は `'google'`（dev では `'credential'` もある。`password` はその時だけ入る）。
+ * 🔴 `userId` の FK は `ON DELETE CASCADE`（`session` と同じくマイグレーション SQL を手で直してある）。
+ */
+export const account = mysqlTable(
+  'account',
+  {
+    id: varchar({ length: 36 }).primaryKey(),
+    userId: varchar({ length: 36 }).notNull(),
+    providerId: varchar({ length: 64 }).notNull(),
+    /** Google の `sub`。**本人の同定はこれで行う** */
+    accountId: varchar({ length: 255 }).notNull(),
+    accessToken: text(),
+    refreshToken: text(),
+    idToken: text(),
+    accessTokenExpiresAt: timestamp(),
+    refreshTokenExpiresAt: timestamp(),
+    scope: text(),
+    password: text(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    uniqueIndex('account_provider_account_uq').on(table.providerId, table.accountId),
+    index('account_user_id_idx').on(table.userId),
+    foreignKey({ columns: [table.userId], foreignColumns: [users.id] }).onDelete('cascade'),
+  ],
+);
+
+/**
+ * Better Auth の短命の値（OAuth の state など）。
+ * `identifier` は乱数の文字列で引くので、`session.token` と同じく **`utf8mb4_bin`**
+ * （マイグレーション SQL で指定）。
+ */
+export const verification = mysqlTable(
+  'verification',
+  {
+    id: varchar({ length: 36 }).primaryKey(),
+    identifier: varchar({ length: 255 }).notNull(),
+    value: text().notNull(),
+    expiresAt: timestamp().notNull(),
+    createdAt: timestamp().notNull().defaultNow(),
+    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [index('verification_identifier_idx').on(table.identifier)],
+);
 
 /**
  * 対局者名と突き合わせる名前候補（prd/11 §2）。
@@ -45,7 +139,7 @@ export const userAliases = mysqlTable(
   'user_aliases',
   {
     id: serial().primaryKey(),
-    userId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    userId: varchar({ length: 36 }).notNull(),
     /**
      * 棋譜の `sente` / `gote` と突き合わせる値。swars の ID もここに入る。
      *
@@ -118,7 +212,7 @@ export const kifus = mysqlTable(
      * **このデータを持っている人**（prd/11 §3）。⚠ 対局者ではない——動画解析の棋譜も
      * 投入した人が所有者で、対局者は `sente` / `gote` の話。
      */
-    ownerId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    ownerId: varchar({ length: 36 }).notNull(),
     /**
      * 主体の手番（prd/11 §4）。**導出値**で、`source = 'video'` は `bottomIsSente` から、
      * それ以外は所有者の名前候補との突き合わせで決まる。両対局者とも一致したら null。
@@ -131,8 +225,8 @@ export const kifus = mysqlTable(
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
     // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
     index('kifus_source_idx').on(table.source),
-    // ⚠ ユーザーを消しても棋譜は道連れにしない（CASCADE にしない）。
-    // ユーザー削除は prd/11 のスコープ外で、消せないことが正しい既定
+    // 🔒 ユーザーを消しても棋譜は道連れにしない（CASCADE にしない。prd/14 §3.1）。
+    // ユーザー行を 1 度誤って消しただけで全データが道連れになるため。削除は退会のバッチが明示的に行う
     foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
   ],
 );
@@ -469,6 +563,9 @@ export const relations = defineRelations(
     videoKifuSources,
     kifuPositions,
     users,
+    session,
+    account,
+    verification,
     userAliases,
     drills,
     drillAttempts,

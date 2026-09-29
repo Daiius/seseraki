@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
+import { finalStageIsProduction, missingEntryCopies } from "./src/dockerfile-check";
 
 // ⚠ **エントリは名前付きで渡す。** 配列で渡すと出力先が入力の共通ベースからの相対になり、
 // src/ と直下のスクリプトが別階層にあるため dist/src/index.js に落ちる。
@@ -43,6 +44,10 @@ const entryPoints = {
     // ⚠ **生成した SQL はバンドルに入らない**（migrator が実行時に fs で読む）。
     //   `Dockerfile.prod` が `drizzle/` を別途 COPY する。
     migrate: "./migrate.ts",
+    // 所有者のログイン手段の付け替え（Google ログインへの移行で 1 回。prd/07 §4.1）。
+    // 既定は dry-run、LINK_OWNER_APPLY=1 で実書込。dev ログインも同じ関数を使う
+    //   docker compose run --rm -e LINK_OWNER_APPLY=1 <service>  # command: ["/app/link-owner-account.js"]
+    "link-owner-account": "./link-owner-account.ts",
 };
 
 await build({
@@ -82,13 +87,16 @@ const __dirname = __esbuildDirname(__filename);
 // COPY を書き忘れると**本番でだけファイルが無い**。実際に踏んだ（`generate-drills.js`）。
 // 発現するのは「そのスクリプトを流そうとした時」＝**一番流したいタイミング**なので、ここで落とす。
 const dockerfile = readFileSync("./Dockerfile.prod", "utf8");
-const missing = Object.keys(entryPoints).filter(
-  (name) => !dockerfile.includes(`dist/${name}.js`),
-);
+const missing = missingEntryCopies(dockerfile, Object.keys(entryPoints));
 if (missing.length > 0) {
   console.error(
     `Dockerfile.prod が COPY していないエントリがあります: ${missing.join(", ")}`,
   );
+  process.exit(1);
+}
+// 🔒 本番イメージは NODE_ENV=production を明示する（dev ログインの抜け道を開かない。prd/07 §6.1）
+if (!finalStageIsProduction(dockerfile)) {
+  console.error("Dockerfile.prod の最終ステージに ENV NODE_ENV=production がありません");
   process.exit(1);
 }
 

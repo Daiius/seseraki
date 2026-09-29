@@ -1,6 +1,8 @@
 import { readFileSync } from 'fs';
 import { db } from './index.js';
+import { eq } from 'drizzle-orm';
 import { kifus, users } from './schema.js';
+import { OWNER_USER_ID } from '../users.js';
 
 const sampleKifPath = process.argv[2];
 if (!sampleKifPath) {
@@ -23,9 +25,12 @@ const [existing] = await db
 if (existing) {
   console.log('Seed skipped: kifus table already has data');
 } else {
-  // 所有者はマイグレーションが作った単一ユーザー（prd/11 §6.1）
-  const [owner] = await db.select({ id: users.id }).from(users).orderBy(users.id).limit(1);
-  if (!owner) throw new Error('users に行が無い。マイグレーションを先に流す');
+  // 所有者はマイグレーションが作った行（prd/11 §6.1・prd/07 §3.1。ID は "1"）
+  const [owner] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.id, OWNER_USER_ID));
+  if (!owner) throw new Error('所有者の行が無い。マイグレーションを先に流す');
   const [result] = await db
     .insert(kifus)
     .values({ title, kifText, ownerId: owner.id })

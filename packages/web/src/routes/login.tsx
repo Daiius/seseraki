@@ -1,118 +1,167 @@
 import { useState } from 'react';
-import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
-import { checkSession, login } from '../lib/auth';
+import {
+  createFileRoute,
+  redirect,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router';
+import {
+  devLogin,
+  fetchMe,
+  loginErrorMessage,
+  logout,
+  signInWithGoogle,
+  type MeStatus,
+} from '../lib/auth';
 import { Logo } from '../components/Logo';
 
-type LoginSearch = { redirect?: string };
+type LoginSearch = { redirect?: string; error?: string };
 
 export const Route = createFileRoute('/login')({
   validateSearch: (search: Record<string, unknown>): LoginSearch => ({
     redirect: typeof search.redirect === 'string' ? search.redirect : undefined,
+    // Google ログインが失敗すると Better Auth が `?error=<code>` を付けて戻す
+    error: typeof search.error === 'string' ? search.error : undefined,
   }),
   beforeLoad: async ({ search }) => {
-    if (await checkSession()) {
+    // サーバーに届かないときは null（画面で知らせる）
+    const me: MeStatus | null = await fetchMe().catch(() => null);
+    if (me?.kind === 'owner') {
       throw redirect({ to: search.redirect ?? '/' });
     }
+    return { me };
   },
   component: LoginPage,
 });
 
+/** `?as=` に渡せる名前（server の検査と同じ形） */
+const DEV_AS_PATTERN = /^[a-z0-9_-]{1,32}$/;
+
 function LoginPage() {
   const navigate = useNavigate();
-  const { redirect: redirectTo } = Route.useSearch();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const router = useRouter();
+  const { redirect: redirectTo, error: errorCode } = Route.useSearch();
+  const { me } = Route.useRouteContext();
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [devAs, setDevAs] = useState('alice');
 
-  const handleSubmit = async (e: React.SubmitEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
+  const run = async (action: () => Promise<void>) => {
+    setBusy(true);
     setError(null);
     try {
-      const ok = await login(username, password);
-      if (!ok) {
-        setError('ユーザー名またはパスワードが違います');
-        return;
-      }
-      if ('credentials' in navigator && 'PasswordCredential' in window) {
-        try {
-          const CredCtor = (
-            window as unknown as {
-              PasswordCredential: new (init: {
-                id: string;
-                password: string;
-              }) => Credential;
-            }
-          ).PasswordCredential;
-          await navigator.credentials.store(
-            new CredCtor({ id: username, password }),
-          );
-        } catch {
-          // ignore: Safari など未対応ブラウザ
-        }
-      }
-      await navigate({ to: redirectTo ?? '/' });
-    } catch {
-      setError('サーバーに接続できません');
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   };
 
+  const handleGoogle = () =>
+    run(async () => {
+      // 戻り先は同一オリジンの相対パス（server の trustedOrigins で検査される）
+      await signInWithGoogle(redirectTo ?? '/');
+    });
+
+  const handleDevLogin = (as?: string) =>
+    run(async () => {
+      await devLogin(as);
+      await navigate({ to: redirectTo ?? '/' });
+    });
+
+  const handleLogout = () =>
+    run(async () => {
+      await logout();
+      // 同じ画面のまま beforeLoad をやり直し、ログイン前の表示に戻す
+      await router.invalidate();
+    });
+
+  const shownError = error ?? loginErrorMessage(errorCode);
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <form
-        onSubmit={handleSubmit}
-        className="card bg-base-200 w-full max-w-sm shadow"
-      >
+      <div className="card bg-base-200 w-full max-w-sm shadow">
         <div className="card-body">
           <h1 className="card-title text-3xl justify-center mb-2">
             <Logo />
           </h1>
-          <label className="form-control w-full">
-            <div className="label">
-              <span className="label-text">ユーザー名</span>
+
+          {me?.kind === 'forbidden' ? (
+            // 所有者以外のアカウント（所有者ゲート。prd/07 §5.1）。別のアカウントで入り直せるようにする
+            <>
+              <div role="alert" className="alert alert-warning">
+                このアカウントでは利用できません
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary mt-4"
+                onClick={() => void handleLogout()}
+                disabled={busy}
+              >
+                ログアウト
+              </button>
+            </>
+          ) : (
+            <>
+              {me === null && (
+                <div role="alert" className="alert alert-error">
+                  サーバーに接続できません
+                </div>
+              )}
+              {shownError && (
+                <div role="alert" className="alert alert-error">
+                  {shownError}
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary mt-4"
+                onClick={() => void handleGoogle()}
+                disabled={busy}
+              >
+                {busy ? (
+                  <span className="loading loading-spinner loading-sm" />
+                ) : (
+                  'Google でログイン'
+                )}
+              </button>
+            </>
+          )}
+
+          {/* dev のときだけ（prd/07 §6.1）。本番のビルドでは import.meta.env.DEV が false になり丸ごと消える */}
+          {import.meta.env.DEV && (
+            <div className="mt-6 border-t border-base-300 pt-4 space-y-2">
+              <p className="text-sm text-base-content/70">開発用</p>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm w-full"
+                onClick={() => void handleDevLogin()}
+                disabled={busy}
+              >
+                dev ログイン（所有者）
+              </button>
+              <div className="join w-full">
+                <input
+                  type="text"
+                  className="input input-bordered input-sm join-item flex-1"
+                  aria-label="dev ユーザー名"
+                  value={devAs}
+                  onChange={(e) => setDevAs(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm join-item"
+                  onClick={() => void handleDevLogin(devAs)}
+                  disabled={busy || !DEV_AS_PATTERN.test(devAs)}
+                >
+                  別ユーザーで
+                </button>
+              </div>
             </div>
-            <input
-              type="text"
-              name="username"
-              autoComplete="username"
-              className="input input-bordered w-full"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              autoFocus
-            />
-          </label>
-          <label className="form-control w-full">
-            <div className="label">
-              <span className="label-text">パスワード</span>
-            </div>
-            <input
-              type="password"
-              name="password"
-              autoComplete="current-password"
-              className="input input-bordered w-full"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </label>
-          {error && <div className="alert alert-error mt-2">{error}</div>}
-          <button
-            type="submit"
-            className="btn btn-primary mt-4"
-            disabled={submitting}
-          >
-            {submitting ? (
-              <span className="loading loading-spinner loading-sm" />
-            ) : (
-              'ログイン'
-            )}
-          </button>
+          )}
         </div>
-      </form>
+      </div>
     </div>
   );
 }

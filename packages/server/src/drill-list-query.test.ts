@@ -97,26 +97,26 @@ describe('drillAttemptWhere', () => {
   const parse = (q: Record<string, string>) => drillAttemptQuerySchema.parse(q);
 
   it('既定は所有者だけで絞る（除外の行も含む）', () => {
-    const { sql, params } = render(drillAttemptWhere(7, parse({})));
+    const { sql, params } = render(drillAttemptWhere('7', parse({})));
     expect(sql).toContain('`ownerId`');
-    expect(params).toEqual([7]);
+    expect(params).toEqual(['7']);
   });
 
   it('verdict=excluded は「自明だった」の行', () => {
-    const { sql, params } = render(drillAttemptWhere(7, parse({ verdict: 'excluded' })));
+    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'excluded' })));
     expect(sql).toContain('`excluded`');
-    expect(params).toEqual([7, true]);
+    expect(params).toEqual(['7', true]);
   });
 
   it('verdict=correct は解答の行だけ（除外だけの行を混ぜない）', () => {
-    const { sql, params } = render(drillAttemptWhere(7, parse({ verdict: 'correct' })));
+    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'correct' })));
     expect(sql).toContain('`move` is not null');
-    expect(params).toEqual([7, 'correct']);
+    expect(params).toEqual(['7', 'correct']);
   });
 
   it('kind は出題の種類で絞る', () => {
-    const { params } = render(drillAttemptWhere(7, parse({ kind: 'mate' })));
-    expect(params).toEqual([7, 'mate']);
+    const { params } = render(drillAttemptWhere('7', parse({ kind: 'mate' })));
+    expect(params).toEqual(['7', 'mate']);
   });
 });
 

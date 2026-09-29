@@ -53,13 +53,8 @@ import {
   importVideoKifu,
   videoKifuInputSchema,
 } from './video-analysis.js';
-import {
-  hasValidSession,
-  issueSession,
-  revokeSession,
-  sessionRequired,
-  verifyCredentials,
-} from './auth.js';
+import { auth, sessionRequired, settings as authSettings } from './auth.js';
+import { devLoginRoutes } from './dev-login.js';
 import {
   clearProgress,
   getClearToken,
@@ -136,7 +131,6 @@ import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-quer
 import {
   addAlias,
   countUnresolvedSubjects,
-  currentUserId,
   rebuildSubjectSides,
   refreshSubjectSide,
   removeAlias,
@@ -210,6 +204,16 @@ const corsOrigins = (process.env.CORS_ORIGINS ?? '')
 app.use('*', logger());
 if (corsOrigins.length > 0) {
   app.use('*', cors({ origin: corsOrigins, credentials: true }));
+}
+
+// 人のログイン（Better Auth。prd/07 §2.1）。サインイン・コールバック・サインアウト・セッション取得を
+// 丸ごと受ける。⚠ **アプリの API を /auth/* の下に置かない**（このハンドラが先に受ける）
+app.on(['POST', 'GET'], '/auth/*', (c) => auth.handler(c.req.raw));
+
+// 🔒 dev ログインの抜け道は **NODE_ENV=development のときだけ登録する**（prd/07 §6）。
+// それ以外ではルート自体が無く 404（auth-routes.test.ts で固定）。RPC の型にも載せない
+if (authSettings.isDev) {
+  app.route('/dev', devLoginRoutes(auth));
 }
 
 interface KifIngestion {
@@ -325,26 +329,9 @@ async function answerWithEngine(input: ResolveInput, reveal: Record<string, unkn
 
 const route = app
   // --- 認証 ---
-  .get('/auth/me', async (c) => {
-    if (!(await hasValidSession(c))) return c.body(null, 401);
-    return c.json({ ok: true } as const);
-  })
-  .post(
-    '/auth/login',
-    zv('json', z.object({ username: z.string(), password: z.string() })),
-    async (c) => {
-      const { username, password } = c.req.valid('json');
-      if (!verifyCredentials(username, password)) {
-        return c.json({ error: 'invalid credentials' } as const, 401);
-      }
-      await issueSession(c);
-      return c.json({ ok: true } as const);
-    },
-  )
-  .post('/auth/logout', async (c) => {
-    revokeSession(c);
-    return c.json({ ok: true } as const);
-  })
+  // ログイン中の自分（prd/07 §5.3）。未ログインは 401・所有者以外は 403（所有者ゲート。§5.1）。
+  // web のルートガードがこれを叩く。⚠ /auth/* の外に置く（/auth/* は Better Auth が丸ごと受ける）
+  .get('/me', sessionRequired, (c) => c.json({ userId: c.get('userId') }))
   // --- Web 向け（セッション認証） ---
   .get(
     '/kifus',
@@ -539,7 +526,7 @@ const route = app
       // 別にすると、戦型判定で落ちたときに「指し手はあるがラベルが無い」棋譜が残り、
       // 一覧の絞り込みから黙って外れる
       const id = await db.transaction(async (tx) => {
-        const ownerId = await currentUserId(tx);
+        const ownerId = c.get('userId');
         const [result] = await tx
           .insert(kifus)
           .values({
@@ -570,7 +557,7 @@ const route = app
   // 手動の再導出に頼ると、変えた直後に画面の数字が古いまま残り、
   // しかも間違っていることが画面から分からない。
   .get('/users/me', sessionRequired, async (c) => {
-    const userId = await currentUserId();
+    const userId = c.get('userId');
     const [user] = await db
       .select({ id: users.id, displayName: users.displayName })
       .from(users)
@@ -598,7 +585,7 @@ const route = app
     zv('json', z.object({ displayName: z.string().trim().min(1).max(100) })),
     async (c) => {
       const { displayName } = c.req.valid('json');
-      const userId = await currentUserId();
+      const userId = c.get('userId');
       await db.update(users).set({ displayName }).where(eq(users.id, userId));
       return c.json({ ok: true } as const);
     },
@@ -609,7 +596,7 @@ const route = app
     zv('json', aliasCreateSchema),
     async (c) => {
       const { name, validFrom, validTo } = c.req.valid('json');
-      const userId = await currentUserId();
+      const userId = c.get('userId');
       try {
         const updated = await db.transaction(async (tx) => {
           await addAlias(tx, userId, name, { validFrom, validTo });
@@ -634,7 +621,7 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { validFrom, validTo } = c.req.valid('json');
-      const userId = await currentUserId();
+      const userId = c.get('userId');
       const updated = await db.transaction(async (tx) => {
         await updateAliasPeriod(tx, id, { validFrom, validTo });
         return rebuildSubjectSides(tx, userId);
@@ -650,7 +637,7 @@ const route = app
       // ⚠ **旧名を消すと、その名前で指した過去の棋譜が「自分の対局」でなくなる**
       // （prd/11 §2.2）。画面側で警告してから呼ぶ
       const { id } = c.req.valid('param');
-      const userId = await currentUserId();
+      const userId = c.get('userId');
       const updated = await db.transaction(async (tx) => {
         await removeAlias(tx, id);
         return rebuildSubjectSides(tx, userId);
@@ -1095,12 +1082,12 @@ const route = app
     zv('query', z.object({ kind: z.enum(['mate', 'best']).optional() })),
     async (c) => {
       const { kind } = c.req.valid('query');
-      const drill = await pickNextDrill(await currentUserId(), kind);
+      const drill = await pickNextDrill(c.get('userId'), kind);
       return c.json({ drill });
     },
   )
   .get('/drills/counts', sessionRequired, async (c) =>
-    c.json(await drillCounts(await currentUserId())),
+    c.json(await drillCounts(c.get('userId'))),
   )
   // 解答履歴の一覧（prd/13 §7.3）。⚠ **`/drills/:id` より先に登録する**——
   // `:id` を先に置くと固定の口を飲み込む
@@ -1108,11 +1095,11 @@ const route = app
     '/drills/attempts',
     sessionRequired,
     zv('query', drillAttemptQuerySchema),
-    async (c) => c.json(await listDrillAttempts(await currentUserId(), c.req.valid('query'))),
+    async (c) => c.json(await listDrillAttempts(c.get('userId'), c.req.valid('query'))),
   )
   // 問題の一覧（prd/13 §7.2）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
   .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>
-    c.json(await listDrills(await currentUserId(), c.req.valid('query'))),
+    c.json(await listDrills(c.get('userId'), c.req.valid('query'))),
   )
   // 一覧から名指しで開いた 1 問（prd/13 §5.4）。返す形は `/drills/next` と同じ
   .get(
@@ -1121,7 +1108,7 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrillQuestion(id, await currentUserId());
+      const drill = await loadDrillQuestion(id, c.get('userId'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       return c.json({ drill });
     },
@@ -1133,7 +1120,7 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrill(id, await currentUserId());
+      const drill = await loadDrill(id, c.get('userId'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       await unexcludeDrill(id);
       return c.json({ ok: true } as const);
@@ -1147,7 +1134,7 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrill(id, await currentUserId());
+      const drill = await loadDrill(id, c.get('userId'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       await recordAttempt(db, {
         drillId: id,
@@ -1180,7 +1167,7 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { line, correctMargin, closeMargin } = c.req.valid('json');
-      const drill = await loadDrill(id, await currentUserId());
+      const drill = await loadDrill(id, c.get('userId'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       const scoring: DrillScoring = {
         correctMargin: correctMargin ?? DEFAULT_SCORING.correctMargin,
@@ -1888,6 +1875,8 @@ const route = app
     ),
     async (c) => {
       const { userId, gtype, pages } = c.req.valid('json');
+      // 取り込んだ棋譜の所有者（ログイン中の自分）。ジョブは応答の後も走るので先に取り出す
+      const ownerId = c.get('userId');
       const cookie = process.env.SWARS_SESSION_COOKIE;
       if (!cookie) {
         return c.json({ error: 'SWARS_SESSION_COOKIE not configured' }, 500);
@@ -1923,7 +1912,6 @@ const route = app
             const title = formatTitle(gameData);
             const playedAt = parsePlayedAt(gameKey);
             const newId = await db.transaction(async (tx) => {
-              const ownerId = await currentUserId(tx);
               const [result] = await tx
                 .insert(kifus)
                 .values({

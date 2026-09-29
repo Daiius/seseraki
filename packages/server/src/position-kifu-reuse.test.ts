@@ -315,6 +315,21 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
   });
 
+  it('🔒 3 本とも局面をハッシュで引いて盤・持ち駒・手番で照合し、その後に上限をかける（prd/14 §6.3）', () => {
+    for (const query of [
+      positionEvalAnalysesQuery(SFEN),
+      namedMoveAnalysesQuery(SFEN, '7g7f'),
+      playedMoveAnalysesQuery(SFEN, '7g7f'),
+    ]) {
+      const { sql } = render(query);
+      expect(sql).toContain('`kifu_positions`.`sfenhash` = ?');
+      expect(sql).toContain('`kifu_positions`.`board` = ?');
+      expect(sql).toContain('`kifu_positions`.`hands` = ?');
+      expect(sql).toContain('`kifu_positions`.`sidetomove` = ?');
+      expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('`kifu_positions`.`board` = ?'));
+    }
+  });
+
   it('🔴 3 本とも profile=full の解析だけに絞る（quick はエンジン評価へ回す）', () => {
     for (const query of [
       positionEvalAnalysesQuery(SFEN),

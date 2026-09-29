@@ -108,21 +108,25 @@ kifuPositions
 ├── kifuId: bigint FK → kifus.id (CASCADE)   ┐ PK
 ├── moveNumber: int      -- 0 = 初期局面      ┘ ＋単独の INDEX（下記）
 ├── move: varchar(8)?        -- この局面に至った直前の手（USI）。moveNumber = 0 では null
-├── sfen: varchar(200)       -- 局面キー（盤 / 手番 / 持ち駒）  (INDEX)
-├── senteSfen: varchar(200)  -- 先手側の配置のみ                (INDEX)
-├── goteSfen: varchar(200)   -- 後手側の配置のみ（180度回転）   (INDEX)
+├── sfenHash: binary(8)       -- 局面キー（盤 / 手番 / 持ち駒）のハッシュ  (INDEX)
+├── senteSfenHash: binary(8)  -- 先手側の配置のみのハッシュ                (INDEX)
+├── goteSfenHash: binary(8)   -- 後手側の配置のみ（180度回転）のハッシュ   (INDEX)
 ├── board: binary(81)        -- 1 マス 1 バイト（下記）
 ├── hands: binary(14)        -- 側 × 駒種の枚数（先手 7 + 後手 7）
 └── sideToMove: enum('b' | 'w')
 ```
 
-🔒 **キーはハッシュではなく SFEN 文字列そのもの**（§5.1）。**衝突しない**うえ、
-URL に載せられ（`/positions?pos=<sfen>`）、DB を直接見たときに人が読める。
+🔒 **キーは SFEN 文字列の 64 ビットハッシュで持ち、引いた後に `board` / `hands` / `sideToMove` で照合する**
+（§5.1・[14](./14-multi-user.md) §6.3）。**文字列は保存しない**——盤と持ち駒から組み立て直せる。
+URL（`/positions?pos=<sfen>`）や応答には組み立てた文字列を載せる。
 
 🔴 **`goteSfen` は盤を 180 度回して書く。** この鍵の用途は「**自分の駒の配置**が似ている
 局面を探す」ことなので、**先後で盤の向きが逆のままでは比べられない**——「自分が先手のときの形」と
 「自分が後手のときの同じ形」が一致しない。回して**常に自分が手前**に揃える。
 ⚠ 大小文字（駒の所属）は残るので、比較は**小文字化してから**行う。持ち駒は向きを持たないのでそのまま。
+🔴 ハッシュの入力と照合は**小文字にした配置**（`shared` の `sideLayoutKey`）。文字列を保存していた頃は、
+この小文字化を**列の照合順序（`utf8mb4_0900_ai_ci`。大文字小文字を区別しない）が黙って担っていた**。
+ハッシュにすると照合順序は効かないので、コードで明示している（落とすと先後をまたいだ一致が消える。実際に踏んだ）。
 
 **`board` は 1 マス 1 バイト**（`binary(81)`）。マスの状態は **空 + 14 駒種 × 2 側 = 29 通り**あり、
 ニブル（4 ビット = 16 値）では表せない。値は `0` = 空、`1..14` = 先手の `P L N S G B R K +P +L +N +S +B +R`、
@@ -158,7 +162,7 @@ kifus.subjectSide: enum('sente' | 'gote')?
 - **自分の対局**: 所有者の名前候補と `sente`/`gote` の突き合わせ。**server 側ユーザーの導入が前提**で、
   導出規則と名前の有効期間は [11](./11-users.md) §4〜5 に定める
 
-🔒 **主体側を局面索引に焼き込まない。** `senteSfen` / `goteSfen` を両方持ち、どちらを引くかは
+🔒 **主体側を局面索引に焼き込まない。** `senteSfen` / `goteSfen`（のハッシュ）を両方持ち、どちらを引くかは
 クエリ時に `subjectSide` で選ぶ:
 
 ```sql
@@ -176,9 +180,14 @@ END
 
 ```sql
 WHERE k.subjectSide IS NOT NULL
-  AND (   (k.subjectSide = 'sente' AND p.senteSfen = :baseSideSfen)
-       OR (k.subjectSide = 'gote'  AND p.goteSfen  = :baseSideSfen) )
+  AND (   (k.subjectSide = 'sente' AND p.senteSfenHash = hash(lower(:baseSideSfen)))
+       OR (k.subjectSide = 'gote'  AND p.goteSfenHash  = hash(lower(:baseSideSfen))) )
 ```
+
+⚠ 片側の配置（相手の駒を空にし、後手なら回したもの）は SQL で素直に比べられないので、
+**照合はアプリ側**で行う（行の `board` / `hands` から `sideLayoutKey` を組み立て直して比べる）。
+照合で落とす行を `LIMIT` の後に捨てると件数がずれるので、**このクエリには上限をかけず、
+照合してから数えて切る**（読む行数は一致する局面の数で、文字列の頃に `count(*) over ()` が数えていた行と同じ）。
 
 ⚠ **枝の列挙は主体側モードでは出せない。** 片側の配置だけでは次の局面が決まらないため
 （枝は両側を含む局面キーの上に立つ）。主体側モードは「**似た形の棋譜を探す**」機能で、
@@ -259,15 +268,25 @@ POST /api/video-analysis/kifus   (API_KEY 必須)
 
 ⚠ **持ち駒をキーから外さない。** 同じ盤面でも持ち駒が違えば別の局面で、序盤の判断が変わる。
 
-🔒 **キーはハッシュにせず、SFEN 文字列そのものを使う。** 理由は 3 つ:
+🔒 **キーは SFEN 文字列の 64 ビットハッシュ（FNV-1a 64）にし、引いた後に盤のバイト列・持ち駒・手番で照合する**
+（[14](./14-multi-user.md) §6.3）。
 
-1. **衝突しない。** ハッシュだと別の局面が同じキーになりうる。確率は小さいが、起きたときの
-   症状は「検索結果に無関係な棋譜が混ざる」で、**気づきにくい壊れ方**をする
-2. **URL に載せられる**（`/positions?pos=<sfen>`）
-3. **人が読める。** DB を直接見たときに、それがどの局面か分かる
+- **衝突しても誤った棋譜は出ない。** ハッシュで引いた候補を `board` / `hands` / `sideToMove`
+  （片側検索なら組み立て直した片側の配置）で照合するので、衝突は「候補が 1 行増えて照合で落ちる」だけ
+- 照合は `LIMIT` / `count(*) over ()` と矛盾しない位置に置く（完全一致は SQL の `WHERE` に入れる。
+  片側は上限をかけずに読んでからアプリで照合し、数えて切る。§3.3）
+- **URL と応答には文字列を載せる**（`/positions?pos=<sfen>`）。保存していないので、盤・持ち駒・手番から
+  組み立てる。引く側は受け取った SFEN を読み直して正規化してからハッシュする
+- ハッシュ関数は `shared`（`position-hash.ts`）に**純粋な TypeScript** で置く（環境非依存。
+  node の `crypto` も Web Crypto も使わない）。🔴 **関数を変えたら索引の全件の作り直しが要る**
+  （`rebuild-positions`）。既知の値をテストで固定している
 
-⚠ 加えて `shared` は環境非依存（`lib: esnext` / `types: []`）なので、node の `crypto` も
-Web Crypto も使えない。ハッシュを自前で書くことになるが、**書かずに済む方がよい。**
+> **経緯**: 当初は「キーはハッシュにせず、SFEN 文字列そのものを使う」としていた。理由は
+> (1) ハッシュは衝突すると**検索結果に無関係な棋譜が混ざる**（気づきにくい壊れ方）、
+> (2) URL に載せられる、(3) DB を直接見て人が読める、(4) `shared` でハッシュを自前で書かずに済む、の 4 つ。
+> 複数ユーザーへの開放（[14](./14-multi-user.md) §6.3）で 1 局あたりの容量（≒ 80KB）が問題になり、
+> 文字列 3 本とその索引をやめた（目標 ≒ 36KB/局）。(1) は**照合で消えた**。(2) は応答で文字列を
+> 組み立てるので保たれる。(3) は失った（DB を直接見ても局面は読めない）。(4) は FNV-1a 64 を自前で書いた。
 
 ### 5.2 距離 — 盤の不一致 + 持ち駒の差
 
@@ -299,20 +318,20 @@ dist = Σ(81 マス)[ 駒種・側が不一致 ]
 
 | 種類 | 実装 |
 |---|---|
-| **完全一致**（両側） | `sfen` の index seek |
-| **完全一致**（片側） | `senteSfen` / `goteSfen` の index seek。どちらを引くかは `subjectSide` で決める（§3.3。NULL は除外） |
+| **完全一致**（両側） | `sfenHash` の index seek + `board` / `hands` / `sideToMove` の照合（SQL） |
+| **完全一致**（片側） | `senteSfenHash` / `goteSfenHash` の index seek + 片側の配置の照合（アプリ側）。どちらを引くかは `subjectSide` で決める（§3.3。NULL は除外） |
 | **近い局面** | 手数帯で粗く絞り、読み出した行に対してアプリ側で距離を計算（§5.2）。**別エンドポイント**にして、押されたときだけ走らせる——完全一致は index seek で済むが、こちらは手数帯ぶんの行を読むので桁違いに重い |
 | **枝の列挙** | 同じ `kifuId` の `moveNumber + 1` を self join し、**次の局面が持つ `move`** で集計 |
 
 近さ検索は**手番を問わず候補に入れ**、結果に手番を表示する。
 
 ```sql
--- この局面の次の手と、その出現数
-SELECT n.move, n.sfen, count(*) AS games
+-- この局面の次の手と、その出現数（次の局面の SFEN は n.board / n.hands / n.sideToMove から組み立てる）
+SELECT n.move, n.board, n.hands, n.sideToMove, count(*) AS games
 FROM kifu_positions p
 JOIN kifu_positions n ON n.kifuId = p.kifuId AND n.moveNumber = p.moveNumber + 1
-WHERE p.sfen = ?
-GROUP BY n.move, n.sfen
+WHERE p.sfenHash = ? AND p.board = ? AND p.hands = ? AND p.sideToMove = ?
+GROUP BY n.move, n.board, n.hands, n.sideToMove
 ORDER BY games DESC
 ```
 

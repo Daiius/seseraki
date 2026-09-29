@@ -7,6 +7,7 @@ import {
   positionDistance,
   positionKey,
   positionSfen,
+  sideLayoutKey,
   sideSfen,
   stateFromBytes,
 } from './position';
@@ -235,5 +236,19 @@ describe('positionDiff（距離の内訳）', () => {
     const a = positionKey(createInitialState());
     const b = keyAfter(['7g7f', '3c3d']);
     expect(81 - positionDiff(a, b).board).toBe(77);
+  });
+});
+
+describe('sideLayoutKey（片側の配置の比較キー）', () => {
+  it('🔴 先後をまたいで同じ形なら同じキーになる（大小文字を落とす）', () => {
+    const initial = createInitialState();
+    expect(sideLayoutKey(initial, 'sente')).toBe(sideLayoutKey(initial, 'gote'));
+    // sideSfen のままでは大小文字が違うので一致しない（照合順序が担っていた部分）
+    expect(sideSfen(initial, 'sente')).not.toBe(sideSfen(initial, 'gote'));
+  });
+
+  it('配置が違えば別のキーになる', () => {
+    const [initial, after] = buildPositions(['7g7f']);
+    expect(sideLayoutKey(initial, 'sente')).not.toBe(sideLayoutKey(after, 'sente'));
   });
 });

@@ -1,59 +1,343 @@
 # 07. 認証とプライバシー
 
-本アプリは**個人用・シングルユーザー**である。認証は「自分以外に触られないため」の最小限であり、
-**ユーザーごとの資格情報・セッションへの userId 紐づけ・所有者スコープは持たない**。
+人のログインは **Google ログインのみ**（実装は Better Auth）。**パスワードは持たない。**
+worker・動画解析の取り込みは **API_KEY** の別系統で、人のログインとは交わらない。
 
-> ⚠ **「自分」がデータとして存在しないわけではない**（[11](./11-users.md)）。`users` / `userAliases` に
-> 名前候補を持ち、`kifus.ownerId` で所有者を記録する——**認証が単一アカウントのまま**であることと、
-> データに所有者の概念があることは別。招待を実際に動かすには本章の前提を書き換える必要がある。
+> **設計確定・未実装**（2026-09-29）。一般公開の全体設計は [14](./14-multi-user.md)、ユーザーのデータ
+> （`users` / `user_aliases` / `ownerId`）は [11](./11-users.md)。決定の経緯は
+> [決定ログ](./_grilling/decisions.md)「Google ログイン（Better Auth）の設計」。
+> 未決は §9。
 >
-> **一般公開に向けた設計**（Google 認証・失効できるサーバ側セッション・所有者スコープ）は [14](./14-multi-user.md)。
+> **現状（移行前）** は ID/パスワードの単一アカウント（§8）。**Google ログインへの切り替えと同時に削除する。**
 
 ---
 
-## 1. Web の認証（cookie セッション）
+## 1. 方針
 
-- ログインフォーム（`/login`）→ `POST /api/auth/login` → **署名付き cookie**（`seseraki_session`）を発行。
-- 認証情報は `AUTH_USERNAME` + `AUTH_PASSWORD`（平文。他の API_KEY / DB 資格情報と同様、`.env.server` を
-  秘密として運用）。照合は `crypto.timingSafeEqual` で**定数時間比較**。
-- cookie は **HMAC 署名 + 発行時刻埋め込みで stateless**。**30 日固定有効期限**（スライディングなし）。
-  署名鍵は `SESSION_SECRET`。
-- cookie 属性: `HttpOnly; SameSite=Lax`、本番は `Secure`、**`Path=/` 固定**（`COOKIE_SECURE` / `COOKIE_PATH`
-  env で切替）。現在の配信契約（web は origin 直下、API は origin 直下の `/api`）では `/` 以外にすると web か
-  `/api` の一方に cookie が届かずログイン直後から 401 になる。サブパス配信を正式支援するには、web と API を
-  同一プレフィックス下（例 `/seseraki` と `/seseraki/api`）へ置く URL・proxy 契約と client base URL の対応が
-  別途必要（現状は未対応）。
+- 🔒 **パスワードを持たない。** 漏洩・再利用・リセット導線の責任を持たないため。第一は Google
+- **認可コードフロー + PKCE の、リダイレクト型**（Better Auth の既定）。ポップアップ型（`window.opener` に依存）は
+  ブラウザ解析の COOP と衝突する（[14](./14-multi-user.md) §5.5）。コールバックは `/api/auth/callback/google`
+- 🔒 **本人の同定は Google の `sub`**（`account.accountId`）。**メールアドレスでは同定しない**（メールは変わりうる）
+- 🔒 **アカウント連携は無効**（`account.accountLinking.enabled: false`）。同じメールでの自動連携は乗っ取りの経路になりやすい
+- 🔒 **サーバ側セッションで、いつでも失効できる。** 今の署名 cookie は userId も失効手段も持たない（§8）
+- 🔒 **Better Auth の表は `schema.ts` に手書きする**（§3）。CLI の生成は drizzle 1.0 の relations v2 に追いついていない
+- **worker の API_KEY 認証は変えない**（§5）
 
-### 認証 API
+## 2. 構成
 
-| Method | Path | 説明 |
+### 2.1 server への組み込み
+
+- `/api/auth/*` を Better Auth のハンドラへ渡す（Hono 公式の統合。`app` は `basePath('/api')` なので
+  `app.on(['POST', 'GET'], '/auth/*', (c) => auth.handler(c.req.raw))`）。**Hono RPC の型とは干渉しない**
+- セッションの確認は `auth.api.getSession({ headers: c.req.raw.headers })`。`sessionRequired` をこれで作り直す（§5）
+- 🔴 **Better Auth には既存の `db`（`packages/server/src/db/index.ts`）を渡す。** 別の接続を作らせない——
+  接続のセッションを UTC に固定しているのはこの `db` だけで、別接続では `expiresAt` などが**黙って 9h ずれる**
+  （[03](./03-data-model.md) §1.1）。アダプタは `drizzleAdapter(db, { provider: 'mysql', schema })`
+- ⚠ **`drizzleAdapter` が drizzle 1.0（relations v2）で動くかは実装時に確かめる**（CLI は追いついていない。§3）
+
+### 2.2 主な設定
+
+| 設定 | 値 | 理由 |
 |---|---|---|
-| GET | `/api/auth/me` | ログイン状態確認。未ログインは 401 |
-| POST | `/api/auth/login` | body: `{ username, password }`。成功で署名付き cookie 発行 |
-| POST | `/api/auth/logout` | cookie を破棄 |
+| `socialProviders.google` | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 第一のログイン手段 |
+| `account.accountLinking.enabled` | `false` | §1 |
+| `emailAndPassword.enabled` | **`NODE_ENV === 'development'` のときだけ `true`** | dev の抜け道の土台（§6） |
+| `session.cookieCache.enabled` | `false`（明示） | 🔒 cookie cache を使うと、**失効してもキャッシュの期限まで通ってしまう** |
+| `session.expiresIn` / `updateAge` | 30 日 / 1 日（仮置き） | 今の 30 日を踏襲し、使っている間は延びる |
+| `user.additionalFields.displayName` | `input: false` | 表示名（§3.1）。登録時の入力から書かせない |
+| `advanced.database.generateId` | UUID（36 文字） | ID を `varchar(36)` に揃え、大文字小文字の混ざらない形にする（§3.2） |
+| `advanced.cookiePrefix` | `seseraki` | 他のアプリの cookie と取り違えない |
+| `trustedOrigins` | `BETTER_AUTH_URL`（+ `CORS_ORIGINS`） | リダイレクト先・`Origin` の検査 |
 
-- `/login` 以外は web の `__root.tsx` の `beforeLoad` で `/api/auth/me` を叩いてガードし、未ログインなら
-  `/login?redirect=<元の URL>` へリダイレクト（[05](./05-analysis.md)）。
+### 2.3 cookie
 
-## 2. ルート保護
+- **同一オリジンの `/api` 配下でしか使わない。** web は cookie を読まない（`HttpOnly`）。API（`/api/*`）へ届けば足りるので、
+  `Path=/api` に絞る（`advanced.defaultCookieAttributes`）。OAuth の state / PKCE の cookie もコールバック
+  （`/api/auth/callback/google`）で読まれるので同じ path でよい
+  - ⚠ 移行前の注意（§8）はそのまま生きる: **web と API の配置を変える（サブパス配信など）ときは cookie の path も
+    合わせる。** 合わないと、ログイン直後から 401 になる
+  - ⚠ **絞った path でサインアウト時の cookie 削除が効くか**は実装時に確かめる（`/` 既定のままでも動作はする）
+- `Secure` は `BETTER_AUTH_URL` が https なら自動で付く（移行前の `COOKIE_SECURE` は不要になる）
+- `SameSite=Lax`（Better Auth の既定）。Google からのリダイレクト（トップレベルの GET）で state の cookie が届く
+
+## 3. 表（`schema.ts` に手書き）
+
+Better Auth の `user` / `session` / `account` / `verification` を持つ。**ID はすべて `varchar(36)`。**
+列名はこのリポジトリの流儀（camelCase）に合わせる（アダプタは schema のキーで対応付けるので、物理名は自由）。
+
+```
+users（Better Auth の user。modelName: 'users'）
+├── id: varchar(36) PK           -- 既存の所有者は "1"（§4）。新規は UUID
+├── name: varchar(255)           -- Google の表示名（Better Auth が書く）
+├── email: varchar(255) UNIQUE   -- Google のメール。同定には使わない（§1）
+├── emailVerified: boolean
+├── image: text?
+├── displayName: varchar(100)    -- 画面に出す名前（独自列・additionalFields）。Google の name とは別
+├── deletionRequestedAt: timestamp?  -- 退会の予約（§7。後の段階）
+├── createdAt / updatedAt
+
+session
+├── id: varchar(36) PK
+├── token: varchar(255) UNIQUE   -- 🔴 COLLATE utf8mb4_bin（§3.3）
+├── userId: varchar(36) FK → users.id (CASCADE)
+├── expiresAt: timestamp
+├── ipAddress: text? / userAgent: text?
+├── createdAt / updatedAt
+
+account
+├── id: varchar(36) PK
+├── userId: varchar(36) FK → users.id (CASCADE)
+├── providerId: varchar          -- 'google'（dev では 'credential' もある）
+├── accountId: varchar           -- Google の sub（本人の同定。§1）
+├── accessToken / refreshToken / idToken: text?
+├── accessTokenExpiresAt / refreshTokenExpiresAt: timestamp?
+├── scope: text? / password: text?（dev の email+password のみ）
+├── createdAt / updatedAt
+UNIQUE (providerId, accountId)
+
+verification                     -- OAuth の state など、短命の値
+├── id: varchar(36) PK
+├── identifier: varchar(255) INDEX
+├── value: text
+├── expiresAt: timestamp
+├── createdAt / updatedAt
+```
+
+### 3.1 既存の `users` を作り替える
+
+🔒 **既存の `users` 表を Better Auth の user 表にする**（別の表を足して 1:1 で結ばない）。
+**物理名は `users` のまま**（`user.modelName: 'users'`）にする——表の名前を変えると FK・コードの参照が
+すべて動き、drizzle-kit の生成も改名を対話で尋ねてくる。変わるのは列と ID の型だけ。
+
+- 🔒 **既存の行の ID は文字列 `"1"` として残す。** 参照する列（`kifus.ownerId`・`user_aliases.userId`）も
+  `varchar(36)` に変えるが、**値は `"1"` のまま書き換えない**。棋譜・出題・名前候補はそのまま引き継がれる
+  （[11](./11-users.md) §3 で `ownerId` を先に入れておいた理由）
+- 🔒 **`displayName` は独自列として残し、Google の `name` と分けて持つ。** `name` は Google が決める値で、
+  ログインのたびに上書きされうる。画面に出す名前は利用者が `/settings` で決める（[11](./11-users.md) §6.3）
+- ⚠ **`"1"` の行にも `name` / `email`（NOT NULL・UNIQUE）が要る。** マイグレーションで
+  `name = displayName`、`email` は**予約済みドメインのプレースホルダ**（例: `owner-1@example.invalid`）で埋める。
+  🔴 **所有者の本物の Gmail アドレスを先に入れてはいけない**——Better Auth は `sub` で見つからないとき
+  メールで user を探し、見つかると**連携が無効なので初回ログインを拒否する**。移行（§4）が始められなくなる
+
+### 3.2 マイグレーション
+
+型の変更とデータ投入が絡むので、**生成した SQL を土台に手で書く**（[11](./11-users.md) §6.1 と同じ扱い）。順序:
+
+1. `user_aliases` と `kifus` から `users` への FK を外す
+2. `users.id` を `varchar(36)` に（`bigint` の `1` は `'1'` になる。AUTO_INCREMENT も外れる）
+3. `user_aliases.userId`・`kifus.ownerId` を `varchar(36)` に（値は `'1'` のまま）
+4. `users` に `name` / `email` / `emailVerified` / `image` を足し、`"1"` の行を埋めてから NOT NULL・UNIQUE にする
+5. FK を張り直す（`user_aliases` は CASCADE・**`kifus.ownerId` は CASCADE にしない**。[14](./14-multi-user.md) §3.1）
+6. `session` / `account` / `verification` を作る
+
+- 🔴 **FK の文字列列は、参照先と文字セット・照合順序を揃える。** 揃っていないと FK の作成で落ちる。
+  ID は UUID（小文字の 16 進）で生成するので、ID 列は既定の照合順序でよい
+- 🔴 **`session` / `account` の FK から `ON DELETE CASCADE` が落ちる。** drizzle-kit は rc.3 でも
+  新規テーブルの FK の CASCADE を生成しない（AGENTS.md）。**生成した SQL を手で直し、適用後に
+  `show create table` で確かめる。** 落ちたままだと、ユーザーを消すときに FK で止まる
+- ⚠ **データ投入（`"1"` の行を埋める）はマイグレーションの 2 つ目の例外**になる（1 つ目は [11](./11-users.md) §6.1）。
+  理由は同じで、`NOT NULL`・`UNIQUE` の成立にデータが要る
+
+### 3.3 照合順序
+
+🔴 **`session.token` は `utf8mb4_bin`（大文字小文字を区別する）にする。** MySQL の既定
+（`utf8mb4_0900_ai_ci`）では、**大文字小文字だけが違う token が同じ値として照合される**。
+drizzle は照合順序を扱えないので、**マイグレーション SQL に手で書く**（`user_aliases.name` と同じ）。
+⚠ **`db:push` で作り直すと既定に戻る。** dev で作り直したときは確かめる。
+
+## 4. 既存アカウント（所有者）の移行
+
+所有者が初めて Google でログインすると、Better Auth は**新しい user（ID = X）と account（sub → X）を作る**
+（`"1"` の行にはまだ account が無いので、`sub` で見つからない）。これを `"1"` に付け替える。
+
+1. 切り替えをデプロイする（マイグレーション → server。旧ログインはこの時点で消える。§8）
+2. 所有者が Google でログインする。X が作られるが、**所有者ゲート（§5.1）で何も見えない**
+3. 付け替える（下の SQL）
+4. もう一度ログインする。`sub` → `"1"` で入れる
+
+```sql
+-- @provider は本番 'google'（dev の練習では 'credential'。§6.3）
+SET @provider := 'google';
+
+-- 0. 確認: 付け替える account がちょうど 1 行で、"1" にはまだその provider の account が無いこと
+SELECT a.userId, u.email, u.name FROM account a JOIN users u ON u.id = a.userId
+ WHERE a.providerId = @provider AND a.userId <> '1';                        -- 1 行・所有者のメールであること
+SELECT COUNT(*) FROM account WHERE providerId = @provider AND userId = '1';  -- 0 であること
+
+START TRANSACTION;
+SELECT userId INTO @x FROM account WHERE providerId = @provider AND userId <> '1';
+SELECT name, email, emailVerified, image INTO @name, @email, @verified, @image FROM users WHERE id = @x;
+-- 1. account を "1" に付け替える
+UPDATE account SET userId = '1' WHERE providerId = @provider AND userId = @x;
+-- 2. X を消す（session は CASCADE で消える。account は付け替え済みなので残る）
+DELETE FROM users WHERE id = @x;
+-- 3. Google の値を "1" に写す（email は UNIQUE なので X を消した後）。displayName は触らない
+UPDATE users SET name = @name, email = @email, emailVerified = @verified, image = @image WHERE id = '1';
+COMMIT;
+```
+
+- 🔒 **利用者が所有者 1 人のうちに切り替える。** 失敗しても DB を直接触って戻せる（`"1"` の行と
+  棋譜は一切動かさない手順なので、最悪でも account を消してやり直せば済む）
+- ⚠ 手順 0 で**メールが所有者のものか必ず目で確かめる。** 他人が先にログインしていた場合（§9.1）、
+  その X を付け替えると**他人に全データを渡す**
+- 本番でどう流すか（イメージ同梱のエントリか手で流すか）は §9.2
+
+## 5. ルート保護
 
 | 系統 | 対象 | 認証 |
 |---|---|---|
-| セッション | 棋譜 CRUD 系エンドポイント | `sessionRequired`（web のログイン cookie） |
-| （無効） | `/api/swars/*`（一括取り込み系） | **常時 404**。認証前に遮断（無効化・[04](./04-ingestion.md) §4） |
-| API_KEY | `/api/worker/*` | `Authorization: Bearer <API_KEY>`（別系統） |
+| Better Auth | `/api/auth/*`（サインイン・コールバック・サインアウト・セッション取得） | Better Auth 自身 |
+| セッション | 棋譜・出題・設定など web 向けのエンドポイント | `sessionRequired`（Better Auth のセッション + 所有者ゲート。§5.1） |
+| （無効） | `/api/swars/*`（一括取り込み系） | **常時 404**。認証前に遮断（[04](./04-ingestion.md) §4。[14](./14-multi-user.md) §4.3 で撤去） |
+| API_KEY | `/api/worker/*`・動画解析の取り込み（`POST /video-analysis/kifus`） | `Authorization: Bearer <API_KEY>`（別系統・変更なし） |
+| dev のみ | `/api/dev/login` | `NODE_ENV=development` のときだけ登録（§6） |
 
 - **worker 認証はユーザー認証と別系統**。worker は inbound の口を持たず、API_KEY で server を polling する
-  （[02](./02-architecture.md) / [05](./05-analysis.md)）。
+  （[02](./02-architecture.md) / [05](./05-analysis.md)）。API_KEY 経路で作られる行の所有者は**所有者（`"1"`）固定**
+  （worker・動画解析とも所有者専用。[14](./14-multi-user.md) §4・§5.1）
+- `currentUserId()`（今は `users` の先頭行）は、**セッションの userId**（web）/ 所有者の定数（API_KEY 経路）に置き換える。
+  `ownerId` を受け渡す関数の型は `number` → `string`
 - 全リクエストに `hono/logger` でアクセスログを出力。**web と API は同一オリジン配信なので通常 CORS は不要**
   （`CORS_ORIGINS` 未設定なら CORS ミドルウェア自体が無効）。別オリジンの web から叩く特殊構成のときだけ
-  `CORS_ORIGINS`（カンマ区切り）を設定する（`credentials: true`）。
+  `CORS_ORIGINS`（カンマ区切り）を設定する（`credentials: true`。`trustedOrigins` にも足す）
 
-## 3. プライバシーと公開配置の前提
+### 5.1 所有者ゲート（所有者スコープが入るまで）
 
-- **シングルユーザー・private データのみ**。自分の棋譜を自分だけが見る。認証のマルチユーザー化は未対応
-  （データ側の所有者は [11](./11-users.md)）。
+🔴 **所有者スコープ（[14](./14-multi-user.md) §4）が入るまで、他人がログインできると全データが見える。**
+今のクエリは所有者で絞っていない（絞っているのは出題系だけ）ので、「セッションがあること」だけを見て通すと、
+**ログインできた人は誰でも所有者の棋譜を読み書き・削除できる**。
+
+- 🔒 **`sessionRequired` は「セッションがあり、かつ userId が所有者（`"1"`）」のときだけ通す。**
+  それ以外のセッションは **403**（未ログインは 401）
+- 新規登録を閉じる（§9.1）のとは**別に、必ず入れる。** 登録を閉じる仕組みが漏れても（設定の取り違え・
+  移行中の窓）、ゲートがあればデータは見えない。**移行手順（§4）の 2 で X が何も見えないのもこのゲートのおかげ**
+- 🔒 **所有者スコープ（段階 2）を入れたら、このゲートを外す**——外す前に全エンドポイントのスコープを検査する
+  （[14](./14-multi-user.md) §4 のテスト）
+
+### 5.2 web
+
+- `/login` は **「Google でログイン」ボタンだけ**。押すと `POST /api/auth/sign-in/social`（`provider: 'google'`,
+  `callbackURL`: 元の URL）→ 返った URL へ遷移 → Google → `/api/auth/callback/google` → `callbackURL` へ戻る
+  （`callbackURL` は `trustedOrigins` で検査される）
+- `__root.tsx` の `beforeLoad` のガードは、移行前の `/api/auth/me` をやめて **`GET /api/me`**（`/api/auth/*` の外。
+  401 / 403 / `{ userId }`）を叩く。401 は `/login?redirect=<元の URL>`、403 は「このアカウントでは利用できません」と
+  ログアウトを出す
+  - `/api/auth/*` は Better Auth のハンドラが丸ごと受けるので、**アプリの API をその下に置かない**
+- ログアウトは `POST /api/auth/sign-out`（**セッションの行が消える**＝その場で失効する）
+- dev のときだけ「dev ログイン」ボタンを出す（`import.meta.env.DEV`。§6）
+
+## 6. 開発環境
+
+- 🔒 **`NODE_ENV=development` のときだけ** email+password と **dev ログインの抜け道**（`POST /api/dev/login`）を有効にする。
+  **それ以外（production・未設定・test）では登録すらしない**（fail-closed）。明示の allowlist にするのは、
+  `NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため
+- ⚠ **dev compose の server に `NODE_ENV=development` を足す必要がある**（今は付いていない）
+- 目的は **Playwright の E2E を Google なしで通す**こと。本物の Google ログインも、localhost・リモート dev の
+  オリジンを OAuth クライアントのリダイレクト先に登録すれば dev で試せる
+- 秘密のフォールバック（`BETTER_AUTH_SECRET` 未設定時の固定値）も development だけ。それ以外は起動を失敗させる
+
+### 6.1 dev ログインの抜け道
+
+参考実装と同じ方式: 固定の dev ユーザーで `signUpEmail`（既にあれば握りつぶす）→ `signInEmail` して、
+**Better Auth の本物のセッション cookie** を返す。以後の経路（`sessionRequired`・失効）は本番と同じものを通る。
+
+- 🔴 **dev ユーザーも所有者ゲート（§5.1）に掛かる。** 付け替えなければ何も見えない。
+  **初回の dev ログインで、移行手順（§4）と同じ付け替えを `provider = 'credential'` で行う**
+  （`"1"` にまだ credential の account が無いときだけ）。E2E が所有者として動き、
+  **移行手順のコードが dev のたびに通る**（本番で一度しか流さない手順を、一度きりにしない）
+- 付け替え後は、**`"1"` の現在のメール**と固定のパスワードで `signInEmail` する（`"1"` に credential の account が
+  あれば作成を試みない）。固定の dev メールで引くと、§6.3 の練習で `"1"` のメールが Google のものに
+  書き換わった後に**別の dev ユーザーが作られ、所有者でなくなる**
+
+### 6.2 dev の Google ログイン
+
+`BETTER_AUTH_URL` を**ブラウザから見えるオリジン**（dev は Vite の origin。`/api` は Vite の proxy が server へ渡す）にし、
+そのオリジンの `/api/auth/callback/google` を OAuth クライアントに登録する。`GOOGLE_CLIENT_ID` / `SECRET` が
+無い dev では Google を登録しない（dev ログインだけで動く）。
+
+### 6.3 移行手順の練習
+
+dev ログインで付け替え済みの `"1"` に、**Google で初めてログインすると X が作られる**（`"1"` には google の
+account が無いので）。これで §4 の手順を `@provider = 'google'` のまま dev DB で練習できる（`"1"` には credential と google の
+account が並び、どちらでも入れる）。Google のクライアントが無いときは、DB を作り直した直後に
+dev ユーザーで `signUpEmail` だけ行い、`@provider = 'credential'` で練習する（dev ログインの自動の付け替えが行う処理を手で踏む）。
+
+## 7. 退会（後の段階）
+
+[14](./14-multi-user.md) §3.1 のとおり**猶予期間の後に削除**する。今回は設計だけで、実装は後の段階。
+
+- 🔒 **Better Auth の `deleteUser` は使わない**（即時削除で、猶予を置けない）。既定で無効のままにし、
+  有効にする場合も `user.deleteUser.beforeDelete` で**必ず止める**
+- 退会は自前の API で `users.deletionRequestedAt` を立て、**その人のセッションをすべて消す**
+- 猶予期間中にログインしたら `deletionRequestedAt` を戻す（`databaseHooks.session.create` で見る）
+- 期限を過ぎた行は**バッチが明示的に消す**（棋譜ほか → `users`。session / account は CASCADE）。
+  🔒 **`kifus.ownerId` の FK は CASCADE にしない**——ユーザー行を 1 度誤って消しただけで全データが道連れになる
+
+## 8. 移行前（ID/パスワード）と撤去
+
+移行前は**単一アカウント**: `/login` のフォーム → `POST /api/auth/login` → HMAC 署名 + 発行時刻の stateless cookie
+（`seseraki_session`・30 日固定）。認証情報は環境変数 `AUTH_USERNAME` / `AUTH_PASSWORD`、署名鍵は `SESSION_SECRET`。
+cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/api` という配信契約。サブパス配信は未対応）。
+
+- 🔒 **Google ログインへの切り替えと同時に削除する**（コード・環境変数・`/api/auth/login`・`/api/auth/me`・
+  `/api/auth/logout`・ログインフォーム）。併存させない——**パスワードの経路が 1 本でも残ると「パスワードを持たない」が
+  成り立たない**。利用者が所有者 1 人のうちに切り替えるので、失敗しても DB を直接触って戻せる（§4）
+- 撤去する環境変数: `AUTH_USERNAME` / `AUTH_PASSWORD` / `SESSION_SECRET` / `COOKIE_SECURE` / `COOKIE_PATH`
+- 古い `seseraki_session` cookie は読まれなくなるだけで、期限で消える
+
+### 環境変数（切り替え後）
+
+| 変数 | 必須 | 内容 |
+|---|---|---|
+| `BETTER_AUTH_SECRET` | development 以外は必須（無ければ起動失敗） | セッション等の署名鍵 |
+| `BETTER_AUTH_URL` | development 以外は必須 | ブラウザから見えるオリジン（`/api` は付けない。Better Auth が `/api/auth` を足す） |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | development 以外は必須 | Google の OAuth クライアント |
+| `NODE_ENV` | — | `development` のときだけ dev の抜け道を開く（§6） |
+| `API_KEY` | 必須（変更なし） | worker・動画解析の取り込み |
+
+値・ドメイン・OAuth クライアントの具体は**公開リポに置かない**（§10）。
+
+## 9. 未決
+
+### 9.1 新規登録の閉じ方
+
+所有者スコープが入るまで、**所有者以外は何もできない**（§5.1 のゲートで確定）。そのうえで、
+**他人の Google ログインで user を作らせるか**が未決。
+
+| 案 | 挙動 | 評価 |
+|---|---|---|
+| A. 作らせる（ゲートだけ） | 他人もログインでき、403 を見る | 仕組みは最小。ただし**目的の無い他人のメール・名前を溜め込む**（規約・プライバシーポリシーの前）。一般公開のときに「同意していない既存ユーザー」が残る |
+| **B. 作らせない（提案）** | `databaseHooks.user.create.before` で新規作成を拒否する | 他人の行が生まれない。**ただし移行（§4）の 2 で X を 1 度だけ作る必要がある** |
+
+**提案は B**。移行の窓は `AUTH_ALLOW_SIGNUP=true` の間だけ作成を許す形で開ける
+（切り替えのデプロイで立てて、§4 が済んだら外して再起動）。窓の間に他人が入り込んでも、ゲートで何も見えず、
+§4 の手順 0 で見分けて消せる。development は常に許す（dev ログインが作るため）。
+
+- 別案: 「google の account が 1 行も無い間だけ作成を許す」なら環境変数も再起動も要らないが、
+  窓を閉じる条件が暗黙的で、他人が先に入ると所有者が入れなくなる（手で消せば戻る）。明示の方を推す
+- 一般公開（[14](./14-multi-user.md) §10 の段階 5）で B の拒否を外す
+
+### 9.2 移行手順の流し方
+
+**提案: イメージ同梱のエントリ `/app/link-owner-account.js` にする**（AGENTS.md の同梱エントリと同じ形。
+既定 dry-run・`LINK_OWNER_APPLY=1` で実書込・`--provider` で provider を指定）。
+
+- 手順 0 の確認（1 行であること・`"1"` に未連携であること）を**コードで強制でき、メールを表示して止まる**
+- **dev ログイン（§6.1）の付け替えと同じ関数**を使えるので、本番で流すコードが dev で毎回通る
+- `baseline.js` を同梱しない理由（中身を確かめずに記録する）は当てはまらない——こちらは確かめてから書く
+- 手で SQL を流す場合は §4 の SQL がそのまま手順になる。接続先の取り違え（`:dev` が tunnel 越しに本番を指す等）に注意
+
+### 9.3 その他
+
+- セッションの期間（30 日・`updateAge` 1 日は仮置き）
+- `Path=/api` で Better Auth のすべての cookie（state / PKCE を含む）が期待どおりに動くか（§2.3）
+- `drizzleAdapter` と drizzle 1.0（relations v2）の相性（§2.1）
+
+## 10. プライバシーと公開配置の前提
+
+- 所有者スコープが入るまでは**所有者の private データのみ**（§5.1）。一般公開の方針は [14](./14-multi-user.md)
 - 公開配置の前提: HTTPS / シークレット管理（`.env*` はコミットしない）/ 同一オリジン配信（`/api` を
-  書き換えず server へ転送）。同一オリジンのため CORS は原則不要。
-- **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
-  PRD は姿勢のみ記述し、具体はローカルの `.claude-personal/` に置く（[02](./02-architecture.md) §5 / [README](./README.md)）。
+  書き換えず server へ転送）。同一オリジンのため CORS は原則不要
+- Google から受け取るのは `sub`・メール・名前・画像だけ（既定のスコープ）。**`sub` 以外は同定に使わない**
+- **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット・OAuth クライアント）は公開リポに含めない。**
+  PRD は姿勢のみ記述し、具体はローカルの `.claude-personal/` に置く（[02](./02-architecture.md) §5 / [README](./README.md)）

@@ -1650,3 +1650,40 @@ PR #122 のレビューで、採点の契約に 2 つの穴が見つかった。
 - 既定として決めた: エンジン・評価関数は VPS の静的配信（内容ハッシュ名・長期キャッシュ・brotli・前段でキャッシュ）。
 
 **帰結**: [14](../14-multi-user.md) を確定版に書き直した。
+
+### Google ログイン（Better Auth）の設計（2026-09-29・「複数ユーザーへの開放」の続き）
+
+**きっかけ**: [14](../14-multi-user.md) §3 に残した「Better Auth と既存 `users`（数値 ID）の擦り合わせ」を詰め、
+段階 1（認証と既存アカウントの移行）の設計を確定する。
+
+- **決定: Better Auth の表（`user` / `session` / `account` / `verification`・ID は `varchar(36)`）を `schema.ts` に手書きする。**
+  CLI の生成に頼らない——drizzle 1.0（rc.3）の relations v2 に CLI が追いついていない。
+  - 事実: drizzle-kit は rc.3 でも新規テーブルの FK から `ON DELETE CASCADE` を落とす（#150 で確認）。
+    session / account の FK は生成 SQL を手で直す。`session.token` は `utf8mb4_bin` を手書きする（既定の照合順序は大文字小文字を区別しない）。
+- **決定: 既存の `users` を Better Auth の user 表に作り替え、既存の行の ID は文字列 `"1"` として残す。**
+  参照する列（`kifus.ownerId`・`user_aliases.userId`）も `varchar(36)` に変えるが、値は `"1"` のまま書き換えない。
+  - 理由: 別表を足して 1:1 で結ぶと、「自分」を指す ID が 2 種類になり、所有者スコープのクエリがどちらを見るかで迷う。
+    値を変えなければ、棋譜・出題・名前候補の付け替えが要らない。
+  - `displayName` は独自列（`additionalFields`）として残す。Google の `name` はログインのたびに書かれうるので、表示名と兼ねない。
+  - 物理名は `users` のまま（`modelName`）。改名すると FK とコードの参照がすべて動く。
+- **決定: 既存アカウントの移行は「初回の Google ログインで作られた X の account を `"1"` に付け替え、Google の値を写し、X を消す」**（3 行程度の SQL）。
+  - Better Auth は `sub` で見つからないと新しい user を作る。事前に `"1"` へ本物のメールを入れると、
+    メールで見つかった user に連携しようとして（連携無効なので）拒否される——**プレースホルダのメールにしておく**。
+  - dev では dev ログインで作ったユーザー（provider `credential`）で同じ手順を踏めるようにする。
+- **決定: 旧ログイン（`AUTH_USERNAME` / `AUTH_PASSWORD`・`SESSION_SECRET` の署名 cookie）は切り替えと同時に削除する。**
+  併存させるとパスワードの経路が残る。利用者が所有者 1 人のうちに切り替えるので、失敗しても DB を直接触って戻せる。
+- **決定: `NODE_ENV=development` のときだけ email+password と dev ログインの抜け道（`/api/dev/login`）を有効にする。**
+  それ以外（production・未設定・test）では登録すらしない（fail-closed）。Playwright の E2E を Google なしで通すため。
+  本物の Google ログインも、dev のオリジンを OAuth クライアントに登録すれば試せる。
+  - 参考実装（別リポジトリ）と同じ方式。明示の allowlist にするのは、`NODE_ENV` を付け忘れた本番で抜け道が開かないようにするため。
+- **決定: 所有者スコープが入るまで、新規登録は閉じる方向。**
+  🔴 今のクエリは所有者で絞っていない（出題系だけ）ので、**他人がログインできると全データが見える**。
+  - 設計として、**所有者（`"1"`）以外のセッションを通さない「所有者ゲート」を必ず入れる**（登録を閉じる仕組みが漏れても効く）。
+  - そのうえで他人の user を作らせないかは未決。提案は「作らせない（`databaseHooks.user.create.before` で拒否し、
+    移行の間だけ環境変数で開ける）」——作らせると目的の無い他人のメール・名前を溜め込み、公開時に同意の無い既存ユーザーが残る。
+- 既定として決めた: cookie cache は使わない（失効が遅れる）。cookie は同一オリジンの `/api` 配下。worker の API_KEY は変えない。
+  退会は Better Auth の `deleteUser`（即時削除）を使わず、`deletionRequestedAt` とバッチで作る（後の段階）。
+- 未決: 新規登録の閉じ方、移行手順の流し方（提案はイメージ同梱のエントリ・既定 dry-run）。
+
+**帰結**: [07](../07-auth-and-privacy.md) を Google ログインを正とする内容に書き直した。
+[11](../11-users.md) §2・§3・[03](../03-data-model.md) §1 の型の記述と、[14](../14-multi-user.md) §3・§10 を合わせた。

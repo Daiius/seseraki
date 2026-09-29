@@ -37,6 +37,9 @@ services:
   #       condition: service_healthy
 
   server:
+    # 🔒 dev のイメージには -dev を付ける。本番 worker はローカルビルドの `seseraki-worker:latest` を
+    # 参照しているため、compose の既定名（<project>-<service>）のままだと dev のビルドが本番のタグを上書きする
+    image: seseraki-server-dev
     build:
       context: .
       dockerfile: Dockerfile.dev
@@ -78,6 +81,7 @@ services:
           path: pnpm-lock.yaml
 
   worker:
+    image: seseraki-worker-dev
     build:
       context: .
       dockerfile: packages/worker/Dockerfile
@@ -115,6 +119,7 @@ services:
           path: pnpm-lock.yaml
 
   web:
+    image: seseraki-web-dev
     build:
       context: .
       dockerfile: Dockerfile.dev

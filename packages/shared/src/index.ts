@@ -3,6 +3,7 @@
 export * from './board';
 export * from './tactics';
 export * from './position';
+export * from './position-hash';
 export * from './sfen';
 export * from './position-validation';
 export * from './position-edit';

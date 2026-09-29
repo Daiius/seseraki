@@ -5,13 +5,16 @@
  * `7g7f 3c3d 2g2f` と `2g2f 3c3d 7g7f` は同じ局面に至るので、**同じキーになる**
  * （構造は木ではなく DAG）。
  *
- * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。ハッシュ関数（node の `crypto` /
- * Web Crypto）は使えないし、使わない——**キーは SFEN 文字列そのもの**にする:
+ * 🔒 **局面索引（`kifu_positions`）は文字列そのものを保存しない**（prd/14 §6.3）。ここで作る
+ * 文字列（`positionSfen` / `sideSfen`）の 64 ビットハッシュ（`position-hash.ts`）で索引を引き、
+ * 引いた後に盤のバイト列・持ち駒・手番で照合する。文字列は URL（`/positions?pos=<sfen>`）や
+ * 応答に載せるときに、盤と持ち駒から組み立て直す。
  *
- * - **衝突しない**。ハッシュだと、別の局面が同じキーになりうる（確率は小さいが、
- *   起きたときに「検索結果に無関係な棋譜が混ざる」という気づきにくい壊れ方をする）
- * - **URL に載せられる**（`/positions?pos=<sfen>`）
- * - **人が読める**。DB を直接見たときに、それがどの局面か分かる
+ * 経緯: 以前は「衝突すると無関係な棋譜が混ざる」ことを理由にキーを文字列そのものにしていた
+ * （prd/10 §5.1）。照合でその誤ヒットを消せるので、容量を優先してハッシュに改めた。
+ *
+ * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。ハッシュも node の `crypto` / Web Crypto を
+ * 使わず純粋な演算で書いている。
  */
 import type { BoardState, PieceKind, Side, Square } from './board';
 
@@ -185,7 +188,10 @@ export function stateFromBytes(
   };
 }
 
-/** 局面索引 1 行ぶんの値（`kifuPositions`。prd/10 §3.2） */
+/**
+ * 局面索引 1 行ぶんの値の材料（`kifuPositions`。prd/10 §3.2）。
+ * ⚠ 文字列 3 本は DB にはハッシュ（`positionHash`）として入る（prd/14 §6.3）
+ */
 export interface PositionKey {
   sfen: string;
   senteSfen: string;

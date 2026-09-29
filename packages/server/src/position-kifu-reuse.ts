@@ -4,7 +4,8 @@
  * 検討の起点は閲覧中の棋譜の局面で、数手動かすまでは**解析済みの局面をなぞっているだけ**の
  * ことが多い。同じ答えを待って計算し直す理由がないので、**エンジンにジョブを積む前に**
  * `moveAnalyses` / `candidateMoves`（prd/03 §3・§4）から答えを組み立てる。
- * 正規化 SFEN → 棋譜局面は局面索引 `kifuPositions`（prd/10 §3.2）が引ける。
+ * 正規化 SFEN → 棋譜局面は局面索引 `kifuPositions`（prd/10 §3.2）が引ける
+ * （ハッシュで引いて盤・持ち駒・手番で照合する。照合は SQL 側なので上限は照合後にかかる。prd/14 §6.3）。
  *
  * 🔒 **判定はここ 1 か所に置く**（prd/12 §2.6）。web も MCP（prd/12 §4）も
  * `POST /api/positions/evaluate` を通るので、そこから呼べば双方に効く。
@@ -28,6 +29,7 @@ import { alias } from 'drizzle-orm/mysql-core';
 import { db } from './db/index.js';
 import { candidateMoves, kifuPositions, moveAnalyses } from './db/schema.js';
 import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';
+import { samePositionAsSfen } from './positions.js';
 
 type DoneOutcome = Extract<EvalOutcome, { status: 'done' }>;
 
@@ -268,7 +270,7 @@ export function positionEvalAnalysesQuery(sfen: string) {
       ),
     )
     .where(
-      and(eq(kifuPositions.sfen, sfen), isFullAnalysis(), hasCandidateRank(3)),
+      and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis(), hasCandidateRank(3)),
     )
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);
@@ -296,7 +298,7 @@ export function namedMoveAnalysesQuery(sfen: string, move: string) {
         eq(candidateMoves.move, move),
       ),
     )
-    .where(and(eq(kifuPositions.sfen, sfen), isFullAnalysis()))
+    .where(and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis()))
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);
 }
@@ -329,7 +331,7 @@ export function playedMoveAnalysesQuery(sfen: string, move: string) {
       ),
     )
     .where(
-      and(eq(kifuPositions.sfen, sfen), isFullAnalysis(), hasCandidateRank(1)),
+      and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis(), hasCandidateRank(1)),
     )
     .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
     .limit(MATCH_LIMIT);

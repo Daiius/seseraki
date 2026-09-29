@@ -227,6 +227,13 @@ docker compose run --rm --no-deps <server サービス> /app/backfill-user.js --
 > ```bash
 > docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 <server サービス> /app/rebuild-positions.js
 > ```
+>
+> 🔴 **局面索引をハッシュ化するマイグレーション（`position_hash_index`）の後も、本番で一度流す。**
+> ハッシュは SQL で計算できないので、このマイグレーションは **`kifu_positions` を空にしてから**列を差し替える
+> （索引は派生値で `usiMoves` から作り直せる。[prd/14](./prd/14-multi-user.md) §6.3）。
+> **流すまで局面検索は空**（初期局面すら 404・検討盤の棋譜解析の再利用も効かない）。
+> 🔴 **ハッシュ関数（`shared` の `position-hash.ts`）を変えたときも全件の作り直しが要る**——
+> 保存済みの値と検索時の値が食い違い、局面検索が黙って空になる。
 
 > **出題の一括生成**（`prd/13` §8）: 抽出規則や閾値（`DRILL_BLUNDER_CP` / `DRILL_MATE_MAX_PLIES`）を
 > 変えたら流す。**既定は dry-run**（種類ごとの件数を表示）、`GENERATE_DRILLS_APPLY=1` で実書込。

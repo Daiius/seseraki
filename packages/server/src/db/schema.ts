@@ -285,14 +285,22 @@ export const kifuPositions = mysqlTable(
      */
     move: varchar({ length: 8 }),
     /**
-     * 局面キー（SFEN の 盤 / 手番 / 持ち駒）。**手数は含めない**ので手順前後が合流する。
-     * ⚠ ハッシュにしない——衝突すると無関係な棋譜が検索結果に混ざり、気づきにくい。
-     * 文字列そのものなら衝突せず、URL に載せられ、人が読める（prd/10 §5.1）
+     * 局面キー（SFEN の 盤 / 手番 / 持ち駒）の **64 ビットハッシュ**（`shared` の `positionHash`）。
+     * **手数は含めない**ので手順前後が合流する。
+     *
+     * 🔒 **文字列は保存せず、ハッシュで引いてから `board` / `hands` / `sideToMove` で照合する**
+     * （prd/14 §6.3・prd/10 §5.1）。照合があるので衝突しても無関係な棋譜は混ざらない。
+     * 文字列が要るときは盤・持ち駒・手番から組み立てる（`stateFromBytes` → `positionSfen`）。
+     * ⚠ ハッシュ関数を変えたら全件の作り直し（`rebuild-positions.ts`）が要る
      */
-    sfen: varchar({ length: 200 }).notNull(),
-    /** 先手側だけの配置（盤 + 先手の持ち駒）。相手の駒は空として書く */
-    senteSfen: varchar({ length: 200 }).notNull(),
-    goteSfen: varchar({ length: 200 }).notNull(),
+    sfenHash: bytes(8).notNull(),
+    /**
+     * 先手側だけの配置（盤 + 先手の持ち駒。`sideSfen(state, 'sente')`）のハッシュ。
+     * 照合は盤・持ち駒から片側の配置を組み立て直して行う（`/positions/subject`）
+     */
+    senteSfenHash: bytes(8).notNull(),
+    /** 後手側だけの配置（盤を 180 度回して書いたもの。`sideSfen(state, 'gote')`）のハッシュ */
+    goteSfenHash: bytes(8).notNull(),
     /** 盤 81 マス（1 マス 1 バイト）。距離の計算に読む（prd/10 §5.2） */
     board: bytes(81).notNull(),
     /** 持ち駒（先手 7 種 → 後手 7 種の枚数） */
@@ -305,9 +313,9 @@ export const kifuPositions = mysqlTable(
       columns: [table.kifuId],
       foreignColumns: [kifus.id],
     }).onDelete('cascade'),
-    index('kifu_positions_sfen_idx').on(table.sfen),
-    index('kifu_positions_sente_sfen_idx').on(table.senteSfen),
-    index('kifu_positions_gote_sfen_idx').on(table.goteSfen),
+    index('kifu_positions_sfen_hash_idx').on(table.sfenHash),
+    index('kifu_positions_sente_sfen_hash_idx').on(table.senteSfenHash),
+    index('kifu_positions_gote_sfen_hash_idx').on(table.goteSfenHash),
     // 近い局面の検索は `moveNumber` の範囲で候補を粗く絞る（prd/10 §5.2）。
     // ⚠ **PK は `(kifuId, moveNumber)` なので、この範囲条件には使えない**
     //（先頭列が kifuId のため）。索引が無いと全局面を走査することになる

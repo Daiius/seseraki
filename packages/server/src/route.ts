@@ -16,6 +16,7 @@ import {
   isNull,
   lte,
   ne,
+  not,
   notExists,
   or,
   sql,
@@ -101,7 +102,14 @@ import {
   type TacticLabel,
 } from 'shared';
 import { replaceTactics } from './tactics';
-import { replacePositions } from './positions';
+import {
+  hashOf,
+  parsePositionKey,
+  replacePositions,
+  samePosition,
+  sameSideLayout,
+  sfenOfRow,
+} from './positions';
 import { drillConfigFromEnv, syncDrills } from './drills';
 import {
   DEFAULT_SCORING,
@@ -659,7 +667,12 @@ const route = app
     sessionRequired,
     zv('query', z.object({ pos: z.string().max(200).optional() })),
     async (c) => {
-      const sfen = c.req.valid('query').pos ?? INITIAL_SFEN;
+      // 🔒 **読み直して書き戻した SFEN で引く**（prd/14 §6.3）。索引はハッシュで引いて
+      // 盤・持ち駒・手番で照合するので、照合に使うバイト列も同じ局面から作る。
+      // 読めない SFEN はどの棋譜も通っていないので 404（文字列で引いていた頃と同じ）
+      const key = parsePositionKey(c.req.valid('query').pos ?? INITIAL_SFEN);
+      if (!key) return c.json({ error: 'not found' } as const, 404);
+      const sfen = key.sfen;
 
       // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
       // kifuId では畳まず、到達した手数ごとに 1 行返す。
@@ -685,7 +698,8 @@ const route = app
         })
         .from(kifuPositions)
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
-        .where(eq(kifuPositions.sfen, sfen))
+        // ⭐ 照合（盤・持ち駒・手番）まで SQL に入れているので、上限と総数は照合後の行にかかる
+        .where(samePosition(kifuPositions, key))
         // ⚠ **並びは打ち切りとセットで意味を持つ。** 序盤の局面はどの棋譜も通るので
         // 必ず上限に当たる。そこで残るのが「古い棋譜」では使い物にならないので、
         // 到達が早い順 → **新しい対局順**に並べる（基準は一覧と同じ playedOrCreatedAt）
@@ -698,12 +712,16 @@ const route = app
       if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
 
       // 枝の列挙。**次の局面が持つ `move` で集計する**——局面キーだけでは
-      // 「同じ局面から指された別の手」を区別できない（prd/10 §5.3）
+      // 「同じ局面から指された別の手」を区別できない（prd/10 §5.3）。
+      // 次の局面の SFEN は保存していないので、盤・持ち駒・手番で束ねて後から組み立てる
+      // （この局面は照合済みなので、同じ手なら次の局面も同じ。束ね方は文字列の頃と一致する）
       const next = alias(kifuPositions, 'next');
-      const branches = await db
+      const branchRows = await db
         .select({
           move: next.move,
-          sfen: next.sfen,
+          board: next.board,
+          hands: next.hands,
+          sideToMove: next.sideToMove,
           games: sql<number>`count(*)`,
         })
         .from(kifuPositions)
@@ -714,9 +732,14 @@ const route = app
             eq(next.moveNumber, sql`${kifuPositions.moveNumber} + 1`),
           ),
         )
-        .where(eq(kifuPositions.sfen, sfen))
-        .groupBy(next.move, next.sfen)
+        .where(samePosition(kifuPositions, key))
+        .groupBy(next.move, next.board, next.hands, next.sideToMove)
         .orderBy(desc(sql`count(*)`), asc(next.move));
+      const branches = branchRows.map(({ board, hands, sideToMove, ...b }) => ({
+        move: b.move,
+        sfen: sfenOfRow({ board, hands, sideToMove }),
+        games: b.games,
+      }));
 
       // 盤・持ち駒はこの局面のものなのでどの行でも同じ。web が盤を描くのに使う
       const [first] = rows;
@@ -754,29 +777,36 @@ const route = app
     async (c) => {
       const { pos, side } = c.req.valid('query');
 
-      // 基準となる片側の配置。⚠ `goteSfen` は 180 度回して保存されているので、
-      // 先後をまたいでそのまま比べられる（prd/10 §3.2）
+      // 基準局面。⚠ `goteSfen` は 180 度回して書くので、先後をまたいでそのまま比べられる
+      // （prd/10 §3.2）。片側の配置は保存していないので、読み直した局面から組み立てる
+      const key = parsePositionKey(pos);
+      if (!key) return c.json({ error: 'not found' } as const, 404);
       const [base] = await db
-        .select({
-          senteSfen: kifuPositions.senteSfen,
-          goteSfen: kifuPositions.goteSfen,
-        })
+        .select({ one: sql`1` })
         .from(kifuPositions)
-        .where(eq(kifuPositions.sfen, pos))
+        .where(samePosition(kifuPositions, key))
         .limit(1);
       if (!base) return c.json({ error: 'not found' } as const, 404);
-      const baseSideSfen = side === 'sente' ? base.senteSfen : base.goteSfen;
+      const baseSideSfen = side === 'sente' ? key.senteSfen : key.goteSfen;
+      const baseSideHash = hashOf(baseSideSfen);
 
-      const rows = await db
+      // 🔒 **ハッシュで引いて、片側の配置を組み立て直して照合する**（prd/14 §6.3）。
+      // 片側の配置（相手の駒を空にし、後手なら 180 度回したもの）は SQL で素直に比べられない
+      // ので、照合はアプリ側で行う。⚠ **そのため SQL では上限をかけない**——照合で落とす行を
+      // `limit` の後に捨てると件数がずれる。一致した行を全部読み、照合してから数えて切る。
+      // 読む行数は「この配置に一致する局面の数」（+ 衝突ぶん）で、文字列で引いていた頃に
+      // `count(*) over ()` が数えていた行と同じ
+      const matched = await db
         .select({
           kifuId: kifuPositions.kifuId,
           moveNumber: kifuPositions.moveNumber,
-          sfen: kifuPositions.sfen,
+          board: kifuPositions.board,
+          hands: kifuPositions.hands,
+          sideToMove: kifuPositions.sideToMove,
           title: kifus.title,
           source: kifus.source,
           subjectSide: kifus.subjectSide,
           playedAt: kifus.playedAt,
-          total: sql<number>`count(*) over ()`,
         })
         .from(kifuPositions)
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
@@ -786,11 +816,11 @@ const route = app
             or(
               and(
                 eq(kifus.subjectSide, 'sente'),
-                eq(kifuPositions.senteSfen, baseSideSfen),
+                eq(kifuPositions.senteSfenHash, baseSideHash),
               ),
               and(
                 eq(kifus.subjectSide, 'gote'),
-                eq(kifuPositions.goteSfen, baseSideSfen),
+                eq(kifuPositions.goteSfenHash, baseSideHash),
               ),
             ),
           ),
@@ -799,8 +829,22 @@ const route = app
           asc(kifuPositions.moveNumber),
           desc(playedOrCreatedAt),
           desc(kifuPositions.kifuId),
-        )
-        .limit(POSITION_GAMES_LIMIT);
+        );
+      const verified = matched.filter(
+        (row) =>
+          row.subjectSide !== null && sameSideLayout(row, row.subjectSide, baseSideSfen),
+      );
+      const rows = verified
+        .slice(0, POSITION_GAMES_LIMIT)
+        .map(({ board, hands, sideToMove, ...g }) => ({
+          kifuId: g.kifuId,
+          moveNumber: g.moveNumber,
+          sfen: sfenOfRow({ board, hands, sideToMove }),
+          title: g.title,
+          source: g.source,
+          subjectSide: g.subjectSide,
+          playedAt: g.playedAt,
+        }));
 
       // 主体側が決まらない棋譜の数（この検索の対象外になっているもの）
       const [{ unresolved }] = await db
@@ -808,10 +852,10 @@ const route = app
         .from(kifus)
         .where(isNull(kifus.subjectSide));
 
-      const total = rows.length > 0 ? Number(rows[0].total) : 0;
+      const total = verified.length;
       return c.json({
-        base: { sfen: pos, side, sideSfen: baseSideSfen },
-        games: rows.map(({ total: _t, ...g }) => g),
+        base: { sfen: key.sfen, side, sideSfen: baseSideSfen },
+        games: rows,
         total,
         hasMore: total > rows.length,
         /** 🔒 主体側が決まらないので除外した棋譜の数（prd/10 §3.3） */
@@ -836,6 +880,8 @@ const route = app
     ),
     async (c) => {
       const { pos, window, limit } = c.req.valid('query');
+      const key = parsePositionKey(pos);
+      if (!key) return c.json({ error: 'not found' } as const, 404);
 
       // 基準の局面。**最初に到達した手数**を手数帯の中心にする
       // （同じ局面でも棋譜ごとに到達手数が違う）
@@ -846,7 +892,7 @@ const route = app
           hands: kifuPositions.hands,
         })
         .from(kifuPositions)
-        .where(eq(kifuPositions.sfen, pos))
+        .where(samePosition(kifuPositions, key))
         .orderBy(asc(kifuPositions.moveNumber))
         .limit(1);
       if (!base) return c.json({ error: 'not found' } as const, 404);
@@ -860,7 +906,6 @@ const route = app
       // `2 * window + 1` 行なので、数百局でも数千行に収まる
       const candidates = await db
         .select({
-          sfen: kifuPositions.sfen,
           kifuId: kifuPositions.kifuId,
           moveNumber: kifuPositions.moveNumber,
           board: kifuPositions.board,
@@ -877,7 +922,8 @@ const route = app
             gte(kifuPositions.moveNumber, from),
             lte(kifuPositions.moveNumber, to),
             // 完全一致は `/positions` の側で出ているので、ここでは除く
-            ne(kifuPositions.sfen, pos),
+            // ⚠ ハッシュの不一致（`ne(sfenHash, …)`）で代えない。衝突した別の局面まで落ちる
+            not(samePosition(kifuPositions, key)),
             // 🔒 **この局面を通った棋譜そのものを外す。** 外さないと、序盤では
             // 「1 手前の局面（距離 2）」が全棋譜ぶん並ぶだけになる——どの棋譜も
             // 通っているので**当たり前の結果しか出ない**。近さが意味を持つのは
@@ -886,7 +932,9 @@ const route = app
               db
                 .select({ one: sql`1` })
                 .from(exact)
-                .where(and(eq(exact.kifuId, kifuPositions.kifuId), eq(exact.sfen, pos))),
+                .where(
+                  and(eq(exact.kifuId, kifuPositions.kifuId), samePosition(exact, key)),
+                ),
             ),
           ),
         )
@@ -906,7 +954,9 @@ const route = app
       const similar = [...best.values()]
         .sort((a, b) => a.diff.total - b.diff.total || a.moveNumber - b.moveNumber)
         .slice(0, limit)
-        .map(({ board: _b, hands: _h, diff, ...r }) => ({
+        .map(({ board, hands, diff, ...r }) => ({
+          // 文字列は保存していないので、返す行（上位 `limit` 件）だけ盤から組み立てる
+          sfen: sfenOfRow({ board, hands, sideToMove: r.sideToMove }),
           ...r,
           distance: diff.total,
           boardDiff: diff.board,
@@ -914,7 +964,7 @@ const route = app
         }));
 
       return c.json({
-        base: { sfen: pos, moveNumber: base.moveNumber, from, to },
+        base: { sfen: key.sfen, moveNumber: base.moveNumber, from, to },
         similar,
         /** 距離を掛けた行数と、読み出しを打ち切ったか（🔒 黙って切らない） */
         scanned: candidates.length,

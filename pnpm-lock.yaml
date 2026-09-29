@@ -56,8 +56,8 @@ importers:
         specifier: ^0.7.6
         version: 0.7.6(hono@4.12.31)(zod@3.25.76)
       drizzle-orm:
-        specifier: 1.0.0-beta.22
-        version: 1.0.0-beta.22(@types/mssql@9.1.11(@azure/core-client@1.10.1))(gel@2.2.0)(mssql@11.0.1(@azure/core-client@1.10.1))(mysql2@3.22.2(@types/node@22.19.17))(zod@3.25.76)
+        specifier: 1.0.0-rc.3
+        version: 1.0.0-rc.3(@types/mssql@9.1.11(@azure/core-client@1.10.1))(mssql@11.0.1(@azure/core-client@1.10.1))(mysql2@3.22.2(@types/node@22.19.17))(zod@3.25.76)
       hono:
         specifier: ^4.12.25
         version: 4.12.31
@@ -75,8 +75,8 @@ importers:
         specifier: ^22.19.17
         version: 22.19.17
       drizzle-kit:
-        specifier: 1.0.0-beta.23
-        version: 1.0.0-beta.23
+        specifier: 1.0.0-rc.3
+        version: 1.0.0-rc.3
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
@@ -753,9 +753,6 @@ packages:
   '@oxc-project/types@0.142.0':
     resolution: {integrity: sha512-7W+2q5AKQVU36fkaryontrHn3YDt1RyUYXatw9i5H8ocYe2sPKSFB6eS8WNPeRKiN1qAWWZUPm7gwFzJGrccqQ==}
 
-  '@petamoriken/float16@3.9.3':
-    resolution: {integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==}
-
   '@rolldown/binding-android-arm64@1.2.1':
     resolution: {integrity: sha512-02hOeOSryYxVrOIphmLAsqnCJWxwlzFk+pEt/N/i6OgT3lShHO7xGCU5cpgchRDHboAEbSjzgGh+O/u1GswQmA==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -1362,19 +1359,16 @@ packages:
     resolution: {integrity: sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==}
     engines: {node: '>=0.3.1'}
 
-  drizzle-kit@1.0.0-beta.23:
-    resolution: {integrity: sha512-AXVAYTItegF3h1JQECt4s4z9RwipiBoK99A3IY/thGZ0xdSPlsXZr/SU9sh6JvQi5bq08ZYXmKcdIwJpNxITig==}
-    deprecated: The 1.0.0-beta line is superseded by the 1.0 release candidate. Install drizzle-kit@rc instead.
+  drizzle-kit@1.0.0-rc.3:
+    resolution: {integrity: sha512-lwGIi6GTlEYzrtac1Szecns+zrAxjaOoNysfBCKRQOXQE7nMJ8IU2I2S6ek3FHEm1N30dQb5YrTdqV7zNH6n7A==}
     hasBin: true
 
-  drizzle-orm@1.0.0-beta.22:
-    resolution: {integrity: sha512-F+DZyVIvH0oVKa/w08Cle1xfoH+pc+htIXHG/frnMLG72aby9NYYr9oc+9XvghnoO4umxFItduz0OMmQJMnenw==}
-    deprecated: The 1.0.0-beta line is superseded by the 1.0 release candidate. Install drizzle-orm@rc instead.
+  drizzle-orm@1.0.0-rc.3:
+    resolution: {integrity: sha512-akZOa5UxapFbdBG8IDkfBRpSZJpMHaOJtGgp7oi1oHaiU8S3KN92waHo2l5aRuv1D9tMGYpv3BQFOsiGcNjLTQ==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
       '@cloudflare/workers-types': '>=4'
-      '@effect/sql': ^0.48.5
-      '@effect/sql-pg': ^0.49.7
+      '@effect/sql-pg': '>=4.0.0-beta.58 || >=4.0.0'
       '@electric-sql/pglite': '>=0.2.0'
       '@libsql/client': '>=0.10.0'
       '@libsql/client-wasm': '>=0.10.0'
@@ -1398,8 +1392,8 @@ packages:
       arktype: '>=2.0.0'
       better-sqlite3: '>=9.3.0'
       bun-types: '*'
+      effect: '>=4.0.0-beta.58 || >=4.0.0'
       expo-sqlite: '>=14.0.0'
-      gel: '>=2'
       mssql: ^11.0.1
       mysql2: '>=2'
       pg: '>=8'
@@ -1413,8 +1407,6 @@ packages:
       '@aws-sdk/client-rds-data':
         optional: true
       '@cloudflare/workers-types':
-        optional: true
-      '@effect/sql':
         optional: true
       '@effect/sql-pg':
         optional: true
@@ -1464,9 +1456,9 @@ packages:
         optional: true
       bun-types:
         optional: true
-      expo-sqlite:
+      effect:
         optional: true
-      gel:
+      expo-sqlite:
         optional: true
       mssql:
         optional: true
@@ -1496,10 +1488,6 @@ packages:
   enhanced-resolve@5.21.0:
     resolution: {integrity: sha512-otxSQPw4lkOZWkHpB3zaEQs6gWYEsmX4xQF68ElXC/TWvGxGMSGOvoNbaLXm6/cS/fSfHtsEdw90y20PCd+sCA==}
     engines: {node: '>=10.13.0'}
-
-  env-paths@3.0.0:
-    resolution: {integrity: sha512-dtJUTepzMW3Lm/NPxRf3wP4642UWhjL2sQxc+ym2YMj1m/H2zDNQOlezafzkHwn6sMstjHTwG6iQQsctDW/b1A==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   es-module-lexer@2.1.0:
     resolution: {integrity: sha512-n27zTYMjYu1aj4MjCWzSP7G9r75utsaoc8m61weK+W8JMBGGQybd43GstCXZ3WNmSFtGT9wi59qQTW6mhTR5LQ==}
@@ -1550,11 +1538,6 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
-
-  gel@2.2.0:
-    resolution: {integrity: sha512-q0ma7z2swmoamHQusey8ayo8+ilVdzDt4WTxSPzq/yRqvucWRfymRVMvNgmSC0XK7eNjjEZEcplxpgaNojKdmQ==}
-    engines: {node: '>= 18.0.0'}
-    hasBin: true
 
   generate-function@2.3.1:
     resolution: {integrity: sha512-eeB5GfMNeevm/GRYq20ShmsaGcmI81kIX2K9XQx5miC8KdHaC6Jm0qQ8ZNeGOi7wYB8OsdxKs+Y2oVuTFuVwKQ==}
@@ -1638,10 +1621,6 @@ packages:
 
   isbot@5.1.39:
     resolution: {integrity: sha512-obH0yYahGXdzNxo+djmHhBYThUKDkz565cxkIlt2L9hXfv1NlaLKoDBHo6KxXsYrIXx2RK3x5vY36CfZcobxEw==}
-    engines: {node: '>=18'}
-
-  isexe@3.1.5:
-    resolution: {integrity: sha512-6B3tLtFqtQS4ekarvLVMZ+X+VlvQekbe4taUkf/rhVO3d/h0M2rfARm/pXLcPEsjjMsFgrFgSrhQIxcSVrBz8w==}
     engines: {node: '>=18'}
 
   jiti@2.6.1:
@@ -1997,10 +1976,6 @@ packages:
     resolution: {integrity: sha512-TBwwKfscTEgnBEWmYKKeCcmCGmrJi0LV6qNUY//WBA3MDesh/zfn+KOMq/ckpxM4gZ0ouAE706A1eenekM2sug==}
     engines: {node: '>=10'}
 
-  shell-quote@1.10.0:
-    resolution: {integrity: sha512-w1aiOKwKuRgtwAReIIj89puqg+I7GvX4IbLrvmhXbzQsj1+Zwi4VO3+fa6ZF91TWSjIxoEkKnMeHcLEODK5ZXA==}
-    engines: {node: '>= 0.4'}
-
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
@@ -2192,11 +2167,6 @@ packages:
 
   webpack-virtual-modules@0.6.2:
     resolution: {integrity: sha512-66/V2i5hQanC51vBQKPH4aI8NMAcBW59FVBs+rC7eGHupMyfn34q7rZIE+ETlJ+XTevqfUhVVBgSUNSW2flEUQ==}
-
-  which@4.0.0:
-    resolution: {integrity: sha512-GlaYyEb07DPxYCKhKzplCWBJtvxZcZMrL+4UkrTSJHHPyZU4mYYTv3qaOe77H7EODLSSopAUFAc6W8U4yqvscg==}
-    engines: {node: ^16.13.0 || >=18.0.0}
-    hasBin: true
 
   why-is-node-running@2.3.0:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
@@ -2752,9 +2722,6 @@ snapshots:
     optional: true
 
   '@oxc-project/types@0.142.0': {}
-
-  '@petamoriken/float16@3.9.3':
-    optional: true
 
   '@rolldown/binding-android-arm64@1.2.1':
     optional: true
@@ -3330,7 +3297,7 @@ snapshots:
 
   diff@8.0.4: {}
 
-  drizzle-kit@1.0.0-beta.23:
+  drizzle-kit@1.0.0-rc.3:
     dependencies:
       '@drizzle-team/brocli': 0.11.0
       '@js-temporal/polyfill': 0.5.1
@@ -3338,10 +3305,9 @@ snapshots:
       get-tsconfig: 4.14.0
       jiti: 2.6.1
 
-  drizzle-orm@1.0.0-beta.22(@types/mssql@9.1.11(@azure/core-client@1.10.1))(gel@2.2.0)(mssql@11.0.1(@azure/core-client@1.10.1))(mysql2@3.22.2(@types/node@22.19.17))(zod@3.25.76):
+  drizzle-orm@1.0.0-rc.3(@types/mssql@9.1.11(@azure/core-client@1.10.1))(mssql@11.0.1(@azure/core-client@1.10.1))(mysql2@3.22.2(@types/node@22.19.17))(zod@3.25.76):
     optionalDependencies:
       '@types/mssql': 9.1.11(@azure/core-client@1.10.1)
-      gel: 2.2.0
       mssql: 11.0.1(@azure/core-client@1.10.1)
       mysql2: 3.22.2(@types/node@22.19.17)
       zod: 3.25.76
@@ -3357,9 +3323,6 @@ snapshots:
     dependencies:
       graceful-fs: 4.2.11
       tapable: 2.3.3
-
-  env-paths@3.0.0:
-    optional: true
 
   es-module-lexer@2.1.0: {}
 
@@ -3446,18 +3409,6 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  gel@2.2.0:
-    dependencies:
-      '@petamoriken/float16': 3.9.3
-      debug: 4.4.3
-      env-paths: 3.0.0
-      semver: 7.7.4
-      shell-quote: 1.10.0
-      which: 4.0.0
-    transitivePeerDependencies:
-      - supports-color
-    optional: true
-
   generate-function@2.3.1:
     dependencies:
       is-property: 1.0.2
@@ -3537,9 +3488,6 @@ snapshots:
     optional: true
 
   isbot@5.1.39: {}
-
-  isexe@3.1.5:
-    optional: true
 
   jiti@2.6.1: {}
 
@@ -3854,9 +3802,6 @@ snapshots:
 
   seroval@1.6.0: {}
 
-  shell-quote@1.10.0:
-    optional: true
-
   siginfo@2.0.0: {}
 
   source-map-js@1.2.1: {}
@@ -4016,11 +3961,6 @@ snapshots:
       - msw
 
   webpack-virtual-modules@0.6.2: {}
-
-  which@4.0.0:
-    dependencies:
-      isexe: 3.1.5
-    optional: true
 
   why-is-node-running@2.3.0:
     dependencies:

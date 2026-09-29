@@ -118,7 +118,7 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
-- 認証は server 側のログインフォーム（[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
+- 人の認証は Google ログイン（Better Auth・server 側のセッション。[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
 - **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する
   （[README](./README.md) §公開リポジトリでの秘匿方針）。

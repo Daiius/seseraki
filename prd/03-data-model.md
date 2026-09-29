@@ -23,15 +23,15 @@
 | `kifuPositions` | 局面索引（`kifus` に紐付く派生値。[10](./10-video-analysis.md) §3.2） |
 | `drills` | 出題（`kifus` に紐付く派生値。[13](./13-drills.md) §6.1） |
 | `drillAttempts` | 解答履歴と「自明だった」の除外（`drills` に紐付く。[13](./13-drills.md) §6.2） |
-| `users` | 自分（将来は一般ユーザー。[11](./11-users.md) §2）。Google ログインで Better Auth の user 表を兼ねる（[07](./07-auth-and-privacy.md) §3。未実装） |
+| `users` | 自分（将来は一般ユーザー。[11](./11-users.md) §2）。Better Auth の user 表を兼ねる（[07](./07-auth-and-privacy.md) §3） |
 | `userAliases` | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
-| `session` / `account` / `verification`（計画中） | Better Auth のセッション・Google の `sub`・OAuth の state（[07](./07-auth-and-privacy.md) §3） |
+| `session` / `account` / `verification` | Better Auth のセッション・Google の `sub`・OAuth の state（[07](./07-auth-and-privacy.md) §3） |
 
 - リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
-- **認証は単一アカウント**（[07](./07-auth-and-privacy.md) §8。Google ログインへ切り替える設計が確定）だが、
-  **データ側には所有者を持つ**（`kifus.ownerId`。[11](./11-users.md) §3）。
-  Google ログインで **`users.id` は `varchar(36)`** になり、既存の所有者は `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
+- **認証は Google ログイン**（[07](./07-auth-and-privacy.md)）。所有者スコープが入るまでは所有者（`"1"`）以外を通さない
+  （所有者ゲート。[07](./07-auth-and-privacy.md) §5.1）が、**データ側には所有者を持つ**（`kifus.ownerId`。[11](./11-users.md) §3）。
+  **`users.id` は `varchar(36)`**、既存の所有者は `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
 - 投入・API 境界の **runtime 検証は zod で行い、検証スキーマは `shared` に置く**（型共有だけでは動作時に
   不正データを弾けないため。[02](./02-architecture.md) §3.2 / [04](./04-ingestion.md)）。
 
@@ -104,7 +104,7 @@ kifus
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
 ├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
 ├── source: enum notNull default 'manual'  -- 出所（'manual' | 'swars' | 'video'。[10](./10-video-analysis.md) §2.1）
-├── ownerId: bigint → users.id          -- このデータを持っている人（対局者ではない。[11](./11-users.md) §3）。Google ログインで varchar(36)（[07](./07-auth-and-privacy.md) §3.2）
+├── ownerId: varchar(36) → users.id     -- このデータを持っている人（対局者ではない。[11](./11-users.md) §3）。FK は CASCADE にしない（[14](./14-multi-user.md) §3.1）
 ├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。[11](./11-users.md) §4）
 ├── createdAt: timestamp
 └── updatedAt: timestamp

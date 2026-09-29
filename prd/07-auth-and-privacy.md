@@ -3,12 +3,13 @@
 人のログインは **Google ログインのみ**（実装は Better Auth）。**パスワードは持たない。**
 worker・動画解析の取り込みは **API_KEY** の別系統で、人のログインとは交わらない。
 
-> **設計確定・未実装**（2026-09-29）。一般公開の全体設計は [14](./14-multi-user.md)、ユーザーのデータ
-> （`users` / `user_aliases` / `ownerId`）は [11](./11-users.md)。決定の経緯は
-> [決定ログ](./_grilling/decisions.md)「Google ログイン（Better Auth）の設計」。
-> 実装時に確かめることは §9。
+> **段階 1 を実装済み**（2026-09-29）: Google ログイン・所有者ゲート・新規登録の拒否・dev ログイン・
+> 所有者の付け替えエントリ。**退会（§7）と所有者スコープ（[14](./14-multi-user.md) §4）は後の段階。**
+> 一般公開の全体設計は [14](./14-multi-user.md)、ユーザーのデータ（`users` / `user_aliases` / `ownerId`）は
+> [11](./11-users.md)。決定の経緯は [決定ログ](./_grilling/decisions.md)「Google ログイン（Better Auth）の設計」。
+> 実装で確かめたことは §9。
 >
-> **現状（移行前）** は ID/パスワードの単一アカウント（§8）。**Google ログインへの切り替えと同時に削除する。**
+> 移行前の ID/パスワードの単一アカウント（§8）は**切り替えと同時に削除した。**
 
 ---
 
@@ -33,7 +34,9 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 - 🔴 **Better Auth には既存の `db`（`packages/server/src/db/index.ts`）を渡す。** 別の接続を作らせない——
   接続のセッションを UTC に固定しているのはこの `db` だけで、別接続では `expiresAt` などが**黙って 9h ずれる**
   （[03](./03-data-model.md) §1.1）。アダプタは `drizzleAdapter(db, { provider: 'mysql', schema })`
-- ⚠ **`drizzleAdapter` が drizzle 1.0（relations v2）で動くかは実装時に確かめる**（CLI は追いついていない。§3）
+- `drizzleAdapter` は drizzle 1.0 rc.3（relations v2 の `db`）に渡して動く（§9）。Better Auth は **1.6 系に固定**
+  （`~1.6.33`）——drizzle 1.0 との組み合わせの実績が 1.6 系にあるため。peer 依存は drizzle 0.45 を指すので警告が出るが無害
+- 実装: 設定の純粋な部分は `packages/server/src/auth-config.ts`（テスト対象）、組み立てと `sessionRequired` は `auth.ts`
 
 ### 2.2 主な設定
 
@@ -48,6 +51,9 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 | `advanced.database.generateId` | UUID（36 文字） | ID を `varchar(36)` に揃え、大文字小文字の混ざらない形にする（§3.2） |
 | `advanced.cookiePrefix` | `seseraki` | 他のアプリの cookie と取り違えない |
 | `trustedOrigins` | `BETTER_AUTH_URL`（+ `CORS_ORIGINS`） | リダイレクト先・`Origin` の検査 |
+| `advanced.disableOriginCheck` | `false`（明示） | 🔒 Better Auth は **`NODE_ENV=test` のとき既定で `Origin` / `callbackURL` の検査を外す**。env の取り違えで検査が消えないよう固定する |
+| `onAPIError.errorURL` | `<BETTER_AUTH_URL>/login` | OAuth の失敗（登録を閉じている等）をログイン画面へ戻す（`?error=<code>`。web が文にする） |
+| `telemetry.enabled` | `false`（明示） | 外へ何も送らない |
 
 ### 2.3 cookie
 
@@ -56,7 +62,7 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
   （`/api/auth/callback/google`）で読まれるので同じ path でよい
   - ⚠ 移行前の注意（§8）はそのまま生きる: **web と API の配置を変える（サブパス配信など）ときは cookie の path も
     合わせる。** 合わないと、ログイン直後から 401 になる
-  - ⚠ **絞った path でサインアウト時の cookie 削除が効くか**は実装時に確かめる（`/` 既定のままでも動作はする）
+  - 絞った path でもサインアウト時の cookie 削除は効く——Better Auth は削除にも作成時と同じ属性（path を含む）を使う（§9）
 - `Secure` は `BETTER_AUTH_URL` が https なら自動で付く（移行前の `COOKIE_SECURE` は不要になる）
 - `SameSite=Lax`（Better Auth の既定）。Google からのリダイレクト（トップレベルの GET）で state の cookie が届く
 
@@ -73,7 +79,7 @@ users（Better Auth の user。modelName: 'users'）
 ├── emailVerified: boolean
 ├── image: text?
 ├── displayName: varchar(100)    -- 画面に出す名前（独自列・additionalFields）。Google の name とは別
-├── deletionRequestedAt: timestamp?  -- 退会の予約（§7。後の段階）
+├── deletionRequestedAt: timestamp?  -- 退会の予約（§7。後の段階。**段階 1 では列を足していない**）
 ├── createdAt / updatedAt
 
 session
@@ -87,8 +93,8 @@ session
 account
 ├── id: varchar(36) PK
 ├── userId: varchar(36) FK → users.id (CASCADE)
-├── providerId: varchar          -- 'google'（dev では 'credential' もある）
-├── accountId: varchar           -- Google の sub（本人の同定。§1）
+├── providerId: varchar(64)      -- 'google'（dev では 'credential' もある）
+├── accountId: varchar(255)      -- Google の sub（本人の同定。§1）
 ├── accessToken / refreshToken / idToken: text?
 ├── accessTokenExpiresAt / refreshTokenExpiresAt: timestamp?
 ├── scope: text? / password: text?（dev の email+password のみ）
@@ -97,7 +103,7 @@ UNIQUE (providerId, accountId)
 
 verification                     -- OAuth の state など、短命の値
 ├── id: varchar(36) PK
-├── identifier: varchar(255) INDEX
+├── identifier: varchar(255) INDEX  -- 🔴 COLLATE utf8mb4_bin（乱数の文字列で引くので token と同じ扱い。§3.3）
 ├── value: text
 ├── expiresAt: timestamp
 ├── createdAt / updatedAt
@@ -149,10 +155,16 @@ verification                     -- OAuth の state など、短命の値
   `show create table` で確かめる。** 落ちたままだと、ユーザーを消すときに FK で止まる
 - ⚠ **データ投入（`"1"` の行を埋める）はマイグレーションの 2 つ目の例外**になる（1 つ目は [11](./11-users.md) §6.1）。
   理由は同じで、`NOT NULL`・`UNIQUE` の成立にデータが要る
+- 実装: `packages/server/drizzle/20260929123049_google_login/migration.sql`（上の順序で手書き）。
+  drizzle-kit の生成物は **FK を外さずに `users.id` の型を変えようとして落ちる**・データ投入が無い・照合順序が無い、の 3 点で
+  そのままでは使えない。今回の生成では新規テーブルの FK に CASCADE が出ていた（`ALTER TABLE … ADD CONSTRAINT` の形）が、
+  AGENTS.md の罠は再現条件が分かっていないので、**適用後の `show create table` での確認はやめない**
+- ⚠ `serial` の名残で、`users` には主キーとは別に `id` の UNIQUE 索引が残る（`serial` = `UNIQUE` 付き）。
+  名前が環境で揃っている保証が無く、落とすと失敗しうるので残した（害は無い）
 
 ### 3.3 照合順序
 
-🔴 **`session.token` は `utf8mb4_bin`（大文字小文字を区別する）にする。** MySQL の既定
+🔴 **`session.token` は `utf8mb4_bin`（大文字小文字を区別する）にする。**（`verification.identifier` も同じ） MySQL の既定
 （`utf8mb4_0900_ai_ci`）では、**大文字小文字だけが違う token が同じ値として照合される**。
 drizzle は照合順序を扱えないので、**マイグレーション SQL に手で書く**（`user_aliases.name` と同じ）。
 ⚠ **`db:push` で作り直すと既定に戻る。** dev で作り直したときは確かめる。
@@ -195,11 +207,14 @@ COMMIT;
 - ⚠ 手順 0 で**メールが所有者のものか必ず目で確かめる。** 窓（§5.2）の間に他人が先にログインしていた場合、
   その X を付け替えると**他人に全データを渡す**
 
-### 4.1 流し方 — イメージ同梱のエントリ（計画中）
+### 4.1 流し方 — イメージ同梱のエントリ
 
 🔒 **`/app/link-owner-account.js` として本番イメージに同梱する**（AGENTS.md の同梱エントリと同じ形）。
 **既定は dry-run**（付け替え対象の X のメール・名前を表示して止まる）、`LINK_OWNER_APPLY=1` で実書込。
-`--provider` で provider を指定する（既定 `google`）。
+`--provider` で provider を指定する（既定 `google`）。`--email` で対象をメールで絞れる
+（窓の間に他人が入り込んで対象が複数になったとき。絞っても「ちょうど 1 行」の確認は同じ）。
+実装は `packages/server/src/owner-account.ts`（判定の `decideOwnerLink` はテスト対象）と `link-owner-account.ts`。
+付け替えられる状態でなければ（対象なし・複数・付け替え済み）終了コード 1。
 
 ```bash
 docker compose run --rm --no-deps <server サービス> /app/link-owner-account.js
@@ -265,7 +280,8 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
   （`callbackURL` は `trustedOrigins` で検査される）
 - `__root.tsx` の `beforeLoad` のガードは、移行前の `/api/auth/me` をやめて **`GET /api/me`**（`/api/auth/*` の外。
   401 / 403 / `{ userId }`）を叩く。401 は `/login?redirect=<元の URL>`、403 は「このアカウントでは利用できません」と
-  ログアウトを出す
+  ログアウトを出す（実装では 403 も `/login` へ送り、ログイン画面がその表示に切り替わる）
+- Google ログインの失敗は `/login?error=<code>` に戻る（`errorCallbackURL`）。`signup_disabled`（登録を閉じている）などを文にして出す
   - `/api/auth/*` は Better Auth のハンドラが丸ごと受けるので、**アプリの API をその下に置かない**
 - ログアウトは `POST /api/auth/sign-out`（**セッションの行が消える**＝その場で失効する）
 - dev のときだけ「dev ログイン」ボタンを出す（`import.meta.env.DEV`。§6）
@@ -282,7 +298,8 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 
 ### 6.1 dev ログインの抜け道
 
-参考実装と同じ方式: 固定の dev ユーザーで `signUpEmail`（既にあれば握りつぶす）→ `signInEmail` して、
+参考実装と同じ方式: 固定の dev ユーザー（所有者用は `dev@example.invalid`・`?as=<名前>` は `dev+<名前>@example.invalid`）で
+`signUpEmail`（既にあれば握りつぶす）→ `signInEmail` して、
 **Better Auth の本物のセッション cookie** を返す。以後の経路（`sessionRequired`・失効）は本番と同じものを通る。
 
 - 🔴 **dev ユーザーも所有者ゲート（§5.1）に掛かる。** 付け替えなければ何も見えない。
@@ -306,13 +323,15 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 
 🔒 **unit テストで確かめる**: `NODE_ENV` が development 以外（**production・未設定・test**）のとき、
 
+実装は `packages/server/src/auth-routes.test.ts`（アプリ全体を env を変えて読み直す）と `auth-config.test.ts`:
+
 - `/api/dev/login` が **404**（ルート自体が登録されていない）
 - email+password のエンドポイント（`/api/auth/sign-up/email`・`/api/auth/sign-in/email`）が**使えない**
 - `BETTER_AUTH_SECRET` などが無ければ**起動が失敗する**（固定値へのフォールバックが無い）
 
-⚠ **本番イメージ（`Dockerfile.prod`）の `NODE_ENV=production` も確認項目に入れる。** 今の `Dockerfile.prod` は
-`NODE_ENV` を設定していない。未設定でも抜け道は閉じる（fail-closed）が、**明示して、ビルドかテストで確かめる**
-（`esbuild.config.ts` が Dockerfile.prod の COPY を照合しているのと同じ形でよい）。
+🔒 **本番イメージ（`Dockerfile.prod`）は最終ステージで `ENV NODE_ENV=production` を明示する。** 未設定でも抜け道は
+閉じる（fail-closed）が、付け忘れに頼らない。`esbuild.config.ts`（ビルド時）と `src/dockerfile-check.test.ts`（テスト）が
+COPY の照合と同じ形で確かめる。
 
 ### 6.2 dev の Google ログイン
 
@@ -352,14 +371,15 @@ dev ユーザーで `signUpEmail` だけ行い、`@provider = 'credential'` で�
 
 ## 8. 移行前（ID/パスワード）と撤去
 
-移行前は**単一アカウント**: `/login` のフォーム → `POST /api/auth/login` → HMAC 署名 + 発行時刻の stateless cookie
+**撤去済み。** 以下は経緯として残す。移行前は**単一アカウント**: `/login` のフォーム → `POST /api/auth/login` → HMAC 署名 + 発行時刻の stateless cookie
 （`seseraki_session`・30 日固定）。認証情報は環境変数 `AUTH_USERNAME` / `AUTH_PASSWORD`、署名鍵は `SESSION_SECRET`。
 cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/api` という配信契約。サブパス配信は未対応）。
 
 - 🔒 **Google ログインへの切り替えと同時に削除する**（コード・環境変数・`/api/auth/login`・`/api/auth/me`・
   `/api/auth/logout`・ログインフォーム）。併存させない——**パスワードの経路が 1 本でも残ると「パスワードを持たない」が
   成り立たない**。利用者が所有者 1 人のうちに切り替えるので、失敗しても DB を直接触って戻せる（§4）
-- 撤去する環境変数: `AUTH_USERNAME` / `AUTH_PASSWORD` / `SESSION_SECRET` / `COOKIE_SECURE` / `COOKIE_PATH`
+- 撤去した環境変数: `AUTH_USERNAME` / `AUTH_PASSWORD` / `SESSION_SECRET` / `COOKIE_SECURE` / `COOKIE_PATH`
+  （remote dev の `COOKIE_SECURE` は `BETTER_AUTH_URL` に置き換えた。https なら `Secure` が付く）
 - 古い `seseraki_session` cookie は読まれなくなるだけで、期限で消える
 
 ### 環境変数（切り替え後）
@@ -375,11 +395,22 @@ cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/
 
 値・ドメイン・OAuth クライアントの具体は**公開リポに置かない**（§10）。
 
-## 9. 実装時に確かめること
+## 9. 実装で確かめたこと
 
-- セッションの期間（30 日・`updateAge` 1 日は仮置き）
-- `Path=/api` で Better Auth のすべての cookie（state / PKCE を含む）とサインアウト時の削除が期待どおりに動くか（§2.3）
-- `drizzleAdapter` と drizzle 1.0（relations v2）の相性（§2.1）
+- **セッションの期間**: 30 日・`updateAge` 1 日の仮置きのまま実装した（cookie の `Max-Age` も 30 日）。運用して見直す
+- **`Path=/api` の cookie**: Better Auth のすべての cookie（`session_token`・OAuth の state・`dont_remember` など）は
+  `advanced.defaultCookieAttributes` を通って作られ、**削除（`Max-Age=0`）も作成時と同じ属性で出す**。
+  サインアップ・サインアウト・Google のサインイン開始の `Set-Cookie` がすべて `Path=/api` で、サインアウトでセッションの行が
+  消えることをメモリのアダプタで確かめた（`src/auth-flow.test.ts`）。⚠ ブラウザと本物の Google を通した 1 周は dev で手で確かめる（§6.4）
+- **`drizzleAdapter` と drizzle 1.0**: アダプタは `db.query` を**結合（experimental joins）を有効にしたときだけ**使い、
+  既定では素のクエリビルダ（`select` / `insert` …）で動く。relations v2 の `db` を渡して型も通る。
+  ⚠ DB を通した実動作は dev での確認に委ねた（unit テストはメモリのアダプタ）
+- **ID の生成**: `generateId: 'uuid'` は MySQL ではアダプタが JS 側で `crypto.randomUUID()` を振る（DB の `uuid()` には頼らない）
+- **Google のメール**は Better Auth が小文字にしてから保存する。付け替えの `--email` も小文字にして比べる
+- **`input: false` の追加列**: `required: true` にすると Better Auth が作成時に「値が無い」と弾く（フックより前に検査する）。
+  そのため `displayName` は Better Auth の上では `required: false` にし、DB の NOT NULL とフックで必ず埋める
+- **新規登録の拒否**はフックで `APIError('FORBIDDEN', 'signup disabled')` を投げる。email の登録は 403、
+  Google は `errorCallbackURL` へ `?error=signup_disabled` で戻る
 
 ## 10. プライバシーと公開配置の前提
 

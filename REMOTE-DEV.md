@@ -14,7 +14,7 @@ remote と local の差は次の3点のみで、すべて env 由来:
 | 差分                  | ローカル既定   | remote（.env.remote）          | 効かせ方                                       |
 | --------------------- | -------------- | ------------------------------ | ---------------------------------------------- |
 | web の公開バインド    | `5173`（全IF） | `127.0.0.1:8101`               | compose `${WEB_BIND}`                          |
-| secure cookie         | `false`        | `true`                         | compose `${COOKIE_SECURE}` → server            |
+| ログインのオリジン    | `http://localhost:5173` | 公開オリジン（https）  | compose `${BETTER_AUTH_URL}` → server（https なら cookie に `Secure` が付く） |
 | Vite の許可ホスト/HMR | なし           | `allowedHosts` + `hmr wss:443` | `${DEV_ALLOWED_HOST}` を vite.config.ts が判定 |
 
 ブラウザは web(Vite) の `/api` proxy 経由で server に届き（`DEV_API_TARGET=http://server:4000`）、

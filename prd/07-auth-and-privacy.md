@@ -249,6 +249,27 @@ COMMIT;
   あれば作成を試みない）。固定の dev メールで引くと、§6.3 の練習で `"1"` のメールが Google のものに
   書き換わった後に**別の dev ユーザーが作られ、所有者でなくなる**
 
+#### 複数ユーザー（`?as=<名前>`）
+
+- `/api/dev/login` の**既定は所有者**（`"1"`・上記）。`?as=<名前>`（例 `alice` / `bob`）を付けると、
+  **所有者ではない別の dev ユーザー**として入れる（初回に作成。メールは名前から作る固定値。付け替えはしない）
+- 理由: 一般公開の本題である**所有者スコープ（[14](./14-multi-user.md) §4）は、2 人目のユーザーがいないと確かめられない**。
+  所有者ゲート（§5.1）がある間は、**他ユーザーが 403 になること自体**をこの経路で確かめられる
+- 新規登録を閉じる仕組み（§9.1）とは矛盾しない——**development では作成を常に許す**（§9.1 の案 B の例外）ので、
+  `?as=` のユーザーも作れる。development 以外では `/api/dev/login` 自体が無い
+
+#### 抜け道が本番に出ないことをテストで固定する
+
+🔒 **unit テストで確かめる**: `NODE_ENV` が development 以外（**production・未設定・test**）のとき、
+
+- `/api/dev/login` が **404**（ルート自体が登録されていない）
+- email+password のエンドポイント（`/api/auth/sign-up/email`・`/api/auth/sign-in/email`）が**使えない**
+- `BETTER_AUTH_SECRET` などが無ければ**起動が失敗する**（固定値へのフォールバックが無い）
+
+⚠ **本番イメージ（`Dockerfile.prod`）の `NODE_ENV=production` も確認項目に入れる。** 今の `Dockerfile.prod` は
+`NODE_ENV` を設定していない。未設定でも抜け道は閉じる（fail-closed）が、**明示して、ビルドかテストで確かめる**
+（`esbuild.config.ts` が Dockerfile.prod の COPY を照合しているのと同じ形でよい）。
+
 ### 6.2 dev の Google ログイン
 
 `BETTER_AUTH_URL` を**ブラウザから見えるオリジン**（dev は Vite の origin。`/api` は Vite の proxy が server へ渡す）にし、
@@ -261,6 +282,18 @@ dev ログインで付け替え済みの `"1"` に、**Google で初めてログ
 account が無いので）。これで §4 の手順を `@provider = 'google'` のまま dev DB で練習できる（`"1"` には credential と google の
 account が並び、どちらでも入れる）。Google のクライアントが無いときは、DB を作り直した直後に
 dev ユーザーで `signUpEmail` だけ行い、`@provider = 'credential'` で練習する（dev ログインの自動の付け替えが行う処理を手で踏む）。
+
+### 6.4 開発環境での確認の仕方
+
+| 確かめたいこと | 手段 |
+|---|---|
+| 画面・API・所有者スコープ（他ユーザーが 403 / 404 になること） | dev ログイン（複数ユーザー。§6.1）。Playwright の E2E もこれで回す |
+| 抜け道が本番に出ないこと | unit テスト（§6.1）+ `Dockerfile.prod` の `NODE_ENV=production` |
+| 本物の Google の流れ（リダイレクト・PKCE・コールバック・cookie） | dev で実アカウント（localhost・リモート dev をリダイレクト先に登録。§6.2）。**認証を変えたときと本番反映前に手で 1 周** |
+| 既存アカウントの移行（§4） | dev の実アカウントで練習してから本番（§6.3） |
+
+- 偽の OAuth サーバー（mock-oauth2-server 等）は**今は入れない**。Google 側の設定ミス（リダイレクト先の登録漏れ等）は
+  検出できず、手間の割に得るものが小さい
 
 ## 7. 退会（後の段階）
 

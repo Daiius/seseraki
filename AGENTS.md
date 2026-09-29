@@ -154,6 +154,7 @@ server の本番イメージ（`packages/server/Dockerfile.prod`）には、常�
 | `/app/rebuild-subjects.js` | 主体側の一括再導出（[prd/11](./prd/11-users.md) §4.2） | dry-run | `REBUILD_SUBJECTS_APPLY=1` |
 | `/app/backfill-user.js` | 表示名と名前候補の設定（移行時に 1 回。[prd/11](./prd/11-users.md) §6.2） | dry-run | `--apply`（引数を取る） |
 | `/app/rederive-played-at.js` | `playedAt` を出どころから作り直す（冪等。[prd/03](./prd/03-data-model.md) §1.1） | dry-run | `REDERIVE_PLAYED_AT_APPLY=1` |
+| `/app/link-owner-account.js`（**計画中・未実装**） | Google ログインへの移行で、初回ログインの account を所有者（`"1"`）へ付け替える（移行時に 1 回。[prd/07](./prd/07-auth-and-privacy.md) §4.1） | dry-run | `LINK_OWNER_APPLY=1` |
 
 ```bash
 docker compose run --rm --no-deps <server サービス> /app/<entry>.js

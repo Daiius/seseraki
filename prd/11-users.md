@@ -34,25 +34,35 @@
 - **招待の本体** — ユーザーごとの資格情報、セッションへの userId 紐づけ、全クエリの所有者スコープ。
   ログインは当面**単一アカウント**（[07](./07-auth-and-privacy.md)）のままで、
   **セッションは常にただ一人の `users` 行を指す**
+  > ⚠ **資格情報とセッションは Google ログイン（Better Auth）で置き換える設計が確定した**（[07](./07-auth-and-privacy.md)・未実装）。
+  > `users` は Better Auth の user 表になり、ID は `varchar(36)`・既存の行は `"1"` のまま（§2）。
+  > 所有者スコープは [14](./14-multi-user.md) §4
 - **動画解析の可視性** — 他ユーザーへ見せるかは [10](./10-video-analysis.md) §8.3 で保留した論点。
   判断材料（棋譜データの共有可否）が揃っていない
 
 ## 2. `users` と `userAliases`
 
 ```
-users
-├── id: serial PK
-├── displayName: varchar(100)    -- 画面に出す名前。対局者名とは別
+users                            -- Better Auth の user 表を兼ねる（[07](./07-auth-and-privacy.md) §3）
+├── id: varchar(36) PK           -- 既存の所有者は "1"。新規は UUID
+├── displayName: varchar(100)    -- 画面に出す名前。対局者名とも Google の name とも別（独自列）
+├── name / email / emailVerified / image   -- Better Auth が Google から書く（[07](./07-auth-and-privacy.md) §3）
 ├── createdAt / updatedAt
 
 userAliases
 ├── id: serial PK
-├── userId: bigint FK → users.id (CASCADE)
+├── userId: varchar(36) FK → users.id (CASCADE)
 ├── name: varchar(100) UNIQUE    -- 棋譜の対局者名と突き合わせる値
 ├── validFrom: date?             -- 有効期間（§4）。既定は無期限
 ├── validTo: date?
 └── createdAt
 ```
+
+> **Google ログイン（[07](./07-auth-and-privacy.md)）で型が変わる**（未実装）。実装済みの形は
+> `users.id: serial`・`userAliases.userId: bigint`。**ID の値は変えない**——既存の行は数値の `1` から
+> 文字列の `"1"` になるだけで、参照する列も `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
+> 🔒 **`displayName` を Google の `name` で置き換えない。** `name` はログインのたびに Google が書きうる値で、
+> 表示名は利用者が `/settings` で決める（§6.3）。
 
 ### 2.1 名前候補は別テーブルにする
 
@@ -88,7 +98,7 @@ userAliases
 ## 3. `kifus.ownerId`
 
 ```
-kifus.ownerId: bigint NOT NULL → users.id
+kifus.ownerId: varchar(36) NOT NULL → users.id   -- 実装済みは bigint。Google ログインで varchar に（値は "1" のまま）
 ```
 
 🔒 **意味は「このデータを持っている人」であって、対局者ではない。** 動画解析の棋譜も
@@ -266,7 +276,8 @@ ALTER TABLE kifus MODIFY ownerId bigint unsigned NOT NULL;
 ALTER TABLE kifus ADD subjectSide enum('sente','gote') NULL;
 ```
 
-⚠ **マイグレーションにデータ投入を書くのは、この 1 箇所だけの例外。** 他のマイグレーションは
+⚠ **マイグレーションにデータ投入を書くのは例外。** ここと、Google ログインへの切り替え
+（[07](./07-auth-and-privacy.md) §3.2。`"1"` の行の `name` / `email` を埋める）の 2 箇所だけ。 他のマイグレーションは
 スキーマのみを扱う。ここで例外にするのは、**`NOT NULL` + FK の成立にデータが必要**という
 避けられない依存があるため。
 
@@ -317,5 +328,5 @@ pnpm db:backfill-user --display "<表示名>" --names "<名前1>,<名前2>,..." 
 |---|---|
 | **同時期に同名の別人** | 期間では解けない。**1 局ごとの主体側の上書き**（`subjectSideOverride`）を将来の拡張として残す |
 | **日時不明の棋譜での衝突** | 期間が効かないので ambiguous のまま（§5.3） |
-| **招待の本体** | ユーザーごとの資格情報・セッションへの userId・所有者スコープ。[07](./07-auth-and-privacy.md) の前提を書き換える規模 |
+| **招待の本体** | 資格情報・セッションは Google ログイン（[07](./07-auth-and-privacy.md)。設計確定・未実装）、所有者スコープは [14](./14-multi-user.md) §4 |
 | **動画解析の可視性** | [10](./10-video-analysis.md) §8.3 で保留 |

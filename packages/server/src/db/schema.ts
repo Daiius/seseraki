@@ -295,11 +295,12 @@ export const kifuPositions = mysqlTable(
      */
     sfenHash: bytes(8).notNull(),
     /**
-     * 先手側だけの配置（盤 + 先手の持ち駒。`sideSfen(state, 'sente')`）のハッシュ。
+     * 先手側だけの配置（盤 + 先手の持ち駒）のハッシュ。入力は**小文字にした** `sideSfen`
+     * （`sideLayoutKey`）——先後をまたいで一致させるため（文字列の頃は照合順序が担っていた）。
      * 照合は盤・持ち駒から片側の配置を組み立て直して行う（`/positions/subject`）
      */
     senteSfenHash: bytes(8).notNull(),
-    /** 後手側だけの配置（盤を 180 度回して書いたもの。`sideSfen(state, 'gote')`）のハッシュ */
+    /** 後手側だけの配置（盤を 180 度回して書いたもの。`sideLayoutKey(state, 'gote')`）のハッシュ */
     goteSfenHash: bytes(8).notNull(),
     /** 盤 81 マス（1 マス 1 バイト）。距離の計算に読む（prd/10 §5.2） */
     board: bytes(81).notNull(),

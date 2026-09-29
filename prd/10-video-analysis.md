@@ -124,8 +124,9 @@ URL（`/positions?pos=<sfen>`）や応答には組み立てた文字列を載せ
 局面を探す」ことなので、**先後で盤の向きが逆のままでは比べられない**——「自分が先手のときの形」と
 「自分が後手のときの同じ形」が一致しない。回して**常に自分が手前**に揃える。
 ⚠ 大小文字（駒の所属）は残るので、比較は**小文字化してから**行う。持ち駒は向きを持たないのでそのまま。
-（⚠ 実装は現状**小文字化していない**——`sideSfen` の文字列をそのままハッシュ・照合している。
-ハッシュ化の変更では挙動を変えていない）
+🔴 ハッシュの入力と照合は**小文字にした配置**（`shared` の `sideLayoutKey`）。文字列を保存していた頃は、
+この小文字化を**列の照合順序（`utf8mb4_0900_ai_ci`。大文字小文字を区別しない）が黙って担っていた**。
+ハッシュにすると照合順序は効かないので、コードで明示している（落とすと先後をまたいだ一致が消える。実際に踏んだ）。
 
 **`board` は 1 マス 1 バイト**（`binary(81)`）。マスの状態は **空 + 14 駒種 × 2 側 = 29 通り**あり、
 ニブル（4 ビット = 16 値）では表せない。値は `0` = 空、`1..14` = 先手の `P L N S G B R K +P +L +N +S +B +R`、
@@ -179,12 +180,12 @@ END
 
 ```sql
 WHERE k.subjectSide IS NOT NULL
-  AND (   (k.subjectSide = 'sente' AND p.senteSfenHash = hash(:baseSideSfen))
-       OR (k.subjectSide = 'gote'  AND p.goteSfenHash  = hash(:baseSideSfen)) )
+  AND (   (k.subjectSide = 'sente' AND p.senteSfenHash = hash(lower(:baseSideSfen)))
+       OR (k.subjectSide = 'gote'  AND p.goteSfenHash  = hash(lower(:baseSideSfen))) )
 ```
 
 ⚠ 片側の配置（相手の駒を空にし、後手なら回したもの）は SQL で素直に比べられないので、
-**照合はアプリ側**で行う（行の `board` / `hands` から `sideSfen` を組み立て直して比べる）。
+**照合はアプリ側**で行う（行の `board` / `hands` から `sideLayoutKey` を組み立て直して比べる）。
 照合で落とす行を `LIMIT` の後に捨てると件数がずれるので、**このクエリには上限をかけず、
 照合してから数えて切る**（読む行数は一致する局面の数で、文字列の頃に `count(*) over ()` が数えていた行と同じ）。
 

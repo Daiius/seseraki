@@ -115,6 +115,21 @@ export function sideSfen(state: BoardState, side: Side): string {
   return `${board} ${handToSfen(state, side)}`;
 }
 
+/**
+ * 片側の配置を**索引で比べるときのキー**（`sideSfen` を小文字にしたもの）。
+ *
+ * 🔴 **先後をまたいで比べるために大小文字（駒の所属）を落とす**（prd/10 §3.2）。後手の配置は
+ * 盤を回したうえで小文字で書かれるので、`sideSfen` のままでは「自分が先手のときの形」と
+ * 「自分が後手のときの同じ形」が一致しない。
+ *
+ * 経緯: 文字列を保存していた頃は、この小文字化を**列の照合順序（`utf8mb4_0900_ai_ci`。大文字小文字を
+ * 区別しない）が黙って担っていた**。ハッシュ化（prd/14 §6.3）で照合順序が効かなくなったので、
+ * ここで明示する。⚠ **ハッシュの入力はこの値**。変えたら索引の全件の作り直しが要る。
+ */
+export function sideLayoutKey(state: BoardState, side: Side): string {
+  return sideSfen(state, side).toLowerCase();
+}
+
 /** 盤を 180 度回す（段も筋も逆順にする） */
 function rotated(board: Square[][]): Square[][] {
   return [...board].reverse().map((row) => [...row].reverse());

@@ -788,7 +788,10 @@ const route = app
         .limit(1);
       if (!base) return c.json({ error: 'not found' } as const, 404);
       const baseSideSfen = side === 'sente' ? key.senteSfen : key.goteSfen;
-      const baseSideHash = hashOf(baseSideSfen);
+      // 🔴 引く・比べるのは**小文字にした**配置（先後をまたいで一致させる。`sideLayoutKey`）。
+      // 応答の `sideSfen` は従来どおり `sideSfen` の文字列を返す
+      const baseLayoutKey = baseSideSfen.toLowerCase();
+      const baseSideHash = hashOf(baseLayoutKey);
 
       // 🔒 **ハッシュで引いて、片側の配置を組み立て直して照合する**（prd/14 §6.3）。
       // 片側の配置（相手の駒を空にし、後手なら 180 度回したもの）は SQL で素直に比べられない
@@ -832,7 +835,7 @@ const route = app
         );
       const verified = matched.filter(
         (row) =>
-          row.subjectSide !== null && sameSideLayout(row, row.subjectSide, baseSideSfen),
+          row.subjectSide !== null && sameSideLayout(row, row.subjectSide, baseLayoutKey),
       );
       const rows = verified
         .slice(0, POSITION_GAMES_LIMIT)

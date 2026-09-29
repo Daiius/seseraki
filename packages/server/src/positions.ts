@@ -14,7 +14,7 @@ import {
   positionHash,
   positionKey,
   positionSfen,
-  sideSfen,
+  sideLayoutKey,
   stateFromBytes,
   type PositionKey,
   type Side,
@@ -75,16 +75,23 @@ export function samePositionAsSfen(table: PositionColumns, sfen: string): SQL {
 /**
  * 片側の配置の照合（`/positions/subject`。prd/14 §6.3）。
  *
- * 行の盤・持ち駒から**その側の配置の文字列を組み立て直し**、基準と比べる。ハッシュが一致した
- * 行に対して呼び、衝突した別の配置を落とす。文字列で引いていた頃の `senteSfen = ?` /
- * `goteSfen = ?` と同じ判定になる（組み立てる関数が同じ `sideSfen` なので）。
+ * 行の盤・持ち駒から**その側の配置のキー（`sideLayoutKey`。小文字化した `sideSfen`）を
+ * 組み立て直し**、基準と比べる。ハッシュが一致した行に対して呼び、衝突した別の配置を落とす。
+ *
+ * 🔴 **大小文字を区別しない**（先後をまたいで一致させる）。文字列を保存していた頃の
+ * `senteSfen = ?` / `goteSfen = ?` は、列の照合順序（`utf8mb4_0900_ai_ci`）で大小文字を
+ * 区別せずに比べていた。それと同じ判定にする。
+ *
+ * @param baseLayoutKey 基準局面の `sideLayoutKey`
  */
 export function sameSideLayout(
   row: { board: Uint8Array; hands: Uint8Array; sideToMove: 'b' | 'w' },
   side: Side,
-  baseSideSfen: string,
+  baseLayoutKey: string,
 ): boolean {
-  return sideSfen(stateFromBytes(row.board, row.hands, row.sideToMove), side) === baseSideSfen;
+  return (
+    sideLayoutKey(stateFromBytes(row.board, row.hands, row.sideToMove), side) === baseLayoutKey
+  );
 }
 
 /** 索引の行（盤・持ち駒・手番）から局面キーの SFEN を組み立てる。文字列は保存していないため */
@@ -130,8 +137,9 @@ export async function replacePositions(
       move: i === 0 ? null : usiMoves[i - 1],
       // 🔒 文字列は保存しない（prd/14 §6.3）。検索はハッシュで引いて盤・持ち駒で照合する
       sfenHash: hashOf(key.sfen),
-      senteSfenHash: hashOf(key.senteSfen),
-      goteSfenHash: hashOf(key.goteSfen),
+      // ⚠ 片側は**小文字にしてから**ハッシュする（先後をまたいで一致させる。`sideLayoutKey`）
+      senteSfenHash: hashOf(sideLayoutKey(state, 'sente')),
+      goteSfenHash: hashOf(sideLayoutKey(state, 'gote')),
       // drizzle の binary 列は Buffer を受ける（shared は環境非依存なので Uint8Array を返す）
       board: Buffer.from(key.board),
       hands: Buffer.from(key.hands),

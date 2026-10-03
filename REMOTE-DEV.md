@@ -15,6 +15,10 @@ remote と local の差は次の3点のみで、すべて env 由来:
 | --------------------- | -------------- | ------------------------------ | ---------------------------------------------- |
 | web の公開バインド    | `5173`（全IF） | `127.0.0.1:8101`               | compose `${WEB_BIND}`                          |
 | ログインのオリジン    | `http://localhost:5173` | 公開オリジン（https）  | compose `${BETTER_AUTH_URL}` → server（https なら cookie に `Secure` が付く） |
+
+🔒 **remote では dev ログインと email+password が閉じる**（ログインのオリジンが公開オリジンのため。prd/07 §6）。
+入るのは Google だけで、`.env.server` に `BETTER_AUTH_SECRET` と `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` が
+無ければ server が起動しない。公開リポにある dev の固定パスワードで、前段のアクセス制限だけが守りにならないようにするため。
 | Vite の許可ホスト/HMR | なし           | `allowedHosts` + `hmr wss:443` | `${DEV_ALLOWED_HOST}` を vite.config.ts が判定 |
 
 ブラウザは web(Vite) の `/api` proxy 経由で server に届き（`DEV_API_TARGET=http://server:4000`）、

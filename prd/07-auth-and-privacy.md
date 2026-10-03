@@ -44,7 +44,7 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 |---|---|---|
 | `socialProviders.google` | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 第一のログイン手段 |
 | `account.accountLinking.enabled` | `false` | §1 |
-| `emailAndPassword.enabled` | **`NODE_ENV === 'development'` のときだけ `true`** | dev の抜け道の土台（§6） |
+| `emailAndPassword.enabled` | **手元の development（§6）のときだけ `true`** | dev の抜け道の土台（§6） |
 | `session.cookieCache.enabled` | `false`（明示） | 🔒 cookie cache を使うと、**失効してもキャッシュの期限まで通ってしまう** |
 | `session.expiresIn` / `updateAge` | 30 日 / 1 日（仮置き） | 今の 30 日を踏襲し、使っている間は延びる |
 | `user.additionalFields.displayName` | `input: false` | 表示名（§3.1）。登録時の入力から書かせない。作成時の値は `databaseHooks.user.create.before` で補う |
@@ -236,7 +236,7 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 | セッション | 棋譜・出題・設定など web 向けのエンドポイント | `sessionRequired`（Better Auth のセッション + 所有者ゲート。§5.1） |
 | （無効） | `/api/swars/*`（一括取り込み系） | **常時 404**。認証前に遮断（[04](./04-ingestion.md) §4。[14](./14-multi-user.md) §4.3 で撤去） |
 | API_KEY | `/api/worker/*`・動画解析の取り込み（`POST /video-analysis/kifus`） | `Authorization: Bearer <API_KEY>`（別系統・変更なし） |
-| dev のみ | `/api/dev/login` | `NODE_ENV=development` のときだけ登録（§6） |
+| dev のみ | `/api/dev/login` | 手元の development（§6）のときだけ登録 |
 
 - **worker 認証はユーザー認証と別系統**。worker は inbound の口を持たず、API_KEY で server を polling する
   （[02](./02-architecture.md) / [05](./05-analysis.md)）。API_KEY 経路で作られる行の所有者は**所有者（`"1"`）固定**
@@ -268,7 +268,7 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
   （規約・プライバシーポリシーの前）。一般公開のときに「同意していない既存ユーザー」も残る
 - **移行（§4）の間だけ `AUTH_ALLOW_SIGNUP=true` で作成を許す**（切り替えのデプロイで立て、§4 が済んだら外して再起動）。
   窓の間に他人が入り込んでも、ゲートで何も見えず、§4 の手順 0（エントリの dry-run）で見分けて消せる
-- **development では常に許す**（dev ログインが所有者と `?as=` の他ユーザーを作るため。§6.1）
+- **手元の development（§6）では常に許す**（dev ログインが所有者と `?as=` の他ユーザーを作るため。§6.1）
 - 採らなかった案: 「google の account が 1 行も無い間だけ作成を許す」。環境変数も再起動も要らないが、
   窓を閉じる条件が暗黙的で、他人が先に入ると所有者が入れなくなる
 - 一般公開（[14](./14-multi-user.md) §10 の段階 5）でこの拒否を外す
@@ -284,17 +284,22 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 - Google ログインの失敗は `/login?error=<code>` に戻る（`errorCallbackURL`）。`signup_disabled`（登録を閉じている）などを文にして出す
   - `/api/auth/*` は Better Auth のハンドラが丸ごと受けるので、**アプリの API をその下に置かない**
 - ログアウトは `POST /api/auth/sign-out`（**セッションの行が消える**＝その場で失効する）
-- dev のときだけ「dev ログイン」ボタンを出す（`import.meta.env.DEV`。§6）
+- 手元の dev のときだけ「dev ログイン」ボタンを出す（`import.meta.env.DEV` かつホストが localhost。§6）
 
 ## 6. 開発環境
 
-- 🔒 **`NODE_ENV=development` のときだけ** email+password と **dev ログインの抜け道**（`POST /api/dev/login`）を有効にする。
-  **それ以外（production・未設定・test）では登録すらしない**（fail-closed）。明示の allowlist にするのは、
-  `NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため
-- ⚠ **dev compose の server に `NODE_ENV=development` を足す必要がある**（今は付いていない）
+- 🔒 **手元の development（`NODE_ENV=development` かつ `BETTER_AUTH_URL` が http の `localhost` / `127.0.0.1` / `[::1]`）
+  のときだけ** email+password と **dev ログインの抜け道**（`POST /api/dev/login`）を有効にする。
+  **それ以外（production・未設定・test・公開オリジンの development）では登録すらしない**（fail-closed）。
+  明示の allowlist にするのは、`NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため
+- 🔒 **リモート dev（[REMOTE-DEV.md](../REMOTE-DEV.md)。同じ compose を公開オリジンで使う）は development でも閉じる。**
+  dev の固定パスワードと秘密のフォールバックは公開リポにあるので、開いていると前段のアクセス制限だけが守りになる
+  （PR #152 のレビューで指摘）。リモート dev は**本番と同じく Google だけ**で入り、`BETTER_AUTH_SECRET` と
+  Google のクライアントが無ければ起動しない
+- dev compose は server に `NODE_ENV=development` と `BETTER_AUTH_URL` を渡す（compose.yml）
 - 目的は **Playwright の E2E を Google なしで通す**こと。本物の Google ログインも、localhost・リモート dev の
   オリジンを OAuth クライアントのリダイレクト先に登録すれば dev で試せる
-- 秘密のフォールバック（`BETTER_AUTH_SECRET` 未設定時の固定値）も development だけ。それ以外は起動を失敗させる
+- 秘密のフォールバック（`BETTER_AUTH_SECRET` 未設定時の固定値）も手元の development だけ。それ以外は起動を失敗させる
 
 ### 6.1 dev ログインの抜け道
 
@@ -317,11 +322,12 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 - 理由: 一般公開の本題である**所有者スコープ（[14](./14-multi-user.md) §4）は、2 人目のユーザーがいないと確かめられない**。
   所有者ゲート（§5.1）がある間は、**他ユーザーが 403 になること自体**をこの経路で確かめられる
 - 新規登録を閉じる仕組み（§5.2）とは矛盾しない——**development では作成を常に許す**（§5.2）ので、
-  `?as=` のユーザーも作れる。development 以外では `/api/dev/login` 自体が無い
+  `?as=` のユーザーも作れる。手元の development 以外では `/api/dev/login` 自体が無い
 
 #### 抜け道が本番に出ないことをテストで固定する
 
 🔒 **unit テストで確かめる**: `NODE_ENV` が development 以外（**production・未設定・test**）のとき、
+および **development でも `BETTER_AUTH_URL` が公開オリジン（リモート dev）**のとき、
 
 実装は `packages/server/src/auth-routes.test.ts`（アプリ全体を env を変えて読み直す）と `auth-config.test.ts`:
 
@@ -386,11 +392,11 @@ cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/
 
 | 変数 | 必須 | 内容 |
 |---|---|---|
-| `BETTER_AUTH_SECRET` | development 以外は必須（無ければ起動失敗） | セッション等の署名鍵 |
+| `BETTER_AUTH_SECRET` | 手元の development 以外は必須（無ければ起動失敗。リモート dev も必須） | セッション等の署名鍵 |
 | `BETTER_AUTH_URL` | development 以外は必須 | ブラウザから見えるオリジン（`/api` は付けない。Better Auth が `/api/auth` を足す） |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | development 以外は必須 | Google の OAuth クライアント |
-| `NODE_ENV` | — | `development` のときだけ dev の抜け道を開く（§6） |
-| `AUTH_ALLOW_SIGNUP` | 移行（§4）の間だけ `true` | 新規 user の作成を許す（§5.2）。development では不要（常に許す） |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 手元の development 以外は必須（リモート dev も必須） | Google の OAuth クライアント |
+| `NODE_ENV` | — | `development` かつ `BETTER_AUTH_URL` が手元のときだけ dev の抜け道を開く（§6） |
+| `AUTH_ALLOW_SIGNUP` | 移行（§4）の間だけ `true` | 新規 user の作成を許す（§5.2）。手元の development では不要（常に許す） |
 | `API_KEY` | 必須（変更なし） | worker・動画解析の取り込み |
 
 値・ドメイン・OAuth クライアントの具体は**公開リポに置かない**（§10）。

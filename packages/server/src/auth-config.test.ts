@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { authSettings, initialDisplayName, ownerGate } from './auth-config.js';
+import {
+  authSettings,
+  initialDisplayName,
+  isLocalOrigin,
+  ownerGate,
+} from './auth-config.js';
 
 const PROD_ENV = {
   BETTER_AUTH_SECRET: 'x'.repeat(40),
@@ -45,6 +50,34 @@ describe('authSettings: 開発用の機能は development のときだけ（prd/
       }
     });
   }
+
+  // 🔒 remote dev は development でも公開オリジンなので閉じる（prd/07 §6.1）
+  describe('NODE_ENV=development・公開オリジン（remote dev）', () => {
+    const remote = { ...PROD_ENV, NODE_ENV: 'development' };
+
+    it('開発用の機能を開かない', () => {
+      const s = authSettings(remote);
+      expect(s.isDev).toBe(false);
+      expect(s.allowSignup).toBe(false);
+    });
+
+    for (const name of ['BETTER_AUTH_SECRET', 'GOOGLE_CLIENT_ID']) {
+      it(`${name} が無ければ起動を失敗させる（固定値へ逃がさない）`, () => {
+        const env: Record<string, string | undefined> = { ...remote };
+        delete env[name];
+        expect(() => authSettings(env)).toThrow(name);
+      });
+    }
+  });
+
+  it('isLocalOrigin: http の localhost だけを手元とみなす', () => {
+    expect(isLocalOrigin('http://localhost:5173')).toBe(true);
+    expect(isLocalOrigin('http://127.0.0.1:8101')).toBe(true);
+    expect(isLocalOrigin('http://[::1]:5173')).toBe(true);
+    expect(isLocalOrigin('https://localhost:5173')).toBe(false);
+    expect(isLocalOrigin('http://localhost.example.test')).toBe(false);
+    expect(isLocalOrigin('https://dev.example.test')).toBe(false);
+  });
 
   it('AUTH_ALLOW_SIGNUP=true の間だけ登録を許す（移行の窓。prd/07 §5.2）', () => {
     expect(

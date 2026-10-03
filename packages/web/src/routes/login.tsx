@@ -37,6 +37,14 @@ export const Route = createFileRoute('/login')({
 /** `?as=` に渡せる名前（server の検査と同じ形） */
 const DEV_AS_PATTERN = /^[a-z0-9_-]{1,32}$/;
 
+/**
+ * dev ログインを出すか。server は手元のオリジン（http の localhost）でしか開かないので（prd/07 §6.1）、
+ * remote dev（公開オリジン）では押しても 404 になるボタンを出さない
+ */
+const SHOW_DEV_LOGIN =
+  import.meta.env.DEV &&
+  ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+
 function LoginPage() {
   const navigate = useNavigate();
   const router = useRouter();
@@ -129,8 +137,8 @@ function LoginPage() {
             </>
           )}
 
-          {/* dev のときだけ（prd/07 §6.1）。本番のビルドでは import.meta.env.DEV が false になり丸ごと消える */}
-          {import.meta.env.DEV && (
+          {/* 手元の dev のときだけ（prd/07 §6.1）。本番のビルドでは import.meta.env.DEV が false になり丸ごと消える */}
+          {SHOW_DEV_LOGIN && (
             <div className="mt-6 border-t border-base-300 pt-4 space-y-2">
               <p className="text-sm text-base-content/70">開発用</p>
               <button

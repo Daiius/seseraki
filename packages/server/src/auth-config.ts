@@ -3,9 +3,11 @@
  * インスタンスの組み立て（`auth.ts`）と分ける——unit テストが env を差し替えて検査できるように。
  *
  * 🔒 **開発用の機能（email+password・dev ログイン・秘密のフォールバック・登録の常時許可）は
- * `NODE_ENV === 'development'` のときだけ有効にする**（明示の許可リスト。prd/07 §6）。
- * production・未設定・test などそれ以外はすべて閉じ、必須の値が無ければ**起動を失敗させる**。
- * `NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため。
+ * `NODE_ENV === 'development'` **かつ** ログインのオリジンが手元（http の localhost）のときだけ
+ * 有効にする**（明示の許可リスト。prd/07 §6）。それ以外はすべて閉じ、必須の値が無ければ
+ * **起動を失敗させる**。`NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため。
+ * remote dev（同じ compose を公開オリジンで使う）も development だが、公開オリジンなので閉じる——
+ * 前段のアクセス制限だけに守りを預けない（dev の固定パスワードと秘密は公開リポにある）。
  */
 import type { BetterAuthOptions } from 'better-auth';
 import { APIError } from 'better-auth/api';
@@ -14,7 +16,7 @@ import { OWNER_USER_ID } from './users.js';
 export type Env = Record<string, string | undefined>;
 
 export interface AuthSettings {
-  /** 開発用の機能を開くか。`NODE_ENV === 'development'` のときだけ true */
+  /** 開発用の機能を開くか。`NODE_ENV === 'development'` かつオリジンが手元のときだけ true */
   isDev: boolean;
   secret: string;
   /** ブラウザから見えるオリジン（`/api` は付けない。Better Auth が `/api/auth` を足す） */
@@ -40,20 +42,29 @@ function required(
   );
 }
 
+/** 手元のオリジンか（http の localhost / 127.0.0.1 / [::1]）。公開オリジン（https）は false */
+export function isLocalOrigin(url: string): boolean {
+  const { protocol, hostname } = new URL(url);
+  return (
+    protocol === 'http:' &&
+    ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
+  );
+}
+
 export function authSettings(env: Env): AuthSettings {
-  const isDev = env.NODE_ENV === 'development';
+  // dev は Vite の origin（`/api` は Vite の proxy が server へ渡す。prd/07 §6.2）
+  const baseURL = required(
+    env,
+    env.NODE_ENV === 'development',
+    'BETTER_AUTH_URL',
+    'http://localhost:5173',
+  );
+  const isDev = env.NODE_ENV === 'development' && isLocalOrigin(baseURL);
   const secret = required(
     env,
     isDev,
     'BETTER_AUTH_SECRET',
     'seseraki-dev-insecure-secret-do-not-use-in-production',
-  );
-  // dev は Vite の origin（`/api` は Vite の proxy が server へ渡す。prd/07 §6.2）
-  const baseURL = required(
-    env,
-    isDev,
-    'BETTER_AUTH_URL',
-    'http://localhost:5173',
   );
   const clientId = env.GOOGLE_CLIENT_ID;
   const clientSecret = env.GOOGLE_CLIENT_SECRET;
@@ -61,7 +72,7 @@ export function authSettings(env: Env): AuthSettings {
   if (clientId && clientSecret) {
     google = { clientId, clientSecret };
   } else if (!isDev) {
-    // development 以外は Google が唯一のログイン手段なので、無ければ起動させない
+    // 手元の development 以外は Google が唯一のログイン手段なので、無ければ起動させない
     required(
       env,
       isDev,
@@ -148,7 +159,7 @@ export function authOptions(
       // 🔒 同じメールでの自動連携は乗っ取りの経路になりやすい（prd/07 §1）
       accountLinking: { enabled: false },
     },
-    // 🔒 development のときだけ（dev ログインの土台。prd/07 §6）
+    // 🔒 手元の development のときだけ（dev ログインの土台。prd/07 §6）
     emailAndPassword: { enabled: settings.isDev },
     ...(settings.google && {
       socialProviders: {
@@ -177,7 +188,7 @@ export function authOptions(
         create: {
           before: async (user) => {
             // 🔒 他人の Google ログインで user を作らせない（prd/07 §5.2）。
-            // 移行の間だけ AUTH_ALLOW_SIGNUP=true で開ける。development は常に許す
+            // 移行の間だけ AUTH_ALLOW_SIGNUP=true で開ける。手元の development は常に許す
             if (!settings.allowSignup) {
               throw new APIError('FORBIDDEN', { message: 'signup disabled' });
             }

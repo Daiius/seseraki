@@ -1,5 +1,6 @@
 /**
- * 🔒 **dev ログインの抜け道が development 以外で出ないこと**をアプリ全体で固定する（prd/07 §6.1）。
+ * 🔒 **dev ログインの抜け道が手元の development 以外で出ないこと**をアプリ全体で固定する（prd/07 §6.1）。
+ * remote dev（development だが公開オリジン）も閉じる側に入る。
  *
  * `route.ts` は import した時点の `NODE_ENV` でルートを組むので、env を差し替えてから
  * モジュールを読み直す。DB には繋がない（ここで叩く経路は DB に届く前に止まる）。
@@ -30,18 +31,43 @@ async function loadApp(env: Record<string, string | undefined>) {
 afterEach(() => setEnv(saved));
 
 const ORIGIN = 'http://localhost:5173';
-const jsonPost = (body: unknown) => ({
+const REMOTE_ORIGIN = 'https://dev.example.test';
+// Better Auth のレート制限（email 系は 10 秒に 3 回）の記録は読み直しをまたいで残るので、送信元を毎回変える
+let clientSeq = 0;
+const jsonPost = (body: unknown, origin = ORIGIN) => ({
   method: 'POST',
-  headers: { 'content-type': 'application/json', origin: ORIGIN },
+  headers: {
+    'content-type': 'application/json',
+    origin,
+    'x-forwarded-for': `192.0.2.${++clientSeq}`,
+  },
   body: JSON.stringify(body),
 });
 const hasDevLogin = (app: Awaited<ReturnType<typeof loadApp>>) =>
   app.routes.some((r) => r.path.startsWith('/api/dev'));
 
-for (const nodeEnv of ['production', undefined, 'test']) {
-  describe(`NODE_ENV=${nodeEnv ?? '未設定'}`, () => {
+const CLOSED = [
+  ...['production', undefined, 'test'].map((nodeEnv) => ({
+    label: `NODE_ENV=${nodeEnv ?? '未設定'}`,
+    env: { ...PROD_ENV, NODE_ENV: nodeEnv },
+    origin: ORIGIN,
+  })),
+  // 🔒 remote dev: 同じ compose（development）を公開オリジンで使う
+  {
+    label: 'NODE_ENV=development・公開オリジン（remote dev）',
+    env: {
+      ...PROD_ENV,
+      BETTER_AUTH_URL: REMOTE_ORIGIN,
+      NODE_ENV: 'development',
+    },
+    origin: REMOTE_ORIGIN,
+  },
+];
+
+for (const { label, env: closedEnv, origin } of CLOSED) {
+  describe(label, () => {
     it('/api/dev/login は 404（ルート自体が登録されていない）', async () => {
-      const app = await loadApp({ ...PROD_ENV, NODE_ENV: nodeEnv });
+      const app = await loadApp(closedEnv);
       expect(hasDevLogin(app)).toBe(false);
       expect(
         (await app.request('/api/dev/login', { method: 'POST' })).status,
@@ -53,32 +79,29 @@ for (const nodeEnv of ['production', undefined, 'test']) {
     }, 20_000);
 
     it('email+password のエンドポイントは使えない', async () => {
-      const app = await loadApp({
-        ...PROD_ENV,
-        NODE_ENV: nodeEnv,
-        AUTH_ALLOW_SIGNUP: 'true',
-      });
+      const app = await loadApp({ ...closedEnv, AUTH_ALLOW_SIGNUP: 'true' });
       const body = {
         email: 'dev@example.invalid',
         password: 'password-1234',
         name: 'x',
       };
-      const up = await app.request('/api/auth/sign-up/email', jsonPost(body));
+      const up = await app.request(
+        '/api/auth/sign-up/email',
+        jsonPost(body, origin),
+      );
       expect(up.status).toBe(400);
       expect(await up.text()).toMatch(/not enabled/i);
       const signIn = await app.request(
         '/api/auth/sign-in/email',
-        jsonPost(body),
+        jsonPost(body, origin),
       );
       expect(signIn.status).toBe(400);
       expect(await signIn.text()).toMatch(/not enabled/i);
     }, 20_000);
 
     it('BETTER_AUTH_SECRET が無ければ起動しない（固定値へ逃がさない）', async () => {
-      const { BETTER_AUTH_SECRET: _, ...rest } = PROD_ENV;
-      await expect(loadApp({ ...rest, NODE_ENV: nodeEnv })).rejects.toThrow(
-        'BETTER_AUTH_SECRET',
-      );
+      const { BETTER_AUTH_SECRET: _, ...rest } = closedEnv;
+      await expect(loadApp(rest)).rejects.toThrow('BETTER_AUTH_SECRET');
     }, 20_000);
   });
 }

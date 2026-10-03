@@ -127,7 +127,9 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
 - 🔒 **マイグレーションはトランザクションで流れる**（Postgres は DDL もトランザクションに入る）。途中で失敗したら丸ごと戻る
 - 削除する一度きりのスクリプト（役目を終えた・Postgres では要らない）:
   `baseline.ts`（既存 DB を管理下に載せる）・`backfill-source-tz.ts`・`backfill-user.ts`・`rederive-played-at.ts`
-  （`timestamptz` で日時の不具合の種類が無くなる。移行前に本番の `playedAt` が正しいことは §6.4 で確かめる）
+  （`timestamptz` で日時の不具合の種類が無くなる）
+  - 🔴 **ただし、既に保存されている `playedAt` のずれは移行では直らない**（形として正しい日時なので、制約の検査も通る）。
+    切り替えの最初の手順（§7 の 0）で、**旧イメージに残っている `rederive-played-at.js` の dry-run を流し、ずれが 0 件であることを確かめる**
 - 残して移植する: `migrate.ts`・`link-owner-account.ts`（dev ログインが毎回使う関数のエントリ）・
   `generate-drills`・`rebuild-positions`・`rebuild-subjects`・`redetect-tactics`
 
@@ -152,6 +154,10 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 ### 6.3 変換
 
 - 日時: MySQL の値を**文字列のまま読み、UTC として** `Date` にする（今の typeCast と同じ解釈）
+  - 🔴 **MySQL の読み取り接続は、最初の SELECT より前にセッションを UTC（`time_zone = '+00:00'`）に固定する。**
+    `TIMESTAMP` は接続のセッションの時刻帯で文字列になるので、JST の接続で読んで UTC と解釈すると**全行が一律に 9 時間ずれる**
+    （[03](./03-data-model.md) §1.1・server の `db/index.ts` と同じ罠）。固定した後に `@@session.time_zone` を読み返し、
+    UTC でなければ**何も書かずに中止する**。接続を張り直す経路（プール）があるなら、すべての接続で同じことをする
 - `binary` → `Buffer` のまま `bytea` へ。`json` → `jsonb`。enum → `text`
 - 🔴 **ID は元の値のまま入れる。** identity が `generated always` なので、挿入に **`OVERRIDING SYSTEM VALUE`** が要る
   （付けないと拒否される。試作で確認）。全表を入れた後に **`setval` で採番の続きを合わせる**（忘れると次の挿入が PK 衝突で落ちる）
@@ -165,6 +171,9 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 ## 7. 切り替え
 
+0. 🔴 **旧イメージ（MySQL 版）で `rederive-played-at.js` を dry-run で流し、`playedAt` のずれが 0 件であることを確かめる。**
+   ずれがあれば `REDERIVE_PLAYED_AT_APPLY=1` で直してから進む（主体側と出題も同じトランザクションで追随する。[03](./03-data-model.md) §1.1）。
+   移行は値をそのまま運ぶので、ここで直さないと**ずれたまま Postgres に入る**
 1. VPS に Postgres のコンテナを足し、空の DB に `migrate.js` で 0000 を当てる（管理ロール）
 2. 本番の server と worker を止める（利用者は所有者だけなので告知は要らない）
 3. MySQL の seseraki DB を `mysqldump` で丸ごとファイルに残す

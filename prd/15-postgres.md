@@ -129,7 +129,8 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
   `baseline.ts`（既存 DB を管理下に載せる）・`backfill-source-tz.ts`・`backfill-user.ts`・`rederive-played-at.ts`
   （`timestamptz` で日時の不具合の種類が無くなる）
   - 🔴 **ただし、既に保存されている `playedAt` のずれは移行では直らない**（形として正しい日時なので、制約の検査も通る）。
-    切り替えの最初の手順（§7 の 0）で、**旧イメージに残っている `rederive-played-at.js` の dry-run を流し、ずれが 0 件であることを確かめる**
+    切り替えの最初の手順（§7 の 0）で、**旧イメージに残っている `rederive-played-at.js` の dry-run を流し、ずれと `sourceTz` 未設定の行が
+    どちらも 0 件であることを確かめる**
 - 残して移植する: `migrate.ts`・`link-owner-account.ts`（dev ログインが毎回使う関数のエントリ）・
   `generate-drills`・`rebuild-positions`・`rebuild-subjects`・`redetect-tactics`
 
@@ -171,9 +172,11 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 ## 7. 切り替え
 
-0. 🔴 **旧イメージ（MySQL 版）で `rederive-played-at.js` を dry-run で流し、`playedAt` のずれが 0 件であることを確かめる。**
-   ずれがあれば `REDERIVE_PLAYED_AT_APPLY=1` で直してから進む（主体側と出題も同じトランザクションで追随する。[03](./03-data-model.md) §1.1）。
+0. 🔴 **旧イメージ（MySQL 版）で `rederive-played-at.js` を dry-run で流し、次の 2 つがどちらも 0 件であることを確かめる。**
    移行は値をそのまま運ぶので、ここで直さないと**ずれたまま Postgres に入る**
+   - **`playedAt` のずれ**。あれば `REDERIVE_PLAYED_AT_APPLY=1` で直す（主体側と出題も同じトランザクションで追随する。[03](./03-data-model.md) §1.1）
+   - **`sourceTz` が未設定の行**。⚠ `rederive-played-at` は**この行を検査の対象から外し、件数を別に出すだけ**なので、
+     ずれていても「変更 0 件」になる。あれば先に `sourceTz` の埋め戻し（`db:backfill-tz`。AGENTS.md）を流し、もう一度 dry-run から確かめる
 1. VPS に Postgres のコンテナを足し、空の DB に `migrate.js` で 0000 を当てる（管理ロール）
 2. 本番の server と worker を止める（利用者は所有者だけなので告知は要らない）
 3. MySQL の seseraki DB を `mysqldump` で丸ごとファイルに残す

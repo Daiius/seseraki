@@ -28,13 +28,14 @@
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
 | [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。認証の段階 1 だけ実装済み・他は未実装） |
+| [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。未実装・所有者スコープの前に行う） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 
 ## 技術スタック / 構成
 
 - フルスタック TypeScript の **pnpm monorepo**。
-- **DB**: MySQL 8.4 / **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
+- **DB**: MySQL 8.4（**Postgres 18 へ移行予定**。[prd/15](./prd/15-postgres.md)）/ **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
 - **Front**: React 19 + Vite + TanStack Router + TailwindCSS v4 + daisyUI
   - **メモ化は React Compiler に委ねる**。`useMemo` / `useCallback` / `React.memo` は原則書かない
     （`packages/web/vite.config.ts` で `reactCompilerPreset` を有効化済み）。

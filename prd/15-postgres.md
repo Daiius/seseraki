@@ -177,6 +177,9 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
    - **`playedAt` のずれ**。あれば `REDERIVE_PLAYED_AT_APPLY=1` で直す（主体側と出題も同じトランザクションで追随する。[03](./03-data-model.md) §1.1）
    - **`sourceTz` が未設定の行**。⚠ `rederive-played-at` は**この行を検査の対象から外し、件数を別に出すだけ**なので、
      ずれていても「変更 0 件」になる。あれば先に `sourceTz` の埋め戻し（`db:backfill-tz`。AGENTS.md）を流し、もう一度 dry-run から確かめる
+   - ⚠ **埋め戻しは主体側と出題を作り直さない**（`playedAt` と `sourceTz` だけを書く）。埋め戻しを適用したら、続けて
+     **`rebuild-subjects.js` を `REBUILD_SUBJECTS_APPLY=1` で流す**（主体側が変わった棋譜は出題も同じトランザクションで引き直す。
+     [11](./11-users.md) §4.2・[13](./13-drills.md) §4.1）。名前候補の有効期間の境界をまたぐ棋譜が、古い主体側のまま移らないようにする
 1. VPS に Postgres のコンテナを足し、空の DB に `migrate.js` で 0000 を当てる（管理ロール）
 2. 本番の server と worker を止める（利用者は所有者だけなので告知は要らない）
 3. MySQL の seseraki DB を `mysqldump` で丸ごとファイルに残す

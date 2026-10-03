@@ -8,6 +8,8 @@
  * **起動を失敗させる**。`NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため。
  * remote dev（同じ compose を公開オリジンで使う）も development だが、公開オリジンなので閉じる——
  * 前段のアクセス制限だけに守りを預けない（dev の固定パスワードと秘密は公開リポにある）。
+ * 公開ホスト（`DEV_ALLOWED_HOST`。Vite が未知の Host を拒むので remote 公開には必須）が
+ * 設定されていても閉じる——`BETTER_AUTH_URL` を localhost のまま公開経路だけ作った食い違いに備える。
  */
 import type { BetterAuthOptions } from 'better-auth';
 import { APIError } from 'better-auth/api';
@@ -59,7 +61,11 @@ export function authSettings(env: Env): AuthSettings {
     'BETTER_AUTH_URL',
     'http://localhost:5173',
   );
-  const isDev = env.NODE_ENV === 'development' && isLocalOrigin(baseURL);
+  const publicHost = env.DEV_ALLOWED_HOST;
+  const isDev =
+    env.NODE_ENV === 'development' &&
+    isLocalOrigin(baseURL) &&
+    (!publicHost || publicHost === 'localhost');
   const secret = required(
     env,
     isDev,

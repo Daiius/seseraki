@@ -55,6 +55,9 @@ services:
       # ブラウザから見えるオリジン（Vite。/api は Vite の proxy が server へ渡す。prd/07 §6.2）。
       # remote は .env.remote で公開オリジン（https）を渡す——https なら cookie に Secure が付く
       BETTER_AUTH_URL: '${BETTER_AUTH_URL:-http://localhost:5173}'
+      # 🔒 web と同じ値を渡す。localhost 以外（＝公開ホストがある）なら dev の抜け道を閉じる（prd/07 §6）。
+      # BETTER_AUTH_URL を localhost のまま公開経路だけ作った食い違いでも開かないように
+      DEV_ALLOWED_HOST: '${DEV_ALLOWED_HOST:-localhost}'
     command: pnpm --filter server start
     depends_on:
       db:

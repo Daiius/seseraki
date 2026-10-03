@@ -70,6 +70,24 @@ describe('authSettings: 開発用の機能は development のときだけ（prd/
     }
   });
 
+  it('公開ホスト（DEV_ALLOWED_HOST）があれば、BETTER_AUTH_URL が localhost のままでも閉じる', () => {
+    expect(
+      authSettings({ NODE_ENV: 'development', DEV_ALLOWED_HOST: 'localhost' })
+        .isDev,
+    ).toBe(true);
+    const env = {
+      ...PROD_ENV,
+      BETTER_AUTH_URL: 'http://localhost:5173',
+      NODE_ENV: 'development',
+      DEV_ALLOWED_HOST: 'dev.example.test',
+    };
+    const s = authSettings(env);
+    expect(s.isDev).toBe(false);
+    expect(s.allowSignup).toBe(false);
+    const { BETTER_AUTH_SECRET: _, ...noSecret } = env;
+    expect(() => authSettings(noSecret)).toThrow('BETTER_AUTH_SECRET');
+  });
+
   it('isLocalOrigin: http の localhost だけを手元とみなす', () => {
     expect(isLocalOrigin('http://localhost:5173')).toBe(true);
     expect(isLocalOrigin('http://127.0.0.1:8101')).toBe(true);

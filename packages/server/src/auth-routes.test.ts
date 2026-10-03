@@ -13,7 +13,12 @@ const PROD_ENV = {
   GOOGLE_CLIENT_ID: 'client-id',
   GOOGLE_CLIENT_SECRET: 'client-secret',
 };
-const KEYS = ['NODE_ENV', 'AUTH_ALLOW_SIGNUP', ...Object.keys(PROD_ENV)];
+const KEYS = [
+  'NODE_ENV',
+  'AUTH_ALLOW_SIGNUP',
+  'DEV_ALLOWED_HOST',
+  ...Object.keys(PROD_ENV),
+];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 
 function setEnv(env: Record<string, string | undefined>) {
@@ -61,6 +66,17 @@ const CLOSED = [
       NODE_ENV: 'development',
     },
     origin: REMOTE_ORIGIN,
+  },
+  // 🔒 公開経路（DEV_ALLOWED_HOST）だけ作り、BETTER_AUTH_URL は localhost のまま
+  {
+    label:
+      'NODE_ENV=development・公開ホストあり（BETTER_AUTH_URL は localhost）',
+    env: {
+      ...PROD_ENV,
+      NODE_ENV: 'development',
+      DEV_ALLOWED_HOST: 'dev.example.test',
+    },
+    origin: ORIGIN,
   },
 ];
 

@@ -288,14 +288,15 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 
 ## 6. 開発環境
 
-- 🔒 **手元の development（`NODE_ENV=development` かつ `BETTER_AUTH_URL` が http の `localhost` / `127.0.0.1` / `[::1]`）
-  のときだけ** email+password と **dev ログインの抜け道**（`POST /api/dev/login`）を有効にする。
+- 🔒 **手元の development（`NODE_ENV=development` かつ `BETTER_AUTH_URL` が http の `localhost` / `127.0.0.1` / `[::1]`
+  かつ公開ホスト `DEV_ALLOWED_HOST` が未設定か `localhost`）のときだけ** email+password と **dev ログインの抜け道**（`POST /api/dev/login`）を有効にする。
   **それ以外（production・未設定・test・公開オリジンの development）では登録すらしない**（fail-closed）。
   明示の allowlist にするのは、`NODE_ENV` を付け忘れた本番で抜け道が開く事故（fail-open）を構造的に起こさないため
 - 🔒 **リモート dev（[REMOTE-DEV.md](../REMOTE-DEV.md)。同じ compose を公開オリジンで使う）は development でも閉じる。**
   dev の固定パスワードと秘密のフォールバックは公開リポにあるので、開いていると前段のアクセス制限だけが守りになる
   （PR #152 のレビューで指摘）。リモート dev は**本番と同じく Google だけ**で入り、`BETTER_AUTH_SECRET` と
-  Google のクライアントが無ければ起動しない
+  Google のクライアントが無ければ起動しない。`BETTER_AUTH_URL` を localhost のまま公開経路（`DEV_ALLOWED_HOST`。
+  Vite が未知の Host を拒むので remote 公開に必須）だけ作った食い違いでも閉じる（compose が server にも同じ値を渡す）
 - dev compose は server に `NODE_ENV=development` と `BETTER_AUTH_URL` を渡す（compose.yml）
 - 目的は **Playwright の E2E を Google なしで通す**こと。本物の Google ログインも、localhost・リモート dev の
   オリジンを OAuth クライアントのリダイレクト先に登録すれば dev で試せる
@@ -327,7 +328,7 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 #### 抜け道が本番に出ないことをテストで固定する
 
 🔒 **unit テストで確かめる**: `NODE_ENV` が development 以外（**production・未設定・test**）のとき、
-および **development でも `BETTER_AUTH_URL` が公開オリジン（リモート dev）**のとき、
+および **development でも `BETTER_AUTH_URL` が公開オリジン、または `DEV_ALLOWED_HOST` が公開ホスト（リモート dev）**のとき、
 
 実装は `packages/server/src/auth-routes.test.ts`（アプリ全体を env を変えて読み直す）と `auth-config.test.ts`:
 
@@ -396,6 +397,7 @@ cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/
 | `BETTER_AUTH_URL` | development 以外は必須 | ブラウザから見えるオリジン（`/api` は付けない。Better Auth が `/api/auth` を足す） |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 手元の development 以外は必須（リモート dev も必須） | Google の OAuth クライアント |
 | `NODE_ENV` | — | `development` かつ `BETTER_AUTH_URL` が手元のときだけ dev の抜け道を開く（§6） |
+| `DEV_ALLOWED_HOST` | リモート dev のみ（compose が web と server に渡す） | localhost 以外なら dev の抜け道を閉じる（§6） |
 | `AUTH_ALLOW_SIGNUP` | 移行（§4）の間だけ `true` | 新規 user の作成を許す（§5.2）。手元の development では不要（常に許す） |
 | `API_KEY` | 必須（変更なし） | worker・動画解析の取り込み |
 

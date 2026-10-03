@@ -49,9 +49,15 @@ services:
       - .env.server
     environment:
       TZ: 'Asia/Tokyo'
-      # https 配信時（リモート = Cloudflare が終端）は secure cookie を強制。
-      # ローカルは既定 false。remote は .env.remote で COOKIE_SECURE=true を渡す。
-      COOKIE_SECURE: '${COOKIE_SECURE:-false}'
+      # 🔒 dev の抜け道（dev ログイン・email+password・秘密の固定値）は development のときだけ開く
+      # （prd/07 §6。許可リスト方式なので、ここを外すと dev ログインが 404 になる）
+      NODE_ENV: development
+      # ブラウザから見えるオリジン（Vite。/api は Vite の proxy が server へ渡す。prd/07 §6.2）。
+      # remote は .env.remote で公開オリジン（https）を渡す——https なら cookie に Secure が付く
+      BETTER_AUTH_URL: '${BETTER_AUTH_URL:-http://localhost:5173}'
+      # 🔒 web と同じ値を渡す。localhost 以外（＝公開ホストがある）なら dev の抜け道を閉じる（prd/07 §6）。
+      # BETTER_AUTH_URL を localhost のまま公開経路だけ作った食い違いでも開かないように
+      DEV_ALLOWED_HOST: '${DEV_ALLOWED_HOST:-localhost}'
     command: pnpm --filter server start
     depends_on:
       db:

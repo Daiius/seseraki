@@ -15,7 +15,7 @@
 import { eq } from 'drizzle-orm';
 import { client, db } from './src/db';
 import { userAliases, users } from './src/db/schema';
-import { aliasesOf, currentUserId, rebuildSubjectSides } from './src/users';
+import { aliasesOf, OWNER_USER_ID, rebuildSubjectSides } from './src/users';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -47,7 +47,8 @@ if (names.length === 0) {
 }
 
 async function main() {
-  const userId = await currentUserId();
+  // 対象は所有者（prd/07 §3.1。ID は "1" のまま引き継いでいる）
+  const userId = OWNER_USER_ID;
   const existing = await aliasesOf(db, userId);
   const existingNames = new Set(existing.map((a) => a.name));
   const toAdd = names.filter((n) => !existingNames.has(n));

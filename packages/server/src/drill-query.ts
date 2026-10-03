@@ -52,7 +52,7 @@ const TIER = sql`case
  * 出題を作り直しても残る。
  */
 export async function pickNextDrill(
-  ownerId: number,
+  ownerId: string,
   kind?: 'mate' | 'best',
 ): Promise<DrillQuestion | null> {
   const [row] = await db
@@ -102,7 +102,7 @@ export function drillSfen(usiMoves: string[] | null, moveNumber: number): string
 }
 
 /** 採点に要る 1 問ぶん（**答えを含む**。server 内でしか使わない） */
-export async function loadDrill(id: number, ownerId: number) {
+export async function loadDrill(id: number, ownerId: string) {
   const [row] = await db
     .select({
       id: drills.id,
@@ -150,7 +150,7 @@ export async function recordAttempt(
 }
 
 /** 成績（prd/13 §7 の「初版では持たない」に備えた最小の数え方） */
-export async function drillCounts(ownerId: number) {
+export async function drillCounts(ownerId: string) {
   const [row] = await db
     .select({
       total: sql<number>`count(distinct ${drills.id})`.mapWith(Number),
@@ -175,7 +175,7 @@ export async function drillCounts(ownerId: number) {
  */
 export async function loadDrillQuestion(
   id: number,
-  ownerId: number,
+  ownerId: string,
 ): Promise<DrillQuestion | null> {
   const [row] = await db
     .select({
@@ -213,7 +213,7 @@ export async function loadDrillQuestion(
  * ⚠ **棋譜名・手数は未解答の問題でも返す**（決定・2026-09-10。prd/13 §5.4）——伏せるのは
  * 解く画面の規則で、一覧は解く画面ではない。
  */
-export async function listDrills(ownerId: number, query: DrillListQuery) {
+export async function listDrills(ownerId: string, query: DrillListQuery) {
   const where = and(
     eq(kifus.ownerId, ownerId),
     query.kind ? eq(drills.kind, query.kind) : undefined,
@@ -292,7 +292,7 @@ export async function listDrills(ownerId: number, query: DrillListQuery) {
  * 🔒 **同じ問題の複数回はまとめない**——間違えた後に正解した経過が読めなくなる。
  * ⚠ **「自明だった」の行（`move` / `verdict` が null）も出す**（prd/13 §6.2）。
  */
-export async function listDrillAttempts(ownerId: number, query: DrillAttemptQuery) {
+export async function listDrillAttempts(ownerId: string, query: DrillAttemptQuery) {
   const where = drillAttemptWhere(ownerId, query);
 
   const [totals] = await db

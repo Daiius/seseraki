@@ -1,71 +1,46 @@
-import { timingSafeEqual } from 'node:crypto';
-import type { Context, MiddlewareHandler } from 'hono';
-import { getSignedCookie, setSignedCookie, deleteCookie } from 'hono/cookie';
+/**
+ * 人のログイン（Google。実装は Better Auth。prd/07）。
+ *
+ * 設定の中身は `auth-config.ts`（純粋な部分・テスト対象）。ここは組み立てとミドルウェアだけ。
+ * worker・動画解析の取り込みは API_KEY の別系統（`middlewares.ts`）で、こことは交わらない。
+ */
+import { betterAuth } from 'better-auth';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { createMiddleware } from 'hono/factory';
+import { authOptions, authSettings, ownerGate } from './auth-config.js';
+import { db } from './db/index.js';
+import { account, session, users, verification } from './db/schema.js';
 
-export const SESSION_COOKIE_NAME = 'seseraki_session';
-export const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 30; // 30 日
+/** 起動時に 1 回だけ読む。development 以外で必須の値が無ければここで throw する（起動失敗） */
+export const settings = authSettings(process.env);
 
-function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual(ab, bb);
-}
+/**
+ * 🔴 **既存の `db` を渡す。別の接続を作らせない**（prd/07 §2.1）。接続のセッションを UTC に
+ * 固定しているのはこの `db` だけで、別接続では `expiresAt` などが黙って 9h ずれる（prd/03 §1.1）。
+ */
+export const auth = betterAuth(
+  authOptions(
+    settings,
+    drizzleAdapter(db, {
+      provider: 'mysql',
+      // キーは Better Auth のモデル名（user は modelName: 'users'）
+      schema: { users, session, account, verification },
+    }),
+  ),
+);
 
-function getSessionSecret(): string {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) throw new Error('SESSION_SECRET is not set');
-  return secret;
-}
+export type SessionEnv = { Variables: { userId: string } };
 
-function isSecureCookie(): boolean {
-  return process.env.COOKIE_SECURE === 'true';
-}
-
-function getCookiePath(): string {
-  return process.env.COOKIE_PATH ?? '/';
-}
-
-/** セッション cookie を発行。値は発行時刻 (ms) */
-export async function issueSession(c: Context): Promise<void> {
-  const issuedAt = Date.now().toString();
-  await setSignedCookie(c, SESSION_COOKIE_NAME, issuedAt, getSessionSecret(), {
-    httpOnly: true,
-    secure: isSecureCookie(),
-    sameSite: 'Lax',
-    path: getCookiePath(),
-    maxAge: SESSION_MAX_AGE_SEC,
-  });
-}
-
-/** セッション cookie を破棄 */
-export function revokeSession(c: Context): void {
-  deleteCookie(c, SESSION_COOKIE_NAME, {
-    path: getCookiePath(),
-    secure: isSecureCookie(),
-  });
-}
-
-/** cookie が有効なら true。署名不正・期限切れ・未設定は false */
-export async function hasValidSession(c: Context): Promise<boolean> {
-  const value = await getSignedCookie(c, getSessionSecret(), SESSION_COOKIE_NAME);
-  if (!value) return false;
-  const issuedAt = Number(value);
-  if (!Number.isFinite(issuedAt)) return false;
-  return Date.now() - issuedAt < SESSION_MAX_AGE_SEC * 1000;
-}
-
-/** ログイン済みでなければ 401 を返すミドルウェア */
-export const sessionRequired: MiddlewareHandler = async (c, next) => {
-  if (!(await hasValidSession(c))) return c.body(null, 401);
+/**
+ * web 向けエンドポイントの認証（prd/07 §5）。Better Auth のセッション + **所有者ゲート**（§5.1）。
+ * 未ログインは 401、所有者以外のセッションは 403。通したら `c.get('userId')` に載せる。
+ */
+export const sessionRequired = createMiddleware<SessionEnv>(async (c, next) => {
+  const current = await auth.api.getSession({ headers: c.req.raw.headers });
+  const userId = current?.user.id ?? null;
+  const gate = ownerGate(userId);
+  if (gate === 401) return c.body(null, 401);
+  if (gate === 403) return c.body(null, 403);
+  c.set('userId', userId!);
   await next();
-};
-
-/** ユーザー名とパスワードを env var の認証情報と照合 */
-export function verifyCredentials(username: string, password: string): boolean {
-  const expectedUsername = process.env.AUTH_USERNAME;
-  const expectedPassword = process.env.AUTH_PASSWORD;
-  if (!expectedUsername || !expectedPassword) return false;
-  const userMatches = safeEqual(username, expectedUsername);
-  const passwordMatches = safeEqual(password, expectedPassword);
-  return userMatches && passwordMatches;
-}
+});

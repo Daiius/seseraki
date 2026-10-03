@@ -32,11 +32,9 @@
 ### スコープ外
 
 - **招待の本体** — ユーザーごとの資格情報、セッションへの userId 紐づけ、全クエリの所有者スコープ。
-  ログインは当面**単一アカウント**（[07](./07-auth-and-privacy.md)）のままで、
-  **セッションは常にただ一人の `users` 行を指す**
-  > ⚠ **資格情報とセッションは Google ログイン（Better Auth）で置き換える設計が確定した**（[07](./07-auth-and-privacy.md)・未実装）。
+  > **資格情報とセッションは Google ログイン（Better Auth）に置き換えた**（[07](./07-auth-and-privacy.md)）。
   > `users` は Better Auth の user 表になり、ID は `varchar(36)`・既存の行は `"1"` のまま（§2）。
-  > 所有者スコープは [14](./14-multi-user.md) §4
+  > 所有者スコープ（[14](./14-multi-user.md) §4）が入るまでは所有者ゲートで `"1"` 以外のセッションを通さない
 - **動画解析の可視性** — 他ユーザーへ見せるかは [10](./10-video-analysis.md) §8.3 で保留した論点。
   判断材料（棋譜データの共有可否）が揃っていない
 
@@ -58,9 +56,9 @@ userAliases
 └── createdAt
 ```
 
-> **Google ログイン（[07](./07-auth-and-privacy.md)）で型が変わる**（未実装）。実装済みの形は
-> `users.id: serial`・`userAliases.userId: bigint`。**ID の値は変えない**——既存の行は数値の `1` から
-> 文字列の `"1"` になるだけで、参照する列も `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
+> **Google ログイン（[07](./07-auth-and-privacy.md)）で型を変えた**（`users.id: serial`・`userAliases.userId: bigint` から
+> `varchar(36)` へ）。**ID の値は変えない**——既存の行は数値の `1` から文字列の `"1"` になっただけで、
+> 参照する列も `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
 > 🔒 **`displayName` を Google の `name` で置き換えない。** `name` はログインのたびに Google が書きうる値で、
 > 表示名は利用者が `/settings` で決める（§6.3）。
 
@@ -98,7 +96,7 @@ userAliases
 ## 3. `kifus.ownerId`
 
 ```
-kifus.ownerId: varchar(36) NOT NULL → users.id   -- 実装済みは bigint。Google ログインで varchar に（値は "1" のまま）
+kifus.ownerId: varchar(36) NOT NULL → users.id   -- bigint から varchar に変えた（値は "1" のまま。[07](./07-auth-and-privacy.md) §3.2）
 ```
 
 🔒 **意味は「このデータを持っている人」であって、対局者ではない。** 動画解析の棋譜も

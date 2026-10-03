@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。認証の段階 1 だけ実装済み・他は未実装） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 
@@ -154,7 +154,7 @@ server の本番イメージ（`packages/server/Dockerfile.prod`）には、常�
 | `/app/rebuild-subjects.js` | 主体側の一括再導出（[prd/11](./prd/11-users.md) §4.2） | dry-run | `REBUILD_SUBJECTS_APPLY=1` |
 | `/app/backfill-user.js` | 表示名と名前候補の設定（移行時に 1 回。[prd/11](./prd/11-users.md) §6.2） | dry-run | `--apply`（引数を取る） |
 | `/app/rederive-played-at.js` | `playedAt` を出どころから作り直す（冪等。[prd/03](./prd/03-data-model.md) §1.1） | dry-run | `REDERIVE_PLAYED_AT_APPLY=1` |
-| `/app/link-owner-account.js`（**計画中・未実装**） | Google ログインへの移行で、初回ログインの account を所有者（`"1"`）へ付け替える（移行時に 1 回。[prd/07](./prd/07-auth-and-privacy.md) §4.1） | dry-run | `LINK_OWNER_APPLY=1` |
+| `/app/link-owner-account.js` | Google ログインへの移行で、初回ログインの account を所有者（`"1"`）へ付け替える（移行時に 1 回。`--provider` / `--email`。[prd/07](./prd/07-auth-and-privacy.md) §4.1） | dry-run | `LINK_OWNER_APPLY=1` |
 
 ```bash
 docker compose run --rm --no-deps <server サービス> /app/<entry>.js

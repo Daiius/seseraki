@@ -13,7 +13,7 @@ import { composeKifVerified } from './kif/compose';
 import { ANALYSIS_STATE_RESET } from './analysis-submit';
 import { replaceTactics } from './tactics';
 import { replacePositions } from './positions';
-import { currentUserId, subjectSideFromVideo } from './users';
+import { OWNER_USER_ID, subjectSideFromVideo } from './users';
 
 /**
  * 取り込みの入力（`POST /api/video-analysis/kifus`）。
@@ -146,8 +146,8 @@ export async function importVideoKifu(
           kifText,
           usiMoves: input.usi,
           source: 'video',
-          // 動画解析も「投入した人」が所有者（prd/11 §3）
-          ownerId: await currentUserId(tx),
+          // 動画解析も「投入した人」が所有者（prd/11 §3）。API_KEY の経路なので所有者に固定（prd/07 §5）
+          ownerId: OWNER_USER_ID,
           // 画面の下が録画者なので、主体側はここで決まる（prd/11 §4.1）
           subjectSide: subjectSideFromVideo(input.bottomIsSente),
         })

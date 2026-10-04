@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# db コンテナの 3306 を一時的に 127.0.0.1 へ port-forward して <cmd...> を実行する。
+# db コンテナ（Postgres）の 5432 を一時的に 127.0.0.1 へ port-forward して <cmd...> を実行する。
 #
 # 開発 compose では db をホストに常時公開しない（compose 網内のみ）。ホスト実行の
-# db ツール（drizzle-kit / tsx で localhost:3306 に繋ぐ pnpm db:push / db:seed / *:dev）は、
+# db ツール（tsx で localhost:5432 に繋ぐ pnpm db:migrate:dev / db:seed / *:dev）は、
 # 本スクリプト経由で「都度 forward → 実行 → 撤去」する。本番 DB を cloudflared の
 # port-forward 越しに操作するのと同じ発想のローカル版。
 #
-# 仕組み: compose 網に socat コンテナを一時的に挿し、127.0.0.1:${DB_FORWARD_PORT:-3306}
-#   → service `db` の 3306 を中継する。コマンド終了（や中断）で socat は自動削除。
+# 仕組み: compose 網に socat コンテナを一時的に挿し、127.0.0.1:${DB_FORWARD_PORT:-5432}
+#   → service `db` の 5432 を中継する。コマンド終了（や中断）で socat は自動削除。
 #
 # 使い方:
 #   scripts/db-forward.sh <cmd> [args...]
 #   例) scripts/db-forward.sh pnpm --filter server exec sh -c '... DB_HOST=localhost ...'
 # 環境変数:
-#   DB_FORWARD_PORT  ホスト側の待受ポート（既定 3306。db ツールは 3306 前提なので通常は既定）
+#   DB_FORWARD_PORT  ホスト側の待受ポート（既定 5432）。変えたら db ツールにも同じ値を DB_PORT で渡す
 #   COMPOSE_FILE 等  docker compose の解決はカレント（リポジトリルート）の compose 設定に従う
 
-PORT="${DB_FORWARD_PORT:-3306}"
+PORT="${DB_FORWARD_PORT:-5432}"
 
 if [ "$#" -eq 0 ]; then
   echo "usage: scripts/db-forward.sh <cmd> [args...]" >&2
@@ -38,12 +38,12 @@ if [ -z "$NET" ]; then
   exit 1
 fi
 
-# socat で 127.0.0.1:PORT -> (net) db:3306 を中継。
+# socat で 127.0.0.1:PORT -> (net) db:5432 を中継。
 FWD_CID="$(docker run -d --rm \
-  -p "127.0.0.1:${PORT}:3306" \
+  -p "127.0.0.1:${PORT}:5432" \
   --network "$NET" \
   alpine/socat \
-  TCP-LISTEN:3306,fork,reuseaddr TCP:db:3306)"
+  TCP-LISTEN:5432,fork,reuseaddr TCP:db:5432)"
 
 cleanup() { docker rm -f "$FWD_CID" >/dev/null 2>&1 || true; }
 trap cleanup EXIT INT TERM

@@ -6,6 +6,7 @@ import {
   desc,
   eq,
   gte,
+  ilike,
   isNotNull,
   isNull,
   like,
@@ -54,7 +55,10 @@ export function ownGamesOnly(): SQL {
   return ne(kifus.source, 'video');
 }
 
-/** LIKE のワイルドカード（`%` `_` `\`）を打ち消し、入力を素の部分一致として扱う */
+/**
+ * LIKE のワイルドカード（`%` `_` `\`）を打ち消し、入力を素の部分一致として扱う。
+ * Postgres の LIKE / ILIKE も既定のエスケープ文字は `\`（`ESCAPE` 句は要らない）
+ */
 export function escapeLike(s: string): string {
   return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }
@@ -167,11 +171,12 @@ export function analyzedCondition(): SQL {
 const DISPLAY_TZ_OFFSET = '+09:00';
 
 /**
- * JST の暦日の 0 時を、DB へ渡す壁時計文字列（**UTC**）にする。
+ * JST の暦日の 0 時を、DB へ渡す日時（**UTC のオフセット付き**）にする。
  *
- * 🔴 **DB セッションは UTC 固定**（prd/03 §1.1）なので、`'2026-09-10'` をそのまま渡すと
- * **UTC の 0 時**として比較される。JST の 0〜9 時にあたる対局・登録がその日から落ちるので、
- * **境界の側を JST → UTC に直してから渡す**。`2026-09-10`（JST 0 時）→ `2026-09-09 15:00:00`。
+ * 🔴 **オフセットを必ず付ける。** 列は `timestamptz` なので、オフセットの無い文字列は
+ * **接続のセッションの時刻帯**で解釈される（環境次第で境界が 9h ずれる）。
+ * `'2026-09-10'` をそのまま渡すとその時刻帯の 0 時になるので、**境界の側を JST → UTC に直してから
+ * オフセット付きで渡す**。`2026-09-10`（JST 0 時）→ `2026-09-09 15:00:00+00`。
  *
  * @param addDays 加算する日数（`to` の「翌日 0 時未満」に使う）
  */
@@ -181,7 +186,8 @@ export function jstDayStartUtc(day: string, addDays = 0): string {
   return new Date(at + addDays * 86_400_000)
     .toISOString()
     .slice(0, 19)
-    .replace('T', ' ');
+    .replace('T', ' ')
+    .concat('+00');
 }
 
 /**
@@ -278,11 +284,13 @@ export function kifuListWhere(query: KifuListQuery): SQL | undefined {
 
   if (query.q) {
     const pattern = `%${escapeLike(query.q)}%`;
+    // 🔒 **`ilike`（大文字小文字を区別しない）。** MySQL の既定の照合順序で区別していなかった
+    // 挙動を保つ（`daiius` で `Daiius` も出る。prd/15 §3.2）。Postgres の `like` は区別する
     conditions.push(
       or(
-        like(kifus.title, pattern),
-        like(kifus.sente, pattern),
-        like(kifus.gote, pattern),
+        ilike(kifus.title, pattern),
+        ilike(kifus.sente, pattern),
+        ilike(kifus.gote, pattern),
       )!,
     );
   }

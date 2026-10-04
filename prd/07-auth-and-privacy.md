@@ -31,9 +31,8 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 - `/api/auth/*` を Better Auth のハンドラへ渡す（Hono 公式の統合。`app` は `basePath('/api')` なので
   `app.on(['POST', 'GET'], '/auth/*', (c) => auth.handler(c.req.raw))`）。**Hono RPC の型とは干渉しない**
 - セッションの確認は `auth.api.getSession({ headers: c.req.raw.headers })`。`sessionRequired` をこれで作り直す（§5）
-- 🔴 **Better Auth には既存の `db`（`packages/server/src/db/index.ts`）を渡す。** 別の接続を作らせない——
-  接続のセッションを UTC に固定しているのはこの `db` だけで、別接続では `expiresAt` などが**黙って 9h ずれる**
-  （[03](./03-data-model.md) §1.1）。アダプタは `drizzleAdapter(db, { provider: 'mysql', schema })`
+- 🔒 **Better Auth には既存の `db`（`packages/server/src/db/index.ts`）を渡す。** 別の接続を作らせない——
+  接続の設定（server ロール。[15](./15-postgres.md) §2）を 1 か所に保つ。アダプタは `drizzleAdapter(db, { provider: 'pg', schema })`
 - `drizzleAdapter` は drizzle 1.0 rc.3（relations v2 の `db`）に渡して動く（§9）。Better Auth は **1.6 系に固定**
   （`~1.6.33`）——drizzle 1.0 との組み合わせの実績が 1.6 系にあるため。peer 依存は drizzle 0.45 を指すので警告が出るが無害
 - 実装: 設定の純粋な部分は `packages/server/src/auth-config.ts`（テスト対象）、組み立てと `sessionRequired` は `auth.ts`
@@ -126,7 +125,7 @@ verification                     -- OAuth の state など、短命の値
   初期値は **作成時の `name`**（Google の表示名 / dev ログインの固定名。空なら `(未設定)`）。
   - 🔴 **列の長さに収めてから写す。** `name` は `varchar(255)`・`displayName` は `varchar(100)` なので、長い Google の名前を
     そのまま写すと**作成が落ちる**（strict mode でないなら黙って切れる）。**先頭 100 文字（コードポイント単位）に切り詰める**。
-    MySQL の `varchar(n)` は文字数で数えるので、JS の `.slice`（UTF-16 単位）ではなく `Array.from` などで数え、
+    Postgres の `varchar(n)` も文字数で数えるので、JS の `.slice`（UTF-16 単位）ではなく `Array.from` などで数え、
     **サロゲートペアを割らない**。切り詰めた名前は利用者が `/settings` で直せる
   - **作成時に 1 回写すだけ**で、以後のログインでは触らない。「Google の `name` で上書きしない」はこれで保たれる
   - nullable にして表示時に `name` で補う案は採らない。`displayName` が「利用者が決めていないと Google 次第で変わる値」になり、
@@ -164,10 +163,9 @@ verification                     -- OAuth の state など、短命の値
 
 ### 3.3 照合順序
 
-🔴 **`session.token` は `utf8mb4_bin`（大文字小文字を区別する）にする。**（`verification.identifier` も同じ） MySQL の既定
-（`utf8mb4_0900_ai_ci`）では、**大文字小文字だけが違う token が同じ値として照合される**。
-drizzle は照合順序を扱えないので、**マイグレーション SQL に手で書く**（`user_aliases.name` と同じ）。
-⚠ **`db:push` で作り直すと既定に戻る。** dev で作り直したときは確かめる。
+🔴 **`session.token` は大文字小文字を区別して照合する。**（`verification.identifier` も同じ）
+Postgres の既定がそうなので、列に照合順序は付けない（[15](./15-postgres.md) §3.2）。
+MySQL の頃は既定（`utf8mb4_0900_ai_ci`）が区別しないため、`utf8mb4_bin` をマイグレーション SQL に手で書いていた。
 
 ## 4. 既存アカウント（所有者）の移行
 
@@ -416,7 +414,9 @@ cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/
 - **`drizzleAdapter` と drizzle 1.0**: アダプタは `db.query` を**結合（experimental joins）を有効にしたときだけ**使い、
   既定では素のクエリビルダ（`select` / `insert` …）で動く。relations v2 の `db` を渡して型も通る。
   ⚠ DB を通した実動作は dev での確認に委ねた（unit テストはメモリのアダプタ）
-- **ID の生成**: `generateId: 'uuid'` は MySQL ではアダプタが JS 側で `crypto.randomUUID()` を振る（DB の `uuid()` には頼らない）
+- **ID の生成**: 🔴 `generateId: 'uuid'` は、pg 方言では**アダプタが JS 側で振らず DB の既定値に任せる**（MySQL では JS 側で
+  `crypto.randomUUID()` を振っていた）。`users`・`session`・`account`・`verification` の ID 列に `gen_random_uuid()` の既定値を
+  付けている（[15](./15-postgres.md) §3.3）。無いと user の作成が NOT NULL 違反で落ちる。実 DB のテスト（`test:db`）で確かめている
 - **Google のメール**は Better Auth が小文字にしてから保存する。付け替えの `--email` も小文字にして比べる
 - **`input: false` の追加列**: `required: true` にすると Better Auth が作成時に「値が無い」と弾く（フックより前に検査する）。
   そのため `displayName` は Better Auth の上では `required: false` にし、DB の NOT NULL とフックで必ず埋める

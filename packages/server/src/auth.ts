@@ -15,14 +15,14 @@ import { account, session, users, verification } from './db/schema.js';
 export const settings = authSettings(process.env);
 
 /**
- * 🔴 **既存の `db` を渡す。別の接続を作らせない**（prd/07 §2.1）。接続のセッションを UTC に
- * 固定しているのはこの `db` だけで、別接続では `expiresAt` などが黙って 9h ずれる（prd/03 §1.1）。
+ * 🔒 **既存の `db` を渡す。別の接続を作らせない**（prd/07 §2.1）。接続の設定（server ロール）を
+ * 1 か所に保つため。
  */
 export const auth = betterAuth(
   authOptions(
     settings,
     drizzleAdapter(db, {
-      provider: 'mysql',
+      provider: 'pg',
       // キーは Better Auth のモデル名（user は modelName: 'users'）
       schema: { users, session, account, verification },
     }),

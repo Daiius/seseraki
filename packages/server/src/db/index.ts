@@ -1,68 +1,42 @@
-import { drizzle } from 'drizzle-orm/mysql2';
-import mysql from 'mysql2/promise';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import pg from 'pg';
 import { relations } from './schema.js';
 
 /**
- * 接続のセッションタイムゾーン。**必ず UTC に固定する。**
+ * DB 接続（Postgres。node-postgres + drizzle。prd/15 §2）。
  *
- * 🔴 **drizzle は DB から返る日時の壁時計を無条件に UTC として読む。**
- * `drizzle-orm/mysql2` の session は自前の `typeCast` を渡していて、
- * `TIMESTAMP` / `DATETIME` / `DATE` を `field.string()`（生の文字列）のまま受け取る
- * ——**mysql2 側の日時変換は通らない**。その文字列を
- * `mysql-core/columns/timestamp.js` の `mapFromDriverValue` が
- * `new Date(value + "+0000")` で組み立てる。書く側も `toISOString()` なので、
- * **drizzle は「DB の壁時計 ＝ UTC」を前提にしている**。
+ * **ロールを 2 つに分ける**（prd/15 §2）:
+ * - **server ロール**（DML のみ）… 常駐の server と一括処理のエントリ。`DB_USER` / `DB_PASSWORD`
+ * - **管理ロール**（DDL）… マイグレーションの適用（`migrate.ts`）だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`
  *
- * 🔴 **`mysql.createPool({ timezone })` を足しても直らない。** あのオプションは
- * mysql2 の日時変換で使われるが、上記のとおりその経路を drizzle が潰している。
- * 効くのは**セッションの時刻帯そのもの**を UTC にすることだけ。
+ * 接続先（`DB_HOST` / `DB_PORT` / `DB_NAME`）は共通。ホストから dev の DB へ繋ぐ `*:dev` の scripts は
+ * `DB_HOST=localhost` だけを差し替える（`scripts/db-forward.sh` が都度 port-forward する）。
  *
- * これを入れないと、MySQL の `time_zone` が `SYSTEM`（＝コンテナの JST）のとき
- * `now()` 由来の列（`defaultNow()` / `onUpdateNow()` の `createdAt` / `updatedAt`）が
- * **JST の壁時計を UTC と読まれて +9h 未来に見える**。
- * 逆に JS が書いた列（`playedAt` / `analysisCompletedAt`）は
- * **UTC の壁時計を JST として保存**していたので、読み書きの誤解釈が打ち消し合って
- * 画面上は正しく見えていた（保存されている instant の方が 9h 手前にずれている）。
- * → 既存行の是正は一度きりの `shift-js-timestamps.ts`。
+ * ⭐ 日時は `timestamptz` なので、**接続の時刻帯に依存しない**（MySQL の頃にあった
+ * 「セッションを UTC に固定する」処理と自前の typeCast は要らなくなった。prd/03 §1.1）。
+ * ⚠ **node-postgres は bigint（`count(*)`・`sum(…)`）を文字列で返す。** 列ではなく `sql` 断片で
+ * 集計を取るときは `.mapWith(Number)` を通す（prd/15 §3.5）。
  */
-const SET_SESSION_UTC = "SET time_zone = '+00:00'";
+export type DbRole = 'server' | 'admin';
 
-export const client = mysql.createPool({
-  host: process.env.DB_HOST ?? 'localhost',
-  // 既定 3306。cloudflared tunnel やローカル検証用 DB を別ポートに立てたときに
-  // DB_PORT で差し替える（未設定なら 3306）。
-  port: process.env.DB_PORT ? Number(process.env.DB_PORT) : undefined,
-  user: process.env.MYSQL_USER ?? 'root',
-  password: process.env.MYSQL_PASSWORD ?? '',
-  database: process.env.MYSQL_DATABASE ?? 'seseraki',
-});
-
-/**
- * 新しく張られた接続ごとにセッションを UTC へ寄せる。
- *
- * mysql2 のプールには「接続確立時に流す SQL」の設定が無いので `connection` イベントで流す。
- * この**イベントはプールが呼び出し元へ接続を渡す前に同期的に発火**し、発行したクエリは
- * その接続のコマンド待ち行列に先に積まれる（mysql2 `lib/base/pool.js`）。
- * だから利用側のクエリより必ず先に適用される。
- *
- * ⚠ 型は promise 版（`PoolConnection`）だが、**実体は callback 版の接続**が流れてくる
- * （`inheritEvents` がコアプールのイベントをそのまま中継するため）。だからコールバックで受ける。
- * 失敗したら**黙って JST のまま使わせない**——接続を壊して取り直させる。
- */
-client.on('connection', (connection) => {
-  const raw = connection as unknown as {
-    query: (sql: string, cb: (err: unknown) => void) => void;
-    destroy: () => void;
+export function connectionConfig(role: DbRole, env: NodeJS.ProcessEnv = process.env): pg.PoolConfig {
+  return {
+    host: env.DB_HOST ?? 'localhost',
+    port: env.DB_PORT ? Number(env.DB_PORT) : 5432,
+    database: env.DB_NAME ?? 'seseraki',
+    user: role === 'admin' ? env.DB_ADMIN_USER : env.DB_USER,
+    password: role === 'admin' ? env.DB_ADMIN_PASSWORD : env.DB_PASSWORD,
   };
-  raw.query(SET_SESSION_UTC, (err) => {
-    if (err) {
-      console.error('セッションのタイムゾーンを UTC にできませんでした', err);
-      raw.destroy();
-    }
-  });
-});
+}
 
-export const db = drizzle({
-  client,
-  relations,
-});
+/** プールから drizzle を組み立てる（server 用の `db` と、migrate・実 DB テストが同じ形で使う） */
+export function createDb(client: pg.Pool) {
+  return drizzle({ client, relations });
+}
+
+/** server ロールの接続。接続は最初のクエリまで張られない（import しただけでは繋がない） */
+export const client = new pg.Pool(connectionConfig('server'));
+
+export const db = createDb(client);
+
+export type Db = typeof db;

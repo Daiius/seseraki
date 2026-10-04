@@ -22,7 +22,7 @@ import {
 import { kifuPositions } from './db/schema';
 import type { Tx } from './tactics';
 
-/** 局面キー文字列 → 索引に入れる 8 バイト（drizzle の binary 列は Buffer を受ける） */
+/** 局面キー文字列 → 索引に入れる 8 バイト（drizzle の bytea 列は Buffer を受ける） */
 export function hashOf(key: string): Buffer {
   return Buffer.from(positionHash(key));
 }
@@ -140,7 +140,7 @@ export async function replacePositions(
       // ⚠ 片側は**小文字にしてから**ハッシュする（先後をまたいで一致させる。`sideLayoutKey`）
       senteSfenHash: hashOf(sideLayoutKey(state, 'sente')),
       goteSfenHash: hashOf(sideLayoutKey(state, 'gote')),
-      // drizzle の binary 列は Buffer を受ける（shared は環境非依存なので Uint8Array を返す）
+      // drizzle の bytea 列は Buffer を受ける（shared は環境非依存なので Uint8Array を返す）
       board: Buffer.from(key.board),
       hands: Buffer.from(key.hands),
       sideToMove: key.sideToMove,

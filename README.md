@@ -15,7 +15,7 @@ sequenceDiagram
     participant U as User
     participant W as web<br/>React + Vite
     participant S as server<br/>Hono + Drizzle
-    participant DB as MySQL
+    participant DB as Postgres
     participant WK as 棋譜解析
 
     U->>W: 棋譜を閲覧・登録
@@ -37,7 +37,7 @@ sequenceDiagram
 sequenceDiagram
     participant W as フロントエンド
     participant S as server<br/>Hono + Drizzle
-    participant DB as MySQL
+    participant DB as Postgres
     participant WK as worker<br/>Node.js
     participant E as yaneuraou<br/>+ 水匠5 + 定跡
 
@@ -58,7 +58,7 @@ sequenceDiagram
 | パッケージ | 役割        | 主要技術                                                |
 | ---------- | ----------- | ------------------------------------------------------- |
 | web        | 棋譜管理 UI | React 19, Vite, TanStack Router, Tailwind CSS + daisyUI |
-| server     | API + DB    | Hono, Drizzle ORM, MySQL, zod                           |
+| server     | API + DB    | Hono, Drizzle ORM, Postgres, zod                        |
 | worker     | 棋譜解析    | USI プロトコル, やねうら王                              |
 
 ## 開発

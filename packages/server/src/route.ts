@@ -1,6 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { cors } from 'hono/cors';
-import { alias } from 'drizzle-orm/mysql-core';
+import { alias } from 'drizzle-orm/pg-core';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
@@ -22,6 +22,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { db } from './db/index.js';
+import { isUniqueViolation } from './db/errors.js';
 import {
   kifus,
   moveAnalyses,
@@ -542,7 +543,7 @@ const route = app
             sourceTz: meta.sourceTz,
             ownerId,
           })
-          .$returningId();
+          .returning({ id: kifus.id });
         await replaceTactics(tx, result.id, usiMoves);
         await replacePositions(tx, result.id, usiMoves);
         // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
@@ -605,8 +606,7 @@ const route = app
         return c.json({ ok: true, rederived: updated } as const, 201);
       } catch (e) {
         // `name` は UNIQUE（大文字小文字を区別する。prd/11 §2.1）
-        const message = e instanceof Error ? e.message : String(e);
-        if (message.includes('Duplicate')) {
+        if (isUniqueViolation(e)) {
           return c.json({ error: 'この名前は既に登録されている' } as const, 409);
         }
         throw e;
@@ -681,7 +681,7 @@ const route = app
           title: kifus.title,
           source: kifus.source,
           playedAt: kifus.playedAt,
-          total: sql<number>`count(*) over ()`,
+          total: sql<number>`count(*) over ()`.mapWith(Number),
         })
         .from(kifuPositions)
         .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
@@ -709,7 +709,7 @@ const route = app
           board: next.board,
           hands: next.hands,
           sideToMove: next.sideToMove,
-          games: sql<number>`count(*)`,
+          games: sql<number>`count(*)`.mapWith(Number),
         })
         .from(kifuPositions)
         .innerJoin(
@@ -1271,7 +1271,7 @@ const route = app
         extractorRev: videoKifuSources.extractorRev,
         updatedAt: videoKifuSources.updatedAt,
         // 一覧に要るのは手数だけ。指し手列そのものを載せると 1 局 100 手ぶんが無駄に流れる
-        moveCount: sql<number>`json_length(${kifus.usiMoves})`,
+        moveCount: sql<number>`jsonb_array_length(${kifus.usiMoves})`,
         analyzedAt: kifus.analysisCompletedAt,
         analysisError: kifus.analysisError,
       })
@@ -1557,7 +1557,7 @@ const route = app
             ),
           ),
         );
-      const applied = result[0].affectedRows > 0;
+      const applied = (result.rowCount ?? 0) > 0;
       if (applied) clearProgress(id);
       return c.json({ ok: true, applied }, 201);
     },
@@ -1726,7 +1726,7 @@ const route = app
                   moveNumber: analysis.moveNumber,
                   ...provenance,
                 })
-                .$returningId();
+                .returning({ id: moveAnalyses.id });
               moveAnalysisId = inserted.id;
             } else {
               // 上書き（quick → full）でも行は増やさず、来歴を今回の段階で更新する
@@ -1928,7 +1928,7 @@ const route = app
                   playedAt,
                   sourceTz: 'JST',
                 })
-                .$returningId();
+                .returning({ id: kifus.id });
               await replaceTactics(tx, result.id, usiMoves);
         await replacePositions(tx, result.id, usiMoves);
         // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）

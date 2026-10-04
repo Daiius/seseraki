@@ -1,1 +1,0 @@
-CREATE INDEX `kifu_positions_move_number_idx` ON `kifu_positions` (`moveNumber`);

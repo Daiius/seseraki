@@ -106,7 +106,7 @@ export const DISPLAY_NAME_MAX = 100;
  * 作成時の表示名（prd/07 §3.1）。Google の表示名（dev ログインでは固定名）から作る。
  *
  * 🔴 **列の長さに収める。** `name` は 255 文字まで入るが `displayName` は 100 文字。
- * MySQL の `varchar(n)` は文字（コードポイント）で数えるので `Array.from` で数え、
+ * Postgres の `varchar(n)` は文字（コードポイント）で数えるので `Array.from` で数え、
  * サロゲートペアを割らない（`.slice` は UTF-16 単位で割る）。
  */
 export function initialDisplayName(name: string | null | undefined): string {
@@ -183,7 +183,9 @@ export function authOptions(
       // 🔒 同一オリジンの /api 配下でしか使わない（prd/07 §2.3）。state / PKCE の cookie も
       // コールバック（/api/auth/callback/google）で読まれるので同じ path でよい
       defaultCookieAttributes: { path: '/api' },
-      // ID を varchar(36) に揃える（大文字小文字の混ざらない形。prd/07 §3.2）
+      // ID は UUID（varchar(36) に収まる形。prd/07 §3.2）。
+      // 🔴 **pg 方言の Better Auth は `'uuid'` の ID を JS 側で振らず、DB の既定値に任せる**
+      // （`gen_random_uuid()`。schema の `authId`。prd/15 §3.3）。既定値が無いと user の作成が落ちる
       database: { generateId: 'uuid' as const },
       // 🔒 Origin / callbackURL の検査を明示で有効にする。Better Auth は NODE_ENV=test のとき
       // 既定でこれを外す——env の取り違えで検査が消えないように固定する

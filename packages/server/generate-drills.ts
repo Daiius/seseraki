@@ -10,7 +10,7 @@
  * 🔒 **upsert なので、既に解いた問題の解答履歴は作り直しでも消えない**（prd/13 §6.1）。
  * 条件から外れた問題だけが履歴ごと消える。
  *
- * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*` から取る（`rebuild-positions.ts` と同じ規約）。
+ * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と server ロールの `DB_USER` / `DB_PASSWORD` から取る（`rebuild-positions.ts` と同じ規約）。
  * **ホストにポートを開けない compose 網内からの実行を推奨する**（AGENTS.md）。
  *
  *   docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 server pnpm --filter server exec tsx generate-drills.ts

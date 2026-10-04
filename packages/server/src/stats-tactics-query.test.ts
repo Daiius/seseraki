@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MySqlDialect } from 'drizzle-orm/mysql-core';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
 import { NON_SIDE_ATTRIBUTED_LABELS } from 'shared';
 import {
@@ -12,13 +12,14 @@ import {
   statsTacticsWhere,
 } from './stats-tactics-query.js';
 
-const dialect = new MySqlDialect();
+const dialect = new PgDialect();
 
 /** 組み立てた SQL を DB 接続なしで文字列化する（プレースホルダと値を両方見る） */
 function render(fragment: SQL | undefined) {
   if (!fragment) return { sql: '', params: [] as unknown[] };
   const { sql, params } = dialect.sqlToQuery(fragment);
-  return { sql, params };
+  // Postgres の位置パラメータ（`$1`）を `?` に寄せて、期待値をパラメータの番号に依存させない
+  return { sql: sql.replace(/\$\d+/g, '?'), params };
 }
 
 /** クエリ文字列（`GET /api/stats/tactics` の query）を検証済みの値に通す */
@@ -51,7 +52,7 @@ describe('statsTacticsPeriodWhere', () => {
     // 🔒 総局数と除外の内訳はこの母集団で数えるので、ここを外し忘れると
     // 動画解析が ambiguousSelf に積み上がって総局数が膨らむ
     const { sql, params } = render(statsTacticsPeriodWhere(parse(SELF)));
-    expect(sql).toBe('`kifus`.`source` <> ?');
+    expect(sql).toBe('"kifus"."source" <> ?');
     expect(params).toEqual(['video']);
   });
 
@@ -59,11 +60,11 @@ describe('statsTacticsPeriodWhere', () => {
     const { sql, params } = render(
       statsTacticsPeriodWhere(parse({ ...SELF, from: '2026-07-01', to: '2026-07-31' })),
     );
-    expect(sql).toContain('coalesce(`kifus`.`playedAt`, `kifus`.`createdAt`) >=');
+    expect(sql).toContain('coalesce("kifus"."playedAt", "kifus"."createdAt") >=');
     // 🔴 **境界は一覧とまったく同じ**（JST の 0 時。prd/04 §6.1 / prd/09 §5）——
     // 分析の数字から一覧へ飛ぶ導線があるので、母集団がずれると約束が崩れる
     expect(sql).not.toContain('date_add');
-    expect(params).toEqual(['video', '2026-06-30 15:00:00', '2026-07-31 15:00:00']);
+    expect(params).toEqual(['video', '2026-06-30 15:00:00+00', '2026-07-31 15:00:00+00']);
   });
 });
 
@@ -71,7 +72,7 @@ describe('statsTacticsWhere', () => {
   it('対象局は「自分の側が確定」かつ「勝敗がついた」局に限る', () => {
     const { sql, params } = render(statsTacticsWhere(parse(SELF)));
     // ⭐ 自分の側は kifus.subjectSide に導出済み（prd/11 §4）。名前候補は SQL に出てこない
-    expect(sql).toContain('`kifus`.`subjectSide` = ?');
+    expect(sql).toContain('"kifus"."subjectSide" = ?');
     // 勝敗は勝者コードの部分一致。引き分け（DRAW_*）と result null はこれで落ちる
     expect(params).toEqual([
       'video',
@@ -84,12 +85,12 @@ describe('statsTacticsWhere', () => {
   it('期間は対象局の条件と AND で結合される', () => {
     const { params } = render(statsTacticsWhere(parse({ ...SELF, from: '2026-01-01' })));
     expect(params[0]).toBe('video');
-    expect(params[1]).toBe('2025-12-31 15:00:00'); // JST 2026-01-01 00:00
+    expect(params[1]).toBe('2025-12-31 15:00:00+00'); // JST 2026-01-01 00:00
   });
 
   it('⭐ 主体側で絞る（名前候補が無ければ subjectSide が NULL になり自然に 0 件）', () => {
     const { sql } = render(statsTacticsWhere(parse()));
-    expect(sql).toContain('`kifus`.`subjectSide` = ?');
+    expect(sql).toContain('"kifus"."subjectSide" = ?');
     expect(sql).not.toContain('1 = 0');
   });
 });
@@ -110,7 +111,7 @@ describe('statsTacticsSummarySelect', () => {
     expect(render(select.draw).params).toEqual([
       'sente', 'gote', 'DRAW_REPETITION', 'DRAW_IMPASSE',
     ]);
-    expect(render(select.unknownResult).sql).toContain('`result` is null');
+    expect(render(select.unknownResult).sql).toContain('"result" is null');
   });
 
   it('行が無くても 0 になる（sum は null を返す）', () => {
@@ -123,7 +124,7 @@ describe('statsTacticsSummarySelect', () => {
     const select = statsTacticsSummarySelect(parse());
     // ⭐ どの列も subjectSide で絞る。名前候補は現れない（prd/11 §4）
     for (const fragment of Object.values(select)) {
-      expect(render(fragment).sql).toContain('`kifus`.`subjectSide` = ?');
+      expect(render(fragment).sql).toContain('"kifus"."subjectSide" = ?');
       expect(render(fragment).sql).not.toContain('1 = 0');
     }
   });
@@ -132,8 +133,8 @@ describe('statsTacticsSummarySelect', () => {
 describe('statsTacticsJoinOn', () => {
   it('手番固有ラベルは相手の側に立ったものを数える（主軸は「相手が何を採ったか」）', () => {
     const { sql, params } = render(statsTacticsJoinOn(parse(SELF)));
-    expect(sql).toContain('`kifu_tactics`.`kifuId` = `kifus`.`id`');
-    expect(sql).toContain('`kifu_tactics`.`side` =');
+    expect(sql).toContain('"kifu_tactics"."kifuId" = "kifus"."id"');
+    expect(sql).toContain('"kifu_tactics"."side" =');
     // 自分が先手なら side=gote、自分が後手なら side=sente（相手の側）
     // 主体が先手の局では相手（gote）側のラベル、後手の局では sente 側のラベルを数える
     expect(params.slice(0, 2)).toEqual(['sente', 'gote']);
@@ -147,14 +148,14 @@ describe('statsTacticsJoinOn', () => {
     expect(params.slice(4)).toContain('角換わり');
     expect(params.slice(4)).toContain('相掛かり');
     // side 条件との OR なので、これらのラベルは side に関係なく拾われる
-    expect(sql).toContain('or (`kifu_tactics`.`label` in (');
+    expect(sql).toContain('or ("kifu_tactics"."label" in (');
   });
 
   it('生ラベルで数える（含意ラベルを畳む条件を持ち込まない）', () => {
     const { sql } = render(statsTacticsJoinOn(parse(SELF)));
     // `suppressForDisplay` 相当（turn の最小・含意の除外）は集計に持ち込まない（prd/09 §2.1）。
     // 石田流の局は 石田流 / 三間飛車 / 振り飛車 の 3 行すべてに乗る
-    expect(sql).not.toContain('`turn`');
+    expect(sql).not.toContain('"turn"');
     expect(sql).not.toContain('not exists');
   });
 });
@@ -188,22 +189,22 @@ describe('statsTacticsRowsSelect', () => {
     const select = statsTacticsRowsSelect(parse(SELF));
     const { sql, params } = render(select.analyzedLosses);
     // 失敗した棋譜は解析済みに数えない（一覧の status=analyzed と同じ述語）
-    expect(sql).toContain('`analysisError` is null');
-    expect(sql).toContain('`analysisCompletedAt` is not null');
+    expect(sql).toContain('"analysisError" is null');
+    expect(sql).toContain('"analysisCompletedAt" is not null');
     // 負け（自分が先手なら GOTE_WIN、後手なら SENTE_WIN）
     expect(params).toEqual([
       'sente', '%GOTE_WIN%', 'gote', '%SENTE_WIN%',
     ]);
     // ⚠ 「実手が詰みでない」の確認は不要（負けたことに含まれる。prd/09 §3.1）
-    expect(sql).not.toContain('`candidate_moves`');
+    expect(sql).not.toContain('"candidate_moves"');
   });
 
   it('取りこぼしは自分の手番の parity（先手なら偶数・後手なら奇数）で見る', () => {
     const { sql, params } = render(
       statsTacticsRowsSelect(parse({ ...SELF, mateMax: '7' })).missedMateLosses,
     );
-    expect(sql).toContain('mod(`move_analyses`.`moveNumber`, 2) =');
-    expect(sql).toContain('exists (select 1 from `candidate_moves`');
+    expect(sql).toContain('mod("move_analyses"."moveNumber", 2) =');
+    expect(sql).toContain('exists (select 1 from "candidate_moves"');
     // 自分が先手: 負け = GOTE_WIN・parity 0・rank 1・mate・1..7
     expect(params.slice(0, 7)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 7]);
     // 自分が後手: 負け = SENTE_WIN・parity 1
@@ -221,7 +222,7 @@ describe('statsTacticsRowsSelect', () => {
     ] as const) {
       // ⭐ 名前候補ではなく主体側で絞る。名前が未設定なら subjectSide が NULL に
       // なるので、条件に合う行が無く自然に 0 件になる（prd/11 §4）
-      expect(render(select[key]).sql).toContain('`kifus`.`subjectSide` = ?');
+      expect(render(select[key]).sql).toContain('"kifus"."subjectSide" = ?');
       expect(render(select[key]).sql).not.toContain('1 = 0');
     }
   });
@@ -232,6 +233,6 @@ describe('statsTacticsOrderBy', () => {
     const keys = statsTacticsOrderBy();
     expect(keys).toHaveLength(2);
     expect(render(keys[0]).sql).toBe('count(*) desc');
-    expect(render(keys[1]).sql).toBe('`kifu_tactics`.`label` asc');
+    expect(render(keys[1]).sql).toBe('"kifu_tactics"."label" asc');
   });
 });

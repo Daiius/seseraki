@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MySqlDialect, QueryBuilder } from 'drizzle-orm/mysql-core';
+import { PgDialect, QueryBuilder } from 'drizzle-orm/pg-core';
 import { eq, type SQL } from 'drizzle-orm';
 import { drillAttempts, drills, kifus } from './db/schema.js';
 import {
@@ -15,13 +15,14 @@ import {
   drillListQuerySchema,
 } from './drill-list-query.js';
 
-const dialect = new MySqlDialect();
+const dialect = new PgDialect();
 
 /** 組み立てた SQL を DB 接続なしで文字列化する */
 function render(fragment: SQL | undefined) {
   if (!fragment) return { sql: '', params: [] as unknown[] };
   const { sql, params } = dialect.sqlToQuery(fragment);
-  return { sql, params };
+  // Postgres の位置パラメータ（`$1`）を `?` に寄せて、期待値をパラメータの番号に依存させない
+  return { sql: sql.replace(/\$\d+/g, '?'), params };
 }
 
 describe('drillListQuerySchema', () => {
@@ -50,7 +51,7 @@ describe('drillListHaving', () => {
 
   it('既定では除外した問題を出さない', () => {
     const { sql } = render(drillListHaving(parse({})));
-    expect(sql).toContain('`excluded`');
+    expect(sql).toContain('"excluded"');
     expect(sql).toContain('= 0');
   });
 
@@ -61,7 +62,7 @@ describe('drillListHaving', () => {
 
   it('status=unanswered は解答回数 0 の問題', () => {
     const { sql } = render(drillListHaving(parse({ status: 'unanswered' })));
-    expect(sql).toContain('`move` is not null');
+    expect(sql).toContain('"move" is not null');
     expect(sql).toContain('= 0');
   });
 
@@ -98,19 +99,19 @@ describe('drillAttemptWhere', () => {
 
   it('既定は所有者だけで絞る（除外の行も含む）', () => {
     const { sql, params } = render(drillAttemptWhere('7', parse({})));
-    expect(sql).toContain('`ownerId`');
+    expect(sql).toContain('"ownerId"');
     expect(params).toEqual(['7']);
   });
 
   it('verdict=excluded は「自明だった」の行', () => {
     const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'excluded' })));
-    expect(sql).toContain('`excluded`');
+    expect(sql).toContain('"excluded"');
     expect(params).toEqual(['7', true]);
   });
 
   it('verdict=correct は解答の行だけ（除外だけの行を混ぜない）', () => {
     const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'correct' })));
-    expect(sql).toContain('`move` is not null');
+    expect(sql).toContain('"move" is not null');
     expect(params).toEqual(['7', 'correct']);
   });
 
@@ -138,17 +139,17 @@ describe('選択リストの中で組み立てた SQL', () => {
   }
 
   it('「何回目か」は副問い合わせの本体ごと出力される', () => {
-    expect(renderAttemptsSelect()).toContain('select count(*) from `drill_attempts` `prior`');
+    expect(renderAttemptsSelect()).toContain('select count(*) from "drill_attempts" "prior"');
   });
 
   it('相関の外側は必ず修飾する（内側の同名列に解決されると常に真になる）', () => {
     const sql = renderAttemptsSelect();
-    expect(sql).toContain('`prior`.`drillId` = `drill_attempts`.`drillId`');
-    expect(sql).toContain('`prior`.`id` <= `drill_attempts`.`id`');
-    expect(sql).toContain('`prior`.`move` is not null');
+    expect(sql).toContain('"prior"."drillId" = "drill_attempts"."drillId"');
+    expect(sql).toContain('"prior"."id" <= "drill_attempts"."id"');
+    expect(sql).toContain('"prior"."move" is not null');
   });
 
-  it('一覧の集計は列をテーブルで修飾する（`createdAt` は kifus にもある）', () => {
+  it('一覧の集計は列をテーブルで修飾する（"createdAt" は kifus にもある）', () => {
     const query = new QueryBuilder()
       .select({
         id: drills.id,
@@ -161,7 +162,7 @@ describe('選択リストの中で組み立てた SQL', () => {
       .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
       .groupBy(drills.id, kifus.createdAt);
     const sql = dialect.sqlToQuery(query.getSQL()).sql;
-    expect(sql).toContain('max(case when `drill_attempts`.`move` is not null then `drill_attempts`.`createdAt` end)');
+    expect(sql).toContain('max(case when "drill_attempts"."move" is not null then "drill_attempts"."createdAt" end)');
   });
 });
 
@@ -169,8 +170,8 @@ describe('drillAttemptOrderBy', () => {
   it('新しい順で、同値は id 降順を副キーにする', () => {
     const order = drillAttemptOrderBy();
     expect(order).toHaveLength(2);
-    expect(render(order[0]).sql).toContain('`createdAt` desc');
-    expect(render(order[1]).sql).toContain('`id` desc');
+    expect(render(order[0]).sql).toContain('"createdAt" desc');
+    expect(render(order[1]).sql).toContain('"id" desc');
   });
 });
 

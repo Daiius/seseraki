@@ -5,7 +5,7 @@
  * 将来この配置を「本番 server イメージへ同梱し、使い捨てコンテナで実行する」形へ移しても、
  * ここを esbuild のエントリに足すだけで中身は変わらない。
  *
- * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*` から取る（`migrate.ts` と同じ規約）。
+ * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と server ロールの `DB_USER` / `DB_PASSWORD` から取る（`migrate.ts` と同じ規約）。
  * **ホストにポートを開けない compose 網内からの実行を推奨する**（AGENTS.md）。
  *
  *   docker compose run --rm --no-deps -e REDETECT_APPLY=1 server pnpm --filter server exec tsx redetect-tactics.ts

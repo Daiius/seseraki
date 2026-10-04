@@ -1,5 +1,29 @@
 services:
+  # Postgres 18（prd/15）。server はこれに繋ぐ。
+  # 🔒 ロールを 2 つに分ける（prd/15 §2）: 管理ロール = POSTGRES_USER（DDL・マイグレーション）、
+  # server ロール = DB_USER（DML のみ。scripts/postgres-init/10-server-role.sh が空の volume の初回に作る）
   db:
+    image: postgres:18-alpine
+    environment:
+      TZ: 'Asia/Tokyo'
+    env_file:
+      - .env.database
+    volumes:
+      # ⚠ Postgres 18 の公式イメージはデータを /var/lib/postgresql/18/docker に置く（親を mount する）
+      - pg-data:/var/lib/postgresql
+      - ./scripts/postgres-init:/docker-entrypoint-initdb.d:ro
+    # host には公開しない（compose 網内からのみ到達）。ホスト実行の db ツール
+    # （pnpm db:migrate:dev / db:seed / *:dev）は scripts/db-forward.sh が都度 port-forward する。
+    healthcheck:
+      test: pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 20s
+      retries: 3
+      start_period: 5s
+
+  # 旧 MySQL（prd/15 §8.1）。**server からは使わない。** データ移行（prd/15 §6）の練習で
+  # 移行元として読むためだけに残す（volume は旧 db の db-data のまま）。後片付けの PR で消す。
+  db-mysql:
     image: mysql:8.4
     environment:
       TZ: 'Asia/Tokyo'
@@ -7,8 +31,6 @@ services:
       - .env.database
     volumes:
       - db-data:/var/lib/mysql
-    # host には公開しない（compose 網内からのみ到達）。ホスト実行の db ツール
-    # （pnpm db:push / db:seed / *:dev）は scripts/db-forward.sh が都度 port-forward する。
     cap_add:
       - SYS_NICE
     healthcheck:
@@ -17,24 +39,6 @@ services:
       timeout: 20s
       retries: 3
       start_period: 5s
-
-  # db-prep: one-shot マイグレーション＋シード（廃止 → pnpm db:migrate / db:seed に移行）
-  # db-prep:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.dev
-  #   working_dir: /workspace/packages/server
-  #   env_file:
-  #     - .env.database
-  #   command: >
-  #     sh -c "pnpm drizzle-kit push --force
-  #     --dialect mysql --schema=./src/db/schema.ts
-  #     --host=$$DB_HOST --user=$$MYSQL_USER
-  #     --password=$$MYSQL_PASSWORD --database=$$MYSQL_DATABASE
-  #     && pnpm tsx src/db/seed.ts /workspace/sample.kif"
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
 
   server:
     # 🔒 dev のイメージには -dev を付ける。本番 worker はローカルビルドの `seseraki-worker:latest` を
@@ -166,4 +170,6 @@ services:
           path: pnpm-lock.yaml
 
 volumes:
+  pg-data:
+  # 旧 MySQL のデータ（db-mysql。データ移行の練習が済んだら消す）
   db-data:

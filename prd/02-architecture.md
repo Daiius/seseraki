@@ -33,6 +33,7 @@
 | `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |
 
 - **DB は MySQL 8.4**（開発経験が多いため選択。named volume で永続。`docker compose down -v` で初期化）。
+  ⚠ **Postgres 18 へ移る計画**（[15](./15-postgres.md)・未実装）。移行本体の PR でこの節を書き換える。
 - **Drizzle ORM 1.0.0-beta.22**: 1.0 正式リリースが近く、早めにキャッチアップする目的で beta を採用。
 - スタイルは Tailwind v4 + daisyUI。棋譜詳細はモバイルファーストで組む（[05](./05-analysis.md)）。
 

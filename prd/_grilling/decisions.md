@@ -1691,3 +1691,37 @@ PR #122 のレビューで、採点の契約に 2 つの穴が見つかった。
 
 **帰結**: [07](../07-auth-and-privacy.md) を Google ログインを正とする内容に書き直した。
 [11](../11-users.md) §2・§3・[03](../03-data-model.md) §1 の型の記述と、[14](../14-multi-user.md) §3・§10 を合わせた。
+
+### Postgres への移行（2026-10-04・「複数ユーザーへの開放」の続き）
+
+**きっかけ**: 所有者スコープ（[14](../14-multi-user.md) §4）に入る前に、RLS と DB の制約で守る選択肢を検討した。
+[14](../14-multi-user.md) §9 は「当面 MySQL・RLS のためだけに移行しない」としていた。
+
+- **決定: 所有者スコープの前に Postgres 18 へ移る。**
+  - 理由: クエリが書きやすくなることではなく（このアプリでは差が小さい。`RETURNING` も主キーしか使っていない）、
+    **型・CHECK・トリガーで DB が整合を守ること**と、**踏んできた罠の種類を DB の側で消せること**
+    （日時の 9h ずれ・照合順序・途中で失敗する DDL・drizzle-kit の CASCADE 落ち）。利用者が所有者 1 人のいまが一番安い。
+  - 本番は VPS（1GB 級）に Postgres を載せる。VPS 上の他の個人プロジェクトの MySQL は別ホストへ移す（リポジトリの外）。
+- **決定: RLS は所有者スコープの PR で入れる。** 移行は挙動を変えない差し替えに徹し、切り替え後の不具合の原因を DB の差し替えに絞る。
+  移行ではロールを管理（DDL）と server（DML）に分けるところまで。
+- **決定: 型** — `timestamptz`・`date` はそのまま・identity 列・`jsonb`・enum は `text` + CHECK（`pgEnum` は値を消せない）・
+  局面のハッシュ / 盤 / 持ち駒は `bytea` + 長さの CHECK（`bigint` は符号付きへの変換層が増える）・users の ID は `varchar(36)` のまま（所有者 `"1"`）。
+- **決定: 照合順序は既定（区別する）。** MySQL の「区別しない」に頼っていたのは棋譜一覧の検索だけで、そこは `ILIKE` にする。
+- **決定: 意味の制約（`validFrom <= validTo`・手数 `>= 0`・JSON が配列 など）も移行に含める。** 推奨は「移行の直後に別 PR」だったが、
+  ユーザーの判断で含める。データ移行の練習で本番データが満たすことを確かめてから確定する。
+  - 訂正: 比較の段階で「名前候補の期間を排他制約で守れる」と挙げたが当てはまらない（名前ごとに 1 行なので重なりが起きない）。
+- **決定: `updatedAt` は DB のトリガーで更新する**（`$onUpdate` は Drizzle を通らない更新で抜ける）。drizzle-kit は生成しないので手で書く。
+- **決定: MySQL の履歴は消して 0000 を生成し直す。一度きりのスクリプト 4 本（baseline・backfill-source-tz・backfill-user・rederive-played-at）は削除する。**
+- **決定: データ移行は自前の TS スクリプトをイメージ同梱のエントリにする**（pgloader は日時の解釈を握れない）。
+  局面索引は作り直す、session / verification は移さない、drills は解答履歴のため ID ごと移す。
+- **決定: MySQL には書かないので旧イメージに戻せる。1 週間様子を見てから MySQL 側の seseraki DB を消す。**
+- **決定: 実 Postgres に当てるテストの土台を移行で入れる**（制約・移行スクリプトの検査、所有者スコープの 404 テストと RLS で再利用）。
+- **決定: バックアップは今の仕組み（DB を止めて compose 環境を丸ごと毎日コピー）を続ける。**
+- **決定: PR は PRD / 移行本体 / データ移行エントリ / 後片付け。所有者スコープは 4 本**（スキーマ / クエリ＋RLS / swars を閉じる / ゲート撤去）。
+- **決定: 所有者ゲートを外す PR で新規登録も既定で開く**（当初は段階 5）。公開の操作は Google の OAuth 同意画面の公開になる。
+- 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres・Postgres 18）で確かめた事実:
+  pg 方言では FK の CASCADE が正しく出る / `text({ enum })` は CHECK を作らない / `generated always` の identity は ID 指定の挿入を拒む
+  （`OVERRIDING SYSTEM VALUE` と `setval` が要る）/ **Better Auth は pg では ID を DB の既定値に任せる**（`gen_random_uuid()` が無いと user 作成が落ちる）/
+  node-postgres は bigint の集計を文字列で返す / `drizzle-kit push` はトリガーを作らない（dev も `db:migrate` に一本化）。
+
+**帰結**: [15](../15-postgres.md) を足し、[14](../14-multi-user.md) §9・§10、[07](../07-auth-and-privacy.md) §5.2、[02](../02-architecture.md) §2、ロードマップ、AGENTS.md を合わせた。

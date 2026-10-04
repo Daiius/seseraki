@@ -84,4 +84,5 @@
 11. [11-users.md](./11-users.md) — ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出
 12. [12-position-lab.md](./12-position-lab.md) — 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP）
 13. [13-drills.md](./13-drills.md) — 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴）
-14. [14-multi-user.md](./14-multi-user.md) — 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量）。未実装
+14. [14-multi-user.md](./14-multi-user.md) — 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量）。認証の段階 1 だけ実装済み
+15. [15-postgres.md](./15-postgres.md) — Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト）。未実装

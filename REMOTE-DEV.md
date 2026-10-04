@@ -54,14 +54,13 @@ Access で許可メール限定 等）の具体設定と実ドメインは公開
 ## DB 操作（ホストに db ポートを出さない構成での使い方）
 
 db をホスト公開しないため、ホスト実行の db ツールは `scripts/db-forward.sh` が
-**都度 port-forward（socat で 127.0.0.1:3306 → `db:3306`）して実行し、終了時に撤去**する。
+**都度 port-forward（socat で 127.0.0.1:5432 → `db:5432`。db は Postgres）して実行し、終了時に撤去**する。
 `pnpm db:*`（localhost 系）はこのラッパー込みで定義済みなので、**従来どおり一発で動く**:
 
 ```bash
-pnpm db:push        # スキーマ強制同期（forward 経由）
+pnpm db:migrate:dev # 未適用マイグレーション適用（forward 経由。dev のスキーマ変更もこれ。db:push は廃止）
 pnpm db:seed        # サンプル投入（forward 経由）
-pnpm db:migrate:dev # 未適用マイグレーション適用（forward 経由）
 ```
 
-本番 DB 向け（`db:migrate` / `db:baseline` / `db:generate`）は接続先を呼び出し環境の
+本番 DB 向け（`db:migrate`）は接続先を呼び出し環境の
 `DB_HOST` から取る別系統で、forward ラッパーは通さない。

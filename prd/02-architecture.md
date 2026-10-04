@@ -13,7 +13,7 @@
   worker は inbound の口を持たず、server を **API_KEY で polling** する（[05](./05-analysis.md)）。
 
 ```
-   web (React/Vite) ──fetch /api──> server (Hono/Drizzle) ──> MySQL 8.4
+   web (React/Vite) ──fetch /api──> server (Hono/Drizzle) ──> Postgres 18
                                         ▲    │
                                         │    │ （旧: 履歴からの一括取り込み。無効化・実装残置。04 §4）
                                         │    ▼
@@ -27,14 +27,16 @@
 | パッケージ | 役割 | 主要技術 |
 |---|---|---|
 | `web` | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
-| `server` | API + DB + KIF パース + プロンプト生成（+ 無効化済み swars 一括取り込みの残置実装。04 §4） | Hono, Drizzle ORM (1.0.0-beta.22), MySQL, zod |
+| `server` | API + DB + KIF パース + プロンプト生成（+ 無効化済み swars 一括取り込みの残置実装。04 §4） | Hono, Drizzle ORM (1.0.0-rc.3), Postgres（node-postgres）, zod |
 | `worker` | 棋譜解析 | USI プロトコル, やねうら王 |
 | `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3）。**`board.ts` まで実装済み**、残りは gap（§3.2） | TypeScript（React/node 非依存の純 TS）, zod |
 | `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |
 
-- **DB は MySQL 8.4**（開発経験が多いため選択。named volume で永続。`docker compose down -v` で初期化）。
-  ⚠ **Postgres 18 へ移る計画**（[15](./15-postgres.md)・未実装）。移行本体の PR でこの節を書き換える。
-- **Drizzle ORM 1.0.0-beta.22**: 1.0 正式リリースが近く、早めにキャッチアップする目的で beta を採用。
+- **DB は Postgres 18**（[15](./15-postgres.md)。MySQL 8.4 から移した。型・CHECK 制約・トリガーで DB の側でも整合を守る）。
+  named volume で永続。ドライバは node-postgres（`drizzle-orm/node-postgres`）。
+  **ロールを 2 つに分ける**: 管理ロール（DDL。マイグレーション）と server ロール（DML のみ。常駐の server と一括処理）。
+  ⚠ データ移行と本番の切り替え（[15](./15-postgres.md) §6・§7）は未。それまで dev には旧 MySQL を `db-mysql` として残す。
+- **Drizzle ORM 1.0.0-rc.3**: 1.0 正式リリースが近く、早めにキャッチアップする目的で beta を採用。
 - スタイルは Tailwind v4 + daisyUI。棋譜詳細はモバイルファーストで組む（[05](./05-analysis.md)）。
 
 ## 3. 型共有（Hono RPC）と `shared` パッケージ
@@ -130,7 +132,8 @@
 
 | サービス | ポート | ホスト公開 | 備考 |
 |---|---|---|---|
-| db | 3306 | なし（`scripts/db-forward.sh` で都度 forward） | MySQL 8.4, named volume で永続 |
+| db | 5432 | なし（`scripts/db-forward.sh` で都度 forward） | Postgres 18（`pg-data`）。初回に `scripts/postgres-init/` が server ロールを作る |
+| db-mysql | 3306 | なし | 旧 MySQL 8.4（`db-data`）。**server は使わない**。データ移行の練習の移行元（[15](./15-postgres.md) §8.1。後片付けで外す） |
 | server | 4000 | なし（web の `/api` proxy・compose 網内で到達） | `.env.database` + `.env.server` |
 | web | 5173 | あり（唯一の外向き口。remote は `127.0.0.1:<port>`） | Vite dev server, `.env.web` |
 | worker | - | なし | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
@@ -140,27 +143,24 @@
 
 | コマンド | 内容 |
 |---|---|
-| `pnpm dev` | docker compose up --build --watch で db + server + web + worker を起動 |
+| `pnpm dev` | docker compose up --build --watch で db + db-mysql + server + web + worker を起動 |
 | `pnpm typecheck` | 全パッケージ `tsc --noEmit` |
 | `pnpm build` | 全パッケージのビルド |
-| `pnpm db:push` | dev: スキーマを DB に強制同期（使い捨て DB 向け・`drizzle-kit push --force`） |
-| `pnpm db:generate` | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成 |
-| `pnpm db:migrate` | バージョン管理マイグレーションを適用（未適用分のみ・接続先は呼び出し環境の env） |
-| `pnpm db:baseline` | 既存 DB を drizzle 管理下に載せる初回登録（0000 を適用済み記録・スキーマ実在を検証） |
-| `pnpm db:migrate:dev` / `db:baseline:dev` | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行 |
+| `pnpm db:generate` | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成（DB には繋がない。トリガーは手で足す） |
+| `pnpm db:migrate` | バージョン管理マイグレーションを適用（未適用分のみ・管理ロール・接続先は呼び出し環境の env） |
+| `pnpm db:migrate:dev` | 上記を dev DB（`.env.database` + `DB_HOST=localhost`）に対して実行 |
 | `pnpm db:seed` | サンプルデータ投入（初回のみ。既存データがあればスキップ） |
 | `pnpm --filter server test` / `--filter worker test` / `--filter web test` | ユニットテスト（vitest。§7） |
+| `pnpm --filter server test:db` | 実 Postgres に当てるテスト（`TEST_DATABASE_URL`。§7） |
 
-- **マイグレーション方式**: **dev は `db:push`**（強制同期・履歴なし・使い捨て DB 向け）、**本番は generate/migrate 方式**
-  （`packages/server/drizzle/` にバージョン管理、`db:generate` で生成 → `db:migrate` で未適用分だけ適用）。既存の本番 DB を
-  初めて管理下に載せる時は一度だけ `db:baseline` で 0000 を適用済み登録する（`baseline` は対象 DB に 0000 のテーブル・カラムが
-  実在するかを information_schema で検証し、空 DB / 接続先取り違え / drift なら記録せず中止する）。
-- **接続先の env は上書きしない**: `db:migrate` / `db:baseline` / `db:generate` は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*` を
-  そのまま使う（本番は cloudflared tunnel で localhost に向け prod 資格情報を export して実行。具体は `.claude-personal/`）。
-  dev DB に対して versioned migration を試すときは `.env.database` を読む `db:migrate:dev` / `db:baseline:dev` を使う。
-- 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:push && pnpm db:seed`。dev のスキーマ変更は `pnpm db:push`。
+- **マイグレーション方式**: dev も本番も **generate/migrate 方式**（`packages/server/drizzle/` にバージョン管理、`db:generate` で生成 →
+  `db:migrate` で未適用分だけ適用）。🔴 **`db:push` は使わない**——`drizzle-kit push` は手で足した `updatedAt` のトリガーを作らない
+  （[15](./15-postgres.md) §3.4）。Postgres は DDL もトランザクションに入るので、失敗したマイグレーションは丸ごと戻る。
+- **接続先の env は上書きしない**: `db:migrate` は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD` を
+  そのまま使う。本番はイメージ同梱の `migrate.js` で流す（AGENTS.md）。dev DB には `.env.database` を読む `db:migrate:dev` を使う。
+- 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:migrate:dev && pnpm db:seed`。dev のスキーマ変更も `pnpm db:migrate:dev`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（MySQL 接続）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
+  - `.env.database`（Postgres の管理ロール・server ロールと接続先。移行の練習の間は旧 MySQL の値も）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。
@@ -179,8 +179,11 @@
   - **エンジン・DB を伴う処理でも、判断だけを値で閉じた関数に切り出せばテストする。**
     解析結果のチャンク分割・再開位置（worker。スタブエンジンで駆動）や、submit の世代照合・
     完了判定（server の `analysis-submit.ts`）がこれにあたる（[05](./05-analysis.md) §1.1c）。
-- **UI・DB 接続はテストを書かない。** 描画・ルーティング・実 DB への疎通は、
-  PR の「目視確認が必要な点」に回して人が確認する。DOM 環境（jsdom / testing-library）は
+- **UI はテストを書かない。** 描画・ルーティングは、PR の「目視確認が必要な点」に回して人が確認する。
+- **DB が実際にどう振る舞うかは実 Postgres に当てて確かめる**（`*.db.test.ts`・`pnpm --filter server test:db`。[15](./15-postgres.md) §8.2）。
+  CHECK 制約・トリガー・集計の戻り値の型・`ilike`・FK の CASCADE の有無・ロール分離のように、SQL の文字列を見るだけでは
+  分からないものが対象。接続先は `TEST_DATABASE_URL` で、**実行ごとにランダム名の DATABASE を作ってマイグレーションを当て、
+  終わったら DROP する**。通常の `test` は DB 無しのまま回る。DOM 環境（jsdom / testing-library）は
   持ち込まず、web のテストも **node 環境の純ロジックのみ**を対象にする。
   必要になった時点で、UI テスト基盤の導入是非を改めて判断する。
 - **`shared` 抽出（§3.2）ではテストも一緒に移す。** 純ロジックは `shared` へ移る予定なので、

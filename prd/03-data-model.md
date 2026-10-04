@@ -1,12 +1,14 @@
 # 03. データモデル
 
-本章は DB スキーマ（Drizzle + MySQL 8.4）と、worker が扱う USI データ型を定める。
+本章は DB スキーマ（Drizzle + Postgres 18）と、worker が扱う USI データ型を定める。
 ドメイン用語は [01](./01-domain.md)、投入時の変換・抽出は [04](./04-ingestion.md)、解析での消費は [05](./05-analysis.md) を参照。
 
 > 本章は**理想スキーマ**を定め、**PRD が正典**（[README](./README.md) 時制方針）。現行実装の型・制約は
 > Drizzle（`packages/server/src/db`）を参照し、PRD との差（例: `commentaries` は現行未実装の gap）は
 > 各所で「計画中」「gap」と明示する。カラム名・enum は本章を正とする。
-> スキーマ変更は dev では `pnpm db:push`（強制同期）、本番では `pnpm db:generate` → `pnpm db:migrate`（バージョン管理マイグレーション）で反映する（[02](./02-architecture.md) §6）。
+> スキーマ変更は `pnpm db:generate` → `pnpm db:migrate`（バージョン管理マイグレーション。dev は `db:migrate:dev`）で反映する（[02](./02-architecture.md) §6）。
+> 下の型表記（`serial` / `json` / `enum` など）は抽象的な書き方で、Postgres での実際の型（identity 列・`jsonb`・`text` + CHECK・`timestamptz`）は
+> [15](./15-postgres.md) §3 の対応表に従う。値の意味の制約（配列であること・範囲など）は CHECK で入っている（[15](./15-postgres.md) §4.2）。
 
 ---
 
@@ -37,48 +39,27 @@
 
 ### 1.1 日時の扱い（タイムゾーン）
 
-🔴 **DB 接続のセッションタイムゾーンは UTC に固定する**（`packages/server/src/db/index.ts` が
-新しい接続ごとに `SET time_zone = '+00:00'` を流す）。**これが前提で、外すと日時が黙って 9h ずれる。**
+⭐ **日時の列は `timestamptz`**（Postgres。[15](./15-postgres.md) §3）。絶対時刻として保存され、
+drizzle とは `Date` で往復する。**接続のセッションの時刻帯に依存しない**。
 
-理由は drizzle の日時の読み書きにある。`drizzle-orm/mysql2` は自前の `typeCast` で
-`TIMESTAMP` / `DATETIME` / `DATE` を**文字列のまま**受け取り（mysql2 の日時変換を通さない）、
-その壁時計を `new Date(value + "+0000")` で読む。書くときも `toISOString()` の壁時計を送る。
-つまり **drizzle は「DB の壁時計 ＝ UTC」を前提にしている**。DB 側のセッションが JST だと、
-書き手によって食い違いの出方が変わる:
+> MySQL の頃は「DB の壁時計 ＝ UTC」という drizzle の前提と、接続のセッションを UTC に固定する処理に
+> 頼っていた（固定を外すと `now()` 由来の列が +9h 未来に見え、JS が書いた `playedAt` は 9h 手前に
+> 保存された）。Postgres への移行でこの種類の不具合は無くなった。
+> 🔴 ただし**既に保存されていた `playedAt` のずれは移行では直らない**（形として正しい日時なので）。
+> 切り替えの前に旧イメージの `rederive-played-at.js` で 0 件を確かめる（[15](./15-postgres.md) §7 の 0）。
 
-| 書き手 | セッションが JST だと何が起きるか |
-|---|---|
-| MySQL の `now()`（`createdAt` / `updatedAt`） | 保存される instant は正しいが、**読むと +9h 未来に見える**（＝実際に出た症状） |
-| JS の `Date`（`playedAt`） | 送った壁時計を JST として保存するので、**保存される instant が JS の `Date` より 9h 手前**になる |
-
-- ⚠ **`mysql.createPool({ timezone })` では直らない。** drizzle が `typeCast` で mysql2 の
-  変換経路を潰しているため、このオプションはこの経路で効かない。効くのは**セッションの時刻帯**だけ。
-- `TIMESTAMP` は内部 UTC 保持なので、セッションを UTC にすれば **`now()` 由来の列は既存行も含めて直る**
-  （backfill 不要）。
-- **`playedAt` の既存行が正しいかは、行ごとに実物で確かめる。**
-  「JS の `Date` が真の絶対時刻を持っていたか」は、その行を書いた時点の `sourceTz` の解釈次第で変わり、
-  外から一律には決められない。実測では**正しい絶対時刻を持っている行があった**（2026-09-10・dev）。
-  🔴 **だから「一律 `+9h`」のような是正はしない**——正しい行を壊すうえ、二度流せば二重にずれる。
-- **直し方は「出どころからの作り直し」**（`rederive-played-at.ts`。AGENTS.md「本番イメージ同梱のエントリ」）。
-  `playedAt` は絶対値を計算し直せる: swars 経路は `swarsGameKey`（常に JST）、手動貼り付けは
-  `kifText` の開始日時を保存済み `sourceTz` で解釈する（`reanalyze` が既にやっているのと同じ）。
-  **絶対値の再計算なので何度流しても同じ**（冪等・適用済みの印が要らない）。
-  **dry-run の出力（ずれ幅の内訳）がそのまま「ずれていたのか」の答えになる。**
+- `playedAt` は出どころから絶対値を計算できる: swars 経路は `swarsGameKey`（常に JST）、手動貼り付けは
+  `kifText` の開始日時を保存済み `sourceTz` で解釈する（`reanalyze` がやっているのと同じ）。
   🔴 **日時を動かしたら主体側も同じトランザクションで作り直す**（[11](./11-users.md) §5.3）——
   主体側は名前候補の有効期間と `playedAt` の突き合わせで決まるので、境界をまたぐと変わる。
-  出題も追随させる（`replaceSubjectSide` が中でやる。`reanalyze` と同じ姿勢）。
-- ⚠ `sourceTz` 未設定の行は解釈が決まらないので触らない（先に `db:backfill-tz`）。
-  `analysisCompletedAt` は出どころが無く再計算できないが、**有無しか使っていない**ので放置する。
-- 🔴 **`sql` 断片で日時を返すときは、自分で UTC として読む。** 生の `sql` の戻り値には
-  **列の日時変換（`mapFromDriverValue`）が適用されず**、タイムゾーンの無い壁時計文字列が
-  そのまま来る。`new Date(value)` はそれを**実行環境のローカル時刻**として解釈するので、
-  server（`TZ=Asia/Tokyo`）では 9h ずれる。`drill-list-query.ts` の `isoOf` を通すこと。
-  ⚠ **セッションが JST だった頃は DB もサーバも JST で偶然一致していた**ので、
-  UTC 固定にして初めて表に出る種類のずれ（レビュー `OCL-94744330`）。
-- 🔴 **日付で絞り込むときは、境界の側を JST → UTC に直してから渡す**（[04](./04-ingestion.md) §6.1）。
-  セッションが UTC なので、`'2026-09-10'` をそのまま渡すと **UTC の 0 時**で切れ、
-  **JST 0:00〜9:00 の対局・登録がその日から落ちる**（実際に踏んだ。レビュー `OCL-85A77255`）。
-  `kifu-list-query.ts` の `jstDayStartUtc` を通すこと。一覧も分析も同じ `periodConditions` を使う。
+- 🔴 **`sql` 断片で日時を返すときは、オフセットごと読む。** 生の `sql` の戻り値には
+  **列の日時変換が適用されず**、Postgres の文字列表記（`2026-09-10 12:00:00.123+09`。オフセットは
+  接続のセッションの時刻帯で付く）がそのまま来る。`drill-list-query.ts` の `isoOf` を通すこと
+  （オフセットの無い文字列は UTC として読む。レビュー `OCL-94744330`）。
+- 🔴 **日付で絞り込むときは、境界の側を JST → UTC に直し、オフセット付きで渡す**（[04](./04-ingestion.md) §6.1）。
+  オフセットの無い文字列は**セッションの時刻帯**で解釈されるので、`'2026-09-10'` をそのまま渡すと
+  環境次第で **JST 0:00〜9:00 の対局・登録がその日から落ちる**（実際に踏んだ。レビュー `OCL-85A77255`）。
+  `kifu-list-query.ts` の `jstDayStartUtc`（`2026-09-09 15:00:00+00` を返す）を通すこと。一覧も分析も同じ `periodConditions` を使う。
   ⚠ **`sourceTz` ごとに境界を変えない**——同じ絞り込みが棋譜によって別の日を指すと読めなくなる。
   境界は**画面の時刻帯（JST 固定・DST 無し）で一本**にする。
 

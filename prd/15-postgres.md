@@ -3,7 +3,7 @@
 本章は、DB を MySQL 8.4 から **Postgres 18** へ移す設計を定める。
 [14](./14-multi-user.md) §9 の「当面 MySQL のまま」を改め、**所有者スコープ（[14](./14-multi-user.md) §4）の前に**移る。
 
-> **設計確定・未実装**（2026-10-04）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
+> **移行本体まで実装済み・データ移行と本番の切り替えは未**（2026-10-04。§9 の 2 まで）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
 > 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres を Postgres 18 に当てた）で確かめた事実を §3・§5 に書く。
 
 ---
@@ -37,7 +37,7 @@
 | 版 | **Postgres 18**（dev・本番とも同じ。公式イメージ） |
 | 配置 | dev は compose のサービス、本番は VPS の docker（姿勢のみ。具体は `.claude-personal/`） |
 | ドライバ | **node-postgres（`pg`）** + `drizzle-orm/node-postgres` |
-| ロール | **管理ロール**（DDL。`migrate.js` などのエントリ）と **server ロール**（DML のみ。常駐の server）を分ける。今の MySQL と同じ分け方で、RLS の土台になる |
+| ロール | **管理ロール**（DDL。`migrate.js`）と **server ロール**（DML のみ。常駐の server と一括処理のエントリ）を分ける。今の MySQL と同じ分け方で、RLS の土台になる。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。dev は `scripts/postgres-init/` が server ロールと default privileges を作る |
 | 設定 | 本番は 1GB 級の VPS に載るので小さめ（`shared_buffers` は既定・`max_connections` は 20 程度）。具体の値は `.claude-personal/` |
 
 - worker は HTTP の API を通すだけで DB に触らないので、**worker は変わらない**
@@ -81,6 +81,8 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
 - MySQL の `ON UPDATE CURRENT_TIMESTAMP`（`onUpdateNow()`）は Postgres に無い。**DB のトリガー**で更新する
   （Drizzle の `$onUpdate` はアプリの時計で、Drizzle を通らない更新では抜ける）
 - トリガー関数を 1 つ作り、`updatedAt` を持つ表（7 つ）で共有する
+  - 振る舞いは MySQL の `ON UPDATE CURRENT_TIMESTAMP` に合わせる: **行の値が変わったときだけ**更新し、
+    UPDATE が `updatedAt` を**明示的に書いたときはその値を尊重する**（Better Auth は自分で書く）
 - 🔴 **drizzle-kit はトリガーを生成しない。** マイグレーション SQL に手で書く。**表を足したらトリガーも足す**
 - ⚠ **`drizzle-kit push` もトリガーを作らない。** dev も `db:push` をやめ、マイグレーションの適用（`db:migrate`）に一本化する
 
@@ -123,7 +125,9 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
 ## 5. マイグレーションとスクリプト
 
 - MySQL の履歴（15 本）は作業ツリーから消し、**Postgres の 0000 を 1 本生成し直す**（git の履歴には残る）
-- 0000 に手で足すもの: `updatedAt` のトリガー（§3.4）。それ以外（CHECK・CASCADE・uuid の既定値）は schema から生成される
+- 0000 に手で足すもの: `updatedAt` のトリガー（§3.4）と**所有者の行**（ID `"1"`・仮のメール。MySQL の履歴が作っていた行と同じ形）。
+  それ以外（CHECK・CASCADE・uuid の既定値）は schema から生成される
+  - ⚠ 所有者の行があるので、**データ移行（§6）は users を入れる前にこの仮の行を置き換える**（ID ごと運ぶと PK が衝突する）
 - 🔒 **マイグレーションはトランザクションで流れる**（Postgres は DDL もトランザクションに入る）。途中で失敗したら丸ごと戻る
 - 削除する一度きりのスクリプト（役目を終えた・Postgres では要らない）:
   `baseline.ts`（既存 DB を管理下に載せる）・`backfill-source-tz.ts`・`backfill-user.ts`・`rederive-played-at.ts`
@@ -197,13 +201,14 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 ### 8.1 dev
 
-- compose の `db` を Postgres 18 にする。データ移行の練習の間は MySQL と並べて置き、移行本体の PR で MySQL を外す
+- compose の `db` を Postgres 18 にする。データ移行の練習の間は MySQL を `db-mysql`（旧 volume のまま・server は使わない）として並べて置き、**後片付けの PR（§9 の 5）で外す**
 - dev のデータは**本番と同じ移行スクリプト**で dev の MySQL から移す（本番の練習を兼ねる）
 - `db:push` はやめ、`db:migrate` に一本化する（§3.4）
 
 ### 8.2 実 DB のテスト
 
-🔒 **実際の Postgres に当てるテストの土台をこの移行で入れる。** compose の Postgres にテスト用の DB を作り、スキーマを当てて流す。
+🔒 **実際の Postgres に当てるテストの土台をこの移行で入れる。** `pnpm --filter server test:db`（`*.db.test.ts`。通常の `test` は DB 無しのまま）。
+接続先は `TEST_DATABASE_URL`（CREATE DATABASE できるロール）で、**実行ごとにランダム名の DATABASE を作ってマイグレーションを当て、終わったら DROP する**（並行して流しても衝突しない）。
 
 - 移行で確かめる: 意味の制約が不正な値を弾くこと・トリガー・移行スクリプトの変換・集計の戻り値（§3.5）
 - 所有者スコープでそのまま使う: 全エンドポイントで他人の棋譜が 404 になること・RLS
@@ -214,7 +219,7 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 2. **移行本体**: schema・クエリ・dev compose・実 DB テストの土台・制約・トリガー・一度きりのスクリプトの削除・Better Auth のアダプタ
 3. **データ移行エントリ**（§6）。dev で練習する
 4. 本番の切り替え（§7。PR ではなく作業）
-5. **後片付け**（切り替えの 1 週間後）: 移行エントリと MySQL のドライバを外す
+5. **後片付け**（切り替えの 1 週間後）: 移行エントリと MySQL のドライバ・dev compose の `db-mysql` を外す
 
 ## 10. 運用
 

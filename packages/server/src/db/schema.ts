@@ -8,7 +8,7 @@ import {
   index,
   integer,
   jsonb,
-  pgTable,
+  snakeCase,
   primaryKey,
   smallint,
   text,
@@ -18,6 +18,20 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { defineRelations, sql, type SQL } from 'drizzle-orm';
+
+// --- 命名（prd/15 §3.6）---
+
+/**
+ * 表を定義する関数。**DB の列名を snake_case にする**（TS のプロパティ名は camelCase のまま）。
+ * 例: `playedAt` → `played_at`。表名は第 1 引数をそのまま使う（すでに snake_case）。
+ *
+ * 🔒 **表は必ずこれで定義する**（`pgTable` を使わない）。drizzle 1.0 の casing は**表の定義に付く**
+ * （`drizzle()` の設定ではない）ので、ここ 1 か所で server・migrate・テスト・drizzle-kit がそろう。
+ * `pgTable` で足すと**その表だけ列が camelCase で作られ**、psql で毎回ダブルクォートが要る。
+ * ⚠ 列の `.name` は DB 上の名前（snake_case）を返す。TS のプロパティ名が要るときは
+ * `getTableColumns` のキーを使う（データ移行の `plan.ts`）。
+ */
+const table = snakeCase.table;
 
 // --- 列の型の補助（prd/15 §3）---
 
@@ -117,7 +131,7 @@ const sameTruth = (a: SQL, b: SQL) => sql`(${a}) = (${b})`;
  * 🔒 **本人の同定は `account.accountId`（Google の `sub`）で行う。** `email` は同定に使わない
  * （メールは変わりうる。prd/07 §1）。
  */
-export const users = pgTable('users', {
+export const users = table('users', {
   id: authId(),
   /** Google の表示名（Better Auth が書く）。画面には出さない——出すのは `displayName` */
   name: varchar({ length: 255 }).notNull(),
@@ -147,7 +161,7 @@ export const users = pgTable('users', {
  *
  * `userId` の FK は `ON DELETE CASCADE`。
  */
-export const session = pgTable(
+export const session = table(
   'session',
   {
     id: authId(),
@@ -171,7 +185,7 @@ export const session = pgTable(
  * `providerId` は `'google'`（dev では `'credential'` もある。`password` はその時だけ入る）。
  * `userId` の FK は `ON DELETE CASCADE`。
  */
-export const account = pgTable(
+export const account = table(
   'account',
   {
     id: authId(),
@@ -197,7 +211,7 @@ export const account = pgTable(
 );
 
 /** Better Auth の短命の値（OAuth の state など） */
-export const verification = pgTable(
+export const verification = table(
   'verification',
   {
     id: authId(),
@@ -219,7 +233,7 @@ export const verification = pgTable(
  * ⚠ **旧名を消してはいけない**（prd/11 §2.2）。消すと、その名前で指した過去の棋譜が
  * 「自分の対局」でなくなり、成績から静かに落ちる。名前を変えたときは**足す**。
  */
-export const userAliases = pgTable(
+export const userAliases = table(
   'user_aliases',
   {
     id: identityId(),
@@ -254,7 +268,7 @@ export const userAliases = pgTable(
   ],
 );
 
-export const kifus = pgTable(
+export const kifus = table(
   'kifus',
   {
     id: identityId(),
@@ -331,7 +345,7 @@ export const kifus = pgTable(
  * 再走査せずに派生値を作り直せる。手ごとのメタ（time / side / inferredKind）はここに入る。
  * 🔒 索引が要ると分かった値だけ、後から `raw` の外に列として昇格させる。
  */
-export const videoKifuSources = pgTable(
+export const videoKifuSources = table(
   'video_kifu_sources',
   {
     // ⚠ FK は下の table extras で `foreignKey()` として書く。列側の `.references()` は
@@ -374,7 +388,7 @@ export const videoKifuSources = pgTable(
 );
 
 // 1手ごとの解析結果
-export const moveAnalyses = pgTable(
+export const moveAnalyses = table(
   'move_analyses',
   {
     id: identityId(),
@@ -424,7 +438,7 @@ export const moveAnalyses = pgTable(
  * 戦型ラベル（prd/03 §2.1）。`usiMoves` から導く**派生値**で、正は指し手列。
  * この表は絞り込みと集計を SQL で行うための索引にすぎない。
  */
-export const kifuTactics = pgTable(
+export const kifuTactics = table(
   'kifu_tactics',
   {
     kifuId: idRef()
@@ -453,7 +467,7 @@ export const kifuTactics = pgTable(
  * 🔒 **`usiMoves` が変われば必ず作り直す**（同一トランザクション）。全件の作り直しは
  * `rebuild-positions.ts`。
  */
-export const kifuPositions = pgTable(
+export const kifuPositions = table(
   'kifu_positions',
   {
     kifuId: idRef().notNull(),
@@ -517,7 +531,7 @@ export const kifuPositions = pgTable(
   ],
 );
 
-export const candidateMoves = pgTable(
+export const candidateMoves = table(
   'candidate_moves',
   {
     id: identityId(),
@@ -555,7 +569,7 @@ export const candidateMoves = pgTable(
  * 🔴 **再生成は upsert で、DELETE → INSERT にしない。** `drillAttempts` が CASCADE で
  * ぶら下がっているので、作り直すと**解答履歴が道連れで消える**。
  */
-export const drills = pgTable(
+export const drills = table(
   'drills',
   {
     id: identityId(),
@@ -631,7 +645,7 @@ export const drills = pgTable(
  *
  * 🔒 **除外フラグ（「自明だった」）もここに持つ。** 出題側に持つと再生成で消えうる（prd/13 §7）。
  */
-export const drillAttempts = pgTable(
+export const drillAttempts = table(
   'drill_attempts',
   {
     id: identityId(),

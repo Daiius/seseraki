@@ -210,25 +210,26 @@ describe('migrateInto', () => {
 
       // 所有者の行は仮の値から移行元の値へ（updatedAt は明示した値が残る。トリガーに上書きされない）
       const { rows: owner } = await client.query('select * from users where id = $1', ['1']);
-      expect(owner[0]).toMatchObject({ email: 'owner@example.com', displayName: 'だいじ', emailVerified: true });
-      expect((owner[0].updatedAt as Date).toISOString()).toBe('2026-01-01T12:00:00.000Z');
+      // 生の SQL なので列は DB 上の名前（snake_case。prd/15 §3.6）
+      expect(owner[0]).toMatchObject({ email: 'owner@example.com', display_name: 'だいじ', email_verified: true });
+      expect((owner[0].updated_at as Date).toISOString()).toBe('2026-01-01T12:00:00.000Z');
 
       // 日時は MySQL の壁時計を UTC として運ぶ（接続は Asia/Tokyo でも同じ instant）
       const { rows: k } = await client.query('select * from kifus where id = 10');
-      expect((k[0].playedAt as Date).toISOString()).toBe('2025-12-31T15:00:00.000Z');
-      expect(k[0].usiMoves).toEqual(['7g7f', '3c3d']);
+      expect((k[0].played_at as Date).toISOString()).toBe('2025-12-31T15:00:00.000Z');
+      expect(k[0].usi_moves).toEqual(['7g7f', '3c3d']);
       const { rows: v } = await client.query('select * from video_kifu_sources');
-      expect(v[0]).toMatchObject({ bottomIsSente: true, raw: { moves: [{ usi: '7g7f', time: 1.5 }] } });
-      const { rows: a } = await client.query('select "validFrom"::text as "validFrom" from user_aliases where id = 5');
-      expect(a[0].validFrom).toBe('2024-01-01');
+      expect(v[0]).toMatchObject({ bottom_is_sente: true, raw: { moves: [{ usi: '7g7f', time: 1.5 }] } });
+      const { rows: a } = await client.query('select valid_from::text as valid_from from user_aliases where id = 5');
+      expect(a[0].valid_from).toBe('2024-01-01');
 
       // 採番を合わせたので、ID を指定しない挿入が衝突しない
       const { rows: n } = await client.query(
-        `insert into kifus (title, "kifText", "ownerId") values ('new', '', '1') returning id`,
+        `insert into kifus (title, kif_text, owner_id) values ('new', '', '1') returning id`,
       );
       expect(Number(n[0].id)).toBe(14);
       const { rows: d } = await client.query(
-        `insert into drill_attempts ("drillId") values (50) returning id`,
+        `insert into drill_attempts (drill_id) values (50) returning id`,
       );
       expect(Number(d[0].id)).toBe(1);
 
@@ -294,7 +295,7 @@ describe('migrateInto', () => {
       expect(rows).toEqual([{ email: 'owner-1@example.invalid' }]);
       // 採番も戻っている（setval だと ROLLBACK で戻らず、ここが 14 になる。OCL-FE485ABC）
       const { rows: n } = await client.query(
-        `insert into kifus (title, "kifText", "ownerId") values ('new', '', '1') returning id`,
+        `insert into kifus (title, kif_text, owner_id) values ('new', '', '1') returning id`,
       );
       expect(Number(n[0].id)).toBe(1);
     } finally {
@@ -362,7 +363,7 @@ describe('assertTargetPristine', () => {
     const client = await freshTarget();
     try {
       await client.query(
-        `insert into session (token, "userId", "expiresAt") values ('t', '1', now())`,
+        `insert into session (token, user_id, expires_at) values ('t', '1', now())`,
       );
       await expect(assertTargetPristine(client)).rejects.toThrow(/session が空ではない/);
     } finally {

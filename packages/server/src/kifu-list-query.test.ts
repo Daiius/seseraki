@@ -118,27 +118,27 @@ describe('kifuListWhere', () => {
 
   it('解析状態は一覧のバッジと同じ区分で分かれる', () => {
     expect(render(kifuListWhere(parse({ status: 'failed' }))).sql).toContain(
-      '"analysisError" is not null',
+      '"analysis_error" is not null',
     );
     expect(render(kifuListWhere(parse({ status: 'analyzed' }))).sql).toContain(
-      '"analysisCompletedAt" is not null',
+      '"analysis_completed_at" is not null',
     );
     expect(render(kifuListWhere(parse({ status: 'unanalyzed' }))).sql).toContain(
-      '"analysisCompletedAt" is null',
+      '"analysis_completed_at" is null',
     );
     // 失敗した棋譜は「済」にも「未」にも数えない
     expect(render(kifuListWhere(parse({ status: 'analyzed' }))).sql).toContain(
-      '"analysisError" is null',
+      '"analysis_error" is null',
     );
     expect(render(kifuListWhere(parse({ status: 'unanalyzed' }))).sql).toContain(
-      '"analysisError" is null',
+      '"analysis_error" is null',
     );
   });
 
   it('勝ちは主体側と勝者コードの組み合わせで絞る', () => {
     const { sql, params } = render(kifuListWhere(parse({ outcome: 'win' })));
     // ⭐ 名前候補は SQL に出てこない。主体側は kifus.subjectSide に導出済み（prd/11 §4）
-    expect(sql).toContain('"kifus"."subjectSide" = ?');
+    expect(sql).toContain('"kifus"."subject_side" = ?');
     expect(params).toEqual([OWN, 'sente', '%SENTE_WIN%', 'gote', '%GOTE_WIN%']);
     // 🔒 側を確定できない対局（subjectSide が NULL）はどちらの条件にも合わないので自然に外れる
     expect(sql).not.toContain('not in');
@@ -169,7 +169,7 @@ describe('kifuListWhere', () => {
     const { sql, params } = render(
       kifuListWhere(parse({ from: '2026-07-01', to: '2026-07-31' })),
     );
-    expect(sql).toContain('coalesce("kifus"."playedAt", "kifus"."createdAt") >=');
+    expect(sql).toContain('coalesce("kifus"."played_at", "kifus"."created_at") >=');
     // 🔴 **境界は JST の 0 時**（prd/04 §6.1）。DB セッションが UTC 固定なので、
     // 日付をそのまま渡すと UTC の 0 時で切れて JST 0〜9 時ぶんが落ちる。
     // 終了日を含めるため上限は「翌日の JST 0 時」未満。加算は JST の暦日で閉じる
@@ -180,7 +180,7 @@ describe('kifuListWhere', () => {
   it('戦型は kifu_tactics への相関 EXISTS になる（JOIN しない）', () => {
     const { sql, params } = render(kifuListWhere(parse({ tactic: '四間飛車' })));
     expect(sql).toContain('exists (select 1 from "kifu_tactics"');
-    expect(sql).toContain('"kifu_tactics"."kifuId" = "kifus"."id"');
+    expect(sql).toContain('"kifu_tactics"."kifu_id" = "kifus"."id"');
     // JOIN すると count() と LIMIT/OFFSET が壊れる（prd/03 §2.1.1・prd/04 §6.1）
     expect(sql).not.toContain('join');
     expect(params).toEqual([OWN, '四間飛車']);
@@ -227,7 +227,7 @@ describe('kifuListWhere', () => {
     for (const q of queries) {
       const { sql } = render(kifuListWhere(parse(q)));
       expect(sql).not.toContain('1 = 0');
-      expect(sql).toContain('"kifus"."subjectSide" = ?');
+      expect(sql).toContain('"kifus"."subject_side" = ?');
     }
   });
 
@@ -236,7 +236,7 @@ describe('kifuListWhere', () => {
     expect(sql).toContain('exists (select 1 from "move_analyses"');
     expect(sql).toContain('exists (select 1 from "candidate_moves"');
     // 自分の手番は moveNumber の parity（先手なら偶数・後手なら奇数。prd/03 §2.3）
-    expect(sql).toContain('mod("move_analyses"."moveNumber", 2) =');
+    expect(sql).toContain('mod("move_analyses"."move_number", 2) =');
     expect(params[0]).toBe(OWN);
     expect(params.slice(1, 8)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 10]);
     // ⚠ 負け条件を内包する（outcome=loss を別途付ける必要はない。prd/09 §3.1）
@@ -255,7 +255,7 @@ describe('kifuListOrderBy', () => {
   it('既定は対局日時（無ければ登録日時）の降順', () => {
     const [primary] = kifuListOrderBy(parse({}));
     expect(render(primary).sql).toBe(
-      'coalesce("kifus"."playedAt", "kifus"."createdAt") desc',
+      'coalesce("kifus"."played_at", "kifus"."created_at") desc',
     );
   });
 
@@ -264,7 +264,7 @@ describe('kifuListOrderBy', () => {
       '"kifus"."title" asc',
     );
     expect(render(kifuListOrderBy(parse({ sort: 'createdAt' }))[0]).sql).toBe(
-      '"kifus"."createdAt" desc',
+      '"kifus"."created_at" desc',
     );
   });
 

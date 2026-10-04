@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx migrate.ts",
+    "db:migrate-from-mysql": "tsx migrate-from-mysql.ts",
     "tactics:redetect": "tsx redetect-tactics.ts",
     "drills:generate": "tsx generate-drills.ts"
   },
@@ -26,6 +27,7 @@
     "better-auth": "~1.6.33",
     "drizzle-orm": "1.0.0-rc.3",
     "hono": "^4.12.25",
+    "mysql2": "^3.22.2",
     "pg": "^8.23.1",
     "shared": "workspace:*",
     "zod": "^3.25.76"

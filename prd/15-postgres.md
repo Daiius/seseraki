@@ -3,7 +3,7 @@
 本章は、DB を MySQL 8.4 から **Postgres 18** へ移す設計を定める。
 [14](./14-multi-user.md) §9 の「当面 MySQL のまま」を改め、**所有者スコープ（[14](./14-multi-user.md) §4）の前に**移る。
 
-> **移行本体まで実装済み・データ移行と本番の切り替えは未**（2026-10-04。§9 の 2 まで）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
+> **データ移行エントリまで実装済み・本番の切り替えは未**（2026-10-04。§9 の 3 まで。dev での練習はこれから）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
 > 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres を Postgres 18 に当てた）で確かめた事実を §3・§5 に書く。
 
 ---
@@ -37,7 +37,7 @@
 | 版 | **Postgres 18**（dev・本番とも同じ。公式イメージ） |
 | 配置 | dev は compose のサービス、本番は VPS の docker（姿勢のみ。具体は `.claude-personal/`） |
 | ドライバ | **node-postgres（`pg`）** + `drizzle-orm/node-postgres` |
-| ロール | **管理ロール**（DDL。`migrate.js`）と **server ロール**（DML のみ。常駐の server と一括処理のエントリ）を分ける。今の MySQL と同じ分け方で、RLS の土台になる。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。dev は `scripts/postgres-init/` が server ロールと default privileges を作る |
+| ロール | **管理ロール**（DDL。`migrate.js` とデータ移行の `migrate-from-mysql.js`）と **server ロール**（DML のみ。常駐の server と一括処理のエントリ）を分ける。今の MySQL と同じ分け方で、RLS の土台になる。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。dev は `scripts/postgres-init/` が server ロールと default privileges を作る |
 | 設定 | 本番は 1GB 級の VPS に載るので小さめ（`shared_buffers` は既定・`max_connections` は 20 程度）。具体の値は `.claude-personal/` |
 
 - worker は HTTP の API を通すだけで DB に触らないので、**worker は変わらない**
@@ -147,6 +147,14 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 - 汎用の移行ツール（pgloader）は使わない。**日時の解釈（MySQL の壁時計 ＝ UTC）を自分のコードで握る**ためと、
   件数の照合・制約の検査を同じ工程に入れるため
+- 実装: エントリ `packages/server/migrate-from-mysql.ts`、本体 `packages/server/src/mysql-migration/`
+  （`mysql-source.ts` = MySQL の読み取り / `write.ts` = Postgres への書き込み・違反の列挙・件数の照合 / `convert.ts` = 変換の純粋な関数 /
+  `plan.ts` = 移す表と順序）。**読み取りと書き込みを分けてある**ので、書き込み側は MySQL 無しに行を注入して実 DB テスト（§8.2）で確かめる
+- 接続: Postgres は **管理ロール**（`DB_ADMIN_*`）。identity の採番を `ALTER TABLE … RESTART WITH` で合わせるには表の所有者が要り、
+  server ロール（DML だけ）では足りない。MySQL は `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE`
+- 🔒 **MySQL には一切書かない。** 読み取りは `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY`（全表を同じ時点で読み、書く文は MySQL が拒否する）。
+  単一の接続で、行はストリームで読む（全行をメモリに載せない）
+- 移行先が「**適用済みのマイグレーションが 0000 の 1 本だけ**（件数と識別子で見る）・所有者の仮の行 `"1"` 以外は空（移さない表も含む）」でなければ**何もせずに中止する**（二重実行・取り違えの防止）
 
 ### 6.2 何を移すか
 
@@ -158,20 +166,28 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 ### 6.3 変換
 
-- 日時: MySQL の値を**文字列のまま読み、UTC として** `Date` にする（今の typeCast と同じ解釈）
+- 日時: MySQL の値を**文字列のまま読み、UTC として** `Date` にする（今の typeCast と同じ解釈。実装は mysql2 の `dateStrings`）。
+  ゼロ日付・存在しない日時・ミリ秒より細かい値は変換の違反（`conversion`）として一覧に出す
   - 🔴 **MySQL の読み取り接続は、最初の SELECT より前にセッションを UTC（`time_zone = '+00:00'`）に固定する。**
     `TIMESTAMP` は接続のセッションの時刻帯で文字列になるので、JST の接続で読んで UTC と解釈すると**全行が一律に 9 時間ずれる**
     （[03](./03-data-model.md) §1.1・server の `db/index.ts` と同じ罠）。固定した後に `@@session.time_zone` を読み返し、
     UTC でなければ**何も書かずに中止する**。接続を張り直す経路（プール）があるなら、すべての接続で同じことをする
-- `binary` → `Buffer` のまま `bytea` へ。`json` → `jsonb`。enum → `text`
+- `binary` → `Buffer` のまま `bytea` へ。`json` → `jsonb`（mysql2 の既定は `JSON.parse` 済みの値を返すが、`jsonStrings` で文字列のまま受けてそのまま渡す）。
+  enum → `text`。`tinyint(1)` → `boolean`。`bigint unsigned` → number（安全な整数の範囲を検査する）
+- 所有者の行 `"1"` は 0000 が仮の値で入れているので、**INSERT せず移行元の値で UPDATE する**（`updatedAt` も明示するのでトリガーに上書きされない）
 - 🔴 **ID は元の値のまま入れる。** identity が `generated always` なので、挿入に **`OVERRIDING SYSTEM VALUE`** が要る
-  （付けないと拒否される。試作で確認）。全表を入れた後に **`setval` で採番の続きを合わせる**（忘れると次の挿入が PK 衝突で落ちる）
+  （付けないと拒否される。試作で確認）。全表を入れた後に **採番の続きを `max(id) + 1`（空の表は 1）に合わせる**（忘れると次の挿入が PK 衝突で落ちる）。
+  🔴 **`setval` は使わない**——トランザクションの外の操作で、**ROLLBACK しても戻らない**（dry-run の後にも採番が動いたまま残る）。
+  `ALTER TABLE … ALTER COLUMN id RESTART WITH n` は DDL なのでトランザクションに入り、ROLLBACK で戻る
 - 🔒 **全体を 1 つのトランザクションで入れる。** 途中で失敗したら Postgres は空のまま
 
 ### 6.4 検査（既定 dry-run）
 
-- **既定は dry-run**: MySQL を読み、変換し、**意味の制約（§4.2）に合わない行と件数**を表示して止まる。`MIGRATE_APPLY=1` で実書込
-- 実書込の後に**表ごとの件数を照合**し、合わなければ非 0 で終わる
+- **既定は dry-run**: **同じトランザクションで全部入れてみて、最後に ROLLBACK する。** 検査は DB の制約そのもの
+  （意味の制約 §4.2 に加え、型の CHECK・FK・UNIQUE・NOT NULL）で行う——検査の規則をスクリプト側に書き写さない。`MIGRATE_APPLY=1` で COMMIT
+- **違反は違反した行で止まらず全件を列挙する**（表・行の PK・制約名・SQLSTATE）。まとめて INSERT し、失敗した束だけ
+  SAVEPOINT まで戻して 1 行ずつ入れ直す。⚠ 親の行が落ちると子の行が FK 違反として連なるので、制約ごとの件数から根を見る
+- 書き込みの後（COMMIT の前）に**表ごとの件数を MySQL と照合**する。**違反か不一致があれば apply でも ROLLBACK して非 0 で終わる**
 - 練習は dev で行う（dev の MySQL → dev の Postgres）。本番のデータでも、切り替えの前に dry-run を流して制約違反が無いことを確かめる
 
 ## 7. 切り替え
@@ -187,7 +203,7 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 1. VPS に Postgres のコンテナを足し、空の DB に `migrate.js` で 0000 を当てる（管理ロール）
 2. 本番の server と worker を止める（利用者は所有者だけなので告知は要らない）
 3. MySQL の seseraki DB を `mysqldump` で丸ごとファイルに残す
-4. `/app/migrate-from-mysql.js` を dry-run → `MIGRATE_APPLY=1` で流す。件数の照合が通ることを確かめる
+4. `/app/migrate-from-mysql.js` を dry-run → `MIGRATE_APPLY=1` で流す（`MYSQL_HOST` 等を渡す）。違反 0 件・件数の照合が通ることを確かめる
 5. `rebuild-positions.js` を `REBUILD_POSITIONS_APPLY=1` で流す（局面索引）
 6. 新しい server（Postgres 版）を起動し、ログインし直して画面を確かめる。worker を再開する
 
@@ -217,7 +233,7 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 1. **PRD**（本章と関連する章・AGENTS.md）
 2. **移行本体**: schema・クエリ・dev compose・実 DB テストの土台・制約・トリガー・一度きりのスクリプトの削除・Better Auth のアダプタ
-3. **データ移行エントリ**（§6）。dev で練習する
+3. **データ移行エントリ**（§6）。dev で練習する（**エントリは実装済み**。dev の手順は AGENTS.md「MySQL からのデータ移行」）
 4. 本番の切り替え（§7。PR ではなく作業）
 5. **後片付け**（切り替えの 1 週間後）: 移行エントリと MySQL のドライバ・dev compose の `db-mysql` を外す
 

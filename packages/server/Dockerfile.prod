@@ -62,6 +62,12 @@ COPY --from=build /workspace/packages/server/dist/rebuild-subjects.js ./rebuild-
 #   docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <service> /app/link-owner-account.js
 COPY --from=build /workspace/packages/server/dist/link-owner-account.js ./link-owner-account.js
 
+# MySQL → Postgres のデータ移行（一度きり。prd/15 §6）。既定は dry-run（全部入れてみて ROLLBACK）。
+# 🔒 MySQL には書かない。Postgres は管理ロールで 1 トランザクション。後片付けの PR（prd/15 §9 の 5）で外す。
+#   docker compose run --rm --no-deps <service> /app/migrate-from-mysql.js
+#   docker compose run --rm --no-deps -e MIGRATE_APPLY=1 <service> /app/migrate-from-mysql.js
+COPY --from=build /workspace/packages/server/dist/migrate-from-mysql.js ./migrate-from-mysql.js
+
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
 # 🔒 管理ロール（DDL。DB_ADMIN_USER / DB_ADMIN_PASSWORD）で流す（prd/15 §2）。

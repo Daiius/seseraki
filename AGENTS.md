@@ -124,8 +124,10 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > ⚠ **本番のマイグレーションはホストから流さず、イメージ同梱のエントリを使う**（下記）。
 > **生成は drizzle-kit（dev 専用）、適用は drizzle-orm の migrator**（本番の実行時依存）なので、
 > 本番イメージに drizzle-kit を入れずに適用でき、**dev と本番で適用経路が 1 本になる**。
-> ⚠️ **`:dev` は `DB_HOST=localhost` に繋ぐ。tunnel などで localhost の 5432 に別の DB が出ていると、そちらを指しうる**
-> （127.0.0.1:5432 の取り合い）。`:dev` 実行前に `lsof -nP -iTCP:5432 -sTCP:LISTEN` で localhost の実体を確認する。
+> ⚠️ **`:dev` は `scripts/db-forward.sh` が張る 127.0.0.1:55432（`DB_FORWARD_PORT` で変更可）に繋ぐ。** ポートは
+> forward のスクリプトが 1 か所で決め、`:dev` の scripts は `.env.database` を読んだ後に `DB_PORT=$DB_FORWARD_PORT` で上書きする
+> （`.env.database` の `DB_PORT` は compose 網内の値）。5432 を避けているのは、ホストの別の Postgres や tunnel に
+> 繋いでしまう取り違えを防ぐため。**待受ポートに先客がいる・forward が張れないときは何もせずに止まる。**
 
 ### 本番イメージ同梱のエントリ
 

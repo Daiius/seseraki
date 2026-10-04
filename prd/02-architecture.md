@@ -132,7 +132,7 @@
 
 | サービス | ポート | ホスト公開 | 備考 |
 |---|---|---|---|
-| db | 5432 | なし（`scripts/db-forward.sh` で都度 forward） | Postgres 18（`pg-data`）。初回に `scripts/postgres-init/` が server ロールを作る |
+| db | 5432 | なし（`scripts/db-forward.sh` が都度 127.0.0.1:55432 へ forward。`DB_FORWARD_PORT` で変更可） | Postgres 18（`pg-data`）。初回に `scripts/postgres-init/` が server ロールを作る |
 | db-mysql | 3306 | なし | 旧 MySQL 8.4（`db-data`）。**server は使わない**。データ移行の練習の移行元（[15](./15-postgres.md) §8.1。後片付けで外す） |
 | server | 4000 | なし（web の `/api` proxy・compose 網内で到達） | `.env.database` + `.env.server` |
 | web | 5173 | あり（唯一の外向き口。remote は `127.0.0.1:<port>`） | Vite dev server, `.env.web` |

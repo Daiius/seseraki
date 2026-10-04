@@ -49,22 +49,22 @@ export const LAST_ANSWERED_AT = sql<
 /**
  * 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない）。
  *
- * 🔴 **文字列は必ず UTC として読む**（レビュー `OCL-94744330`）。`sql` 断片の戻り値には
- * **列の日時変換（drizzle の `mapFromDriverValue`）が適用されない**——生の壁時計文字列が
- * そのまま来る。DB セッションは UTC 固定（prd/03 §1.1）なのでその壁時計は UTC だが、
- * `new Date('2026-09-10 12:00:00')` はタイムゾーン無しの文字列を**実行環境のローカル時刻**
- * として解釈する。server は `TZ=Asia/Tokyo` で動くので、そのままでは 9h ずれる
- * （一覧の最終解答日時だけが履歴と食い違う）。
- * ⚠ **セッションが JST だった頃は DB もサーバも JST で偶然一致していた**ので、
- * UTC 固定にした側の変更で初めて表に出る。
+ * 🔴 `sql` 断片の戻り値には**列の日時変換が適用されない**——node-postgres（drizzle が
+ * `timestamptz` の型変換を切っている）は Postgres の文字列表記（`2026-09-10 12:00:00.123456+09`）
+ * をそのまま返す。**オフセットは接続のセッションの時刻帯で付く**ので、必ずオフセットごと読む。
+ * ⚠ オフセットの無い文字列は **UTC として読む**（`new Date('2026-09-10 12:00:00')` は
+ * 実行環境のローカル時刻として解釈され、`TZ=Asia/Tokyo` の server では 9h ずれる。レビュー `OCL-94744330`）。
  */
 export function isoOf(value: Date | string | null): string | null {
   if (value === null) return null;
   if (value instanceof Date) return value.toISOString();
-  // 'YYYY-MM-DD HH:MM:SS[.fff]' → ISO 8601 の UTC 表記へ。既にオフセットが付いていれば触らない
-  const hasZone = /(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(value.trim());
-  const normalized = value.trim().replace(' ', 'T');
-  return new Date(hasZone ? normalized : `${normalized}Z`).toISOString();
+  const trimmed = value.trim();
+  const zone = /(?:[Zz]|[+-]\d{2}(?::?\d{2})?)$/.exec(trimmed);
+  const normalized = trimmed.replace(' ', 'T');
+  if (!zone) return new Date(`${normalized}Z`).toISOString();
+  // Postgres は分の無いオフセット（`+09`）を返す。ISO 8601 の `+09:00` に揃えてから読む
+  const withMinutes = /[+-]\d{2}$/.test(normalized) ? `${normalized}:00` : normalized;
+  return new Date(withMinutes).toISOString();
 }
 
 /** 出題順の段（prd/13 §6.3）。**未出題 > 間違えた > 正解済み** */
@@ -121,9 +121,9 @@ export function drillAttemptWhere(ownerId: string, query: DrillAttemptQuery): SQ
 export const ATTEMPT_NO = sql<number>`${sql.raw(
   (() => {
     const table = getTableName(drillAttempts);
-    const outer = (column: { name: string }) => `\`${table}\`.\`${column.name}\``;
-    const inner = (column: { name: string }) => `\`prior\`.\`${column.name}\``;
-    return `(select count(*) from \`${table}\` \`prior\`
+    const outer = (column: { name: string }) => `"${table}"."${column.name}"`;
+    const inner = (column: { name: string }) => `"prior"."${column.name}"`;
+    return `(select count(*) from "${table}" "prior"
       where ${inner(drillAttempts.drillId)} = ${outer(drillAttempts.drillId)}
         and ${inner(drillAttempts.move)} is not null
         and ${inner(drillAttempts.id)} <= ${outer(drillAttempts.id)})`;

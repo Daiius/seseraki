@@ -5,7 +5,7 @@
  * **導出規則そのものを直したとき**に流す（名前候補を変えたときは、その操作の中で
  * 同じトランザクションで引き直されるので、これは要らない）。
  *
- * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*`（`redetect-tactics.ts` と同じ規約）。
+ * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と `DB_USER` / `DB_PASSWORD`（`redetect-tactics.ts` と同じ規約）。
  * **ホストにポートを開けない compose 網内からの実行を推奨する**（AGENTS.md）。
  *
  *   docker compose run --rm --no-deps -e REBUILD_SUBJECTS_APPLY=1 server pnpm --filter server exec tsx rebuild-subjects.ts

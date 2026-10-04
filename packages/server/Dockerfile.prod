@@ -53,17 +53,9 @@ COPY --from=build /workspace/packages/server/dist/rebuild-positions.js ./rebuild
 #   docker compose run --rm -e GENERATE_DRILLS_APPLY=1 <service>  # command: ["/app/generate-drills.js"]
 COPY --from=build /workspace/packages/server/dist/generate-drills.js ./generate-drills.js
 
-# 主体側の一括再導出（prd/11 §4.2）と、移行時に 1 回だけ流す名前の設定（同 §6.2）。
+# 主体側の一括再導出（prd/11 §4.2）。
 #   docker compose run --rm <service>   # command: ["/app/rebuild-subjects.js"]
-#   docker compose run --rm <service> /app/backfill-user.js --display "..." --names "..." --apply
 COPY --from=build /workspace/packages/server/dist/rebuild-subjects.js ./rebuild-subjects.js
-COPY --from=build /workspace/packages/server/dist/backfill-user.js ./backfill-user.js
-
-# playedAt の作り直しのエントリ。接続のセッションを UTC に固定した回に流し、既存行が
-# 正しい絶対時刻を持っているかを確かめる（ずれていれば出どころから計算し直す）。
-# 絶対値の再計算なので何度流しても同じ結果になる。
-#   docker compose run --rm -e REDERIVE_PLAYED_AT_APPLY=1 <service>  # command: ["/app/rederive-played-at.js"]
-COPY --from=build /workspace/packages/server/dist/rederive-played-at.js ./rederive-played-at.js
 
 # 所有者のログイン手段の付け替え（Google ログインへの移行で 1 回。prd/07 §4.1）。既定は dry-run。
 #   docker compose run --rm --no-deps <service> /app/link-owner-account.js
@@ -72,6 +64,7 @@ COPY --from=build /workspace/packages/server/dist/link-owner-account.js ./link-o
 
 # マイグレーションのエントリ。**同梱する理由は、適用する SQL とコードのバージョンが
 # 構造的に一致すること**（ホストから流す方式は両者がずれても何も警告されない）。
+# 🔒 管理ロール（DDL。DB_ADMIN_USER / DB_ADMIN_PASSWORD）で流す（prd/15 §2）。
 #   docker compose run --rm <service>   # command: ["/app/migrate.js"]
 COPY --from=build /workspace/packages/server/dist/migrate.js ./migrate.js
 

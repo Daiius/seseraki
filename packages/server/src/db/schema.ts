@@ -1,23 +1,111 @@
 import {
   bigint,
   boolean,
+  check,
   customType,
   date,
   foreignKey,
   index,
-  int,
-  json,
-  mysqlEnum,
-  mysqlTable,
+  integer,
+  jsonb,
+  pgTable,
   primaryKey,
-  serial,
   smallint,
   text,
   timestamp,
   uniqueIndex,
   varchar,
-} from 'drizzle-orm/mysql-core';
-import { defineRelations } from 'drizzle-orm';
+  type AnyPgColumn,
+} from 'drizzle-orm/pg-core';
+import { defineRelations, sql, type SQL } from 'drizzle-orm';
+
+// --- 列の型の補助（prd/15 §3）---
+
+/**
+ * 日時の列。**`timestamptz`**（prd/15 §3）。`Date` で往復し、接続の時刻帯に依存しない
+ * （MySQL の頃の「DB の壁時計 ＝ UTC」という前提と自前の typeCast は要らなくなった）。
+ */
+const timestamptz = () => timestamp({ withTimezone: true });
+
+/**
+ * 自動採番の主キー。`bigint` の **identity 列**（`generated always as identity`）。
+ * ⚠ `generated always` なので**アプリから ID を指定して挿入できない**（データ移行だけが
+ * `OVERRIDING SYSTEM VALUE` を使う。prd/15 §6.3）。
+ */
+const identityId = () => bigint({ mode: 'number' }).primaryKey().generatedAlwaysAsIdentity();
+
+/** identity 列を指す側（FK）の型 */
+const idRef = () => bigint({ mode: 'number' });
+
+/**
+ * Better Auth の表の ID。**DB の既定値で UUID を振る**（prd/15 §3.3）。
+ *
+ * 🔴 **pg 方言の Better Auth は `generateId: 'uuid'` の ID を JS 側で振らず、DB に任せる**
+ * （試作で確認）。既定値が無いと **user の作成が NOT NULL 違反で落ちる**。
+ * 型は `varchar(36)` のまま——既存の所有者の ID は `"1"` で、uuid 型には入らない。
+ */
+const authId = () =>
+  varchar({ length: 36 })
+    .primaryKey()
+    .default(sql`gen_random_uuid()::text`);
+
+/** SQL の文字列リテラル（DDL に値を埋め込むため。値はコード中の定数だけ） */
+const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+
+/** `column in (…values)` の CHECK */
+function inCheck(name: string, column: AnyPgColumn, values: readonly string[]) {
+  return check(name, sql`${column} in (${sql.raw(values.map(literal).join(', '))})`);
+}
+
+/**
+ * 値の集合が決まった文字列の列（MySQL の `enum` の置き換え。prd/15 §3.1）。
+ * **値の一覧から列の型と CHECK を両方作る**——一覧を 1 か所に保つため。
+ *
+ * ⚠ **Drizzle の `text({ enum })` は TypeScript の型を付けるだけで CHECK を作らない**（試作で確認）。
+ * だから**列を使う表では必ず `.check(…)` を table extras に置く**。
+ * 🔒 `pgEnum` にはしない（値の削除・並べ替えができず、追加にもトランザクションの制約がある。
+ * CHECK の差し替えならトランザクションで流せる）。
+ */
+function textEnum<const T extends readonly [string, ...string[]]>(values: T) {
+  return {
+    values,
+    column: () => text({ enum: values }),
+    check: (name: string, column: AnyPgColumn) => inCheck(name, column, values),
+  };
+}
+
+const ANALYSIS_PROFILE = textEnum(['quick', 'full']);
+const KIFU_SOURCE = textEnum(['manual', 'swars', 'video']);
+const SIDE = textEnum(['sente', 'gote']);
+const TACTIC_SIDE = textEnum(['sente', 'gote', 'both']);
+const SIDE_TO_MOVE = textEnum(['b', 'w']);
+const DRILL_KIND = textEnum(['mate', 'best']);
+const DRILL_REASON = textEnum(['missed_mate', 'own_blunder']);
+const VERDICT = textEnum(['correct', 'close', 'wrong']);
+/** 評価値の種類（`candidate_moves.scoreType` / `drills.answerScoreType`）。列は varchar のまま */
+const SCORE_TYPES = ['cp', 'mate'] as const;
+/** 盤面の時刻帯（`kifus.sourceTz`。`localDay` が前提にしている） */
+const SOURCE_TZS = ['JST', 'UTC'] as const;
+
+/** JSON の値が配列であること（`string[]` などの型を DB の側でも守る。null は通す） */
+function jsonArrayCheck(name: string, column: AnyPgColumn) {
+  return check(name, sql`jsonb_typeof(${column}) = 'array'`);
+}
+
+/**
+ * バイト列を **Buffer のまま**扱う `bytea`（prd/15 §3。node-postgres は `Buffer` で往復する）。
+ * 固定長だった性質（MySQL の `binary(N)`）は **`octet_length(…) = N` の CHECK**
+ * （`byteLengthCheck`）で保つ——列を使う表の table extras に置く。
+ */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+function byteLengthCheck(name: string, column: AnyPgColumn, length: number) {
+  return check(name, sql`octet_length(${column}) = ${sql.raw(String(length))}`);
+}
+
+/** 条件 a と b が同値（両方真か両方偽）であること */
+const sameTruth = (a: SQL, b: SQL) => sql`(${a}) = (${b})`;
 
 /**
  * ユーザー。**Better Auth の user 表を兼ねる**（prd/07 §3.1。`user.modelName: 'users'`）。
@@ -29,8 +117,8 @@ import { defineRelations } from 'drizzle-orm';
  * 🔒 **本人の同定は `account.accountId`（Google の `sub`）で行う。** `email` は同定に使わない
  * （メールは変わりうる。prd/07 §1）。
  */
-export const users = mysqlTable('users', {
-  id: varchar({ length: 36 }).primaryKey(),
+export const users = pgTable('users', {
+  id: authId(),
   /** Google の表示名（Better Auth が書く）。画面には出さない——出すのは `displayName` */
   name: varchar({ length: 255 }).notNull(),
   /**
@@ -46,30 +134,30 @@ export const users = mysqlTable('users', {
    * 作成時に `databaseHooks.user.create.before` が `name` から補う（prd/07 §3.1）。以後は触らない
    */
   displayName: varchar({ length: 100 }).notNull(),
-  createdAt: timestamp().notNull().defaultNow(),
-  updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
-});
+  createdAt: timestamptz().notNull().defaultNow(),
+  /** 更新は DB のトリガー（`set_updated_at`）が書く（prd/15 §3.4）。以下の表も同じ */
+  updatedAt: timestamptz().notNull().defaultNow(),
+}, (table) => [
+  // `initialDisplayName` は空なら `(未設定)` を入れる
+  check('users_display_name_not_empty', sql`${table.displayName} <> ''`),
+]);
 
 /**
  * Better Auth のセッション（prd/07 §3）。**行を消せばその場で失効する**。
  *
- * 🔴 **`token` の照合順序は `utf8mb4_bin`**（大文字小文字を区別する）。既定の
- * `utf8mb4_0900_ai_ci` では大文字小文字だけが違う token が同じ値として照合される。
- * drizzle は照合順序を扱えないので**マイグレーション SQL で指定している**（`db:push` で作り直すと既定に戻る）。
- * 🔴 `userId` の FK は `ON DELETE CASCADE`。drizzle-kit は新規テーブルの CASCADE を SQL に出さないので、
- * マイグレーション SQL を手で直してある（AGENTS.md）。
+ * `userId` の FK は `ON DELETE CASCADE`。
  */
-export const session = mysqlTable(
+export const session = pgTable(
   'session',
   {
-    id: varchar({ length: 36 }).primaryKey(),
+    id: authId(),
     token: varchar({ length: 255 }).notNull(),
     userId: varchar({ length: 36 }).notNull(),
-    expiresAt: timestamp().notNull(),
+    expiresAt: timestamptz().notNull(),
     ipAddress: text(),
     userAgent: text(),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('session_token_uq').on(table.token),
@@ -81,12 +169,12 @@ export const session = mysqlTable(
 /**
  * Better Auth のアカウント（ログイン手段）。`(providerId, accountId)` で本人を同定する。
  * `providerId` は `'google'`（dev では `'credential'` もある。`password` はその時だけ入る）。
- * 🔴 `userId` の FK は `ON DELETE CASCADE`（`session` と同じくマイグレーション SQL を手で直してある）。
+ * `userId` の FK は `ON DELETE CASCADE`。
  */
-export const account = mysqlTable(
+export const account = pgTable(
   'account',
   {
-    id: varchar({ length: 36 }).primaryKey(),
+    id: authId(),
     userId: varchar({ length: 36 }).notNull(),
     providerId: varchar({ length: 64 }).notNull(),
     /** Google の `sub`。**本人の同定はこれで行う** */
@@ -94,12 +182,12 @@ export const account = mysqlTable(
     accessToken: text(),
     refreshToken: text(),
     idToken: text(),
-    accessTokenExpiresAt: timestamp(),
-    refreshTokenExpiresAt: timestamp(),
+    accessTokenExpiresAt: timestamptz(),
+    refreshTokenExpiresAt: timestamptz(),
     scope: text(),
     password: text(),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('account_provider_account_uq').on(table.providerId, table.accountId),
@@ -108,20 +196,16 @@ export const account = mysqlTable(
   ],
 );
 
-/**
- * Better Auth の短命の値（OAuth の state など）。
- * `identifier` は乱数の文字列で引くので、`session.token` と同じく **`utf8mb4_bin`**
- * （マイグレーション SQL で指定）。
- */
-export const verification = mysqlTable(
+/** Better Auth の短命の値（OAuth の state など） */
+export const verification = pgTable(
   'verification',
   {
-    id: varchar({ length: 36 }).primaryKey(),
+    id: authId(),
     identifier: varchar({ length: 255 }).notNull(),
     value: text().notNull(),
-    expiresAt: timestamp().notNull(),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    expiresAt: timestamptz().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [index('verification_identifier_idx').on(table.identifier)],
 );
@@ -135,21 +219,16 @@ export const verification = mysqlTable(
  * ⚠ **旧名を消してはいけない**（prd/11 §2.2）。消すと、その名前で指した過去の棋譜が
  * 「自分の対局」でなくなり、成績から静かに落ちる。名前を変えたときは**足す**。
  */
-export const userAliases = mysqlTable(
+export const userAliases = pgTable(
   'user_aliases',
   {
-    id: serial().primaryKey(),
+    id: identityId(),
     userId: varchar({ length: 36 }).notNull(),
     /**
      * 棋譜の `sente` / `gote` と突き合わせる値。swars の ID もここに入る。
      *
-     * 🔴 **照合順序は `utf8mb4_bin`（大文字小文字を区別する）。** MySQL の既定
-     * （`utf8mb4_0900_ai_ci`）では `daiius` と `Daiius` が**同じ値として扱われ**、
-     * UNIQUE に引っかかって両方を登録できない。実際に踏んだ。
-     * ⚠ 判定する JS 側（`subjectSideFromNames`）は `Set` で区別するので、
-     * **DB 側だけ区別しないと食い違う**。
-     * ⚠ drizzle は照合順序を扱えないので**マイグレーション SQL で指定している**。
-     * `db:push` で作り直すと既定に戻るため、dev で作り直したときは要確認。
+     * 大文字小文字を区別する（Postgres の既定。`daiius` と `Daiius` は別の値）。
+     * 判定する JS 側（`subjectSideFromNames`）も `Set` で区別するので食い違わない。
      */
     name: varchar({ length: 100 }).notNull(),
     /**
@@ -159,7 +238,7 @@ export const userAliases = mysqlTable(
      */
     validFrom: date({ mode: 'string' }),
     validTo: date({ mode: 'string' }),
-    createdAt: timestamp().notNull().defaultNow(),
+    createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     foreignKey({
@@ -167,28 +246,33 @@ export const userAliases = mysqlTable(
       foreignColumns: [users.id],
     }).onDelete('cascade'),
     uniqueIndex('user_aliases_name_uq').on(table.name),
+    check('user_aliases_name_not_empty', sql`${table.name} <> ''`),
+    check(
+      'user_aliases_valid_range',
+      sql`${table.validFrom} is null or ${table.validTo} is null or ${table.validFrom} <= ${table.validTo}`,
+    ),
   ],
 );
 
-export const kifus = mysqlTable(
+export const kifus = pgTable(
   'kifus',
   {
-    id: serial().primaryKey(),
+    id: identityId(),
     title: varchar({ length: 255 }).notNull(),
     kifText: text().notNull(),
-    usiMoves: json().$type<string[]>(),
+    usiMoves: jsonb().$type<string[]>(),
     sente: varchar({ length: 100 }),
     gote: varchar({ length: 100 }),
     senteDan: smallint(),
     goteDan: smallint(),
     result: varchar({ length: 50 }),
     swarsGameKey: varchar({ length: 255 }).unique(),
-    playedAt: timestamp(),
+    playedAt: timestamptz(),
     // playedAt の解釈に用いたタイムゾーン。手動貼り付け KIF は開始日時に
     // タイムゾーン欄が無いため、投入時に決めた TZ（"JST" 既定 / "UTC" は投入時指定）を残す。
     // swars 経路は gameKey 由来で常に "JST"。
     sourceTz: varchar({ length: 8 }),
-    analysisCompletedAt: timestamp(),
+    analysisCompletedAt: timestamptz(),
     /**
      * **完了した段階のうち最も高いもの**（prd/03 §2 / prd/05 §1.1d）。
      * quick だけ終わっている棋譜を一覧・詳細で見分けるために持つ。`reanalyze` で null に戻る。
@@ -198,16 +282,16 @@ export const kifus = mysqlTable(
      * 表示・クエリのどこも full の時刻を要求していないので、要らない列を先に足さない
      * （進捗を DB に持たなかったのと同じ立場。prd/05 §1.1b）。
      */
-    analysisProfile: mysqlEnum(['quick', 'full']),
+    analysisProfile: ANALYSIS_PROFILE.column(),
     analysisError: text(),
     // 解析世代。reanalyze で +1 し、worker の submit/error 報告は取得時と同一世代のみ受理
     // （実行中の旧解析がリセット後の状態を上書きするのを防ぐ）
-    analysisRevision: int().notNull().default(0),
+    analysisRevision: integer().notNull().default(0),
     memo: text(),
     // 棋譜の出所（prd/10 §2.1）。動画解析（'video'）は自分の対局ではないため、
     // 🔒 一覧・分析・統計のクエリは `source <> 'video'` を**既定で強制する**
     // （引数で外せる条件にしない。prd/10 §2.2）。既定値は安全側の 'manual'。
-    source: mysqlEnum(['manual', 'swars', 'video']).notNull().default('manual'),
+    source: KIFU_SOURCE.column().notNull().default('manual'),
     /**
      * **このデータを持っている人**（prd/11 §3）。⚠ 対局者ではない——動画解析の棋譜も
      * 投入した人が所有者で、対局者は `sente` / `gote` の話。
@@ -217,9 +301,9 @@ export const kifus = mysqlTable(
      * 主体の手番（prd/11 §4）。**導出値**で、`source = 'video'` は `bottomIsSente` から、
      * それ以外は所有者の名前候補との突き合わせで決まる。両対局者とも一致したら null。
      */
-    subjectSide: mysqlEnum(['sente', 'gote']),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    subjectSide: SIDE.column(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
@@ -228,6 +312,12 @@ export const kifus = mysqlTable(
     // 🔒 ユーザーを消しても棋譜は道連れにしない（CASCADE にしない。prd/14 §3.1）。
     // ユーザー行を 1 度誤って消しただけで全データが道連れになるため。削除は退会のバッチが明示的に行う
     foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
+    ANALYSIS_PROFILE.check('kifus_analysis_profile_check', table.analysisProfile),
+    KIFU_SOURCE.check('kifus_source_check', table.source),
+    SIDE.check('kifus_subject_side_check', table.subjectSide),
+    jsonArrayCheck('kifus_usi_moves_array', table.usiMoves),
+    inCheck('kifus_source_tz_check', table.sourceTz, SOURCE_TZS),
+    check('kifus_analysis_revision_nonneg', sql`${table.analysisRevision} >= 0`),
   ],
 );
 
@@ -241,28 +331,28 @@ export const kifus = mysqlTable(
  * 再走査せずに派生値を作り直せる。手ごとのメタ（time / side / inferredKind）はここに入る。
  * 🔒 索引が要ると分かった値だけ、後から `raw` の外に列として昇格させる。
  */
-export const videoKifuSources = mysqlTable(
+export const videoKifuSources = pgTable(
   'video_kifu_sources',
   {
     // ⚠ FK は下の table extras で `foreignKey()` として書く。列側の `.references()` は
     // **単一列 PK のテーブルでは生成 SQL から `ON DELETE CASCADE` が落ちる**
     // （複合 PK の kifuTactics では落ちない）。CASCADE が無いと棋譜を消せなくなる
-    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    kifuId: idRef().notNull(),
     /** 動画の識別子 */
     videoId: varchar({ length: 32 }).notNull(),
     /** その動画の何局目か（1 始まり） */
-    gameIndex: int().notNull(),
+    gameIndex: integer().notNull(),
     /** 断片の開始秒 / 終了秒 */
-    startedAtSec: int().notNull(),
-    endedAtSec: int().notNull(),
+    startedAtSec: integer().notNull(),
+    endedAtSec: integer().notNull(),
     /** 画面の下が先手か（録画者の側を示す。主体側の導出に使う。prd/10 §3.3） */
     bottomIsSente: boolean().notNull(),
     /** 走査時のコミット。上書きの経緯を辿るために残す */
     extractorRev: varchar({ length: 40 }).notNull(),
     /** 走査の生出力（range / replay / moves[{time,usi,side,inferredKind}]） */
-    raw: json().notNull(),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    raw: jsonb().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.kifuId] }),
@@ -275,18 +365,23 @@ export const videoKifuSources = mysqlTable(
       table.videoId,
       table.gameIndex,
     ),
+    check('video_kifu_sources_game_index_nonneg', sql`${table.gameIndex} >= 0`),
+    check(
+      'video_kifu_sources_range',
+      sql`0 <= ${table.startedAtSec} and ${table.startedAtSec} <= ${table.endedAtSec}`,
+    ),
   ],
 );
 
 // 1手ごとの解析結果
-export const moveAnalyses = mysqlTable(
+export const moveAnalyses = pgTable(
   'move_analyses',
   {
-    id: serial().primaryKey(),
-    kifuId: bigint({ mode: 'number', unsigned: true })
+    id: identityId(),
+    kifuId: idRef()
       .notNull()
       .references(() => kifus.id, { onDelete: 'cascade' }),
-    moveNumber: int().notNull(),
+    moveNumber: integer().notNull(),
     /**
      * 解析段階（prd/05 §1.1d）。**行は段階が上がっても増えず、full が quick を
      * 局面単位で上書きする**。full の進行中は 1 棋譜の中で quick と full が混在する
@@ -295,7 +390,7 @@ export const moveAnalyses = mysqlTable(
      * 🔒 **既定値は持たせない**（アプリが常に明示して書く）。DB 側の default に頼ると、
      * 書き忘れが quick 扱いで静かに通る。
      */
-    profile: mysqlEnum(['quick', 'full']).notNull(),
+    profile: ANALYSIS_PROFILE.column().notNull(),
     /**
      * USI の `id name`（来歴）。
      * 🔴 **上書き・再開の条件には使わない。** やねうら王は再ビルドで版文字列が変わるため、
@@ -308,16 +403,19 @@ export const moveAnalyses = mysqlTable(
      * movetime / 目標 depth / MultiPV の 3 つで**固定**（段階が 2 つ固定なのと同じ立場で、
      * 汎用の設定袋にしない）。列なら型が付き、後から「depth が違う行」を SQL で数えられる。
      */
-    movetimeMs: int(),
-    targetDepth: int(),
-    multiPv: int(),
-    createdAt: timestamp().notNull().defaultNow(),
+    movetimeMs: integer(),
+    targetDepth: integer(),
+    multiPv: integer(),
+    createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('move_analyses_kifu_id_move_number_uq').on(
       table.kifuId,
       table.moveNumber,
     ),
+    ANALYSIS_PROFILE.check('move_analyses_profile_check', table.profile),
+    check('move_analyses_move_number_nonneg', sql`${table.moveNumber} >= 0`),
+    check('move_analyses_multi_pv_positive', sql`${table.multiPv} >= 1`),
   ],
 );
 
@@ -326,36 +424,25 @@ export const moveAnalyses = mysqlTable(
  * 戦型ラベル（prd/03 §2.1）。`usiMoves` から導く**派生値**で、正は指し手列。
  * この表は絞り込みと集計を SQL で行うための索引にすぎない。
  */
-export const kifuTactics = mysqlTable(
+export const kifuTactics = pgTable(
   'kifu_tactics',
   {
-    kifuId: bigint({ mode: 'number', unsigned: true })
+    kifuId: idRef()
       .notNull()
       .references(() => kifus.id, { onDelete: 'cascade' }),
     /** ラベルの**帰属先**。「立った手番」ではない（prd/03 §2.1.1） */
-    side: mysqlEnum(['sente', 'gote', 'both']).notNull(),
+    side: TACTIC_SIDE.column().notNull(),
     /** 一次 / 二次ラベル名。**表示名そのもの**（enum やコード値にしない） */
     label: varchar({ length: 32 }).notNull(),
     /** 成立手数。表示の抑制に使う。**絞り込み条件には使わない**（prd/03 §2.1.2） */
-    turn: int().notNull(),
+    turn: integer().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.kifuId, table.side, table.label] }),
     index('kifu_tactics_label_idx').on(table.label),
+    TACTIC_SIDE.check('kifu_tactics_side_check', table.side),
   ],
 );
-
-/**
- * 固定長バイト列（`binary(N)`）を **Buffer のまま**扱う。
- *
- * ⚠ drizzle の `binary()` は値を string として扱うので、そのままでは
- * `Buffer` を渡せず、読み出しも文字列になる（charset 変換で壊れうる）。
- * 局面の盤・持ち駒はバイト列そのものに意味があるため、型を通す。
- */
-const bytes = (length: number) =>
-  customType<{ data: Buffer; driverData: Buffer }>({
-    dataType: () => `binary(${length})`,
-  })();
 
 /**
  * 局面索引（`kifus` に紐付く派生値。prd/10 §3.2）。
@@ -366,12 +453,12 @@ const bytes = (length: number) =>
  * 🔒 **`usiMoves` が変われば必ず作り直す**（同一トランザクション）。全件の作り直しは
  * `rebuild-positions.ts`。
  */
-export const kifuPositions = mysqlTable(
+export const kifuPositions = pgTable(
   'kifu_positions',
   {
-    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    kifuId: idRef().notNull(),
     /** 0 = 初期局面。N は N 手適用後の局面 */
-    moveNumber: int().notNull(),
+    moveNumber: integer().notNull(),
     /**
      * この局面に**至った直前の手**（USI）。`moveNumber = 0` では null。
      * ⭐ 枝の集計に要る——局面キーだけでは「同じ局面から指された別の手」を区別できない
@@ -387,20 +474,20 @@ export const kifuPositions = mysqlTable(
      * 文字列が要るときは盤・持ち駒・手番から組み立てる（`stateFromBytes` → `positionSfen`）。
      * ⚠ ハッシュ関数を変えたら全件の作り直し（`rebuild-positions.ts`）が要る
      */
-    sfenHash: bytes(8).notNull(),
+    sfenHash: bytea().notNull(),
     /**
      * 先手側だけの配置（盤 + 先手の持ち駒）のハッシュ。入力は**小文字にした** `sideSfen`
      * （`sideLayoutKey`）——先後をまたいで一致させるため（文字列の頃は照合順序が担っていた）。
      * 照合は盤・持ち駒から片側の配置を組み立て直して行う（`/positions/subject`）
      */
-    senteSfenHash: bytes(8).notNull(),
+    senteSfenHash: bytea().notNull(),
     /** 後手側だけの配置（盤を 180 度回して書いたもの。`sideLayoutKey(state, 'gote')`）のハッシュ */
-    goteSfenHash: bytes(8).notNull(),
+    goteSfenHash: bytea().notNull(),
     /** 盤 81 マス（1 マス 1 バイト）。距離の計算に読む（prd/10 §5.2） */
-    board: bytes(81).notNull(),
+    board: bytea().notNull(),
     /** 持ち駒（先手 7 種 → 後手 7 種の枚数） */
-    hands: bytes(14).notNull(),
-    sideToMove: mysqlEnum(['b', 'w']).notNull(),
+    hands: bytea().notNull(),
+    sideToMove: SIDE_TO_MOVE.column().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.kifuId, table.moveNumber] }),
@@ -415,22 +502,34 @@ export const kifuPositions = mysqlTable(
     // ⚠ **PK は `(kifuId, moveNumber)` なので、この範囲条件には使えない**
     //（先頭列が kifuId のため）。索引が無いと全局面を走査することになる
     index('kifu_positions_move_number_idx').on(table.moveNumber),
+    SIDE_TO_MOVE.check('kifu_positions_side_to_move_check', table.sideToMove),
+    byteLengthCheck('kifu_positions_sfen_hash_len', table.sfenHash, 8),
+    byteLengthCheck('kifu_positions_sente_sfen_hash_len', table.senteSfenHash, 8),
+    byteLengthCheck('kifu_positions_gote_sfen_hash_len', table.goteSfenHash, 8),
+    byteLengthCheck('kifu_positions_board_len', table.board, 81),
+    byteLengthCheck('kifu_positions_hands_len', table.hands, 14),
+    check('kifu_positions_move_number_nonneg', sql`${table.moveNumber} >= 0`),
+    // 「`moveNumber = 0` では `move` が null」（上のコメント）を両向きで守る
+    check(
+      'kifu_positions_initial_has_no_move',
+      sameTruth(sql`${table.moveNumber} = 0`, sql`${table.move} is null`),
+    ),
   ],
 );
 
-export const candidateMoves = mysqlTable(
+export const candidateMoves = pgTable(
   'candidate_moves',
   {
-    id: serial().primaryKey(),
-    moveAnalysisId: bigint({ mode: 'number', unsigned: true })
+    id: identityId(),
+    moveAnalysisId: idRef()
       .notNull()
       .references(() => moveAnalyses.id, { onDelete: 'cascade' }),
-    rank: int().notNull(),
+    rank: integer().notNull(),
     move: varchar({ length: 255 }).notNull(),
-    scoreType: varchar({ length: 16 }).notNull(), // "cp" | "mate"
-    scoreValue: int().notNull(),
-    pv: json().$type<string[]>(),
-    depth: int().notNull(),
+    scoreType: varchar({ length: 16 }).notNull(), // SCORE_TYPES（CHECK で守る）
+    scoreValue: integer().notNull(),
+    pv: jsonb().$type<string[]>(),
+    depth: integer().notNull(),
   },
   (table) => [
     uniqueIndex('candidate_moves_move_analysis_id_rank_uq').on(
@@ -441,6 +540,10 @@ export const candidateMoves = mysqlTable(
     // `scoreType` / `scoreValue` を含まないため、局面数ぶんの行読み出しになる。
     // mate 行は全体のごく一部なので、この索引で**読む行が mate 行だけに落ちる**（prd/09 §6.2）
     index('candidate_moves_score_idx').on(table.scoreType, table.scoreValue),
+    inCheck('candidate_moves_score_type_check', table.scoreType, SCORE_TYPES),
+    check('candidate_moves_rank_positive', sql`${table.rank} >= 1`),
+    check('candidate_moves_depth_nonneg', sql`${table.depth} >= 0`),
+    jsonArrayCheck('candidate_moves_pv_array', table.pv),
   ],
 );
 
@@ -452,51 +555,51 @@ export const candidateMoves = mysqlTable(
  * 🔴 **再生成は upsert で、DELETE → INSERT にしない。** `drillAttempts` が CASCADE で
  * ぶら下がっているので、作り直すと**解答履歴が道連れで消える**。
  */
-export const drills = mysqlTable(
+export const drills = pgTable(
   'drills',
   {
-    id: serial().primaryKey(),
-    kifuId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    id: identityId(),
+    kifuId: idRef().notNull(),
     /** 出題局面（= その手を指す前の局面。`moveAnalyses.moveNumber` と同じ数え方） */
-    moveNumber: int().notNull(),
+    moveNumber: integer().notNull(),
     /**
      * 出題の種類（prd/13 §2）。`mate` は詰み上がりまで指し継ぎ、`best` は初手のみ。
      * 🔒 **rank1 が `mate` の局面を `best` にしない**（prd/13 §4.1）——cp 差の採点が成立しない。
      */
-    kind: mysqlEnum(['mate', 'best']).notNull(),
+    kind: DRILL_KIND.column().notNull(),
     /**
      * 拾った理由（prd/13 §4.1）。出題の絞り込みと、解答後の文言に使う。
      * ⚠ **「相手の悪手を咎める」は持たない**——咎め損ねれば評価値が落ちるので
      * `own_blunder` が同じ局面を拾う（prd/13 §4.2）。
      */
-    reason: mysqlEnum(['missed_mate', 'own_blunder']).notNull(),
+    reason: DRILL_REASON.column().notNull(),
     /** 正解手（rank1）。USI */
     answerMove: varchar({ length: 16 }).notNull(),
     answerScoreType: varchar({ length: 16 }).notNull(),
-    answerScoreValue: int().notNull(),
+    answerScoreValue: integer().notNull(),
     /** 正解手の読み筋。`mate` では**指し継ぎの正解手順**そのもの（prd/13 §5.2） */
-    answerPv: json().$type<string[]>(),
+    answerPv: jsonb().$type<string[]>(),
     /**
      * 出題時点の候補手（rank 順・pv を除く）。**採点はここを引く**ので、
      * `candidateMoves` の再解析に影響されない（prd/13 §5.1）。
      */
-    candidates: json()
+    candidates: jsonb()
       .$type<{ rank: number; move: string; scoreType: string; scoreValue: number }[]>()
       .notNull(),
     /** エンジンの詰み距離（plies）。`kind='mate'` のときのみ。⚠ 詰将棋の「N手詰」ではない */
-    matePlies: int(),
+    matePlies: integer(),
     /** 実戦で指された手（解答後の表示に使う）。棋譜の最終手より後は null */
     playedMove: varchar({ length: 16 }),
     /** 実戦の手の損失（cp）。mate が絡む変化では null（prd/01 §5） */
-    playedLossCp: int(),
+    playedLossCp: integer(),
     /** 生成来歴（prd/13 §6.1）。取得時の解析世代と、生成に使った閾値 */
-    analysisRevision: int().notNull(),
-    blunderCp: int().notNull(),
-    mateMaxPlies: int().notNull(),
+    analysisRevision: integer().notNull(),
+    blunderCp: integer().notNull(),
+    mateMaxPlies: integer().notNull(),
     /** 生成器の版。抽出規則を変えたら上げる（一括再生成の対象を絞るための印） */
     generatorRev: varchar({ length: 16 }).notNull(),
-    createdAt: timestamp().notNull().defaultNow(),
-    updatedAt: timestamp().notNull().defaultNow().onUpdateNow(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('drills_kifu_id_move_number_kind_uq').on(
@@ -510,6 +613,16 @@ export const drills = mysqlTable(
     }).onDelete('cascade'),
     // 出題順（未出題 > 間違えた > 正解済み。prd/13 §6.3）は種類で絞ってから引く
     index('drills_kind_idx').on(table.kind),
+    DRILL_KIND.check('drills_kind_check', table.kind),
+    DRILL_REASON.check('drills_reason_check', table.reason),
+    inCheck('drills_answer_score_type_check', table.answerScoreType, SCORE_TYPES),
+    // `matePlies` は「`kind='mate'` のときのみ」（上のコメント）を両向きで守る
+    check(
+      'drills_mate_plies_iff_mate',
+      sameTruth(sql`${table.kind} = 'mate'`, sql`${table.matePlies} is not null`),
+    ),
+    jsonArrayCheck('drills_candidates_array', table.candidates),
+    jsonArrayCheck('drills_answer_pv_array', table.answerPv),
   ],
 );
 
@@ -518,11 +631,11 @@ export const drills = mysqlTable(
  *
  * 🔒 **除外フラグ（「自明だった」）もここに持つ。** 出題側に持つと再生成で消えうる（prd/13 §7）。
  */
-export const drillAttempts = mysqlTable(
+export const drillAttempts = pgTable(
   'drill_attempts',
   {
-    id: serial().primaryKey(),
-    drillId: bigint({ mode: 'number', unsigned: true }).notNull(),
+    id: identityId(),
+    drillId: idRef().notNull(),
     /** 解答した手（USI）。除外だけを記録する行では null */
     move: varchar({ length: 16 }),
     /**
@@ -533,15 +646,15 @@ export const drillAttempts = mysqlTable(
      * 出題局面から読むと駒名が欠ける・別の駒として表示される。
      * ⚠ **既存の行は null**（`line` を持たない行は USI のまま出す。prd/13 §5.4）。
      */
-    line: json().$type<string[]>(),
-    verdict: mysqlEnum(['correct', 'close', 'wrong']),
+    line: jsonb().$type<string[]>(),
+    verdict: VERDICT.column(),
     /**
      * 最善との差（cp）。**null 可**——mate が絡む回答は損失を持たない（prd/13 §5.1）。
      */
-    lossCp: int(),
+    lossCp: integer(),
     /** 「自明だった」（prd/13 §7）。立っている行が 1 つでもあれば以後出題しない */
     excluded: boolean().notNull().default(false),
-    createdAt: timestamp().notNull().defaultNow(),
+    createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
     foreignKey({
@@ -551,6 +664,8 @@ export const drillAttempts = mysqlTable(
     index('drill_attempts_drill_id_idx').on(table.drillId),
     // 解答履歴の一覧は**新しい順**に 50 件ずつ引く（prd/13 §7.3）
     index('drill_attempts_created_at_idx').on(table.createdAt),
+    VERDICT.check('drill_attempts_verdict_check', table.verdict),
+    jsonArrayCheck('drill_attempts_line_array', table.line),
   ],
 );
 

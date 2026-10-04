@@ -151,7 +151,7 @@ export async function importVideoKifu(
           // 画面の下が録画者なので、主体側はここで決まる（prd/11 §4.1）
           subjectSide: subjectSideFromVideo(input.bottomIsSente),
         })
-        .$returningId();
+        .returning({ id: kifus.id });
       await tx
         .insert(videoKifuSources)
         .values({ kifuId: inserted.id, ...source });

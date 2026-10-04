@@ -25,7 +25,7 @@
  * 「実手を次の局面の評価から引く」経路だけ（手番が入れ替わるため）。
  */
 import { and, asc, desc, eq, exists, inArray, sql } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/mysql-core';
+import { alias } from 'drizzle-orm/pg-core';
 import { db } from './db/index.js';
 import { candidateMoves, kifuPositions, moveAnalyses } from './db/schema.js';
 import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';

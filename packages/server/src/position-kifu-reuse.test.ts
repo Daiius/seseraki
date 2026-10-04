@@ -276,13 +276,14 @@ describe('source', () => {
 describe('クエリの形（上限は絞り込みの後）', () => {
   function render(query: { toSQL: () => { sql: string; params: unknown[] } }) {
     const { sql, params } = query.toSQL();
-    return { sql: sql.toLowerCase(), params };
+    // Postgres の位置パラメータ（`$1`）を `?` に寄せて、期待値をパラメータの番号に依存させない
+    return { sql: sql.toLowerCase().replace(/\$\d+/g, '?'), params };
   }
 
   it('局面評価: 候補手 3 本揃いに絞ってから、解析日時の降順で上限をかける', () => {
     const { sql, params } = render(positionEvalAnalysesQuery(SFEN));
     // 局面索引と解析を結合している（一致局面だけを先に切っていない）
-    expect(sql).toContain('inner join `move_analyses`');
+    expect(sql).toContain('inner join "move_analyses"');
     // 3 本揃いの条件が where に入っている
     expect(sql).toContain('exists');
     expect(params).toContain(3);
@@ -291,12 +292,12 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
     // 解析が新しい順、同時刻は kifuId 降順（応答が揺れない）
     // ⚠ 列名は DB 上も camelCase（drizzle の casing 変換は入れていない）
-    expect(sql).toMatch(/order by .*createdat` desc.*kifuid` desc/);
+    expect(sql).toMatch(/order by .*createdat" desc.*kifuid" desc/);
   });
 
   it('名指し評価 ①: その手を持つ候補手に結合してから上限をかける', () => {
     const { sql, params } = render(namedMoveAnalysesQuery(SFEN, '7g7f'));
-    expect(sql).toContain('inner join `candidate_moves`');
+    expect(sql).toContain('inner join "candidate_moves"');
     expect(params).toContain('7g7f');
     // 候補手の本数は問わない（3 本揃いの条件を持ち込まない）
     expect(sql).not.toContain('exists');
@@ -306,7 +307,7 @@ describe('クエリの形（上限は絞り込みの後）', () => {
   it('名指し評価 ②: 次局面へ自己結合し、解析済みのものだけに絞ってから上限をかける', () => {
     const { sql, params } = render(playedMoveAnalysesQuery(SFEN, '7g7f'));
     // 局面索引の自己結合で「次の局面に至った手」を辿る
-    expect(sql).toContain('`next_positions`');
+    expect(sql).toContain('"next_positions"');
     expect(sql).toContain('+ 1');
     expect(params).toContain('7g7f');
     // 候補手が 1 本も無い解析は材料にならないので SQL で落とす
@@ -322,11 +323,11 @@ describe('クエリの形（上限は絞り込みの後）', () => {
       playedMoveAnalysesQuery(SFEN, '7g7f'),
     ]) {
       const { sql } = render(query);
-      expect(sql).toContain('`kifu_positions`.`sfenhash` = ?');
-      expect(sql).toContain('`kifu_positions`.`board` = ?');
-      expect(sql).toContain('`kifu_positions`.`hands` = ?');
-      expect(sql).toContain('`kifu_positions`.`sidetomove` = ?');
-      expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('`kifu_positions`.`board` = ?'));
+      expect(sql).toContain('"kifu_positions"."sfenhash" = ?');
+      expect(sql).toContain('"kifu_positions"."board" = ?');
+      expect(sql).toContain('"kifu_positions"."hands" = ?');
+      expect(sql).toContain('"kifu_positions"."sidetomove" = ?');
+      expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('"kifu_positions"."board" = ?'));
     }
   });
 
@@ -337,7 +338,7 @@ describe('クエリの形（上限は絞り込みの後）', () => {
       playedMoveAnalysesQuery(SFEN, '7g7f'),
     ]) {
       const { sql, params } = render(query);
-      expect(sql).toContain('`move_analyses`.`profile` = ?');
+      expect(sql).toContain('"move_analyses"."profile" = ?');
       expect(params).toContain('full');
     }
   });

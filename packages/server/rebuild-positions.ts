@@ -4,7 +4,7 @@
  * **薄い entry point に徹する。** 局面キーの計算は `shared`、置換は `src/positions.ts`。
  * 局面索引は `kifus.usiMoves` から導く派生値なので、キーの作り方を変えたらここで作り直す。
  *
- * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `MYSQL_*` から取る（`redetect-tactics.ts` と同じ規約）。
+ * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と server ロールの `DB_USER` / `DB_PASSWORD` から取る（`redetect-tactics.ts` と同じ規約）。
  * **ホストにポートを開けない compose 網内からの実行を推奨する**（AGENTS.md）。
  *
  *   docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 server pnpm --filter server exec tsx rebuild-positions.ts

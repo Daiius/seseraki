@@ -39,7 +39,8 @@ function render(where: ReturnType<typeof samePosition>) {
     .where(where)
     .limit(10)
     .toSQL();
-  return { sql: sql.toLowerCase(), params };
+  // Postgres の位置パラメータ（`$1`）を `?` に寄せて、期待値をパラメータの番号に依存させない
+  return { sql: sql.toLowerCase().replace(/\$\d+/g, '?'), params };
 }
 
 describe('parsePositionKey', () => {
@@ -56,12 +57,12 @@ describe('samePosition（ハッシュで引いて照合する）', () => {
   it('🔒 ハッシュだけでなく盤・持ち駒・手番まで where に入る（衝突を照合で落とす）', () => {
     const key = parsePositionKey(INITIAL)!;
     const { sql, params } = render(samePosition(kifuPositions, key));
-    expect(sql).toContain('`kifu_positions`.`sfenhash` = ?');
-    expect(sql).toContain('`kifu_positions`.`board` = ?');
-    expect(sql).toContain('`kifu_positions`.`hands` = ?');
-    expect(sql).toContain('`kifu_positions`.`sidetomove` = ?');
+    expect(sql).toContain('"kifu_positions"."sfenhash" = ?');
+    expect(sql).toContain('"kifu_positions"."board" = ?');
+    expect(sql).toContain('"kifu_positions"."hands" = ?');
+    expect(sql).toContain('"kifu_positions"."sidetomove" = ?');
     // 照合は SQL の中にあるので、上限は照合後の行にかかる（件数がずれない）
-    expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('`board` = ?'));
+    expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('"board" = ?'));
     expect(params).toContainEqual(Buffer.from(positionHash(INITIAL)));
     expect(params).toContainEqual(Buffer.from(key.board));
     expect(params).toContainEqual(Buffer.from(key.hands));

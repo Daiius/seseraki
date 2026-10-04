@@ -76,7 +76,7 @@ export async function pickNextDrill(
     .where(and(eq(kifus.ownerId, ownerId), kind ? eq(drills.kind, kind) : undefined))
     .groupBy(drills.id, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves)
     .having(sql`sum(case when ${drillAttempts.excluded} then 1 else 0 end) = 0`)
-    .orderBy(TIER, sql`rand()`)
+    .orderBy(TIER, sql`random()`)
     .limit(1);
 
   if (!row) return null;

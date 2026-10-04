@@ -7,7 +7,8 @@
  *
  * ⚠ **ロジックはここに置き、スクリプトは薄い entry point にする。**
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   DEFAULT_THRESHOLDS,
   buildPositions,
@@ -272,21 +273,24 @@ export async function syncDrills(
           generatorRev: GENERATOR_REV,
         })),
       )
-      .onDuplicateKeyUpdate({
+      // 一意キー（kifuId, moveNumber, kind）が衝突したら焼き付けた材料を差し替える。
+      // ⚠ **ID は変えない**——解答履歴（`drillAttempts`）が ID を指している
+      .onConflictDoUpdate({
+        target: [drills.kifuId, drills.moveNumber, drills.kind],
         set: {
-          reason: sql`values(${drills.reason})`,
-          answerMove: sql`values(${drills.answerMove})`,
-          answerScoreType: sql`values(${drills.answerScoreType})`,
-          answerScoreValue: sql`values(${drills.answerScoreValue})`,
-          answerPv: sql`values(${drills.answerPv})`,
-          candidates: sql`values(${drills.candidates})`,
-          matePlies: sql`values(${drills.matePlies})`,
-          playedMove: sql`values(${drills.playedMove})`,
-          playedLossCp: sql`values(${drills.playedLossCp})`,
-          analysisRevision: sql`values(${drills.analysisRevision})`,
-          blunderCp: sql`values(${drills.blunderCp})`,
-          mateMaxPlies: sql`values(${drills.mateMaxPlies})`,
-          generatorRev: sql`values(${drills.generatorRev})`,
+          reason: excluded(drills.reason),
+          answerMove: excluded(drills.answerMove),
+          answerScoreType: excluded(drills.answerScoreType),
+          answerScoreValue: excluded(drills.answerScoreValue),
+          answerPv: excluded(drills.answerPv),
+          candidates: excluded(drills.candidates),
+          matePlies: excluded(drills.matePlies),
+          playedMove: excluded(drills.playedMove),
+          playedLossCp: excluded(drills.playedLossCp),
+          analysisRevision: excluded(drills.analysisRevision),
+          blunderCp: excluded(drills.blunderCp),
+          mateMaxPlies: excluded(drills.mateMaxPlies),
+          generatorRev: excluded(drills.generatorRev),
         },
       });
   }
@@ -308,11 +312,15 @@ export async function syncDrills(
   return { upserted: extracted.length, removed: rowsAffected(removed) };
 }
 
-/** drizzle の DELETE 結果から件数を取り出す（driver によって形が違う） */
-function rowsAffected(result: unknown): number {
-  if (Array.isArray(result)) {
-    const [header] = result as { affectedRows?: number }[];
-    return header?.affectedRows ?? 0;
-  }
-  return (result as { affectedRows?: number })?.affectedRows ?? 0;
+/** drizzle の DELETE 結果（node-postgres の `QueryResult`）から件数を取り出す */
+function rowsAffected(result: { rowCount: number | null }): number {
+  return result.rowCount ?? 0;
+}
+
+/**
+ * upsert で「挿入しようとした値」を指す（Postgres の `excluded.<列>`）。
+ * 列名はスキーマから取る（手書きの文字列にすると列名を変えたときに黙って壊れる）
+ */
+function excluded(column: AnyPgColumn): SQL {
+  return sql.raw(`excluded."${column.name}"`);
 }

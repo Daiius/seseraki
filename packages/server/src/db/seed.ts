@@ -34,7 +34,7 @@ if (existing) {
   const [result] = await db
     .insert(kifus)
     .values({ title, kifText, ownerId: owner.id })
-    .$returningId();
+    .returning({ id: kifus.id });
   console.log(`Seed inserted: id=${result.id} "${title}"`);
 }
 

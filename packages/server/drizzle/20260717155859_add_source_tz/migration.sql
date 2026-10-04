@@ -1,1 +1,0 @@
-ALTER TABLE `kifus` ADD `sourceTz` varchar(8);

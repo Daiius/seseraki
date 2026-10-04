@@ -36,7 +36,7 @@ export interface PlannedTable {
   columns: PlannedColumn[];
   /** 違反の一覧で行を示す列（PK） */
   keys: string[];
-  /** identity 列（`OVERRIDING SYSTEM VALUE` で元の値を入れ、最後に `setval` で採番を合わせる） */
+  /** identity 列（`OVERRIDING SYSTEM VALUE` で元の値を入れ、最後に `RESTART WITH` で採番を合わせる） */
   identity: string | null;
 }
 
@@ -84,3 +84,10 @@ export const SKIPPED_TABLES: readonly string[] = [
 
 /** 所有者の ID（0000 が仮の値で入れている行） */
 export const OWNER_ID = OWNER_USER_ID;
+
+/**
+ * 移行先に適用済みであるべき**唯一の**マイグレーション（Postgres の 0000。`drizzle/` のフォルダ名）。
+ * 移行は 0000 の直後の DB にだけ流す。⚠ 切り替えの前に後続のマイグレーションを足したら、
+ * この移行が新しい表・列を扱えるかを見直してからここを更新する。
+ */
+export const EXPECTED_MIGRATION = '20261004033323_postgres';

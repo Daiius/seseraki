@@ -14,8 +14,8 @@
  *
  * 接続:
  * - Postgres … `DB_HOST` / `DB_PORT` / `DB_NAME` と **管理ロール**（`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）。
- *   identity の採番を `setval` で合わせるには sequence の UPDATE 権限が要り、server ロールには無い
- *   （`USAGE, SELECT` だけ。scripts/postgres-init/10-server-role.sh）
+ *   identity の採番を `ALTER TABLE … RESTART WITH` で合わせるには表の所有者（管理ロール）が要る
+ *   （server ロールは DML だけ。scripts/postgres-init/10-server-role.sh）
  * - MySQL … `MYSQL_HOST` / `MYSQL_PORT`（既定 3306）/ `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE`
  *
  *   dev（compose 網の中から。ホストからは MySQL に届かない）:
@@ -42,7 +42,7 @@ const APPLY = process.env.MIGRATE_APPLY === '1';
 async function main(): Promise<number> {
   const pgConfig = connectionConfig('admin');
   if (!pgConfig.user) {
-    console.error('DB_ADMIN_USER が未設定です（データ移行は管理ロールで流す。setval に sequence の UPDATE 権限が要る）');
+    console.error('DB_ADMIN_USER が未設定です（データ移行は管理ロールで流す。採番の調整に表の所有者の権限が要る）');
     return 1;
   }
   const mysqlConfig = mysqlConfigFromEnv();

@@ -79,7 +79,7 @@ function memorySource(data: Record<string, Row[]>, countsOverride: Record<string
 
 const T = '2026-01-02 03:04:05';
 
-/** 一揃いの正しいデータ（全表に 1 行以上。drill_attempts は空で、空の表の setval を見る） */
+/** 一揃いの正しいデータ（全表に 1 行以上。drill_attempts は空で、空の表の採番の合わせ方を見る） */
 function validData(): Record<string, Row[]> {
   return {
     users: [
@@ -292,6 +292,11 @@ describe('migrateInto', () => {
       await assertTargetPristine(client);
       const { rows } = await client.query('select email from users');
       expect(rows).toEqual([{ email: 'owner-1@example.invalid' }]);
+      // 採番も戻っている（setval だと ROLLBACK で戻らず、ここが 14 になる。OCL-FE485ABC）
+      const { rows: n } = await client.query(
+        `insert into kifus (title, "kifText", "ownerId") values ('new', '', '1') returning id`,
+      );
+      expect(Number(n[0].id)).toBe(1);
     } finally {
       await client.end();
     }
@@ -336,6 +341,18 @@ describe('assertTargetPristine', () => {
     await client.connect();
     try {
       await expect(assertTargetPristine(client)).rejects.toThrow(/マイグレーション/);
+    } finally {
+      await client.end();
+    }
+  });
+
+  it('0000 の後のマイグレーションが当たった DB では始めない', async () => {
+    const client = await freshTarget();
+    try {
+      await client.query(
+        `insert into drizzle.__drizzle_migrations (hash, created_at, name) values ('x', 0, '20990101000000_later')`,
+      );
+      await expect(assertTargetPristine(client)).rejects.toThrow(/0000/);
     } finally {
       await client.end();
     }

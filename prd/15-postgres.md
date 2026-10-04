@@ -150,11 +150,11 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 - 実装: エントリ `packages/server/migrate-from-mysql.ts`、本体 `packages/server/src/mysql-migration/`
   （`mysql-source.ts` = MySQL の読み取り / `write.ts` = Postgres への書き込み・違反の列挙・件数の照合 / `convert.ts` = 変換の純粋な関数 /
   `plan.ts` = 移す表と順序）。**読み取りと書き込みを分けてある**ので、書き込み側は MySQL 無しに行を注入して実 DB テスト（§8.2）で確かめる
-- 接続: Postgres は **管理ロール**（`DB_ADMIN_*`）。identity の採番を `setval` で合わせるには sequence の UPDATE 権限が要り、
-  server ロールには無い（`USAGE, SELECT` だけ）。MySQL は `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE`
+- 接続: Postgres は **管理ロール**（`DB_ADMIN_*`）。identity の採番を `ALTER TABLE … RESTART WITH` で合わせるには表の所有者が要り、
+  server ロール（DML だけ）では足りない。MySQL は `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE`
 - 🔒 **MySQL には一切書かない。** 読み取りは `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY`（全表を同じ時点で読み、書く文は MySQL が拒否する）。
   単一の接続で、行はストリームで読む（全行をメモリに載せない）
-- 移行先が「0000 適用済み・所有者の仮の行 `"1"` 以外は空（移さない表も含む）」でなければ**何もせずに中止する**（二重実行・取り違えの防止）
+- 移行先が「**適用済みのマイグレーションが 0000 の 1 本だけ**（件数と識別子で見る）・所有者の仮の行 `"1"` 以外は空（移さない表も含む）」でなければ**何もせずに中止する**（二重実行・取り違えの防止）
 
 ### 6.2 何を移すか
 
@@ -176,8 +176,9 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
   enum → `text`。`tinyint(1)` → `boolean`。`bigint unsigned` → number（安全な整数の範囲を検査する）
 - 所有者の行 `"1"` は 0000 が仮の値で入れているので、**INSERT せず移行元の値で UPDATE する**（`updatedAt` も明示するのでトリガーに上書きされない）
 - 🔴 **ID は元の値のまま入れる。** identity が `generated always` なので、挿入に **`OVERRIDING SYSTEM VALUE`** が要る
-  （付けないと拒否される。試作で確認）。全表を入れた後に **`setval` で採番の続きを合わせる**（忘れると次の挿入が PK 衝突で落ちる）。
-  空の表は `setval(…, 1, false)`（次は 1）にする——`max(id)` が null のまま渡すと落ちる
+  （付けないと拒否される。試作で確認）。全表を入れた後に **採番の続きを `max(id) + 1`（空の表は 1）に合わせる**（忘れると次の挿入が PK 衝突で落ちる）。
+  🔴 **`setval` は使わない**——トランザクションの外の操作で、**ROLLBACK しても戻らない**（dry-run の後にも採番が動いたまま残る）。
+  `ALTER TABLE … ALTER COLUMN id RESTART WITH n` は DDL なのでトランザクションに入り、ROLLBACK で戻る
 - 🔒 **全体を 1 つのトランザクションで入れる。** 途中で失敗したら Postgres は空のまま
 
 ### 6.4 検査（既定 dry-run）

@@ -16,7 +16,13 @@ import {
   rowKey,
   type CountMismatch,
 } from './convert.js';
-import { MIGRATED_TABLES, OWNER_ID, SKIPPED_TABLES, type PlannedTable } from './plan.js';
+import {
+  EXPECTED_MIGRATION,
+  MIGRATED_TABLES,
+  OWNER_ID,
+  SKIPPED_TABLES,
+  type PlannedTable,
+} from './plan.js';
 
 /** 移行元。MySQL の読み取りと、テストの行の注入が同じ形を満たす */
 export interface MigrationSource {
@@ -86,11 +92,18 @@ export async function assertTargetPristine(client: pg.ClientBase): Promise<void>
   if (!reg[0]?.migrations) {
     throw new TargetNotReadyError('マイグレーションが当たっていない（drizzle.__drizzle_migrations が無い）。先に migrate.js を流す');
   }
-  const { rows: applied } = await client.query<{ n: number }>(
-    'select count(*)::int as n from drizzle.__drizzle_migrations',
+  // 「0000 の直後」であること。件数と識別子の両方で見る——後続のマイグレーションが当たった DB は、
+  // 足された表やスキーマの変更をこの移行が知らないので始めない（OCL-9F31E62E）
+  const { rows: applied } = await client.query<{ name: string | null }>(
+    'select name from drizzle.__drizzle_migrations order by id',
   );
-  if (applied[0].n === 0) {
-    throw new TargetNotReadyError('マイグレーションが 1 本も適用されていない。先に migrate.js を流す');
+  const names = applied.map((r) => r.name);
+  if (names.length !== 1 || names[0] !== EXPECTED_MIGRATION) {
+    throw new TargetNotReadyError(
+      names.length === 0
+        ? 'マイグレーションが 1 本も適用されていない。先に migrate.js を流す'
+        : `移行先のマイグレーションが 0000（${EXPECTED_MIGRATION}）の 1 本だけではない: ${names.map((n) => JSON.stringify(n)).join(', ')}`,
+    );
   }
 
   const problems: string[] = [];
@@ -246,17 +259,22 @@ export async function migrateInto(
     }
   }
 
-  // 🔴 identity の採番の続きを合わせる。忘れると次の挿入が PK 衝突で落ちる。
-  // 空の表は「次は 1」（setval(…, 1, false)）——max が null のまま setval すると 0 で落ちる
+  // 🔴 identity の採番の続きを合わせる。忘れると次の挿入が PK 衝突で落ちる。空の表は「次は 1」。
+  // 🔴 **`setval` は使わない。** setval はトランザクションの外の操作で、ROLLBACK しても戻らない
+  // （dry-run や失敗の後にも採番が動いたまま残る。OCL-FE485ABC）。
+  // `ALTER TABLE … ALTER COLUMN … RESTART WITH` は DDL なのでトランザクションに入り、ROLLBACK で戻る
+  // （表の所有者＝管理ロールで流す）。
   const sequences: Record<string, number> = {};
   for (const table of MIGRATED_TABLES) {
     if (!table.identity) continue;
     const col = quote(table.identity);
     const { rows } = await client.query<{ next: string }>(
-      `select setval(pg_get_serial_sequence($1, $2), coalesce(max(${col}), 0) + 1, false) as next from ${quote(table.name)}`,
-      [table.name, table.identity],
+      `select coalesce(max(${col}), 0) + 1 as next from ${quote(table.name)}`,
     );
-    sequences[table.name] = Number(rows[0].next);
+    const next = Number(rows[0].next);
+    if (!Number.isSafeInteger(next)) throw new Error(`採番の続きが整数にならない: ${table.name} ${rows[0].next}`);
+    await client.query(`alter table ${quote(table.name)} alter column ${col} restart with ${next}`);
+    sequences[table.name] = next;
   }
 
   const targetCounts: Record<string, number> = {};

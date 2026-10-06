@@ -98,6 +98,9 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > server ロール（DML のみ。常駐の server と一括処理。`DB_USER` / `DB_PASSWORD`）。dev は
 > `scripts/postgres-init/10-server-role.sh` が空の volume の初回に server ロールを作る。
 >
+> 🔴 **DB の列名は snake_case、TS は camelCase**（prd/15 §3.6）。変換は drizzle の casing で、**表を `schema.ts` の `table`（`snakeCase.table`）で定義すると付く**
+> （drizzle 1.0 では `drizzle()` ではなく表の定義に付く）。**`pgTable` で足すとその表だけ camelCase の列になる**——`test:db` が全列の名前を検査する。手書きの SQL・`sql` 断片・トリガーは DB の名前（`updated_at`）で書く。
+>
 > 🔴 **`updatedAt` はトリガーで更新する。drizzle-kit はトリガーを生成しない。** `updatedAt` を持つ表を
 > 足したら、生成された `migration.sql` に**トリガーを手で足す**（0000 の末尾の `set_updated_at` を参照）。
 > 足し忘れても何もエラーにならず、`updatedAt` が作成時刻のまま止まる（`test:db` が表とトリガーの対応を照合する）。

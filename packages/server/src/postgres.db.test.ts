@@ -276,7 +276,7 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
     ['move_analyses.profile', 'move_analyses_profile_check', async () =>
       db.insert(moveAnalyses).values({ kifuId: await insertKifu(), moveNumber: 0, profile: raw('x') })],
     ['kifu_tactics.side', 'kifu_tactics_side_check', async () =>
-      db.execute(sql`insert into "kifu_tactics" ("kifuId", "side", "label", "turn")
+      db.execute(sql`insert into kifu_tactics (kifu_id, side, label, turn)
         values (${await insertKifu()}, 'nobody', '四間飛車', 1)`)],
     ['kifu_positions.sideToMove', 'kifu_positions_side_to_move_check', async () =>
       db.insert(kifuPositions).values({ ...positionRow(await insertKifu(), 0, null), sideToMove: raw('x') })],
@@ -399,6 +399,52 @@ describe('Better Auth（pg アダプタ。prd/15 §3.3）', () => {
     expect(sessions[0].id).toMatch(uuid);
     expect(sessions[0].expiresAt.getTime()).toBeGreaterThan(Date.now());
   });
+
+  it('列名が snake_case でも signIn・セッションの照会・account が通る（prd/15 §3.6）', async () => {
+    const auth = betterAuth(
+      authOptions(
+        {
+          isDev: true,
+          secret: 'test-secret-'.padEnd(40, 'x'),
+          baseURL: 'http://localhost:5173',
+          google: null,
+          allowSignup: true,
+          trustedOrigins: ['http://localhost:5173'],
+        },
+        drizzleAdapter(db, { provider: 'pg', schema: { users, session, account, verification } }),
+      ),
+    );
+    const email = `${randomUUID()}@example.invalid`;
+    const password = 'password-for-test';
+    await auth.api.signUpEmail({ body: { email, password, name: 'Someone' } });
+
+    const signIn = await auth.api.signInEmail({ body: { email, password }, asResponse: true });
+    expect(signIn.status).toBe(200);
+    const cookie = signIn.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+    const current = await auth.api.getSession({ headers: new Headers({ cookie }) });
+    expect(current?.user).toMatchObject({ email, emailVerified: false });
+
+    const linked = await auth.api.listUserAccounts({ headers: new Headers({ cookie }) });
+    expect(linked.map((a) => a.providerId)).toEqual(['credential']);
+
+    // DB 上の列は snake_case（Better Auth がプロパティ名でなく DB の名前で書いていること）
+    const raw = await db.execute<{ email_verified: boolean; provider_id: string; sessions: number }>(sql`
+      select u.email_verified, a.provider_id,
+        (select count(*)::int from session s where s.user_id = u.id) as sessions
+      from users u join account a on a.user_id = u.id where u.email = ${email}`);
+    expect(raw.rows).toEqual([{ email_verified: false, provider_id: 'credential', sessions: 2 }]);
+  });
+});
+
+describe('命名（prd/15 §3.6）', () => {
+  it('全表の列名が snake_case（大文字を含まない。psql でダブルクォートが要らない）', async () => {
+    const result = await db.execute<{ table_name: string; column_name: string }>(sql`
+      select table_name, column_name from information_schema.columns
+      where table_schema = 'public' order by table_name, column_name`);
+    expect(result.rows.length).toBeGreaterThan(0);
+    const bad = result.rows.filter((r) => !/^[a-z][a-z0-9_]*$/.test(r.column_name));
+    expect(bad).toEqual([]);
+  });
 });
 
 describe('集計の戻り値（node-postgres は bigint を文字列で返す。prd/15 §3.5）', () => {
@@ -500,7 +546,7 @@ describe('FK（CASCADE の有無）', () => {
     const userId = await insertUser();
     await insertKifu({ ownerId: userId });
     const err = await failure(db.delete(users).where(eq(users.id, userId)));
-    expect(err).toMatchObject({ code: FK_VIOLATION, constraint: 'kifus_ownerId_users_id_fkey' });
+    expect(err).toMatchObject({ code: FK_VIOLATION, constraint: 'kifus_owner_id_users_id_fkey' });
   });
 
   it('ユーザーを消すと名前候補・セッション・アカウントは道連れになる', async () => {

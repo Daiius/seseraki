@@ -99,7 +99,7 @@ describe('drillAttemptWhere', () => {
 
   it('既定は所有者だけで絞る（除外の行も含む）', () => {
     const { sql, params } = render(drillAttemptWhere('7', parse({})));
-    expect(sql).toContain('"ownerId"');
+    expect(sql).toContain('"owner_id"');
     expect(params).toEqual(['7']);
   });
 
@@ -144,12 +144,12 @@ describe('選択リストの中で組み立てた SQL', () => {
 
   it('相関の外側は必ず修飾する（内側の同名列に解決されると常に真になる）', () => {
     const sql = renderAttemptsSelect();
-    expect(sql).toContain('"prior"."drillId" = "drill_attempts"."drillId"');
+    expect(sql).toContain('"prior"."drill_id" = "drill_attempts"."drill_id"');
     expect(sql).toContain('"prior"."id" <= "drill_attempts"."id"');
     expect(sql).toContain('"prior"."move" is not null');
   });
 
-  it('一覧の集計は列をテーブルで修飾する（"createdAt" は kifus にもある）', () => {
+  it('一覧の集計は列をテーブルで修飾する（"created_at" は kifus にもある）', () => {
     const query = new QueryBuilder()
       .select({
         id: drills.id,
@@ -162,7 +162,7 @@ describe('選択リストの中で組み立てた SQL', () => {
       .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
       .groupBy(drills.id, kifus.createdAt);
     const sql = dialect.sqlToQuery(query.getSQL()).sql;
-    expect(sql).toContain('max(case when "drill_attempts"."move" is not null then "drill_attempts"."createdAt" end)');
+    expect(sql).toContain('max(case when "drill_attempts"."move" is not null then "drill_attempts"."created_at" end)');
   });
 });
 
@@ -170,7 +170,7 @@ describe('drillAttemptOrderBy', () => {
   it('新しい順で、同値は id 降順を副キーにする', () => {
     const order = drillAttemptOrderBy();
     expect(order).toHaveLength(2);
-    expect(render(order[0]).sql).toContain('"createdAt" desc');
+    expect(render(order[0]).sql).toContain('"created_at" desc');
     expect(render(order[1]).sql).toContain('"id" desc');
   });
 });

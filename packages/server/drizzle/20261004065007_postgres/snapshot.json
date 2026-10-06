@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "d216bd1a-9528-491a-8db8-182370ca8166",
+  "id": "4e3660ef-1baf-435a-879a-9a942430e1f8",
   "prevIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
@@ -105,7 +105,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "userId",
+      "name": "user_id",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -118,7 +118,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "providerId",
+      "name": "provider_id",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -131,7 +131,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "accountId",
+      "name": "account_id",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -144,7 +144,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "accessToken",
+      "name": "access_token",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -157,7 +157,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "refreshToken",
+      "name": "refresh_token",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -170,7 +170,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "idToken",
+      "name": "id_token",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -183,7 +183,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "accessTokenExpiresAt",
+      "name": "access_token_expires_at",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -196,7 +196,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "refreshTokenExpiresAt",
+      "name": "refresh_token_expires_at",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -235,7 +235,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -248,7 +248,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "account"
@@ -283,7 +283,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "moveAnalysisId",
+      "name": "move_analysis_id",
       "entityType": "columns",
       "schema": "public",
       "table": "candidate_moves"
@@ -322,7 +322,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "scoreType",
+      "name": "score_type",
       "entityType": "columns",
       "schema": "public",
       "table": "candidate_moves"
@@ -335,7 +335,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "scoreValue",
+      "name": "score_value",
       "entityType": "columns",
       "schema": "public",
       "table": "candidate_moves"
@@ -396,7 +396,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "drillId",
+      "name": "drill_id",
       "entityType": "columns",
       "schema": "public",
       "table": "drill_attempts"
@@ -448,7 +448,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "lossCp",
+      "name": "loss_cp",
       "entityType": "columns",
       "schema": "public",
       "table": "drill_attempts"
@@ -474,7 +474,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "drill_attempts"
@@ -509,7 +509,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifuId",
+      "name": "kifu_id",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -522,7 +522,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "moveNumber",
+      "name": "move_number",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -561,7 +561,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "answerMove",
+      "name": "answer_move",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -574,7 +574,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "answerScoreType",
+      "name": "answer_score_type",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -587,7 +587,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "answerScoreValue",
+      "name": "answer_score_value",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -600,7 +600,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "answerPv",
+      "name": "answer_pv",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -626,7 +626,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "matePlies",
+      "name": "mate_plies",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -639,7 +639,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "playedMove",
+      "name": "played_move",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -652,7 +652,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "playedLossCp",
+      "name": "played_loss_cp",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -665,7 +665,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "analysisRevision",
+      "name": "analysis_revision",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -678,7 +678,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "blunderCp",
+      "name": "blunder_cp",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -691,7 +691,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "mateMaxPlies",
+      "name": "mate_max_plies",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -704,7 +704,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "generatorRev",
+      "name": "generator_rev",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -717,7 +717,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -730,7 +730,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "drills"
@@ -743,7 +743,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifuId",
+      "name": "kifu_id",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -756,7 +756,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "moveNumber",
+      "name": "move_number",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -782,7 +782,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "sfenHash",
+      "name": "sfen_hash",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -795,7 +795,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "senteSfenHash",
+      "name": "sente_sfen_hash",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -808,7 +808,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "goteSfenHash",
+      "name": "gote_sfen_hash",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -847,7 +847,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "sideToMove",
+      "name": "side_to_move",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_positions"
@@ -860,7 +860,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifuId",
+      "name": "kifu_id",
       "entityType": "columns",
       "schema": "public",
       "table": "kifu_tactics"
@@ -947,7 +947,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifText",
+      "name": "kif_text",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -960,7 +960,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "usiMoves",
+      "name": "usi_moves",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -999,7 +999,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "senteDan",
+      "name": "sente_dan",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1012,7 +1012,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "goteDan",
+      "name": "gote_dan",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1038,7 +1038,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "swarsGameKey",
+      "name": "swars_game_key",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1051,7 +1051,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "playedAt",
+      "name": "played_at",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1064,7 +1064,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "sourceTz",
+      "name": "source_tz",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1077,7 +1077,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "analysisCompletedAt",
+      "name": "analysis_completed_at",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1090,7 +1090,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "analysisProfile",
+      "name": "analysis_profile",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1103,7 +1103,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "analysisError",
+      "name": "analysis_error",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1116,7 +1116,7 @@
       "default": "0",
       "generated": null,
       "identity": null,
-      "name": "analysisRevision",
+      "name": "analysis_revision",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1155,7 +1155,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "ownerId",
+      "name": "owner_id",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1168,7 +1168,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "subjectSide",
+      "name": "subject_side",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1181,7 +1181,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1194,7 +1194,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "kifus"
@@ -1229,7 +1229,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifuId",
+      "name": "kifu_id",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1242,7 +1242,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "moveNumber",
+      "name": "move_number",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1268,7 +1268,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "engineName",
+      "name": "engine_name",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1281,7 +1281,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "movetimeMs",
+      "name": "movetime_ms",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1294,7 +1294,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "targetDepth",
+      "name": "target_depth",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1307,7 +1307,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "multiPv",
+      "name": "multi_pv",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1320,7 +1320,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "move_analyses"
@@ -1359,7 +1359,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "userId",
+      "name": "user_id",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1372,7 +1372,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "expiresAt",
+      "name": "expires_at",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1385,7 +1385,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "ipAddress",
+      "name": "ip_address",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1398,7 +1398,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "userAgent",
+      "name": "user_agent",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1411,7 +1411,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1424,7 +1424,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "session"
@@ -1459,7 +1459,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "userId",
+      "name": "user_id",
       "entityType": "columns",
       "schema": "public",
       "table": "user_aliases"
@@ -1485,7 +1485,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "validFrom",
+      "name": "valid_from",
       "entityType": "columns",
       "schema": "public",
       "table": "user_aliases"
@@ -1498,7 +1498,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "validTo",
+      "name": "valid_to",
       "entityType": "columns",
       "schema": "public",
       "table": "user_aliases"
@@ -1511,7 +1511,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "user_aliases"
@@ -1563,7 +1563,7 @@
       "default": "false",
       "generated": null,
       "identity": null,
-      "name": "emailVerified",
+      "name": "email_verified",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -1589,7 +1589,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "displayName",
+      "name": "display_name",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -1602,7 +1602,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -1615,7 +1615,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "users"
@@ -1667,7 +1667,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "expiresAt",
+      "name": "expires_at",
       "entityType": "columns",
       "schema": "public",
       "table": "verification"
@@ -1680,7 +1680,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "verification"
@@ -1693,7 +1693,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "verification"
@@ -1706,7 +1706,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "kifuId",
+      "name": "kifu_id",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1719,7 +1719,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "videoId",
+      "name": "video_id",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1732,7 +1732,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "gameIndex",
+      "name": "game_index",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1745,7 +1745,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "startedAtSec",
+      "name": "started_at_sec",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1758,7 +1758,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "endedAtSec",
+      "name": "ended_at_sec",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1771,7 +1771,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "bottomIsSente",
+      "name": "bottom_is_sente",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1784,7 +1784,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "extractorRev",
+      "name": "extractor_rev",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1810,7 +1810,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "createdAt",
+      "name": "created_at",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1823,7 +1823,7 @@
       "default": "now()",
       "generated": null,
       "identity": null,
-      "name": "updatedAt",
+      "name": "updated_at",
       "entityType": "columns",
       "schema": "public",
       "table": "video_kifu_sources"
@@ -1832,14 +1832,14 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "providerId",
+          "value": "provider_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "accountId",
+          "value": "account_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1860,7 +1860,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "userId",
+          "value": "user_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1881,7 +1881,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "moveAnalysisId",
+          "value": "move_analysis_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1909,14 +1909,14 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "scoreType",
+          "value": "score_type",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "scoreValue",
+          "value": "score_value",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1937,7 +1937,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "drillId",
+          "value": "drill_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1958,7 +1958,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "createdAt",
+          "value": "created_at",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -1979,14 +1979,14 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "kifuId",
+          "value": "kifu_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "moveNumber",
+          "value": "move_number",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2035,7 +2035,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "sfenHash",
+          "value": "sfen_hash",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2056,7 +2056,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "senteSfenHash",
+          "value": "sente_sfen_hash",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2077,7 +2077,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "goteSfenHash",
+          "value": "gote_sfen_hash",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2098,7 +2098,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "moveNumber",
+          "value": "move_number",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2140,7 +2140,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "analysisCompletedAt",
+          "value": "analysis_completed_at",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2182,14 +2182,14 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "kifuId",
+          "value": "kifu_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "moveNumber",
+          "value": "move_number",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2231,7 +2231,7 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "userId",
+          "value": "user_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2294,14 +2294,14 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "videoId",
+          "value": "video_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "gameIndex",
+          "value": "game_index",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -2321,7 +2321,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "userId"
+        "user_id"
       ],
       "schemaTo": "public",
       "tableTo": "users",
@@ -2330,7 +2330,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "account_userId_users_id_fkey",
+      "name": "account_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "account"
@@ -2338,7 +2338,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "moveAnalysisId"
+        "move_analysis_id"
       ],
       "schemaTo": "public",
       "tableTo": "move_analyses",
@@ -2347,7 +2347,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "candidate_moves_moveAnalysisId_move_analyses_id_fkey",
+      "name": "candidate_moves_move_analysis_id_move_analyses_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "candidate_moves"
@@ -2355,7 +2355,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "drillId"
+        "drill_id"
       ],
       "schemaTo": "public",
       "tableTo": "drills",
@@ -2364,7 +2364,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "drill_attempts_drillId_drills_id_fkey",
+      "name": "drill_attempts_drill_id_drills_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "drill_attempts"
@@ -2372,7 +2372,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "schemaTo": "public",
       "tableTo": "kifus",
@@ -2381,7 +2381,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "drills_kifuId_kifus_id_fkey",
+      "name": "drills_kifu_id_kifus_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "drills"
@@ -2389,7 +2389,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "schemaTo": "public",
       "tableTo": "kifus",
@@ -2398,7 +2398,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "kifu_positions_kifuId_kifus_id_fkey",
+      "name": "kifu_positions_kifu_id_kifus_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "kifu_positions"
@@ -2406,7 +2406,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "schemaTo": "public",
       "tableTo": "kifus",
@@ -2415,7 +2415,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "kifu_tactics_kifuId_kifus_id_fkey",
+      "name": "kifu_tactics_kifu_id_kifus_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "kifu_tactics"
@@ -2423,7 +2423,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "ownerId"
+        "owner_id"
       ],
       "schemaTo": "public",
       "tableTo": "users",
@@ -2432,7 +2432,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "kifus_ownerId_users_id_fkey",
+      "name": "kifus_owner_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "kifus"
@@ -2440,7 +2440,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "schemaTo": "public",
       "tableTo": "kifus",
@@ -2449,7 +2449,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "move_analyses_kifuId_kifus_id_fkey",
+      "name": "move_analyses_kifu_id_kifus_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "move_analyses"
@@ -2457,7 +2457,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "userId"
+        "user_id"
       ],
       "schemaTo": "public",
       "tableTo": "users",
@@ -2466,7 +2466,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "session_userId_users_id_fkey",
+      "name": "session_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "session"
@@ -2474,7 +2474,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "userId"
+        "user_id"
       ],
       "schemaTo": "public",
       "tableTo": "users",
@@ -2483,7 +2483,7 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "user_aliases_userId_users_id_fkey",
+      "name": "user_aliases_user_id_users_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "user_aliases"
@@ -2491,7 +2491,7 @@
     {
       "nameExplicit": false,
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "schemaTo": "public",
       "tableTo": "kifus",
@@ -2500,15 +2500,15 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
-      "name": "video_kifu_sources_kifuId_kifus_id_fkey",
+      "name": "video_kifu_sources_kifu_id_kifus_id_fkey",
       "entityType": "fks",
       "schema": "public",
       "table": "video_kifu_sources"
     },
     {
       "columns": [
-        "kifuId",
-        "moveNumber"
+        "kifu_id",
+        "move_number"
       ],
       "nameExplicit": false,
       "name": "kifu_positions_pkey",
@@ -2518,7 +2518,7 @@
     },
     {
       "columns": [
-        "kifuId",
+        "kifu_id",
         "side",
         "label"
       ],
@@ -2530,7 +2530,7 @@
     },
     {
       "columns": [
-        "kifuId"
+        "kifu_id"
       ],
       "nameExplicit": false,
       "name": "video_kifu_sources_pkey",
@@ -2641,10 +2641,10 @@
     {
       "nameExplicit": false,
       "columns": [
-        "swarsGameKey"
+        "swars_game_key"
       ],
       "nullsNotDistinct": false,
-      "name": "kifus_swarsGameKey_key",
+      "name": "kifus_swars_game_key_key",
       "schema": "public",
       "table": "kifus",
       "entityType": "uniques"
@@ -2661,7 +2661,7 @@
       "entityType": "uniques"
     },
     {
-      "value": "\"scoreType\" in ('cp', 'mate')",
+      "value": "\"score_type\" in ('cp', 'mate')",
       "name": "candidate_moves_score_type_check",
       "entityType": "checks",
       "schema": "public",
@@ -2717,14 +2717,14 @@
       "table": "drills"
     },
     {
-      "value": "\"answerScoreType\" in ('cp', 'mate')",
+      "value": "\"answer_score_type\" in ('cp', 'mate')",
       "name": "drills_answer_score_type_check",
       "entityType": "checks",
       "schema": "public",
       "table": "drills"
     },
     {
-      "value": "(\"kind\" = 'mate') = (\"matePlies\" is not null)",
+      "value": "(\"kind\" = 'mate') = (\"mate_plies\" is not null)",
       "name": "drills_mate_plies_iff_mate",
       "entityType": "checks",
       "schema": "public",
@@ -2738,35 +2738,35 @@
       "table": "drills"
     },
     {
-      "value": "jsonb_typeof(\"answerPv\") = 'array'",
+      "value": "jsonb_typeof(\"answer_pv\") = 'array'",
       "name": "drills_answer_pv_array",
       "entityType": "checks",
       "schema": "public",
       "table": "drills"
     },
     {
-      "value": "\"sideToMove\" in ('b', 'w')",
+      "value": "\"side_to_move\" in ('b', 'w')",
       "name": "kifu_positions_side_to_move_check",
       "entityType": "checks",
       "schema": "public",
       "table": "kifu_positions"
     },
     {
-      "value": "octet_length(\"sfenHash\") = 8",
+      "value": "octet_length(\"sfen_hash\") = 8",
       "name": "kifu_positions_sfen_hash_len",
       "entityType": "checks",
       "schema": "public",
       "table": "kifu_positions"
     },
     {
-      "value": "octet_length(\"senteSfenHash\") = 8",
+      "value": "octet_length(\"sente_sfen_hash\") = 8",
       "name": "kifu_positions_sente_sfen_hash_len",
       "entityType": "checks",
       "schema": "public",
       "table": "kifu_positions"
     },
     {
-      "value": "octet_length(\"goteSfenHash\") = 8",
+      "value": "octet_length(\"gote_sfen_hash\") = 8",
       "name": "kifu_positions_gote_sfen_hash_len",
       "entityType": "checks",
       "schema": "public",
@@ -2787,14 +2787,14 @@
       "table": "kifu_positions"
     },
     {
-      "value": "\"moveNumber\" >= 0",
+      "value": "\"move_number\" >= 0",
       "name": "kifu_positions_move_number_nonneg",
       "entityType": "checks",
       "schema": "public",
       "table": "kifu_positions"
     },
     {
-      "value": "(\"moveNumber\" = 0) = (\"move\" is null)",
+      "value": "(\"move_number\" = 0) = (\"move\" is null)",
       "name": "kifu_positions_initial_has_no_move",
       "entityType": "checks",
       "schema": "public",
@@ -2808,7 +2808,7 @@
       "table": "kifu_tactics"
     },
     {
-      "value": "\"analysisProfile\" in ('quick', 'full')",
+      "value": "\"analysis_profile\" in ('quick', 'full')",
       "name": "kifus_analysis_profile_check",
       "entityType": "checks",
       "schema": "public",
@@ -2822,28 +2822,28 @@
       "table": "kifus"
     },
     {
-      "value": "\"subjectSide\" in ('sente', 'gote')",
+      "value": "\"subject_side\" in ('sente', 'gote')",
       "name": "kifus_subject_side_check",
       "entityType": "checks",
       "schema": "public",
       "table": "kifus"
     },
     {
-      "value": "jsonb_typeof(\"usiMoves\") = 'array'",
+      "value": "jsonb_typeof(\"usi_moves\") = 'array'",
       "name": "kifus_usi_moves_array",
       "entityType": "checks",
       "schema": "public",
       "table": "kifus"
     },
     {
-      "value": "\"sourceTz\" in ('JST', 'UTC')",
+      "value": "\"source_tz\" in ('JST', 'UTC')",
       "name": "kifus_source_tz_check",
       "entityType": "checks",
       "schema": "public",
       "table": "kifus"
     },
     {
-      "value": "\"analysisRevision\" >= 0",
+      "value": "\"analysis_revision\" >= 0",
       "name": "kifus_analysis_revision_nonneg",
       "entityType": "checks",
       "schema": "public",
@@ -2857,14 +2857,14 @@
       "table": "move_analyses"
     },
     {
-      "value": "\"moveNumber\" >= 0",
+      "value": "\"move_number\" >= 0",
       "name": "move_analyses_move_number_nonneg",
       "entityType": "checks",
       "schema": "public",
       "table": "move_analyses"
     },
     {
-      "value": "\"multiPv\" >= 1",
+      "value": "\"multi_pv\" >= 1",
       "name": "move_analyses_multi_pv_positive",
       "entityType": "checks",
       "schema": "public",
@@ -2878,28 +2878,28 @@
       "table": "user_aliases"
     },
     {
-      "value": "\"validFrom\" is null or \"validTo\" is null or \"validFrom\" <= \"validTo\"",
+      "value": "\"valid_from\" is null or \"valid_to\" is null or \"valid_from\" <= \"valid_to\"",
       "name": "user_aliases_valid_range",
       "entityType": "checks",
       "schema": "public",
       "table": "user_aliases"
     },
     {
-      "value": "\"displayName\" <> ''",
+      "value": "\"display_name\" <> ''",
       "name": "users_display_name_not_empty",
       "entityType": "checks",
       "schema": "public",
       "table": "users"
     },
     {
-      "value": "\"gameIndex\" >= 0",
+      "value": "\"game_index\" >= 0",
       "name": "video_kifu_sources_game_index_nonneg",
       "entityType": "checks",
       "schema": "public",
       "table": "video_kifu_sources"
     },
     {
-      "value": "0 <= \"startedAtSec\" and \"startedAtSec\" <= \"endedAtSec\"",
+      "value": "0 <= \"started_at_sec\" and \"started_at_sec\" <= \"ended_at_sec\"",
       "name": "video_kifu_sources_range",
       "entityType": "checks",
       "schema": "public",

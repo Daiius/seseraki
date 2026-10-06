@@ -291,8 +291,8 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     expect(sql.indexOf('order by')).toBeGreaterThan(sql.indexOf('exists'));
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
     // 解析が新しい順、同時刻は kifuId 降順（応答が揺れない）
-    // ⚠ 列名は DB 上も camelCase（drizzle の casing 変換は入れていない）
-    expect(sql).toMatch(/order by .*createdat" desc.*kifuid" desc/);
+    // 列名は DB 上 snake_case（schema の casing。prd/15 §3.6）
+    expect(sql).toMatch(/order by .*created_at" desc.*kifu_id" desc/);
   });
 
   it('名指し評価 ①: その手を持つ候補手に結合してから上限をかける', () => {
@@ -323,10 +323,10 @@ describe('クエリの形（上限は絞り込みの後）', () => {
       playedMoveAnalysesQuery(SFEN, '7g7f'),
     ]) {
       const { sql } = render(query);
-      expect(sql).toContain('"kifu_positions"."sfenhash" = ?');
+      expect(sql).toContain('"kifu_positions"."sfen_hash" = ?');
       expect(sql).toContain('"kifu_positions"."board" = ?');
       expect(sql).toContain('"kifu_positions"."hands" = ?');
-      expect(sql).toContain('"kifu_positions"."sidetomove" = ?');
+      expect(sql).toContain('"kifu_positions"."side_to_move" = ?');
       expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('"kifu_positions"."board" = ?'));
     }
   });

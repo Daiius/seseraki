@@ -91,6 +91,19 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
 ⚠ **node-postgres は bigint を文字列で返す**（`count(*)`・`sum(…)` など）。数値として使う集計は `mapWith(Number)` を通す。
 取りこぼしは実 DB のテスト（§8.2）で捕まえる。
 
+### 3.6 命名（表・列とも小文字の snake_case）
+
+- 🔒 **DB の表名・列名は小文字の snake_case**（`played_at`・`move_analyses`）。Postgres の慣習に合わせ、
+  **psql での手作業でダブルクォートが要らない**ようにする（camelCase の列は `"playedAt"` と毎回クォートが要る）
+- **TS のプロパティ名は camelCase のまま**（`kifus.playedAt`）。変換は drizzle の casing に任せ、列名の文字列を schema に書き足さない
+  - drizzle 1.0 では casing が **表の定義に付く**（`snakeCase.table`。`schema.ts` の `table`）。`drizzle()` の設定ではないので、
+    server・`migrate.ts`・実 DB テスト・drizzle-kit がそれだけでそろう。⚠ **`pgTable` で表を足すと、その表だけ列が camelCase になる**
+    （`test:db` が全列の名前を検査する）
+  - 手書きの SQL（トリガー・データ移行・テストの生 SQL）は DB の名前で書く
+- 予約語を避ける（`users` は `user` を避けた名前）。Better Auth の表（`session`・`account`・`verification`）は単数形のまま
+- MySQL の頃の列名は camelCase。データ移行（§6）は**読み取りを TS のプロパティ名、書き込みを DB の名前**で行う（どちらも schema から引く）
+- 本番に入れる前に決めたので、0000 を生成し直した（RENAME のマイグレーションは無い）
+
 ## 4. 制約
 
 ### 4.1 移す制約

@@ -148,8 +148,9 @@ async function trySavepoint(client: pg.ClientBase, fn: () => Promise<unknown>): 
   }
 }
 
+/** 書き込みは**移行先の列名**（snake_case。`target`）で行う。読み取りの列名（`name`）とは違う */
 function insertSql(table: PlannedTable, rowCount: number): string {
-  const cols = table.columns.map((c) => quote(c.name)).join(', ');
+  const cols = table.columns.map((c) => quote(c.target)).join(', ');
   const width = table.columns.length;
   const tuples = Array.from(
     { length: rowCount },
@@ -164,9 +165,9 @@ function insertSql(table: PlannedTable, rowCount: number): string {
 async function replaceOwner(client: pg.ClientBase, table: PlannedTable, values: unknown[]): Promise<void> {
   const sets = table.columns
     .map((c, i) => ({ c, i }))
-    .filter(({ c }) => c.name !== 'id')
-    .map(({ c, i }) => ({ sql: `${quote(c.name)} = $${i + 1}`, i }));
-  const idIndex = table.columns.findIndex((c) => c.name === 'id');
+    .filter(({ c }) => c.target !== 'id')
+    .map(({ c, i }) => ({ sql: `${quote(c.target)} = $${i + 1}`, i }));
+  const idIndex = table.columns.findIndex((c) => c.target === 'id');
   const res = await client.query(
     `update ${quote(table.name)} set ${sets.map((s) => s.sql).join(', ')} where "id" = $${idIndex + 1}`,
     values,
@@ -219,6 +220,7 @@ export async function migrateInto(
       }
     };
 
+    // 読み取りは**移行元の列名**（camelCase。旧 schema）
     const columnNames = table.columns.map((c) => c.name);
     for await (const chunk of source.rows(table.name, columnNames)) {
       let pending: { key: string; values: unknown[] }[] = [];

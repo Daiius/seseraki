@@ -57,10 +57,10 @@ describe('samePosition（ハッシュで引いて照合する）', () => {
   it('🔒 ハッシュだけでなく盤・持ち駒・手番まで where に入る（衝突を照合で落とす）', () => {
     const key = parsePositionKey(INITIAL)!;
     const { sql, params } = render(samePosition(kifuPositions, key));
-    expect(sql).toContain('"kifu_positions"."sfenhash" = ?');
+    expect(sql).toContain('"kifu_positions"."sfen_hash" = ?');
     expect(sql).toContain('"kifu_positions"."board" = ?');
     expect(sql).toContain('"kifu_positions"."hands" = ?');
-    expect(sql).toContain('"kifu_positions"."sidetomove" = ?');
+    expect(sql).toContain('"kifu_positions"."side_to_move" = ?');
     // 照合は SQL の中にあるので、上限は照合後の行にかかる（件数がずれない）
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('"board" = ?'));
     expect(params).toContainEqual(Buffer.from(positionHash(INITIAL)));
@@ -72,7 +72,7 @@ describe('samePosition（ハッシュで引いて照合する）', () => {
   it('読めない SFEN はどの行にも一致しない条件になる', () => {
     const { sql } = render(samePositionAsSfen(kifuPositions, 'broken'));
     expect(sql).toContain('false');
-    expect(sql).not.toContain('sfenhash');
+    expect(sql).not.toContain('sfen_hash');
   });
 
   it('hashOf は shared の positionHash と同じ 8 バイト', () => {

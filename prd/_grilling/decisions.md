@@ -1723,5 +1723,9 @@ PR #122 のレビューで、採点の契約に 2 つの穴が見つかった。
   pg 方言では FK の CASCADE が正しく出る / `text({ enum })` は CHECK を作らない / `generated always` の identity は ID 指定の挿入を拒む
   （`OVERRIDING SYSTEM VALUE` と `setval` が要る）/ **Better Auth は pg では ID を DB の既定値に任せる**（`gen_random_uuid()` が無いと user 作成が落ちる）/
   node-postgres は bigint の集計を文字列で返す / `drizzle-kit push` はトリガーを作らない（dev も `db:migrate` に一本化）。
+- **決定（2026-10-04・移行本体とデータ移行エントリのマージ後、本番の切り替え前）: 列名を snake_case にする。**
+  camelCase の列は psql の手作業で毎回ダブルクォートが要るため。TS は camelCase のまま drizzle の casing（表の定義に付く `snakeCase.table`）で変換する。
+  表名は変えない（すでに snake_case。Better Auth の表は単数形のまま・`users` は予約語 `user` を避けた名前）。
+  本番の Postgres は空なので RENAME は書かず 0000 を生成し直す。データ移行は読み取りを旧列名（TS のプロパティ名）、書き込みを新列名で行う。→ [15](../15-postgres.md) §3.6
 
 **帰結**: [15](../15-postgres.md) を足し、[14](../14-multi-user.md) §9・§10、[07](../07-auth-and-privacy.md) §5.2、[02](../02-architecture.md) §2、ロードマップ、AGENTS.md を合わせた。

@@ -253,18 +253,15 @@ GET /api/stats/tactics?self=…&mateMax=10&from=…&to=…
   **公開 API の不足は仕様の側で明示する**（「shared の定数から生成」で済ませると、参照できるかどうかが
   実装まで分からない）。
 
-### 6.2 `candidate_moves` に索引を 1 本足す（マイグレーション生成済み）
+### 6.2 取りこぼしの判定は列の比較にする（[16](./16-analysis-storage.md)）
 
-```sql
-CREATE INDEX candidate_moves_score_idx ON candidate_moves (scoreType, scoreValue);
-```
+> 改訂（2026-10-08）: 当初は `candidate_moves (scoreType, scoreValue)` に索引を足し、解析済み局面ぶんの
+> 候補手から mate 行を探していた。解析結果を 1 棋譜 1 行（`kifuAnalyses`）に詰めたので、表ごと索引も無くなった。
 
-取りこぼしの判定は解析済み局面ぶんの `candidate_moves` を見る。既存の索引は
-`UNIQUE(moveAnalysisId, rank)` だけで `scoreType` / `scoreValue` を含まないため、局面数ぶんの
-行読み出しになる（1000 局 × 120 手 ≒ 12 万行）。`mate` 行は全体のごく一部なので、この索引で
-**読む行が mate 行だけに落ちる**。数千局規模まで効く。
-
-> 生成は `db:generate`、適用は本番イメージ同梱の `dist/migrate.js`（[AGENTS.md](../AGENTS.md)）。
+手番ごとの「rank 1 が自分の N 手詰め」の最小の N を、書き込み時に `kifuAnalyses.minMateSente` /
+`minMateGote` へ計算して持つ（[03](./03-data-model.md) §3・[16](./16-analysis-storage.md) §3.2）。
+取りこぼしの述語は「自分の手番の列 `<= N`」になり、**`N` を画面で変えても列はそのまま使える**。
+行は棋譜ごとに 1 つなので、主キーで引くだけで済む。
 
 ### 6.3 採らなかった集計方式
 

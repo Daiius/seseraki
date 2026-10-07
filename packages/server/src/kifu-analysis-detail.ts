@@ -32,7 +32,7 @@ export interface AnalysisRun {
   at: string;
 }
 
-/** API・呼び出し側が扱う候補手（今の `candidateMoves` の行と同じ項目） */
+/** API・呼び出し側が扱う候補手（旧 `candidateMoves` の行と同じ項目） */
 export interface CandidateMove {
   rank: number;
   move: string;

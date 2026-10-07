@@ -17,8 +17,7 @@
 | テーブル | 役割 |
 |---|---|
 | `kifus` | 棋譜の原本・変換済み指し手・対局メタ・解析状態 |
-| `moveAnalyses` | 1 局面ごとの解析レコード（`kifus` に紐付く）。**`kifuAnalyses` に置き換える**（[16](./16-analysis-storage.md)） |
-| `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く）。**同上** |
+| `kifuAnalyses` | 解析結果。1 棋譜の 1 回の解析で 1 行（`kifus` と 1:1。候補手・来歴を詰めて持つ。[16](./16-analysis-storage.md)） |
 | `kifuTactics`（計画中） | 戦型ラベル（`kifus` に紐付く派生値。[01](./01-domain.md) §6） |
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
 | `videoKifuSources` | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
@@ -29,7 +28,7 @@
 | `userAliases` | 対局者名と突き合わせる名前候補（有効期間つき。[11](./11-users.md) §2） |
 | `session` / `account` / `verification` | Better Auth のセッション・Google の `sub`・OAuth の state（[07](./07-auth-and-privacy.md) §3） |
 
-- リレーション: `kifus 1 — N moveAnalyses 1 — N candidateMoves`、`kifus 1 — N kifuTactics`。
+- リレーション: `kifus 1 — 0..1 kifuAnalyses`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
 - **認証は Google ログイン**（[07](./07-auth-and-privacy.md)）。所有者スコープが入るまでは所有者（`"1"`）以外を通さない
   （所有者ゲート。[07](./07-auth-and-privacy.md) §5.1）が、**データ側には所有者を持つ**（`kifus.ownerId`。[11](./11-users.md) §3）。
@@ -244,76 +243,75 @@ SELECT label FROM kifu_tactics
 - ⚠ **抑制した結果を保存し直さない。** 保存値は判定結果そのもので、表示のたびに抑制を適用する。
   抑制後を保存すると、経由形での絞り込み（「四間飛車から向かい飛車に振り直した対局」）ができなくなる。
 
-## 3. `moveAnalyses`（局面ごとの解析）
+## 3. `kifuAnalyses`（解析結果。1 棋譜の 1 回の解析で 1 行）
 
-> **置き換え予定**（2026-10-07）: §3・§4 の 2 表は、1 棋譜の 1 回の解析を 1 行に詰めた `kifuAnalyses` に置き換える（[16](./16-analysis-storage.md)）。
-> 局面番号・スコアの視点・完了と再開の考え方は変えない。実装までは本節が現行の形を表す。
+> 2026-10-07 に、局面ごと（`moveAnalyses`）・候補手ごと（`candidateMoves`）の 2 表から置き換えた。
+> 設計と理由・容量の実測は [16](./16-analysis-storage.md)。局面番号・スコアの視点・完了と再開の考え方は変えていない。
 
 ```
-moveAnalyses
-├── id: serial PK
-├── kifuId: FK → kifus.id (CASCADE)
-├── moveNumber: int              -- 局面番号（0 = 初期局面）
-├── profile: enum notNull        -- 解析段階（'quick' | 'full'。[05](./05-analysis.md) §1.1d）
-├── engineName: varchar?         -- USI `id name` の文字列（来歴。判定には使わない）
-├── (解析設定)                    -- movetime(ms) / 目標 depth / multiPv（列を分けるか JSON かは実装判断）
+kifuAnalyses
+├── kifuId: FK → kifus.id (CASCADE)  PK
+├── fullCount: int notNull            -- 先頭から何局面までが full か（既定値なし。アプリが常に書く）
+├── runs: json notNull                -- submit 1 回ごとの来歴と時刻（下記）
+├── minMateSente: int?                -- 先手番の局面で、rank 1 が「自分が N 手で詰ませる」だった最小の N
+├── minMateGote: int?                 -- 後手番の局面で同上
+├── detail: json notNull              -- 局面ごとの候補手（§4）。列の圧縮は lz4
 ├── createdAt: timestamp
-└── UNIQUE(kifuId, moveNumber)
+└── updatedAt: timestamp              -- トリガーで更新
 ```
 
-- 1 局面 = 1 レコード。**段階が上がっても行は増えず、full が quick を局面単位で上書きする**
-  （改定・2026-09-05。旧「解析来歴は持たない」を改めた。§7 / [05](./05-analysis.md) §1.1d）。
-- **来歴（`profile` / `engineName` / 解析設定）は記録するが、上書き・再開の条件には使わない。**
+- 未解析の棋譜は行を持たない（解析済みの局面数 0 と同じ扱い）。
+- `detail[moveNumber] = [run, 候補手の配列]`。添字が `moveNumber` で、**0 から隙間なく並ぶ**。
+  `moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
+- `runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }`。`run` は `runs` の添字で、
+  **局面ごとの段階（`'quick' | 'full'`。[05](./05-analysis.md) §1.1d）・来歴・解析時刻は、その局面を書いた submit の値**。
+  `at` は submit のトランザクションの時刻。**どの局面からも指されなくなった run は書き込みのたびに消して添字を詰める**（`runs` の件数 ≤ 局面数）。
+- **来歴（`runs` の段階以外の項目）は記録するが、上書き・再開の条件には使わない。**
   やねうら王は再ビルドで `id name` の版文字列が変わるため、識別子で「別エンジン＝やり直し」と判定すると
   **全棋譜の意図しない全再解析**が起きる。構成変更時の作り直しは `reanalyze` の運用で受ける
   （[05](./05-analysis.md) §1.2 / §1.1d）。
-- **移行**: 既存行はすべて `profile='full'`（現行の設定で作ったもの）、`engineName` と解析設定は null。
-  `analysisCompletedAt` が立っている `kifus` は `analysisProfile='full'`。
-- `moveNumber = N` は **N 手適用後・N+1 手目を指す前の局面**（0 は初期局面）。
-  偶数 = 先手番 / 奇数 = 後手番（[01](./01-domain.md) §5）。
-- 解析結果は**チャンクに分けて追記**される（[05](./05-analysis.md) §1.1c）。**一意性と完了の担保は
-  次の 3 箇所に分散する**（submit が「DELETE → 全件 INSERT」だった頃は 1 箇所だった。列の追加はない）:
+- 🔒 **検索・集計に使う値は列に出し、表示にしか使わない値は `detail` に詰める**（[16](./16-analysis-storage.md) §1）。
+  棋譜をまたいで 1 手ごとの値を SQL で引く箇所は「詰み見逃し」の述語だけで、`minMate*` の比較になる
+  （`minMateSente <= limit`。[09](./09-analytics.md) §3.1）。🔴 **`detail` を書き換えたら `minMate*` を同じトランザクションで計算し直す。**
+- `detail` / `runs` の形を知っているのは `kifu-analysis-detail.ts` だけ（呼び出し側は配列の位置を直接読まない）。
+
+### 3.1 書き込み（チャンク submit）
+
+解析結果は**チャンクに分けて重ねる**（[05](./05-analysis.md) §1.1c）。submit は行を `FOR UPDATE` で取り、`detail` を読み、
+チャンクぶんを置き換え・追記して書き戻す（1 トランザクション）。**担保は次の箇所に分かれる**:
 
 | 担保するもの | 担保する場所 |
 |---|---|
-| 同一 `moveNumber` の重複防止 | `UNIQUE(kifuId, moveNumber)` を使った upsert（再送された局面は既存行を使い回し、`candidateMoves` を入れ直す） |
-| `moveNumber` が棋譜の局面であること | submit 時に **`0 <= moveNumber <= usiMoves.length` を検証**し、外れていれば 1 件でも書かずに 400（下記 ⚠） |
-| 前世代の全消去 | **`reanalyze` の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は DELETE しない） |
-| 完了の確定 | **段階ごとの**件数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = 全行数 / full = `profile='full'` の行数（下記） |
-| 段階の後退防止 | submit されたチャンクの段階が**既存行の段階以上**のときだけ書く（既存が full の局面に quick が届いたら無視。[05](./05-analysis.md) §1.1d） |
+| `moveNumber` が棋譜の局面であること | submit 時に **`0 <= moveNumber <= usiMoves.length` を検証**し、外れていれば 1 件でも書かずに 400 |
+| チャンクが連続区間であること | **[先頭, 末尾] の全局面を 1 つずつ**（重複・欠け・逆順は 400。quick / full 共通） |
+| full が先頭からの連続区間であること | **full のチャンクは先頭が `fullCount` 以下**（重なりは再送として上書き）。越えていれば 400。受理後 `fullCount = max(fullCount, 末尾 + 1)` |
+| quick が末尾を越えて飛ばないこと | **quick のチャンクは先頭が `detail` の長さ以下**。`fullCount` は変えない |
+| 段階の後退防止 | quick のチャンクのうち **`moveNumber < fullCount` の局面は捨てる**（既存が full の局面を quick で上書きしない） |
+| 再送が同じ結果になること | 重なった局面は上書き（以前の `UNIQUE(kifuId, moveNumber)` による upsert と同じ性質） |
+| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は消さない） |
+| 完了の確定 | **段階ごとの**局面数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = `detail` の長さ / full = `fullCount` |
 
-- ⚠ **完了を件数で決めるので、`moveNumber` の有効範囲は submit 側で担保する必要がある**。範囲外の行を
-  受け入れると、**必要な局面が欠けたまま件数だけが `usiMoves.length + 1` に達して完了扱いになる**
-  （例: 2 手の棋譜に `0 / 1 / 99` が入ると 3 件で完了）。完了すると poll から外れるため自動再開でも
-  修復されない。範囲を保証すれば `UNIQUE(kifuId, moveNumber)` が値の重複を防ぐので、
-  **件数 = 全局面数 ⇒ 全局面が揃っている**が成り立つ。
-- ⚠ **`reanalyze` の DELETE を落とすと前世代の行が残る**（手数の異なる棋譜に差し替わったときに、
-  古い末尾の局面が孤立して残り、件数による完了判定も狂う）。
-- 途中まで入っている件数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。
-  [05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。**2 段階解析では段階ごとに数える**:
-  quick の完了・再開位置は全行数、**full の完了・再開位置は `profile='full'` の行数**
-  （full は 0 から順に上書きするので、full 行は常に先頭からの連続区間になる。[05](./05-analysis.md) §1.1d）。
+- 範囲と連続性を保証すれば `detail` に隙間は生じないので、**長さ = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。
+- 途中まで入っている局面数は再開位置でもある（`GET /api/worker/kifus` の `analyzedCount`。[05](./05-analysis.md) §1.1c / [04](./04-ingestion.md) §7）。
+  **段階ごとに数える**: quick の再開位置は `detail` の長さ、full の再開位置は `fullCount`。
+- ⚠ **`reanalyze` の DELETE を落とすと前世代の局面が残る**（手数の異なる棋譜に差し替わったときに古い末尾が残り、局面数による完了判定も狂う）。
 
-## 4. `candidateMoves`（MultiPV の候補手）
+## 4. 候補手（`detail` の各局面）
 
 ```
-candidateMoves
-├── id: serial PK
-├── moveAnalysisId: FK → moveAnalyses.id (CASCADE)
-├── rank: int                    -- MultiPV 順位（1 = 最善）
-├── move: varchar(255)           -- 候補手（USI 表記）
-├── scoreType: varchar(16)       -- "cp"（centipawn） | "mate"
-├── scoreValue: int
-├── pv: json (string[])?         -- 読み筋（nullable）
-├── depth: int                   -- 探索深さ
-└── UNIQUE(moveAnalysisId, rank)
+候補手 = [move, scoreType, scoreValue, depth, pv]    -- rank 順。先頭が rank 1（最善）
+  move:       string               -- 候補手（USI 表記）
+  scoreType:  "cp" | "mate"        -- centipawn / 詰み
+  scoreValue: int
+  depth:      int                  -- 探索深さ
+  pv:         string[] | null      -- 読み筋（USI 指し手列）
 ```
 
-- 1 局面につき MultiPV 本数（既定 3）の行が入る。`rank=1` が最善手。
+- 1 局面につき MultiPV 本数（既定 3）の候補手が入る。**rank は配列の位置 + 1**（値としては持たない）。API の応答では
+  `{ rank, move, scoreType, scoreValue, pv, depth }` に展開して返す。
 - `scoreType` / `scoreValue` は **USI エンジンが返した手番視点のスコアをそのまま格納**する（正規化しない）。
   先手視点への変換は表示・判定時に moveNumber の parity で行う（後手番＝奇数は符号反転。[01](./01-domain.md) §5 / [05](./05-analysis.md)）。
-- `pv` は読み筋（USI 指し手列）。利用先は**読み筋を人に見せる 3 箇所**（[05](./05-analysis.md) §2.2 /
-  [06](./06-llm-commentary.md)）:
+- `pv` の利用先は**読み筋を人に見せる 3 箇所**（[05](./05-analysis.md) §2.2 / [06](./06-llm-commentary.md)）:
   1. 盤面直下の候補手一覧での読み筋表示（日本語表記に変換して並べる）
   2. 分岐再生（読み筋を 1 手ずつ盤面に進める）
   3. LLM 解説用テキストの注目局面の読み筋
@@ -397,6 +395,7 @@ commentaries
   `profile` / `engineName` / 解析設定（movetime・目標 depth・multiPv）。**エンジン識別子で「別エンジン＝
   やり直し」を判定しない**（再ビルドで版文字列が変わり、全棋譜の意図しない全再解析を招くため）。
   §3 / [05](./05-analysis.md) §1.1d / [08](./08-roadmap.md)。
+- ✅ **解析結果は 1 棋譜の 1 回の解析を 1 行に詰める**（2026-10-07。`moveAnalyses` / `candidateMoves` から置き換え）。来歴は局面の行ではなく submit ごと（`runs`）に持つ。§3 / [16](./16-analysis-storage.md)。
 - ✅ **局面単位の再解析は最新 1 世代に上書き**（depth 別の複数世代は持たない。単一エンジン前提。[05](./05-analysis.md) / [08](./08-roadmap.md)）。
 - ✅ **戦型ラベルは派生値・別テーブル・バージョン列なし**（2026-08-04）。`usiMoves` から常に再計算でき、
   判定を更新したら全件を一括再判定する。JSON 列ではなく `kifuTactics` に正規化して SQL の絞り込み・

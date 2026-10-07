@@ -1,10 +1,10 @@
 # 16. 解析結果の保存形式
 
-本章は、エンジン解析の結果（[03](./03-data-model.md) §3・§4 の `moveAnalyses` / `candidateMoves`）を
+本章は、エンジン解析の結果（旧 `moveAnalyses` / `candidateMoves`。今は [03](./03-data-model.md) §3・§4 の `kifuAnalyses`）を
 **1 棋譜の 1 回の解析につき 1 行**に詰め直す設計を定める。
 [14](./14-multi-user.md) §6 の容量見積もりの前提を置き換える。
 
-> **設計確定・未実装**（2026-10-07）。決定の経緯は [決定ログ](./_grilling/decisions.md)「解析結果の保存形式」。
+> **実装済み・本番未反映**（2026-10-08）。スキーマの正典は [03](./03-data-model.md) §3・§4。決定の経緯は [決定ログ](./_grilling/decisions.md)「解析結果の保存形式」。
 
 ---
 

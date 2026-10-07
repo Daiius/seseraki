@@ -24,10 +24,6 @@ describe('Dockerfile.prod', () => {
       ]),
     ).toEqual([]);
   });
-
-  it('MySQL からのデータ移行のエントリを同梱する（prd/15 §6。後片付けの PR で外す）', () => {
-    expect(missingEntryCopies(DOCKERFILE, ['migrate-from-mysql'])).toEqual([]);
-  });
 });
 
 describe('finalStageIsProduction', () => {

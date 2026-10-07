@@ -3,7 +3,7 @@
  *
  * 検討の起点は閲覧中の棋譜の局面で、数手動かすまでは**解析済みの局面をなぞっているだけ**の
  * ことが多い。同じ答えを待って計算し直す理由がないので、**エンジンにジョブを積む前に**
- * `moveAnalyses` / `candidateMoves`（prd/03 §3・§4）から答えを組み立てる。
+ * `kifuAnalyses`（prd/16）から答えを組み立てる。
  * 正規化 SFEN → 棋譜局面は局面索引 `kifuPositions`（prd/10 §3.2）が引ける
  * （ハッシュで引いて盤・持ち駒・手番で照合する。照合は SQL 側なので上限は照合後にかかる。prd/14 §6.3）。
  *
@@ -18,16 +18,18 @@
  *
  * ⚠ **どこから来た値かを隠さない。** 解析時のエンジン設定（depth / movetime）は今と
  * 違いうるので、応答は `source: 'kifu' | 'engine'` を持ち、`evaluatedAt` には
- * **そのときの解析時刻**（`moveAnalyses.createdAt`）を入れる。
+ * **その局面を書いた submit の時刻**（`runs[run].at`。prd/16 §5）を入れる。行の `updatedAt` は使わない
+ * ——別の局面の submit で進むので、局面ごとの新しさを表さない。
  *
  * ⚠ DB のスコアは**手番側から見た値**（エンジンが返す生の値）で入っているので、
  * 検討盤の表示視点（prd/12 §2.3）とそのまま噛み合う。符号を触るのは
  * 「実手を次の局面の評価から引く」経路だけ（手番が入れ替わるため）。
  */
-import { and, asc, desc, eq, exists, inArray, sql } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/pg-core';
+import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
+import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { db } from './db/index.js';
-import { candidateMoves, kifuPositions, moveAnalyses } from './db/schema.js';
+import { kifuAnalyses, kifuPositions } from './db/schema.js';
+import { decodeCandidates, type StoredCandidate } from './kifu-analysis-detail.js';
 import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';
 import { samePositionAsSfen } from './positions.js';
 
@@ -54,7 +56,7 @@ export type ReusedEvalOutcome = DoneOutcome & { source: 'kifu' };
  */
 export interface KifuPositionMatch {
   kifuId: number;
-  /** 局面番号（0 = 初期局面。N = N 手適用後）。`moveAnalyses` と同じ意味 */
+  /** 局面番号（0 = 初期局面。N = N 手適用後）。`kifuAnalyses.detail` の添字と同じ意味 */
   moveNumber: number;
   /** この局面の候補手（rank 昇順）。未解析なら空 */
   candidates: EvalCandidate[];
@@ -183,96 +185,64 @@ export function reuseFromKifu(
   return null;
 }
 
-function toCandidate(row: {
-  rank: number;
-  move: string;
-  scoreType: string;
-  scoreValue: number;
-  pv: string[] | null;
-  depth: number;
-}): EvalCandidate {
+function toCandidates(stored: StoredCandidate[]): EvalCandidate[] {
+  return decodeCandidates(stored).map((c) => ({ ...c, pv: c.pv ?? [] }));
+}
+
+/**
+ * 局面 `moveNumber` の解析を指す SQL 断片（prd/16 §3.1。`detail[moveNumber] = [run, 候補手]`）。
+ * 🔴 **full の局面だけ**（`moveNumber < fullCount`）を再利用する（決定・2026-09-05。prd/12 §2.6）。
+ * `quick` の局面は**エンジン評価へ回す**——局面評価の品質は `ENGINE_MOVETIME` が **API の契約**
+ * （prd/12 §2.2）であって、**再利用の都合で契約を崩さない**。
+ */
+function positionAnalysis(moveNumber: AnyPgColumn) {
+  const entry = sql`(${kifuAnalyses.detail} -> ${moveNumber})`;
+  const candidates = sql`(${entry} -> 1)`;
   return {
-    rank: row.rank,
-    move: row.move,
-    // DB の列は varchar だが入るのは USI の 2 値だけ（prd/03 §4）
-    scoreType: row.scoreType === 'mate' ? 'mate' : 'cp',
-    scoreValue: row.scoreValue,
-    pv: row.pv ?? [],
-    depth: row.depth,
+    isFull: lt(moveNumber, kifuAnalyses.fullCount),
+    candidates,
+    /** その局面を書いた submit の時刻（`runs[run].at`） */
+    analyzedAt: sql`((${kifuAnalyses.runs} -> ((${entry} ->> 0)::int)) ->> 'at')::timestamptz`,
+    /** 候補手が `n` 本以上あること */
+    hasCandidates: (n: number): SQL => sql`jsonb_array_length(${candidates}) >= ${n}`,
   };
 }
-
-/** 解析 1 件ぶんの識別と時刻。候補手は後でまとめて引く */
-interface AnalysisRow {
-  id: number;
-  kifuId: number;
-  moveNumber: number;
-  createdAt: Date;
-}
-
-/**
- * その解析が `rank` の候補手を持っているか。
- *
- * 候補手の rank は 1 から連番で入る（worker が MultiPV の結果をそのまま並べる）ので、
- * **`rank = 3` の行があること = 3 本揃っていること**。件数を数える集計より軽く、
- * `UNIQUE(moveAnalysisId, rank)` の索引がそのまま効く。
- * ⚠ それでも `reuseFromKifu` 側で `candidates.length` を見る——DB が想定外の形でも
- * **3 本の契約は最後の砦で守る**。
- */
-function hasCandidateRank(rank: number) {
-  return exists(
-    db
-      .select({ one: sql`1` })
-      .from(candidateMoves)
-      .where(
-        and(
-          eq(candidateMoves.moveAnalysisId, moveAnalyses.id),
-          eq(candidateMoves.rank, rank),
-        ),
-      ),
-  );
-}
-
-/**
- * 🔴 **再利用するのは `profile='full'` の行だけ**（決定・2026-09-05。prd/12 §2.6）。
- * `quick` の行は**エンジン評価へ回す**（`source: 'engine'`）——局面評価の品質は
- * `ENGINE_MOVETIME` が **API の契約**（prd/12 §2.2）であって、**再利用の都合で契約を崩さない**。
- * 候補手が 3 本揃っていることを要求するのと同じ立場。
- */
-const isFullAnalysis = () => eq(moveAnalyses.profile, 'full');
 
 /** 解析行の select 句（3 つのクエリで共通） */
-function analysisSelection() {
+function analysisSelection(moveNumber: AnyPgColumn) {
+  const p = positionAnalysis(moveNumber);
   return {
-    id: moveAnalyses.id,
-    kifuId: moveAnalyses.kifuId,
-    moveNumber: moveAnalyses.moveNumber,
-    createdAt: moveAnalyses.createdAt,
+    kifuId: kifuPositions.kifuId,
+    moveNumber: kifuPositions.moveNumber,
+    candidates: p.candidates.mapWith((v: StoredCandidate[]) => v),
+    // ⚠ `sql` 断片の日時はオフセット付きの文字列で返る（列の変換を通らない）
+    analyzedAt: p.analyzedAt.mapWith((v: string) => new Date(v)),
   };
 }
 
+/** 引いた解析 1 件 */
+interface AnalysisRow {
+  kifuId: number;
+  moveNumber: number;
+  candidates: StoredCandidate[];
+  analyzedAt: Date;
+}
+
 /**
- * 局面評価に使える解析（**候補手が 3 本揃っているものだけ**）を、解析が新しい順に引く。
+ * 局面評価に使える解析（**full かつ候補手が 3 本揃っているものだけ**）を、解析が新しい順に引く。
  *
  * ⚠ クエリ**ビルダ**を返す（await すれば実行される）。DB 接続なしで `.toSQL()` を
  * 見られる形にして、上限が絞り込みより後にかかることをテストで固定するため。
  * 同時刻は `kifuId` の降順（応答が揺れないように順序を決め切る）。
  */
 export function positionEvalAnalysesQuery(sfen: string) {
+  const p = positionAnalysis(kifuPositions.moveNumber);
   return db
-    .select(analysisSelection())
+    .select(analysisSelection(kifuPositions.moveNumber))
     .from(kifuPositions)
-    .innerJoin(
-      moveAnalyses,
-      and(
-        eq(moveAnalyses.kifuId, kifuPositions.kifuId),
-        eq(moveAnalyses.moveNumber, kifuPositions.moveNumber),
-      ),
-    )
-    .where(
-      and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis(), hasCandidateRank(3)),
-    )
-    .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
+    .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, kifuPositions.kifuId))
+    .where(and(samePositionAsSfen(kifuPositions, sfen), p.isFull, p.hasCandidates(3)))
+    .orderBy(desc(p.analyzedAt), desc(kifuPositions.kifuId))
     .limit(MATCH_LIMIT);
 }
 
@@ -281,25 +251,19 @@ export function positionEvalAnalysesQuery(sfen: string) {
  * 本数は問わない（返すのはその手 1 本だから。prd/12 §2.6）。
  */
 export function namedMoveAnalysesQuery(sfen: string, move: string) {
+  const p = positionAnalysis(kifuPositions.moveNumber);
   return db
-    .select(analysisSelection())
+    .select(analysisSelection(kifuPositions.moveNumber))
     .from(kifuPositions)
-    .innerJoin(
-      moveAnalyses,
+    .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, kifuPositions.kifuId))
+    .where(
       and(
-        eq(moveAnalyses.kifuId, kifuPositions.kifuId),
-        eq(moveAnalyses.moveNumber, kifuPositions.moveNumber),
+        samePositionAsSfen(kifuPositions, sfen),
+        p.isFull,
+        sql`exists (select 1 from jsonb_array_elements(${p.candidates}) as c where c ->> 0 = ${move})`,
       ),
     )
-    .innerJoin(
-      candidateMoves,
-      and(
-        eq(candidateMoves.moveAnalysisId, moveAnalyses.id),
-        eq(candidateMoves.move, move),
-      ),
-    )
-    .where(and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis()))
-    .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
+    .orderBy(desc(p.analyzedAt), desc(kifuPositions.kifuId))
     .limit(MATCH_LIMIT);
 }
 
@@ -312,8 +276,15 @@ export function namedMoveAnalysesQuery(sfen: string, move: string) {
  */
 export function playedMoveAnalysesQuery(sfen: string, move: string) {
   const nextPositions = alias(kifuPositions, 'next_positions');
+  const p = positionAnalysis(nextPositions.moveNumber);
   return db
-    .select({ ...analysisSelection(), fromMoveNumber: kifuPositions.moveNumber })
+    .select({
+      kifuId: kifuPositions.kifuId,
+      moveNumber: nextPositions.moveNumber,
+      candidates: p.candidates.mapWith((v: StoredCandidate[]) => v),
+      analyzedAt: p.analyzedAt.mapWith((v: string) => new Date(v)),
+      fromMoveNumber: kifuPositions.moveNumber,
+    })
     .from(kifuPositions)
     .innerJoin(
       nextPositions,
@@ -323,45 +294,10 @@ export function playedMoveAnalysesQuery(sfen: string, move: string) {
         eq(nextPositions.move, move),
       ),
     )
-    .innerJoin(
-      moveAnalyses,
-      and(
-        eq(moveAnalyses.kifuId, nextPositions.kifuId),
-        eq(moveAnalyses.moveNumber, nextPositions.moveNumber),
-      ),
-    )
-    .where(
-      and(samePositionAsSfen(kifuPositions, sfen), isFullAnalysis(), hasCandidateRank(1)),
-    )
-    .orderBy(desc(moveAnalyses.createdAt), desc(moveAnalyses.kifuId))
+    .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, nextPositions.kifuId))
+    .where(and(samePositionAsSfen(kifuPositions, sfen), p.isFull, p.hasCandidates(1)))
+    .orderBy(desc(p.analyzedAt), desc(kifuPositions.kifuId))
     .limit(MATCH_LIMIT);
-}
-
-/** 解析 id → 候補手（rank 昇順）。1 クエリでまとめて引く */
-async function loadCandidates(
-  ids: number[],
-): Promise<Map<number, EvalCandidate[]>> {
-  const byAnalysis = new Map<number, EvalCandidate[]>();
-  if (ids.length === 0) return byAnalysis;
-  const rows = await db
-    .select({
-      moveAnalysisId: candidateMoves.moveAnalysisId,
-      rank: candidateMoves.rank,
-      move: candidateMoves.move,
-      scoreType: candidateMoves.scoreType,
-      scoreValue: candidateMoves.scoreValue,
-      pv: candidateMoves.pv,
-      depth: candidateMoves.depth,
-    })
-    .from(candidateMoves)
-    .where(inArray(candidateMoves.moveAnalysisId, ids))
-    .orderBy(asc(candidateMoves.moveAnalysisId), asc(candidateMoves.rank));
-  for (const row of rows) {
-    const list = byAnalysis.get(row.moveAnalysisId) ?? [];
-    list.push(toCandidate(row));
-    byAnalysis.set(row.moveAnalysisId, list);
-  }
-  return byAnalysis;
 }
 
 /** 材料の入っていない 1 件（`KifuPositionMatch` を埋めるための素） */
@@ -398,11 +334,10 @@ export async function findKifuPositionMatches(
 
   if (move === null) {
     const analyses: AnalysisRow[] = await positionEvalAnalysesQuery(sfen);
-    const candidates = await loadCandidates(analyses.map((a) => a.id));
     return analyses.map((a) => ({
       ...emptyMatch(a.kifuId, a.moveNumber),
-      candidates: candidates.get(a.id) ?? [],
-      analyzedAt: a.createdAt,
+      candidates: toCandidates(a.candidates),
+      analyzedAt: a.analyzedAt,
     }));
   }
 
@@ -411,23 +346,19 @@ export async function findKifuPositionMatches(
       namedMoveAnalysesQuery(sfen, move),
       playedMoveAnalysesQuery(sfen, move),
     ]);
-  const candidates = await loadCandidates([
-    ...named.map((a) => a.id),
-    ...played.map((a) => a.id),
-  ]);
 
   return [
     ...named.map((a) => ({
       ...emptyMatch(a.kifuId, a.moveNumber),
-      candidates: candidates.get(a.id) ?? [],
-      analyzedAt: a.createdAt,
+      candidates: toCandidates(a.candidates),
+      analyzedAt: a.analyzedAt,
     })),
     // 次局面の解析なので、`moveNumber` は**要求された局面の方**に戻して持つ
     ...played.map((a) => ({
       ...emptyMatch(a.kifuId, a.fromMoveNumber),
       playedMove: move,
-      nextCandidates: candidates.get(a.id) ?? [],
-      nextAnalyzedAt: a.createdAt,
+      nextCandidates: toCandidates(a.candidates),
+      nextAnalyzedAt: a.analyzedAt,
     })),
   ];
 }

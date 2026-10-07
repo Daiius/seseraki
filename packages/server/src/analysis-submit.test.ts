@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ANALYSIS_STATE_RESET,
-  canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
   isChunkInRange,
   isStageComplete,
   nextKifuProfile,
-  resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
 
 describe('ANALYSIS_STATE_RESET', () => {
@@ -69,26 +67,6 @@ describe('isStageComplete', () => {
     const kifu = { completedAt: new Date('2026-07-21'), analysisProfile: null };
     expect(isStageComplete(kifu, 'quick')).toBe(true);
     expect(isStageComplete(kifu, 'full')).toBe(false);
-  });
-});
-
-describe('canWriteRow', () => {
-  it('既存が無ければ書く', () => {
-    expect(canWriteRow(null, 'quick')).toBe(true);
-    expect(canWriteRow(undefined, 'full')).toBe(true);
-  });
-
-  it('同段階の再送は書き直す', () => {
-    expect(canWriteRow('quick', 'quick')).toBe(true);
-    expect(canWriteRow('full', 'full')).toBe(true);
-  });
-
-  it('quick を full で上書きする', () => {
-    expect(canWriteRow('quick', 'full')).toBe(true);
-  });
-
-  it('既存が full の局面に quick が届いたら書かない（段階の後退防止）', () => {
-    expect(canWriteRow('full', 'quick')).toBe(false);
   });
 });
 
@@ -222,56 +200,5 @@ describe('isAnalysisComplete', () => {
 
   it('usiMoves が無い棋譜は完了にしない', () => {
     expect(isAnalysisComplete(1, null)).toBe(false);
-  });
-});
-
-describe('resolveExistingMoveAnalyses', () => {
-  it('既存が無ければすべて新規挿入になる', () => {
-    const resolved = resolveExistingMoveAnalyses(
-      [{ moveNumber: 0 }, { moveNumber: 1 }],
-      [],
-    );
-    expect(resolved).toEqual([
-      { analysis: { moveNumber: 0 }, existingId: null },
-      { analysis: { moveNumber: 1 }, existingId: null },
-    ]);
-  });
-
-  it('同一 moveNumber の再送は既存行を使い回す（行が二重に増えない）', () => {
-    const resolved = resolveExistingMoveAnalyses(
-      [{ moveNumber: 5 }, { moveNumber: 6 }],
-      [
-        { id: 105, moveNumber: 5 },
-        { id: 106, moveNumber: 6 },
-      ],
-    );
-    expect(resolved.map((r) => r.existingId)).toEqual([105, 106]);
-  });
-
-  it('チャンクが既存とまたがっていても局面ごとに振り分ける', () => {
-    const resolved = resolveExistingMoveAnalyses(
-      [{ moveNumber: 5 }, { moveNumber: 6 }, { moveNumber: 7 }],
-      [{ id: 105, moveNumber: 5 }],
-    );
-    expect(resolved.map((r) => r.existingId)).toEqual([105, null, null]);
-  });
-
-  it('チャンクに無い既存 moveNumber は無視する（他チャンクの行を触らない）', () => {
-    const resolved = resolveExistingMoveAnalyses(
-      [{ moveNumber: 7 }],
-      [
-        { id: 105, moveNumber: 5 },
-        { id: 106, moveNumber: 6 },
-      ],
-    );
-    expect(resolved).toEqual([
-      { analysis: { moveNumber: 7 }, existingId: null },
-    ]);
-  });
-
-  it('空チャンク（最終チャンクが空のケース）は空を返す', () => {
-    expect(
-      resolveExistingMoveAnalyses([], [{ id: 105, moveNumber: 5 }]),
-    ).toEqual([]);
   });
 });

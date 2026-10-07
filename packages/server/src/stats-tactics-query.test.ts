@@ -196,19 +196,19 @@ describe('statsTacticsRowsSelect', () => {
       'sente', '%GOTE_WIN%', 'gote', '%SENTE_WIN%',
     ]);
     // ⚠ 「実手が詰みでない」の確認は不要（負けたことに含まれる。prd/09 §3.1）
-    expect(sql).not.toContain('"candidate_moves"');
+    expect(sql).not.toContain('"kifu_analyses"');
   });
 
-  it('取りこぼしは自分の手番の parity（先手なら偶数・後手なら奇数）で見る', () => {
+  it('取りこぼしは自分の手番の最小の詰み手数（先手なら sente・後手なら gote の列）で見る', () => {
     const { sql, params } = render(
       statsTacticsRowsSelect(parse({ ...SELF, mateMax: '7' })).missedMateLosses,
     );
-    expect(sql).toContain('mod("move_analyses"."move_number", 2) =');
-    expect(sql).toContain('exists (select 1 from "candidate_moves"');
-    // 自分が先手: 負け = GOTE_WIN・parity 0・rank 1・mate・1..7
-    expect(params.slice(0, 7)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 7]);
-    // 自分が後手: 負け = SENTE_WIN・parity 1
-    expect(params.slice(7)).toEqual(['gote', '%SENTE_WIN%', 1, 1, 'mate', 1, 7]);
+    expect(sql).toContain('"kifu_analyses"."min_mate_sente" <= ?');
+    expect(sql).toContain('"kifu_analyses"."min_mate_gote" <= ?');
+    // 自分が先手: 負け = GOTE_WIN・先手番の列が 7 以下
+    expect(params.slice(0, 3)).toEqual(['sente', '%GOTE_WIN%', 7]);
+    // 自分が後手: 負け = SENTE_WIN・後手番の列
+    expect(params.slice(3)).toEqual(['gote', '%SENTE_WIN%', 7]);
   });
 
   it('⭐ 側に依存する列は subjectSide で絞る（名前候補は現れない）', () => {

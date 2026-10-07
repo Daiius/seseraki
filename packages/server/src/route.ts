@@ -25,8 +25,7 @@ import { db } from './db/index.js';
 import { isUniqueViolation } from './db/errors.js';
 import {
   kifus,
-  moveAnalyses,
-  candidateMoves,
+  kifuAnalyses,
   kifuTactics,
   videoKifuSources,
   kifuPositions,
@@ -64,14 +63,14 @@ import {
 } from './analysis-progress.js';
 import {
   ANALYSIS_STATE_RESET,
-  canWriteRow,
   isAnalysisComplete,
   isChunkAcceptable,
   isChunkInRange,
   isStageComplete,
   nextKifuProfile,
-  resolveExistingMoveAnalyses,
 } from './analysis-submit.js';
+import { decodeAll, mergeChunk } from './kifu-analysis-detail.js';
+import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
 import {
   claimEvaluationJob,
   completeEvaluationJob,
@@ -426,39 +425,22 @@ const route = app
       const [kifu] = await db.select().from(kifus).where(eq(kifus.id, id));
       if (!kifu) return c.json({ error: 'not found' }, 404);
 
-      const moves = await db
-        .select()
-        .from(moveAnalyses)
-        .where(eq(moveAnalyses.kifuId, id))
-        .orderBy(moveAnalyses.moveNumber);
-
-      const candidates = moves.length
-        ? await db
-            .select()
-            .from(candidateMoves)
-            .where(
-              inArray(
-                candidateMoves.moveAnalysisId,
-                moves.map((move) => move.id),
-              ),
-            )
-            .orderBy(candidateMoves.moveAnalysisId, candidateMoves.rank)
-        : [];
-
-      const candidatesByMoveAnalysisId = new Map<number, typeof candidates>();
-      for (const candidate of candidates) {
-        const existing = candidatesByMoveAnalysisId.get(candidate.moveAnalysisId);
-        if (existing) {
-          existing.push(candidate);
-        } else {
-          candidatesByMoveAnalysisId.set(candidate.moveAnalysisId, [candidate]);
-        }
-      }
-
-      const analysesWithCandidates = moves.map((move) => ({
-        ...move,
-        candidates: candidatesByMoveAnalysisId.get(move.id) ?? [],
-      }));
+      // 解析は 1 行を展開して、局面ごとの形で返す（prd/16 §5。web が読む形は局面と候補手の並び）。
+      // 局面ごとの段階・来歴・時刻はその局面を書いた submit（run）の値
+      const stored = await loadAnalysis(db, id);
+      const analysesWithCandidates = decodeAll(stored.detail, stored.runs).map(
+        ({ moveNumber, run, candidates }) => ({
+          moveNumber,
+          profile: run.profile,
+          engineName: run.engineName,
+          movetimeMs: run.movetimeMs,
+          targetDepth: run.targetDepth,
+          multiPv: run.multiPv,
+          // 以前の局面ごとの `createdAt` と同じ意味（その局面を書いた submit の時刻）
+          createdAt: run.at,
+          candidates,
+        }),
+      );
 
       // 戦型ラベルは**保存値をそのまま返す**（経由形も含む）。表示の抑制と関係ラベルの導出は
       // shared の純関数で web 側が行う（prd/03 §2.1.2）
@@ -1373,7 +1355,7 @@ const route = app
       await db.transaction(async (tx) => {
         // 先に kifus を UPDATE して行ロックを取り、analysisRevision を +1（実行中の旧解析の
         // submit/error 報告は世代不一致で弾かれる）。/worker/analyses も kifus を先ロックするため
-        // moveAnalyses との取得順が揃いデッドロックしない。
+        // kifuAnalyses との取得順が揃いデッドロックしない。
         await tx
           .update(kifus)
           .set({
@@ -1392,8 +1374,8 @@ const route = app
             analysisRevision: sql`${kifus.analysisRevision} + 1`,
           })
           .where(eq(kifus.id, id));
-        // 旧解析結果を削除（未解析状態で旧結果が残らないように）。candidateMoves は CASCADE
-        await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, id));
+        // 旧解析結果を削除（未解析状態で旧結果が残らないように。prd/16 §4.3）
+        await tx.delete(kifuAnalyses).where(eq(kifuAnalyses.kifuId, id));
         // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
         // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
         await replaceTactics(tx, id, usiMoves);
@@ -1512,19 +1494,16 @@ const route = app
       // 既に入っている局面数を返し、worker はその続き（moveNumber = analyzedCount）から解析する
       // （チャンク submit の中断からの再開。prd/05 §1.1c）。チャンク submit の失敗は解析ごと中断する
       // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる。
-      // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick は全行数、full は `profile='full'` の行数
-      // （full は 0 から順に上書きするので、full 行は常に先頭からの連続区間になる）
-      const [{ analyzedCount }] = await db
-        .select({ analyzedCount: count() })
-        .from(moveAnalyses)
-        .where(
-          profile === 'full'
-            ? and(
-                eq(moveAnalyses.kifuId, kifu.id),
-                eq(moveAnalyses.profile, 'full'),
-              )
-            : eq(moveAnalyses.kifuId, kifu.id),
-        );
+      // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick は `detail` の長さ、full は `fullCount`
+      // （full は 0 から順に上書きするので、常に先頭からの連続区間になる。prd/16 §4.2）
+      const [counts] = await db
+        .select({
+          quick: sql<number>`jsonb_array_length(${kifuAnalyses.detail})`.mapWith(Number),
+          full: kifuAnalyses.fullCount,
+        })
+        .from(kifuAnalyses)
+        .where(eq(kifuAnalyses.kifuId, kifu.id));
+      const analyzedCount = counts ? counts[profile] : 0;
       return c.json({ ...kifu, analyzedCount, profile });
     },
   )
@@ -1643,19 +1622,13 @@ const route = app
         multiPv,
         analyses,
       } = c.req.valid('json');
-      // 来歴の列（局面ごとに同じ値が入る。チャンク単位で 1 回の解析設定だから）
-      const provenance = {
-        profile,
-        engineName: engineName ?? null,
-        movetimeMs: movetimeMs ?? null,
-        targetDepth: targetDepth ?? null,
-        multiPv: multiPv ?? null,
-      };
       let applied = false;
       let completed = false;
       // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して
       // 完了扱いになりうる（完了すると poll 対象から外れ、自動再開でも直らない）
       let outOfRange = false;
+      // 局面が連続していない・受理条件の先頭を越えた（prd/16 §4.2）
+      let notContiguous = false;
       await db.transaction(async (tx) => {
         // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析のチャンクは破棄）。
         // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
@@ -1667,6 +1640,9 @@ const route = app
             completedAt: kifus.analysisCompletedAt,
             analysisProfile: kifus.analysisProfile,
             usiMoves: kifus.usiMoves,
+            // 今回の run の時刻（prd/16 §3.1）。トランザクションの時刻なので 1 回の submit の中で揃う。
+            // ⚠ `sql` 断片の日時はオフセット付きの文字列で返る（列の変換を通らない）
+            now: sql<string>`now()`.mapWith((v: string) => new Date(v).toISOString()),
           })
           .from(kifus)
           .where(eq(kifus.id, kifuId))
@@ -1684,90 +1660,29 @@ const route = app
           outOfRange = true;
           return;
         }
-        applied = true;
-
-        // チャンクは**追記**する（DELETE しない）。前世代の全消去は `reanalyze` の DELETE が
-        // 唯一の経路になる（prd/03 §3・§7）。
-        if (analyses.length > 0) {
-          const existing = await tx
-            .select({
-              id: moveAnalyses.id,
-              moveNumber: moveAnalyses.moveNumber,
-              profile: moveAnalyses.profile,
-            })
-            .from(moveAnalyses)
-            .where(
-              and(
-                eq(moveAnalyses.kifuId, kifuId),
-                inArray(
-                  moveAnalyses.moveNumber,
-                  analyses.map((a) => a.moveNumber),
-                ),
-              ),
-            );
-          const existingProfiles = new Map(
-            existing.map((row) => [row.moveNumber, row.profile]),
-          );
-          // 同一 moveNumber の再送は既存行を使い回して候補手を入れ直す（行が二重に増えない）
-          for (const { analysis, existingId } of resolveExistingMoveAnalyses(
-            analyses,
-            existing,
-          )) {
-            // 段階の後退防止（prd/05 §1.1d）: 既存が full の局面に quick が届いたら書かずに無視する
-            if (!canWriteRow(existingProfiles.get(analysis.moveNumber), profile)) {
-              continue;
-            }
-            let moveAnalysisId = existingId;
-            if (moveAnalysisId === null) {
-              const [inserted] = await tx
-                .insert(moveAnalyses)
-                .values({
-                  kifuId,
-                  moveNumber: analysis.moveNumber,
-                  ...provenance,
-                })
-                .returning({ id: moveAnalyses.id });
-              moveAnalysisId = inserted.id;
-            } else {
-              // 上書き（quick → full）でも行は増やさず、来歴を今回の段階で更新する
-              await tx
-                .update(moveAnalyses)
-                .set(provenance)
-                .where(eq(moveAnalyses.id, moveAnalysisId));
-              await tx
-                .delete(candidateMoves)
-                .where(eq(candidateMoves.moveAnalysisId, moveAnalysisId));
-            }
-            if (analysis.candidates.length > 0) {
-              await tx.insert(candidateMoves).values(
-                analysis.candidates.map((candidate) => ({
-                  moveAnalysisId,
-                  rank: candidate.rank,
-                  move: candidate.move,
-                  scoreType: candidate.scoreType,
-                  scoreValue: candidate.scoreValue,
-                  pv: candidate.pv ?? null,
-                  depth: candidate.depth,
-                })),
-              );
-            }
-          }
+        // チャンクは**重ねる**（DELETE しない）。前世代の全消去は `reanalyze` の DELETE が
+        // 唯一の経路になる（prd/03 §3・prd/16 §4.3）。重なり・段階の後退防止・full の連続性は
+        // `mergeChunk` が決める（prd/16 §4）
+        const stored = await loadAnalysis(tx, kifuId, { forUpdate: true });
+        const merged = mergeChunk(stored, analyses, {
+          profile,
+          engineName: engineName ?? null,
+          movetimeMs: movetimeMs ?? null,
+          targetDepth: targetDepth ?? null,
+          multiPv: multiPv ?? null,
+          at: current.now,
+        });
+        if (!merged.ok) {
+          notContiguous = true;
+          return;
         }
+        applied = true;
+        if (merged.wrote) await saveAnalysis(tx, kifuId, merged.next);
 
-        // 完了は **server が件数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
-        // 同じトランザクション内で数えて立てるので、チャンク境界や worker のクラッシュ位置に依存しない。
-        // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick = 全行数 / full = `profile='full'` の行数
-        const [{ stored, storedFull }] = await tx
-          .select({
-            stored: count(),
-            storedFull: sql<number>`sum(case when ${moveAnalyses.profile} = 'full' then 1 else 0 end)`.mapWith(
-              Number,
-            ),
-          })
-          .from(moveAnalyses)
-          .where(eq(moveAnalyses.kifuId, kifuId));
-        const quickDone = isAnalysisComplete(stored, current.usiMoves);
-        const fullDone = isAnalysisComplete(storedFull, current.usiMoves);
+        // 完了は **server が局面数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
+        // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick = `detail` の長さ / full = `fullCount`
+        const quickDone = isAnalysisComplete(merged.next.detail.length, current.usiMoves);
+        const fullDone = isAnalysisComplete(merged.next.fullCount, current.usiMoves);
         // 進捗表示を落とすのは**報告された段階**が終わったとき（full 進行中に quick の
         // 完了で落とすと、まだ動いている解析の表示が消える）
         completed = profile === 'full' ? fullDone : quickDone;
@@ -1795,6 +1710,9 @@ const route = app
       });
       if (outOfRange) {
         return c.json({ error: 'moveNumber out of range' } as const, 400);
+      }
+      if (notContiguous) {
+        return c.json({ error: 'moveNumber not contiguous' } as const, 400);
       }
       // 完了したときだけ「解析中」を落とす。途中のチャンクで落とすと、進捗表示が次の報告まで
       // 消えてしまう（旧世代の破棄されたチャンクでも触らない）

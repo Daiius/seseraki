@@ -283,24 +283,25 @@ describe('クエリの形（上限は絞り込みの後）', () => {
   it('局面評価: 候補手 3 本揃いに絞ってから、解析日時の降順で上限をかける', () => {
     const { sql, params } = render(positionEvalAnalysesQuery(SFEN));
     // 局面索引と解析を結合している（一致局面だけを先に切っていない）
-    expect(sql).toContain('inner join "move_analyses"');
-    // 3 本揃いの条件が where に入っている
-    expect(sql).toContain('exists');
+    expect(sql).toContain('inner join "kifu_analyses"');
+    // 3 本揃いの条件が where に入っている（局面の候補手配列の長さ）
+    expect(sql).toContain('jsonb_array_length(');
     expect(params).toContain(3);
     // 並びと上限はその後
-    expect(sql.indexOf('order by')).toBeGreaterThan(sql.indexOf('exists'));
+    expect(sql.indexOf('order by')).toBeGreaterThan(sql.indexOf('jsonb_array_length('));
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
-    // 解析が新しい順、同時刻は kifuId 降順（応答が揺れない）
-    // 列名は DB 上 snake_case（schema の casing。prd/15 §3.6）
-    expect(sql).toMatch(/order by .*created_at" desc.*kifu_id" desc/);
+    // 🔴 解析が新しい順は**その局面を書いた submit の時刻**（runs[run].at。prd/16 §5）。
+    // 行の updated_at は別の局面の submit で進むので使わない。同時刻は kifuId 降順（応答が揺れない）
+    expect(sql).toMatch(/order by .*->> 'at'\)::timestamptz desc.*kifu_id" desc/);
+    expect(sql).not.toContain('updated_at');
   });
 
-  it('名指し評価 ①: その手を持つ候補手に結合してから上限をかける', () => {
+  it('名指し評価 ①: その手を候補手に持つ局面に絞ってから上限をかける', () => {
     const { sql, params } = render(namedMoveAnalysesQuery(SFEN, '7g7f'));
-    expect(sql).toContain('inner join "candidate_moves"');
+    expect(sql).toContain('jsonb_array_elements(');
     expect(params).toContain('7g7f');
     // 候補手の本数は問わない（3 本揃いの条件を持ち込まない）
-    expect(sql).not.toContain('exists');
+    expect(sql).not.toContain('jsonb_array_length(');
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
   });
 
@@ -310,8 +311,8 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     expect(sql).toContain('"next_positions"');
     expect(sql).toContain('+ 1');
     expect(params).toContain('7g7f');
-    // 候補手が 1 本も無い解析は材料にならないので SQL で落とす
-    expect(sql).toContain('exists');
+    // 候補手が 1 本も無い解析は材料にならないので SQL で落とす（次局面の候補手を見る）
+    expect(sql).toContain('jsonb_array_length((("kifu_analyses"."detail" -> "next_positions"."move_number")');
     expect(params).toContain(1);
     expect(sql.indexOf('limit')).toBeGreaterThan(sql.indexOf('order by'));
   });
@@ -331,15 +332,14 @@ describe('クエリの形（上限は絞り込みの後）', () => {
     }
   });
 
-  it('🔴 3 本とも profile=full の解析だけに絞る（quick はエンジン評価へ回す）', () => {
-    for (const query of [
-      positionEvalAnalysesQuery(SFEN),
-      namedMoveAnalysesQuery(SFEN, '7g7f'),
-      playedMoveAnalysesQuery(SFEN, '7g7f'),
-    ]) {
-      const { sql, params } = render(query);
-      expect(sql).toContain('"move_analyses"."profile" = ?');
-      expect(params).toContain('full');
+  it('🔴 3 本とも full の局面だけに絞る（先頭 fullCount 局面。quick はエンジン評価へ回す）', () => {
+    for (const [query, positions] of [
+      [positionEvalAnalysesQuery(SFEN), 'kifu_positions'],
+      [namedMoveAnalysesQuery(SFEN, '7g7f'), 'kifu_positions'],
+      [playedMoveAnalysesQuery(SFEN, '7g7f'), 'next_positions'],
+    ] as const) {
+      const { sql } = render(query);
+      expect(sql).toContain('"' + positions + '"."move_number" < "kifu_analyses"."full_count"');
     }
   });
 });

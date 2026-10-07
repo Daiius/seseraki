@@ -41,10 +41,6 @@ const entryPoints = {
     // 既定は dry-run、LINK_OWNER_APPLY=1 で実書込。dev ログインも同じ関数を使う
     //   docker compose run --rm -e LINK_OWNER_APPLY=1 <service>  # command: ["/app/link-owner-account.js"]
     "link-owner-account": "./link-owner-account.ts",
-    // MySQL → Postgres のデータ移行（一度きり。prd/15 §6）。既定は dry-run、MIGRATE_APPLY=1 で COMMIT。
-    // ⚠ 後片付けの PR（prd/15 §9 の 5）で、mysql2 の依存と一緒に外す
-    //   docker compose run --rm --no-deps -e MIGRATE_APPLY=1 <service>  # command: ["/app/migrate-from-mysql.js"]
-    "migrate-from-mysql": "./migrate-from-mysql.ts",
 };
 
 await build({

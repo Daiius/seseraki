@@ -18,12 +18,11 @@ import { authOptions } from './auth-config.js';
 import { client, db } from './db/index.js';
 import {
   account,
-  candidateMoves,
   drillAttempts,
   drills,
+  kifuAnalyses,
   kifuPositions,
   kifus,
-  moveAnalyses,
   session,
   userAliases,
   users,
@@ -36,6 +35,10 @@ import { syncDrills } from './drills.js';
 import { kifuListQuerySchema, kifuListWhere } from './kifu-list-query.js';
 import { isUniqueViolation } from './db/errors.js';
 import { linkOwnerAccount } from './owner-account.js';
+import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
+import { encodeCandidates, mergeChunk, type CandidateMove } from './kifu-analysis-detail.js';
+import { findKifuPositionMatches } from './position-kifu-reuse.js';
+import { replacePositions } from './positions.js';
 import { addAlias, OWNER_USER_ID } from './users.js';
 
 afterAll(async () => {
@@ -80,12 +83,38 @@ async function insertUser(): Promise<string> {
   return row.id;
 }
 
-async function insertAnalysis(kifuId: number, moveNumber = 0): Promise<number> {
-  const [row] = await db
-    .insert(moveAnalyses)
-    .values({ kifuId, moveNumber, profile: 'full' })
-    .returning({ id: moveAnalyses.id });
-  return row.id;
+/** 解析 1 行（局面 0..n-1 をすべて full で、1 回の submit で書いたものとして入れる） */
+async function insertAnalysis(kifuId: number, positions: CandidateMove[][]): Promise<void> {
+  await db.transaction((tx) =>
+    saveAnalysis(tx, kifuId, {
+      runs: [
+        {
+          profile: 'full',
+          engineName: null,
+          movetimeMs: null,
+          targetDepth: null,
+          multiPv: null,
+          at: '2026-10-07T00:00:00.000Z',
+        },
+      ],
+      detail: positions.map((c) => [0, encodeCandidates(c)]),
+      fullCount: positions.length,
+    }),
+  );
+}
+
+const cand = (move: string, scoreValue: number, rank = 1, scoreType: 'cp' | 'mate' = 'cp'): CandidateMove => ({
+  rank,
+  move,
+  scoreType,
+  scoreValue,
+  pv: null,
+  depth: 1,
+});
+
+/** 正しい形の解析 1 行（上書きして不正な行を作る） */
+function analysisRow(kifuId: number): typeof kifuAnalyses.$inferInsert {
+  return { kifuId, fullCount: 0, runs: [], detail: [] };
 }
 
 /** 正しい形の出題 1 行（上書きして不正な行を作る） */
@@ -174,52 +203,18 @@ describe('意味の制約（prd/15 §4.2）', () => {
         extractorRev: 'r',
         raw: {},
       })],
-    ['move_analyses.moveNumber >= 0', 'move_analyses_move_number_nonneg', async () =>
-      db.insert(moveAnalyses).values({ kifuId: await insertKifu(), moveNumber: -1, profile: 'quick' })],
-    ['move_analyses.multiPv >= 1', 'move_analyses_multi_pv_positive', async () =>
-      db.insert(moveAnalyses).values({
-        kifuId: await insertKifu(),
-        moveNumber: 0,
-        profile: 'quick',
-        multiPv: 0,
-      })],
-    ['candidate_moves.rank >= 1', 'candidate_moves_rank_positive', async () =>
-      db.insert(candidateMoves).values({
-        moveAnalysisId: await insertAnalysis(await insertKifu()),
-        rank: 0,
-        move: '7g7f',
-        scoreType: 'cp',
-        scoreValue: 0,
-        depth: 1,
-      })],
-    ['candidate_moves.scoreType は cp / mate', 'candidate_moves_score_type_check', async () =>
-      db.insert(candidateMoves).values({
-        moveAnalysisId: await insertAnalysis(await insertKifu()),
-        rank: 1,
-        move: '7g7f',
-        scoreType: 'lowerbound',
-        scoreValue: 0,
-        depth: 1,
-      })],
-    ['candidate_moves.depth >= 0', 'candidate_moves_depth_nonneg', async () =>
-      db.insert(candidateMoves).values({
-        moveAnalysisId: await insertAnalysis(await insertKifu()),
-        rank: 1,
-        move: '7g7f',
-        scoreType: 'cp',
-        scoreValue: 0,
-        depth: -1,
-      })],
-    ['candidate_moves.pv は配列', 'candidate_moves_pv_array', async () =>
-      db.insert(candidateMoves).values({
-        moveAnalysisId: await insertAnalysis(await insertKifu()),
-        rank: 1,
-        move: '7g7f',
-        scoreType: 'cp',
-        scoreValue: 0,
-        depth: 1,
-        pv: raw('7g7f'),
-      })],
+    ['kifu_analyses.detail は配列', 'kifu_analyses_detail_array', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), detail: raw({}) })],
+    ['kifu_analyses.runs は配列', 'kifu_analyses_runs_array', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), runs: raw({}) })],
+    ['kifu_analyses.fullCount >= 0', 'kifu_analyses_full_count_range', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), fullCount: -1 })],
+    ['kifu_analyses.fullCount は局面数を超えない', 'kifu_analyses_full_count_range', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), fullCount: 1 })],
+    ['kifu_analyses.minMateSente >= 1', 'kifu_analyses_min_mate_sente_positive', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), minMateSente: 0 })],
+    ['kifu_analyses.minMateGote >= 1', 'kifu_analyses_min_mate_gote_positive', async () =>
+      db.insert(kifuAnalyses).values({ ...analysisRow(await insertKifu()), minMateGote: 0 })],
     ['kifu_positions.moveNumber >= 0', 'kifu_positions_move_number_nonneg', async () =>
       db.insert(kifuPositions).values(positionRow(await insertKifu(), -1, '7g7f'))],
     ['kifu_positions: 初期局面に手を持たせない', 'kifu_positions_initial_has_no_move', async () =>
@@ -253,16 +248,7 @@ describe('意味の制約（prd/15 §4.2）', () => {
   it('null は通す（任意の列の制約は値があるときだけ効く）', async () => {
     const kifuId = await insertKifu({ usiMoves: null, sourceTz: null });
     await db.insert(userAliases).values({ userId: OWNER_USER_ID, name: randomUUID() });
-    const analysisId = await insertAnalysis(kifuId);
-    await db.insert(candidateMoves).values({
-      moveAnalysisId: analysisId,
-      rank: 1,
-      move: '7g7f',
-      scoreType: 'mate',
-      scoreValue: 3,
-      depth: 0,
-      pv: null,
-    });
+    await db.insert(kifuAnalyses).values({ ...analysisRow(kifuId), minMateSente: null, minMateGote: null });
     await db.insert(drills).values({ ...drillRow(kifuId), kind: 'mate', reason: 'missed_mate', matePlies: 3 });
   });
 });
@@ -273,8 +259,6 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
     ['kifus.analysisProfile', 'kifus_analysis_profile_check', () =>
       insertKifu({ analysisProfile: raw('deep') })],
     ['kifus.subjectSide', 'kifus_subject_side_check', () => insertKifu({ subjectSide: raw('both') })],
-    ['move_analyses.profile', 'move_analyses_profile_check', async () =>
-      db.insert(moveAnalyses).values({ kifuId: await insertKifu(), moveNumber: 0, profile: raw('x') })],
     ['kifu_tactics.side', 'kifu_tactics_side_check', async () =>
       db.execute(sql`insert into kifu_tactics (kifu_id, side, label, turn)
         values (${await insertKifu()}, 'nobody', '四間飛車', 1)`)],
@@ -352,7 +336,7 @@ describe('updatedAt のトリガー（prd/15 §3.4）', () => {
   });
 
   it('updatedAt を持つ全表にトリガーがある（表を足したらトリガーも足す）', async () => {
-    const tables = [users, session, account, verification, kifus, videoKifuSources, drills];
+    const tables = [users, session, account, verification, kifus, videoKifuSources, drills, kifuAnalyses];
     const result = await db.execute<{ table: string }>(sql`
       select c.relname as "table"
       from pg_trigger t join pg_class c on c.oid = t.tgrelid
@@ -360,7 +344,7 @@ describe('updatedAt のトリガー（prd/15 §3.4）', () => {
     const withTrigger = new Set(result.rows.map((r) => r.table));
     // schema の側から updatedAt を持つ表を数える（数え漏れを防ぐ）
     const all = [users, session, account, verification, kifus, videoKifuSources, drills,
-      userAliases, moveAnalyses, candidateMoves, kifuPositions, drillAttempts];
+      userAliases, kifuAnalyses, kifuPositions, drillAttempts];
     const expected = all.filter((t) => 'updatedAt' in t).map((t) => getTableName(t));
     expect(expected.sort()).toEqual(tables.map((t) => getTableName(t)).sort());
     expect([...withTrigger].sort()).toEqual(expected.sort());
@@ -517,27 +501,16 @@ describe('名前候補の一意（prd/11 §2.1・prd/15 §3.2）', () => {
 });
 
 describe('FK（CASCADE の有無）', () => {
-  it('棋譜を消すと解析・候補手・局面索引・出題・解答履歴が道連れになる', async () => {
+  it('棋譜を消すと解析・局面索引・出題・解答履歴が道連れになる', async () => {
     const kifuId = await insertKifu();
-    const analysisId = await insertAnalysis(kifuId);
-    await db.insert(candidateMoves).values({
-      moveAnalysisId: analysisId,
-      rank: 1,
-      move: '7g7f',
-      scoreType: 'cp',
-      scoreValue: 0,
-      depth: 1,
-    });
+    await insertAnalysis(kifuId, [[cand('7g7f', 0)]]);
     await db.insert(kifuPositions).values(positionRow(kifuId, 0, null));
     const [drill] = await db.insert(drills).values(drillRow(kifuId)).returning({ id: drills.id });
     await db.insert(drillAttempts).values({ drillId: drill.id, excluded: true });
 
     await db.delete(kifus).where(eq(kifus.id, kifuId));
 
-    expect(await db.select().from(moveAnalyses).where(eq(moveAnalyses.kifuId, kifuId))).toEqual([]);
-    expect(
-      await db.select().from(candidateMoves).where(eq(candidateMoves.moveAnalysisId, analysisId)),
-    ).toEqual([]);
+    expect(await db.select().from(kifuAnalyses).where(eq(kifuAnalyses.kifuId, kifuId))).toEqual([]);
     expect(await db.select().from(kifuPositions).where(eq(kifuPositions.kifuId, kifuId))).toEqual([]);
     expect(await db.select().from(drillAttempts).where(eq(drillAttempts.drillId, drill.id))).toEqual([]);
   });
@@ -567,11 +540,7 @@ describe('出題の追随（upsert。prd/13 §6.1）', () => {
   it('作り直しても ID と解答履歴が残り、条件から外れた行だけが消える', async () => {
     const moves = ['7g7f', '3c3d', '2g2f', '8c8d', '2f2e'];
     const kifuId = await insertKifu({ usiMoves: moves, subjectSide: 'sente' });
-    const analysisId = await insertAnalysis(kifuId, 0);
-    await db.insert(candidateMoves).values([
-      { moveAnalysisId: analysisId, rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 100, depth: 1 },
-      { moveAnalysisId: analysisId, rank: 2, move: '7g7f', scoreType: 'cp', scoreValue: -600, depth: 1 },
-    ]);
+    await insertAnalysis(kifuId, [[cand('2g2f', 100, 1), cand('7g7f', -600, 2)]]);
     const config = { thresholds: DEFAULT_THRESHOLDS, mateMaxPlies: 10 };
 
     const first = await db.transaction((tx) => syncDrills(tx, kifuId, config));
@@ -586,6 +555,77 @@ describe('出題の追随（upsert。prd/13 §6.1）', () => {
     const rows = await db.select().from(drills).where(eq(drills.kifuId, kifuId));
     expect(rows.map((r) => r.id)).toEqual([drill.id]);
     expect(await db.select().from(drillAttempts).where(eq(drillAttempts.drillId, drill.id))).toHaveLength(1);
+  });
+});
+
+describe('解析結果の 1 行（kifu_analyses。prd/16）', () => {
+  const START = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
+
+  it('submit の重ね合わせを保存し、minMate を詰み見逃しの述語が引ける', async () => {
+    const kifuId = await insertKifu({ usiMoves: ['7g7f', '3c3d'], result: 'GOTE_WIN', subjectSide: 'sente' });
+    const run = (profile: 'quick' | 'full', at: string) => ({
+      profile, engineName: 'e', movetimeMs: 1, targetDepth: null, multiPv: 3, at,
+    });
+    let stored = await loadAnalysis(db, kifuId);
+    expect(stored.exists).toBe(false);
+    const quick = mergeChunk(stored, [0, 1, 2].map((moveNumber) => ({
+      moveNumber,
+      candidates: [cand('7g7f', 0)],
+    })), run('quick', '2026-10-01T00:00:00.000Z'));
+    if (!quick.ok) throw new Error('rejected');
+    await db.transaction((tx) => saveAnalysis(tx, kifuId, quick.next));
+    stored = await loadAnalysis(db, kifuId);
+    const full = mergeChunk(stored, [{ moveNumber: 0, candidates: [cand('7g7f', 9, 1, 'mate')] }],
+      run('full', '2026-10-02T00:00:00.000Z'));
+    if (!full.ok) throw new Error('rejected');
+    await db.transaction((tx) => saveAnalysis(tx, kifuId, full.next));
+
+    const [row] = await db.select().from(kifuAnalyses).where(eq(kifuAnalyses.kifuId, kifuId));
+    expect(row.fullCount).toBe(1);
+    expect(row.runs.map((r) => r.profile)).toEqual(['quick', 'full']);
+    expect({ sente: row.minMateSente, gote: row.minMateGote }).toEqual({ sente: 9, gote: null });
+
+    const ids = async (missedMate: string) =>
+      (await db.select({ id: kifus.id }).from(kifus)
+        .where(and(eq(kifus.id, kifuId), kifuListWhere(kifuListQuerySchema.parse({ missedMate })))))
+        .map((r) => r.id);
+    expect(await ids('9')).toEqual([kifuId]);
+    expect(await ids('8')).toEqual([]);
+  });
+
+  it('局面の再利用は full の局面だけを、その局面の submit の時刻付きで引く', async () => {
+    const kifuId = await insertKifu({ usiMoves: ['7g7f', '3c3d'] });
+    await db.transaction((tx) => replacePositions(tx, kifuId, ['7g7f', '3c3d']));
+    await db.transaction((tx) =>
+      saveAnalysis(tx, kifuId, {
+        runs: [
+          { profile: 'full', engineName: null, movetimeMs: null, targetDepth: null, multiPv: 3, at: '2026-10-05T00:00:00.000Z' },
+          { profile: 'quick', engineName: null, movetimeMs: null, targetDepth: null, multiPv: 3, at: '2026-10-06T00:00:00.000Z' },
+        ],
+        detail: [
+          [0, encodeCandidates([cand('7g7f', 30, 1), cand('2g2f', 20, 2), cand('6i7h', 10, 3)])],
+          [0, encodeCandidates([cand('3c3d', -30, 1)])],
+          [1, encodeCandidates([cand('2g2f', 40, 1)])],
+        ],
+        fullCount: 2,
+      }),
+    );
+    const mine = <T extends { kifuId: number }>(ms: T[]) => ms.filter((m) => m.kifuId === kifuId);
+
+    const evalMatches = mine(await findKifuPositionMatches({ sfen: START, move: null }));
+    expect(evalMatches).toHaveLength(1);
+    expect(evalMatches[0].candidates.map((c) => [c.rank, c.move, c.pv])).toEqual([
+      [1, '7g7f', []], [2, '2g2f', []], [3, '6i7h', []],
+    ]);
+    expect(evalMatches[0].analyzedAt).toEqual(new Date('2026-10-05T00:00:00.000Z'));
+
+    const named = mine(await findKifuPositionMatches({ sfen: START, move: '2g2f' }));
+    // ① 候補手に持つ（局面 0）と ② 実手ではない → ① だけ
+    expect(named.map((m) => [m.moveNumber, m.candidates.length, m.playedMove])).toEqual([[0, 3, null]]);
+
+    const played = mine(await findKifuPositionMatches({ sfen: START, move: '7g7f' }));
+    // ① 局面 0 の候補手にある / ② 実手で、次局面（1。full）の解析がある
+    expect(played.find((m) => m.playedMove === '7g7f')?.nextCandidates[0].move).toBe('3c3d');
   });
 });
 

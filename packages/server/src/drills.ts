@@ -18,7 +18,9 @@ import {
   type Thresholds,
 } from 'shared';
 import { db } from './db';
-import { candidateMoves, drills, kifus, moveAnalyses } from './db/schema';
+import { drills, kifus } from './db/schema';
+import { decodeAll } from './kifu-analysis-detail.js';
+import { loadAnalysis } from './kifu-analysis-store.js';
 import type { Tx } from './tactics';
 
 /**
@@ -178,40 +180,27 @@ export function extractDrills(input: ExtractInput): ExtractedDrill[] {
   return result;
 }
 
-/** 1 局ぶんの `profile='full'` の解析を読む（候補手を rank 順に畳む） */
+/**
+ * 1 局ぶんの full の解析を読む（先頭 `fullCount` 局面。prd/16 §5）。
+ * full は先頭からの連続区間なので、それより後ろの局面は quick（出題には使わない。prd/13 §2）。
+ */
 export async function loadFullAnalyses(
   tx: Tx | typeof db,
   kifuId: number,
 ): Promise<DrillAnalysis[]> {
-  const rows = await tx
-    .select({
-      moveNumber: moveAnalyses.moveNumber,
-      rank: candidateMoves.rank,
-      move: candidateMoves.move,
-      scoreType: candidateMoves.scoreType,
-      scoreValue: candidateMoves.scoreValue,
-      pv: candidateMoves.pv,
-    })
-    .from(moveAnalyses)
-    .innerJoin(candidateMoves, eq(candidateMoves.moveAnalysisId, moveAnalyses.id))
-    .where(and(eq(moveAnalyses.kifuId, kifuId), eq(moveAnalyses.profile, 'full')));
-
-  const byMoveNumber = new Map<number, DrillAnalysis>();
-  for (const row of rows) {
-    let entry = byMoveNumber.get(row.moveNumber);
-    if (!entry) {
-      entry = { moveNumber: row.moveNumber, candidates: [] };
-      byMoveNumber.set(row.moveNumber, entry);
-    }
-    entry.candidates.push({
-      rank: row.rank,
-      move: row.move,
-      scoreType: row.scoreType,
-      scoreValue: row.scoreValue,
-      pv: row.pv ?? null,
-    });
-  }
-  return [...byMoveNumber.values()];
+  const stored = await loadAnalysis(tx, kifuId);
+  return decodeAll(stored.detail.slice(0, stored.fullCount), stored.runs).map(
+    ({ moveNumber, candidates }) => ({
+      moveNumber,
+      candidates: candidates.map(({ rank, move, scoreType, scoreValue, pv }) => ({
+        rank,
+        move,
+        scoreType,
+        scoreValue,
+        pv,
+      })),
+    }),
+  );
 }
 
 /**

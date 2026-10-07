@@ -1,11 +1,10 @@
 // 解析結果のチャンク submit（`POST /api/worker/analyses`）の判定ロジック。
 // DB 接続を持たない純粋な関数だけを置き、route.ts から使う（テスト可能に保つため）。
 //
-// 冪等性の担保は 3 箇所に分かれる（prd/03 §3）:
-//   1. 同一 `moveNumber` の重複防止 → `UNIQUE(kifuId, moveNumber)` と `resolveExistingMoveAnalyses`
+// 冪等性の担保は次の箇所に分かれる（prd/03 §3・prd/16 §4）:
+//   1. 同一 `moveNumber` の重複防止・段階の後退防止・full の連続性 → `mergeChunk`（kifu-analysis-detail.ts）
 //   2. 前世代の全消去 → `reanalyze` の DELETE（submit 側は DELETE しない）
-//   3. 完了の確定 → `isAnalysisComplete`（**段階ごとの**件数が `usiMoves.length + 1` に達したら）
-//   4. 段階の後退防止 → `canWriteRow`（既存行の段階以上のときだけ書く）
+//   3. 完了の確定 → `isAnalysisComplete`（**段階ごとの**局面数が `usiMoves.length + 1` に達したら）
 //
 // 2 段階解析（quick / full。prd/05 §1.1d）では、**完了は段階ごとに読む**。
 // `analysisCompletedAt` は quick 完了で立つので、これを段階と無関係に使うと
@@ -88,20 +87,6 @@ export function isChunkAcceptable<
 }
 
 /**
- * その局面に届いたチャンクを書いてよいか（**既存行の段階以上のときだけ**。prd/05 §1.1d）。
- *
- * 既存が full の局面に quick が届いたら**書かずに無視する**（単一 worker では起きないが安い保険）。
- * 同段階の再送は受け入れる（入れ直し・現行どおり）。
- */
-export function canWriteRow(
-  existing: AnalysisProfile | null | undefined,
-  incoming: AnalysisProfile,
-): boolean {
-  if (existing === null || existing === undefined) return true;
-  return PROFILE_RANK[incoming] >= PROFILE_RANK[existing];
-}
-
-/**
  * 完了した段階を踏まえた `kifus.analysisProfile` の次の値。
  *
  * **後退させない**（既に full なら quick へ落とさない）。行数から導く値なので、
@@ -128,8 +113,8 @@ export function nextKifuProfile(
  * 「必要な局面が欠けたまま件数だけ達する」ことがありうる**（例: 2 手の棋譜に 0/1/99 が入ると
  * 3 件で完了扱いになる）。しかも完了すると poll 対象から外れるため、自動再開でも修復されない。
  *
- * 範囲を保証すれば、`UNIQUE(kifuId, moveNumber)` が値の重複を防ぐので
- * **件数 = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。
+ * 範囲を保証すれば、`detail` は添字が `moveNumber` の隙間の無い配列なので（`mergeChunk`）
+ * **長さ = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。
  */
 export function isChunkInRange(
   chunk: { moveNumber: number }[],
@@ -146,15 +131,15 @@ export function isChunkInRange(
 }
 
 /**
- * 解析が完了したか（`moveAnalyses` の件数が全局面数に達したか）。
+ * 解析が完了したか（その段階の局面数が全局面数に達したか）。
  *
  * worker の `isFinal` ではなく **server が件数で判定する**。「揃っていれば完了」という
  * 不変条件で決まるため、worker のクラッシュ位置やチャンク境界に依存しない（prd/05 §1.1c）。
  *
- * ⚠ **2 段階解析では段階ごとに数える**（prd/05 §1.1d）: quick は全行数、full は
- * `profile='full'` の行数（full は 0 から順に上書きするので、full 行は常に先頭からの連続区間になる）。
+ * ⚠ **2 段階解析では段階ごとに数える**（prd/05 §1.1d）: quick は `detail` の長さ、full は
+ * `fullCount`（full は 0 から順に上書きするので、常に先頭からの連続区間になる。prd/16 §4.2）。
  *
- * @param storedCount 当該棋譜の `moveAnalyses` 件数（`UNIQUE(kifuId, moveNumber)` があるので = 揃った局面数）
+ * @param storedCount その段階で揃った局面数
  * @param usiMoves 棋譜の指し手列。全局面数は `usiMoves.length + 1`（初期局面を含む）
  */
 export function isAnalysisComplete(
@@ -163,22 +148,4 @@ export function isAnalysisComplete(
 ): boolean {
   if (usiMoves === null) return false;
   return storedCount >= usiMoves.length + 1;
-}
-
-/**
- * チャンクの各局面に、既存の `moveAnalyses.id`（あれば）を対応づける。
- *
- * 同一 `moveNumber` の再送（server 側だけ成功した submit を worker が送り直す等）で行が
- * 二重に増えないよう、既存があれば **その行を使い回して `candidateMoves` を入れ直す**。
- * 新規挿入は `existingId === null` のものだけ。
- */
-export function resolveExistingMoveAnalyses<T extends { moveNumber: number }>(
-  chunk: T[],
-  existing: { id: number; moveNumber: number }[],
-): { analysis: T; existingId: number | null }[] {
-  const idByMoveNumber = new Map(existing.map((r) => [r.moveNumber, r.id]));
-  return chunk.map((analysis) => ({
-    analysis,
-    existingId: idByMoveNumber.get(analysis.moveNumber) ?? null,
-  }));
 }

@@ -12,7 +12,6 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx migrate.ts",
-    "db:migrate-from-mysql": "tsx migrate-from-mysql.ts",
     "tactics:redetect": "tsx redetect-tactics.ts",
     "drills:generate": "tsx generate-drills.ts"
   },

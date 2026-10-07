@@ -25,7 +25,7 @@
  * interactive なジョブには対応する棋譜も世代も無い（prd/12 §2.5）。
  */
 
-/** 候補手 1 本。列名は `candidateMoves` に合わせるが、**DB には保存しない** */
+/** 候補手 1 本。項目は解析結果の候補手（`kifu-analysis-detail.ts` の `CandidateMove`）に合わせるが、**DB には保存しない** */
 export interface EvalCandidate {
   rank: number;
   move: string;

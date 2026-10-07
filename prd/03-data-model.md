@@ -17,8 +17,8 @@
 | テーブル | 役割 |
 |---|---|
 | `kifus` | 棋譜の原本・変換済み指し手・対局メタ・解析状態 |
-| `moveAnalyses` | 1 局面ごとの解析レコード（`kifus` に紐付く） |
-| `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く） |
+| `moveAnalyses` | 1 局面ごとの解析レコード（`kifus` に紐付く）。**`kifuAnalyses` に置き換える**（[16](./16-analysis-storage.md)） |
+| `candidateMoves` | MultiPV の候補手（`moveAnalyses` に紐付く）。**同上** |
 | `kifuTactics`（計画中） | 戦型ラベル（`kifus` に紐付く派生値。[01](./01-domain.md) §6） |
 | `commentaries`（計画中） | LLM 解説（`kifus` と 1:1。[06](./06-llm-commentary.md)） |
 | `videoKifuSources` | 動画解析の由来メタ（`kifus` と 1:1。[10](./10-video-analysis.md) §3.1） |
@@ -245,6 +245,9 @@ SELECT label FROM kifu_tactics
   抑制後を保存すると、経由形での絞り込み（「四間飛車から向かい飛車に振り直した対局」）ができなくなる。
 
 ## 3. `moveAnalyses`（局面ごとの解析）
+
+> **置き換え予定**（2026-10-07）: §3・§4 の 2 表は、1 棋譜の 1 回の解析を 1 行に詰めた `kifuAnalyses` に置き換える（[16](./16-analysis-storage.md)）。
+> 局面番号・スコアの視点・完了と再開の考え方は変えない。実装までは本節が現行の形を表す。
 
 ```
 moveAnalyses

@@ -49,8 +49,7 @@
 kifuAnalyses（1 棋譜の 1 回の解析で 1 行）
 ├── kifuId: FK → kifus.id (CASCADE)  PK
 ├── fullCount: int notNull            -- 先頭から何局面までが full か（§4.2）
-├── (来歴・quick)                      -- engineName / movetime(ms) / 目標 depth / multiPv（quick を書いたことがあれば）
-├── (来歴・full)                       -- 同上（full を書いたことがあれば）
+├── runs: jsonb notNull               -- submit 1 回ごとの来歴と時刻（§3.1）
 ├── minMateSente: int?                -- 先手番の局面で、最善が「自分が N 手で詰ませる」だった最小の N（§3.2）
 ├── minMateGote: int?                 -- 後手番の局面で同上
 ├── detail: jsonb notNull             -- 局面ごとの候補手（§3.1）。列の圧縮は lz4
@@ -59,18 +58,22 @@ kifuAnalyses（1 棋譜の 1 回の解析で 1 行）
 ```
 
 - 1 棋譜に 1 行（エンジンの切り替えを保留している間は、主キーは `kifuId` だけ。§8）
-- **来歴は段階ごとに 1 組**持つ。今は全局面の行に同じ値が重複しているが、値が変わるのは段階の境目だけ
+- **来歴と解析時刻は submit 1 回ごとに 1 件**持ち（`runs`）、各局面はどの submit で書かれたかを指す。今は全局面の行に同じ値が重複しているが、値が変わるのは submit の境目だけ
 - 解析済みの局面数は `jsonb_array_length(detail)`（今の `analyzedCount`）
 
 ### 3.1 `detail` の形
 
 ```
-detail[moveNumber] = 候補手の配列（rank 順。先頭が rank 1）
+detail[moveNumber] = [run, 候補手の配列（rank 順。先頭が rank 1）]
 候補手 = [move, scoreType, scoreValue, depth, pv]
+runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 ```
 
 - `moveNumber` の意味・`scoreType` / `scoreValue` を手番視点のまま持つこと・`pv` の利用先は今と同じ（[03](./03-data-model.md) §3・§4）
 - 配列の添字が `moveNumber`、候補手の位置が `rank` を兼ねるので、両方とも値としては持たない
+- `run` は `runs` の添字。**局面ごとの段階・来歴・解析時刻は、その局面を書いた submit の値**になる（今の局面ごとの `profile` / `engineName` / 解析設定 / `createdAt` と同じ情報を、重複なしで持つ）。
+  `at` は submit のトランザクションの時刻（今の `createdAt` の既定値 `now()` と同じく、1 回の submit の中で揃う）
+- `runs` は追記だけ。上書きで指されなくなった件は次の書き込みで詰めてよい（実装判断）
 - 🔒 **CHECK で形を守る**（配列であること）。中身の検査は submit の zod で行う（[14](./14-multi-user.md) §6.2 の上限もここで掛ける）
 
 ### 3.2 列に出す値
@@ -104,9 +107,12 @@ detail[moveNumber] = 候補手の配列（rank 順。先頭が rank 1）
 
 ### 4.2 段階（quick / full）
 
-- full は 0 から順に上書きするので、**full の局面は常に先頭からの連続区間**（[05](./05-analysis.md) §1.1d）。今の局面ごとの `profile` は `fullCount` 1 つで表せる
+- full は 0 から順に上書きするので、**full の局面は常に先頭からの連続区間**（[05](./05-analysis.md) §1.1d）。`fullCount` はその長さで、`runs` の段階と常に一致する
+- 🔴 **`fullCount` の連続性は submit の受理条件で守る**:
+  - **full のチャンク**は先頭の局面が `fullCount` 以下であること（重なりは再送として上書き）。越えていれば 400（飛ばした局面を full として数えないため）。
+    受理したら `fullCount = max(fullCount, チャンクの末尾 + 1)`
+  - **quick のチャンク**は先頭の局面が `jsonb_array_length(detail)` 以下であること。`moveNumber < fullCount` の局面は捨てる（段階の後退防止）。`fullCount` は変えない
 - full の再開位置は `fullCount`、quick の再開位置は `jsonb_array_length(detail)`
-- 段階の後退防止（既存が full の局面に quick が届いたら無視）は、`moveNumber < fullCount` の局面への quick を捨てることになる
 
 ### 4.3 作り直し
 
@@ -122,8 +128,8 @@ detail[moveNumber] = 候補手の配列（rank 順。先頭が rank 1）
 | 出題の抽出（[13](./13-drills.md)） | 1 棋譜ぶんの full の行 | 1 行の先頭 `fullCount` 局面 |
 | 解析の進み具合 | 行の件数 | 配列の長さと `fullCount` |
 
-- ⚠ **局面の再利用で返す解析時刻**は、今は局面ごとの `createdAt`。本章では行の `updatedAt` になる（局面ごとの時刻は持たない）。
-  「新しい解析を優先する」並びには足りる
+- **局面の再利用で返す解析時刻**は、その局面を書いた submit の `at`（今の局面ごとの `createdAt` と同じ意味）。
+  行の `updatedAt` は使わない——別の局面の submit で進むので、局面ごとの新しさを表さない
 - `candidate_moves_score_idx`（[09](./09-analytics.md) §6.2）は表ごと無くなる
 
 ## 6. 容量の見込み
@@ -143,7 +149,7 @@ detail[moveNumber] = 候補手の配列（rank 順。先頭が rank 1）
 - **1 本のマイグレーションで行う**: `kifuAnalyses` を作り、既存の行を SQL で集約して詰め、`minMate*` を計算し、旧 2 表を消す。
   Postgres は DDL もトランザクションに入るので、**途中で失敗したら丸ごと戻る**（[15](./15-postgres.md)）
 - `fullCount` は棋譜ごとの `profile='full'` の行数。⚠ **full が先頭からの連続区間になっていない棋譜があれば移行を止める**（前提が崩れているので、黙って詰めない）
-- 来歴は段階ごとに、その段階の行に入っている値を 1 組取る。⚠ 段階の中で値が割れている棋譜は件数を出す（設定を変えた途中で解析が走った棋譜。多い方を取る）
+- `runs` は、局面の行を `(profile, engineName, 解析設定, createdAt)` の組で束ねて作る。**来歴も時刻も失わない**（段階の中で設定が割れている棋譜も、組が分かれるだけ）
 - `minMate*` の計算は SQL と TS の 2 か所に書くことになる。**移行後に TS の計算と突き合わせる検査**（`test:db`）で揃っていることを確かめる
 - 戻し方は前日のバックアップと旧イメージ（[15](./15-postgres.md) の切り替えと同じ）。⚠ 旧イメージは新しい表を読めない
 

@@ -177,7 +177,11 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
     `analysisError` に理由（例 `illegal move at move 57`）を記録し（`POST /api/worker/kifus/:id/error`）、
     **エンジンを無条件で再起動**してクリーンな状態に戻してから次の kifu へ進む。error 付き kifu は poll から
     除外される（[03](./03-data-model.md)）。timeout も同じ depth/byoyomi では再発する二次ポイズンピルなので恒久扱い。
-  - **インフラ起因＝一時失敗**: server への解析結果 submit 失敗（ネットワーク/DB）等。棋譜自体は正常なので
+  - **submit を server が入力の誤りとして拒否した（4xx）＝恒久失敗**: 送り直しても同じなので `analysisError` を記録して
+    次の kifu へ進む（一時失敗として扱うと、同じ棋譜の解析と拒否を繰り返して後続が進まない）。エンジンは正常なので再起動しない。
+    ⚠ 401 / 403（API_KEY）・408 / 429 は除く（全棋譜を失敗にしないため一時失敗）。世代の不一致は 201（`applied: false`）で返るのでここに来ない。
+    正常系で拒否されないよう、worker は候補手を **rank 1 からの連続した先頭部分**に絞って送る（[16](./16-analysis-storage.md) §4.1）
+  - **インフラ起因＝一時失敗**: server への解析結果 submit 失敗（ネットワーク/DB・5xx）等。棋譜自体は正常なので
     `analysisError` は立てず、次の poll で再試行する（エンジン再起動もしない）。
     - ⚠ **チャンク submit の失敗は、その棋譜の解析を中断し、次の poll で続きから再開する**（§1.1c）。
       握りつぶして続行すると `moveNumber` に穴が空き、再開位置を「入っている件数」で決められなくなるため。

@@ -64,6 +64,51 @@ export class ChunkSubmitError extends Error {
 }
 
 /**
+ * チャンク submit を server が**入力の誤りとして拒否した**（4xx。prd/05 §1.1a・prd/16 §4.1）。
+ *
+ * 🔴 **恒久失敗として扱う。** 同じ棋譜を解析し直しても同じ結果を送るので、一時失敗（{@link ChunkSubmitError}）
+ * と同じく次の poll へ回すと、**同じ棋譜を解析しては拒否される堂々巡り**になり後続が進まない。
+ * 呼び出し側は `analysisError` を記録して poll から外す。
+ */
+export class SubmitRejectedError extends Error {
+  constructor(readonly status: number) {
+    super(`Analysis chunk rejected by server: ${status}`);
+    this.name = "SubmitRejectedError";
+  }
+}
+
+/**
+ * submit の HTTP ステータスが**恒久失敗**（入力の誤り）か。
+ *
+ * - 4xx は恒久（範囲外・連続でない・rank の欠番など。送り直しても変わらない）
+ * - ⚠ ただし **401 / 403（API_KEY の誤り）・408 / 429（混雑）は除く**——棋譜ではなく構成や
+ *   一時的な状況の問題で、恒久扱いにすると**全棋譜が失敗として記録される**
+ * - 5xx・通信エラーは一時失敗（今どおり次の poll で続きから再開）
+ * - 世代の不一致は 201（`applied: false`）で返るので、ここには来ない
+ */
+export function isPermanentSubmitStatus(status: number): boolean {
+  if (status < 400 || status >= 500) return false;
+  return ![401, 403, 408, 429].includes(status);
+}
+
+/**
+ * 候補手を **rank 1 からの連続した先頭部分**だけに絞る（rank 順に並べ直す）。
+ *
+ * server は各局面の rank が 1..n の連番でなければ 400 を返す（保存形が rank を配列の位置から戻すため。
+ * prd/16 §4.1）。エンジンの info 行は MultiPV の番号が欠けることがありうるので（例: 1 と 3 だけ
+ * 最終深さに届いた）、**欠番以降は捨てて送る**。正常系では何も変わらない。
+ */
+export function leadingContiguousCandidates(candidates: CandidateMove[]): CandidateMove[] {
+  const sorted = [...candidates].sort((a, b) => a.rank - b.rank);
+  const result: CandidateMove[] = [];
+  for (const c of sorted) {
+    if (c.rank !== result.length + 1) break;
+    result.push(c);
+  }
+  return result;
+}
+
+/**
  * チャンクを区切る経過時間（前回 submit からの ms）。
  *
  * **局面数ではなく時間で切る**: 抑えたいのは「失敗時に失われる計算時間」なので、時間で切れば
@@ -259,7 +304,8 @@ export async function analyzeKifu(
       throw err;
     }
     const elapsed = Date.now() - t0;
-    const candidates = extractMultiPvResults(result.infoLines);
+    // server の受理条件（rank が 1..n の連番。prd/16 §4.1）に合わせ、欠番以降は捨てる
+    const candidates = leadingContiguousCandidates(extractMultiPvResults(result.infoLines));
     const isBook = candidates.length > 0 && candidates[0].depth === 0;
     const hashfull = extractHashfull(result.infoLines);
     if (hashfull !== undefined && (maxHashfull === undefined || hashfull > maxHashfull)) {

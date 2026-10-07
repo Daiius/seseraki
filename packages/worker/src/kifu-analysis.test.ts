@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeKifu,
   ChunkSubmitError,
+  isPermanentSubmitStatus,
+  leadingContiguousCandidates,
   type AnalysisEngine,
+  type CandidateMove,
   type MoveAnalysis,
 } from "./kifu-analysis.js";
 import type { UsiInfo, UsiSearchResult } from "./usi/types.js";
@@ -291,6 +294,17 @@ describe("候補手の抽出", () => {
     vi.restoreAllMocks();
   });
 
+  it("🔴 MultiPV の番号が欠けたら欠番以降を捨てて送る（server は rank 1..n の連番しか受けない。prd/16 §4.1）", async () => {
+    const line = (multipv: number, move: string): UsiInfo => ({
+      multipv,
+      depth: 10,
+      score: { type: "cp", value: 10 },
+      pv: [move],
+    });
+    const candidates = await candidatesOf([line(1, "7g7f"), line(3, "6i7h")]);
+    expect(candidates.map((c) => [c.rank, c.move])).toEqual([[1, "7g7f"]]);
+  });
+
   it("同じ PV 番号は後の（より深い）行で上書きする", async () => {
     const candidates = await candidatesOf([
       {
@@ -498,5 +512,48 @@ describe("局面境界の割り込み（prd/12 §2.1）", () => {
       }),
     ).rejects.toThrow("engine died");
     expect(chunks).toHaveLength(0);
+  });
+});
+
+describe("leadingContiguousCandidates", () => {
+  const c = (rank: number): CandidateMove => ({
+    rank,
+    move: `m${rank}`,
+    score: { type: "cp", value: 0 },
+    pv: [],
+    depth: 1,
+  });
+  const ranks = (cs: CandidateMove[]) => cs.map((x) => x.rank);
+
+  it("連番ならそのまま（rank 順に並べる）", () => {
+    expect(ranks(leadingContiguousCandidates([c(2), c(1), c(3)]))).toEqual([1, 2, 3]);
+    expect(leadingContiguousCandidates([])).toEqual([]);
+  });
+
+  it("欠番以降を捨てる・1 から始まらなければ空", () => {
+    expect(ranks(leadingContiguousCandidates([c(1), c(3)]))).toEqual([1]);
+    expect(ranks(leadingContiguousCandidates([c(1), c(2), c(4), c(5)]))).toEqual([1, 2]);
+    expect(ranks(leadingContiguousCandidates([c(2), c(3)]))).toEqual([]);
+    expect(ranks(leadingContiguousCandidates([c(0), c(1)]))).toEqual([]);
+  });
+});
+
+describe("isPermanentSubmitStatus", () => {
+  it("入力の誤り（4xx）は恒久失敗", () => {
+    for (const status of [400, 404, 409, 413, 422]) {
+      expect(isPermanentSubmitStatus(status)).toBe(true);
+    }
+  });
+
+  it("⚠ 認証（401 / 403）と混雑（408 / 429）は一時失敗（恒久にすると全棋譜が失敗になる）", () => {
+    for (const status of [401, 403, 408, 429]) {
+      expect(isPermanentSubmitStatus(status)).toBe(false);
+    }
+  });
+
+  it("5xx と成功は恒久失敗ではない", () => {
+    for (const status of [200, 201, 500, 502, 503]) {
+      expect(isPermanentSubmitStatus(status)).toBe(false);
+    }
   });
 });

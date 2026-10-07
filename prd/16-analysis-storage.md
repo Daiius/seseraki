@@ -103,6 +103,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 - チャンクの局面は**今の末尾まで**に収まること（重なりは上書き、末尾を越えた飛びは 400）。今の「`UNIQUE(kifuId, moveNumber)` による upsert」
   と同じく、**再送は同じ結果になる**
 - 🔴 **各局面の候補手の `rank` は 1..n の連番**（重複・欠番なし）であること。満たさなければ 400。保存形は `rank` を配列の位置から戻すので、欠番のまま受けると黙って書き換わる（rank 2 だけ届くと rank 1 になる）
+  - worker は送る前に候補手を rank 1 からの連続した先頭部分に絞る（欠番以降は捨てる）。それでも 4xx で拒否されたら恒久失敗として `analysisError` を記録する（[05](./05-analysis.md) §1.1a の失敗の分類。再試行の堂々巡りにしない）
 - `0 <= moveNumber <= usiMoves.length` の検証、完了の確定（段階ごとの件数が `usiMoves.length + 1`）は今と同じ（[03](./03-data-model.md) §3）
 - Postgres の更新は値を丸ごと書き直すので、チャンクごとに 1 局ぶん（数十 KB 以下）を書き直す。量として問題にならない
 

@@ -1,6 +1,10 @@
 import { hc } from "hono/client";
 import type { AppType } from "server";
-import type { MoveAnalysis } from "../kifu-analysis.js";
+import {
+  isPermanentSubmitStatus,
+  SubmitRejectedError,
+  type MoveAnalysis,
+} from "../kifu-analysis.js";
 import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
 
 /** 解析の段階（prd/05 §1.1d）。server の `AnalysisProfile` と同じ 2 値 */
@@ -70,6 +74,10 @@ export function createClient(baseUrl: string, apiKey: string) {
           })),
         },
       });
+      // 入力の誤りとしての拒否（4xx）は恒久失敗。それ以外は一時失敗（prd/05 §1.1a）
+      if (!res.ok && isPermanentSubmitStatus(res.status)) {
+        throw new SubmitRejectedError(res.status);
+      }
       if (!res.ok) throw new Error(`Failed to submit analysis: ${res.status}`);
       return await res.json();
     },

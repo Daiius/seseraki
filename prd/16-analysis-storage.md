@@ -73,7 +73,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 - 配列の添字が `moveNumber`、候補手の位置が `rank` を兼ねるので、両方とも値としては持たない
 - `run` は `runs` の添字。**局面ごとの段階・来歴・解析時刻は、その局面を書いた submit の値**になる（今の局面ごとの `profile` / `engineName` / 解析設定 / `createdAt` と同じ情報を、重複なしで持つ）。
   `at` は submit のトランザクションの時刻（今の `createdAt` の既定値 `now()` と同じく、1 回の submit の中で揃う）
-- `runs` は追記だけ。上書きで指されなくなった件は次の書き込みで詰めてよい（実装判断）
+- 🔒 **書き込みのたびに、どの局面からも指されなくなった run を消して添字を詰める。** 再送を繰り返しても `runs` の件数は局面数を超えない（ブラウザから届く submit で行を際限なく大きくさせない。[14](./14-multi-user.md) §6.2）
 - 🔒 **CHECK で形を守る**（配列であること）。中身の検査は submit の zod で行う（[14](./14-multi-user.md) §6.2 の上限もここで掛ける）
 
 ### 3.2 列に出す値
@@ -109,6 +109,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 
 - full は 0 から順に上書きするので、**full の局面は常に先頭からの連続区間**（[05](./05-analysis.md) §1.1d）。`fullCount` はその長さで、`runs` の段階と常に一致する
 - 🔴 **`fullCount` の連続性は submit の受理条件で守る**:
+  - 🔒 **チャンクの局面は飛びの無い連続区間**（`[先頭, 末尾]` の全局面を 1 つずつ含む。重複・欠けは 400）。段階を問わない
   - **full のチャンク**は先頭の局面が `fullCount` 以下であること（重なりは再送として上書き）。越えていれば 400（飛ばした局面を full として数えないため）。
     受理したら `fullCount = max(fullCount, チャンクの末尾 + 1)`
   - **quick のチャンク**は先頭の局面が `jsonb_array_length(detail)` 以下であること。`moveNumber < fullCount` の局面は捨てる（段階の後退防止）。`fullCount` は変えない

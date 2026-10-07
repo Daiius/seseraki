@@ -69,7 +69,7 @@ import {
   isStageComplete,
   nextKifuProfile,
 } from './analysis-submit.js';
-import { decodeAll, mergeChunk } from './kifu-analysis-detail.js';
+import { decodeAll, hasContiguousRanks, mergeChunk } from './kifu-analysis-detail.js';
 import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
 import {
   claimEvaluationJob,
@@ -1622,6 +1622,11 @@ const route = app
         multiPv,
         analyses,
       } = c.req.valid('json');
+      // 🔴 候補手の rank は局面ごとに 1..n の連番であること（prd/16 §4.1）。保存形は rank を
+      // 配列の位置から戻すので、欠番のまま受けると黙って書き換わる。DB を読む前に弾く
+      if (!analyses.every((a) => hasContiguousRanks(a.candidates))) {
+        return c.json({ error: 'candidate ranks not contiguous' } as const, 400);
+      }
       let applied = false;
       let completed = false;
       // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して

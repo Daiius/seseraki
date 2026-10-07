@@ -52,6 +52,18 @@ export interface DecodedPosition {
   candidates: CandidateMove[];
 }
 
+/**
+ * 1 局面の候補手の rank が **1..n の連番**（重複・欠番なし。順不同）か（prd/16 §4.1）。
+ *
+ * 🔴 保存形は rank を持たず**配列の位置から戻す**ので、連番でない rank を受けると黙って
+ * 書き換わる（rank 2 だけ届くと rank 1 として保存される）。submit はこれを満たさなければ 400。
+ * worker は MultiPV の結果を 1 から並べるので、正常系では起きない。候補手 0 本は通す。
+ */
+export function hasContiguousRanks(candidates: { rank: number }[]): boolean {
+  const ranks = candidates.map((c) => c.rank).sort((a, b) => a - b);
+  return ranks.every((rank, i) => rank === i + 1);
+}
+
 /** 候補手（rank 順に並んだもの）を保存形へ */
 export function encodeCandidates(candidates: CandidateInput[]): StoredCandidate[] {
   return [...candidates]

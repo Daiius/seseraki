@@ -44,6 +44,20 @@ BEGIN
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'kifu_analyses: 局面が連続していないか、full が先頭からの連続区間でない棋譜がある: %', bad;
   END IF;
+  -- 候補手の rank が局面ごとに 1..n の連番であること（prd/16 §7）。詰めた形は rank を配列の位置から
+  -- 戻すので、欠番や 1 始まりでない局面を詰めると rank が黙って書き換わる。
+  -- 重複は旧表の UNIQUE(move_analysis_id, rank) が防いでいるので、最小 = 1 かつ 最大 = 件数 で連番になる
+  SELECT string_agg(DISTINCT ma.kifu_id::text, ', ') INTO bad
+  FROM move_analyses ma
+  JOIN (
+    SELECT move_analysis_id, count(*) AS n, min(rank) AS lo, max(rank) AS hi
+    FROM candidate_moves
+    GROUP BY move_analysis_id
+  ) c ON c.move_analysis_id = ma.id
+  WHERE c.lo <> 1 OR c.hi <> c.n;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION 'kifu_analyses: 候補手の rank が 1 からの連番でない局面を持つ棋譜がある: %', bad;
+  END IF;
 END
 $$;
 --> statement-breakpoint

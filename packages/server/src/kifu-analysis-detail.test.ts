@@ -6,6 +6,7 @@ import {
   decodeCandidates,
   decodePosition,
   encodeCandidates,
+  hasContiguousRanks,
   mergeChunk,
   minMateBySide,
   type AnalysisDetail,
@@ -57,6 +58,24 @@ describe('encodeCandidates / decodeCandidates', () => {
       cand('2g2f', -10, 'cp', 2),
       { ...cand('5i5h', 0, 'cp', 3), pv: null },
     ]);
+  });
+});
+
+describe('hasContiguousRanks', () => {
+  const r = (...ranks: number[]) => ranks.map((rank) => ({ rank }));
+
+  it('1..n の連番なら通す（順不同・0 本も通す）', () => {
+    expect(hasContiguousRanks(r(1, 2, 3))).toBe(true);
+    expect(hasContiguousRanks(r(3, 1, 2))).toBe(true);
+    expect(hasContiguousRanks(r())).toBe(true);
+  });
+
+  it('🔴 1 から始まらない・欠番・重複は通さない（位置から戻すと rank が書き換わる）', () => {
+    expect(hasContiguousRanks(r(2))).toBe(false);
+    expect(hasContiguousRanks(r(1, 3))).toBe(false);
+    expect(hasContiguousRanks(r(1, 1))).toBe(false);
+    expect(hasContiguousRanks(r(0, 1))).toBe(false);
+    expect(hasContiguousRanks(r(1, 1.5))).toBe(false);
   });
 });
 

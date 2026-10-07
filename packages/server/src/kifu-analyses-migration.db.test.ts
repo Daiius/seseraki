@@ -199,4 +199,46 @@ describe('解析結果の詰め替え（prd/16 §7）', () => {
     await expect(applyMigration(client, migrations[target])).rejects.toThrow(String(kifuId));
     await client.end();
   });
+
+  it('🔴 候補手の rank が 1 からの連番でない局面があれば止まり、何も変えない', async () => {
+    const client = await databaseBeforeTarget();
+    const T = '2026-09-01T00:00:00.000Z';
+    const three: OldPosition['candidates'] = [
+      ['7g7f', 'cp', 30, null],
+      ['2g2f', 'cp', 20, null],
+      ['6i7h', 'cp', 10, null],
+    ];
+    const notFromOne = await insertKifu(client);
+    const withGap = await insertKifu(client);
+    const fine = await insertKifu(client);
+    for (const kifuId of [notFromOne, withGap, fine]) {
+      await insertOld(client, kifuId, [
+        { moveNumber: 0, profile: 'full', movetimeMs: 1000, createdAt: T, candidates: three },
+      ]);
+    }
+    // rank 2・3 だけ（1 始まりでない）/ rank 1・3（欠番）。詰めるとどちらも rank が書き換わる
+    const drop = (kifuId: number, rank: number) =>
+      client.query(
+        `delete from candidate_moves where rank = $2 and move_analysis_id in
+           (select id from move_analyses where kifu_id = $1)`,
+        [kifuId, rank],
+      );
+    await drop(notFromOne, 1);
+    await drop(withGap, 2);
+
+    const err = await applyMigration(client, migrations[target]).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(err?.message).toContain('rank');
+    expect(err?.message).toContain(String(notFromOne));
+    expect(err?.message).toContain(String(withGap));
+    expect(err?.message).not.toContain(String(fine));
+
+    const { rows } = await client.query<{ n: string }>('select count(*) as n from candidate_moves');
+    expect(Number(rows[0].n)).toBe(7);
+    const { rows: ka } = await client.query(`select to_regclass('kifu_analyses') as t`);
+    expect(ka[0].t).toBeNull();
+    await client.end();
+  });
 });

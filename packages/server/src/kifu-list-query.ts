@@ -18,7 +18,7 @@ import {
 } from 'drizzle-orm';
 import { z } from 'zod';
 import { NON_SIDE_ATTRIBUTED_LABELS } from 'shared';
-import { candidateMoves, kifus, kifuTactics, moveAnalyses } from './db/schema.js';
+import { kifuAnalyses, kifus, kifuTactics } from './db/schema.js';
 
 /**
  * 期間の入力に使う暦日（`YYYY-MM-DD`）。
@@ -246,23 +246,15 @@ function tacticCondition(query: KifuListQuery, label: string): SQL {
 /**
  * 自分の手番の局面に「`limit` 手以下で詰ませる最善手」があるか。
  *
- * `moveNumber = N` は N 手適用後・N+1 手目を指す前の局面で、`moveNumber = 0` が初期局面＝先手番
- * （prd/03 §3・prd/01 §5）。よって自分が先手なら偶数、後手なら奇数の局面が自分の手番。
- * `scoreValue` は**エンジンが返した手番視点のまま**保存されている（prd/03 §4）ので、
- * 自分の手番の局面では正の `mate` が「自分が詰ませる」を意味する。
+ * 手番ごとの最小の詰み手数は書き込み時に `kifuAnalyses.minMate{Sente,Gote}` へ計算してある
+ * （prd/16 §3.2）。「rank 1 が `1 <= mate <= limit` の局面が存在する」は「最小値 `<= limit`」と同値なので、
+ * `limit` を画面で変えても列はそのまま使える。未解析（行が無い）・詰みの無い棋譜は偽。
  */
 export function selfMateExists(limit: number, side: 'sente' | 'gote'): SQL {
-  const parity = side === 'sente' ? 0 : 1;
-  return sql`exists (select 1 from ${moveAnalyses} where ${and(
-    eq(moveAnalyses.kifuId, kifus.id),
-    sql`mod(${moveAnalyses.moveNumber}, 2) = ${parity}`,
-    sql`exists (select 1 from ${candidateMoves} where ${and(
-      eq(candidateMoves.moveAnalysisId, moveAnalyses.id),
-      eq(candidateMoves.rank, 1),
-      eq(candidateMoves.scoreType, 'mate'),
-      gte(candidateMoves.scoreValue, 1),
-      lte(candidateMoves.scoreValue, limit),
-    )})`,
+  const column = side === 'sente' ? kifuAnalyses.minMateSente : kifuAnalyses.minMateGote;
+  return sql`exists (select 1 from ${kifuAnalyses} where ${and(
+    eq(kifuAnalyses.kifuId, kifus.id),
+    lte(column, limit),
   )})`;
 }
 

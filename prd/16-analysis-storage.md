@@ -1,10 +1,10 @@
 # 16. 解析結果の保存形式
 
-本章は、エンジン解析の結果（[03](./03-data-model.md) §3・§4 の `moveAnalyses` / `candidateMoves`）を
+本章は、エンジン解析の結果（旧 `moveAnalyses` / `candidateMoves`。今は [03](./03-data-model.md) §3・§4 の `kifuAnalyses`）を
 **1 棋譜の 1 回の解析につき 1 行**に詰め直す設計を定める。
 [14](./14-multi-user.md) §6 の容量見積もりの前提を置き換える。
 
-> **設計確定・未実装**（2026-10-07）。決定の経緯は [決定ログ](./_grilling/decisions.md)「解析結果の保存形式」。
+> **実装済み・本番未反映**（2026-10-08）。スキーマの正典は [03](./03-data-model.md) §3・§4。決定の経緯は [決定ログ](./_grilling/decisions.md)「解析結果の保存形式」。
 
 ---
 
@@ -102,6 +102,8 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 - submit は**行を `FOR UPDATE` で取り**、`detail` を読み、チャンクぶんを置き換え・追記して書き戻す（1 トランザクション）
 - チャンクの局面は**今の末尾まで**に収まること（重なりは上書き、末尾を越えた飛びは 400）。今の「`UNIQUE(kifuId, moveNumber)` による upsert」
   と同じく、**再送は同じ結果になる**
+- 🔴 **各局面の候補手の `rank` は 1..n の連番**（重複・欠番なし）であること。満たさなければ 400。保存形は `rank` を配列の位置から戻すので、欠番のまま受けると黙って書き換わる（rank 2 だけ届くと rank 1 になる）
+  - worker は送る前に候補手を rank 1 からの連続した先頭部分に絞る（欠番以降は捨てる）。それでも 4xx で拒否されたら恒久失敗として `analysisError` を記録する（[05](./05-analysis.md) §1.1a の失敗の分類。再試行の堂々巡りにしない）
 - `0 <= moveNumber <= usiMoves.length` の検証、完了の確定（段階ごとの件数が `usiMoves.length + 1`）は今と同じ（[03](./03-data-model.md) §3）
 - Postgres の更新は値を丸ごと書き直すので、チャンクごとに 1 局ぶん（数十 KB 以下）を書き直す。量として問題にならない
 
@@ -150,6 +152,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 - **1 本のマイグレーションで行う**: `kifuAnalyses` を作り、既存の行を SQL で集約して詰め、`minMate*` を計算し、旧 2 表を消す。
   Postgres は DDL もトランザクションに入るので、**途中で失敗したら丸ごと戻る**（[15](./15-postgres.md)）
 - `fullCount` は棋譜ごとの `profile='full'` の行数。⚠ **full が先頭からの連続区間になっていない棋譜があれば移行を止める**（前提が崩れているので、黙って詰めない）
+- ⚠ **候補手の `rank` が 1 からの連番でない局面（欠番・1 始まりでない）を持つ棋譜があれば移行を止める**（詰めると `rank` が黙って書き換わる。§4.1 と同じ理由）
 - `runs` は、局面の行を `(profile, engineName, 解析設定, createdAt)` の組で束ねて作る。**来歴も時刻も失わない**（段階の中で設定が割れている棋譜も、組が分かれるだけ）
 - `minMate*` の計算は SQL と TS の 2 か所に書くことになる。**移行後に TS の計算と突き合わせる検査**（`test:db`）で揃っていることを確かめる
 - 戻し方は前日のバックアップと旧イメージ（[15](./15-postgres.md) の切り替えと同じ）。⚠ 旧イメージは新しい表を読めない

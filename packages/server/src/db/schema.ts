@@ -18,6 +18,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { defineRelations, sql, type SQL } from 'drizzle-orm';
+import type { AnalysisDetail, AnalysisRun } from '../kifu-analysis-detail.js';
 
 // --- 命名（prd/15 §3.6）---
 
@@ -96,7 +97,7 @@ const SIDE_TO_MOVE = textEnum(['b', 'w']);
 const DRILL_KIND = textEnum(['mate', 'best']);
 const DRILL_REASON = textEnum(['missed_mate', 'own_blunder']);
 const VERDICT = textEnum(['correct', 'close', 'wrong']);
-/** 評価値の種類（`candidate_moves.scoreType` / `drills.answerScoreType`）。列は varchar のまま */
+/** 評価値の種類（`kifuAnalyses.detail` の候補手 / `drills.answerScoreType`）。列は varchar のまま */
 const SCORE_TYPES = ['cp', 'mate'] as const;
 /** 盤面の時刻帯（`kifus.sourceTz`。`localDay` が前提にしている） */
 const SOURCE_TZS = ['JST', 'UTC'] as const;
@@ -387,49 +388,47 @@ export const videoKifuSources = table(
   ],
 );
 
-// 1手ごとの解析結果
-export const moveAnalyses = table(
-  'move_analyses',
+/**
+ * 解析結果（prd/16）。**1 棋譜の 1 回の解析を 1 行**に詰める。
+ *
+ * 🔒 **検索・集計に使う値は列に出し、表示にしか使わない値は `detail` に詰める**（prd/16 §1）。
+ * `detail` / `runs` の形は `kifu-analysis-detail.ts` だけが知っている。
+ * 🔴 **`detail` を書き換えたら `minMate*` を同じトランザクションで計算し直す**（prd/16 §3.2）。
+ */
+export const kifuAnalyses = table(
+  'kifu_analyses',
   {
-    id: identityId(),
     kifuId: idRef()
-      .notNull()
+      .primaryKey()
       .references(() => kifus.id, { onDelete: 'cascade' }),
-    moveNumber: integer().notNull(),
     /**
-     * 解析段階（prd/05 §1.1d）。**行は段階が上がっても増えず、full が quick を
-     * 局面単位で上書きする**。full の進行中は 1 棋譜の中で quick と full が混在する
-     * ——これは仕様で、表示にそのまま出す。
-     *
-     * 🔒 **既定値は持たせない**（アプリが常に明示して書く）。DB 側の default に頼ると、
-     * 書き忘れが quick 扱いで静かに通る。
+     * 先頭から何局面までが full か（prd/16 §4.2）。full は 0 から順に上書きするので常に連続区間。
+     * 🔒 **既定値は持たせない**（アプリが常に明示して書く）
      */
-    profile: ANALYSIS_PROFILE.column().notNull(),
+    fullCount: integer().notNull(),
+    /** submit 1 回ごとの来歴と時刻（prd/16 §3.1）。`detail` の各局面が添字で指す */
+    runs: jsonb().$type<AnalysisRun[]>().notNull(),
+    /** 先手番の局面で、最善が「自分が N 手で詰ませる」だった最小の N（prd/16 §3.2） */
+    minMateSente: integer(),
+    /** 後手番の局面で同上 */
+    minMateGote: integer(),
     /**
-     * USI の `id name`（来歴）。
-     * 🔴 **上書き・再開の条件には使わない。** やねうら王は再ビルドで版文字列が変わるため、
-     * 識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**が起きる
-     * （prd/03 §3 / prd/05 §1.1d）。構成変更時の作り直しは `reanalyze` の運用で受ける。
+     * 局面ごとの `[run, 候補手]`（prd/16 §3.1）。添字が `moveNumber`。
+     * 列の圧縮は lz4（マイグレーションで手で指定。drizzle は圧縮を扱わない）
      */
-    engineName: varchar({ length: 255 }),
-    /**
-     * 解析設定（来歴）。**JSON ではなく列に分ける**——記録する値は
-     * movetime / 目標 depth / MultiPV の 3 つで**固定**（段階が 2 つ固定なのと同じ立場で、
-     * 汎用の設定袋にしない）。列なら型が付き、後から「depth が違う行」を SQL で数えられる。
-     */
-    movetimeMs: integer(),
-    targetDepth: integer(),
-    multiPv: integer(),
+    detail: jsonb().$type<AnalysisDetail>().notNull(),
     createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('move_analyses_kifu_id_move_number_uq').on(
-      table.kifuId,
-      table.moveNumber,
+    jsonArrayCheck('kifu_analyses_detail_array', table.detail),
+    jsonArrayCheck('kifu_analyses_runs_array', table.runs),
+    check(
+      'kifu_analyses_full_count_range',
+      sql`${table.fullCount} >= 0 and ${table.fullCount} <= jsonb_array_length(${table.detail})`,
     ),
-    ANALYSIS_PROFILE.check('move_analyses_profile_check', table.profile),
-    check('move_analyses_move_number_nonneg', sql`${table.moveNumber} >= 0`),
-    check('move_analyses_multi_pv_positive', sql`${table.multiPv} >= 1`),
+    check('kifu_analyses_min_mate_sente_positive', sql`${table.minMateSente} >= 1`),
+    check('kifu_analyses_min_mate_gote_positive', sql`${table.minMateGote} >= 1`),
   ],
 );
 
@@ -531,38 +530,8 @@ export const kifuPositions = table(
   ],
 );
 
-export const candidateMoves = table(
-  'candidate_moves',
-  {
-    id: identityId(),
-    moveAnalysisId: idRef()
-      .notNull()
-      .references(() => moveAnalyses.id, { onDelete: 'cascade' }),
-    rank: integer().notNull(),
-    move: varchar({ length: 255 }).notNull(),
-    scoreType: varchar({ length: 16 }).notNull(), // SCORE_TYPES（CHECK で守る）
-    scoreValue: integer().notNull(),
-    pv: jsonb().$type<string[]>(),
-    depth: integer().notNull(),
-  },
-  (table) => [
-    uniqueIndex('candidate_moves_move_analysis_id_rank_uq').on(
-      table.moveAnalysisId,
-      table.rank,
-    ),
-    // 取りこぼし（prd/09 §3.1）の判定は解析済み局面ぶんの候補手を見る。既存の一意索引は
-    // `scoreType` / `scoreValue` を含まないため、局面数ぶんの行読み出しになる。
-    // mate 行は全体のごく一部なので、この索引で**読む行が mate 行だけに落ちる**（prd/09 §6.2）
-    index('candidate_moves_score_idx').on(table.scoreType, table.scoreValue),
-    inCheck('candidate_moves_score_type_check', table.scoreType, SCORE_TYPES),
-    check('candidate_moves_rank_positive', sql`${table.rank} >= 1`),
-    check('candidate_moves_depth_nonneg', sql`${table.depth} >= 0`),
-    jsonArrayCheck('candidate_moves_pv_array', table.pv),
-  ],
-);
-
 /**
- * 出題（prd/13 §6.1）。`moveAnalyses` / `candidateMoves` から導く**派生値**で、正は解析結果。
+ * 出題（prd/13 §6.1）。`kifuAnalyses` から導く**派生値**で、正は解析結果。
  *
  * 🔴 **正解の材料を焼き付けて持つ**（`answer*` / `candidates`）。解析が再実行されても、
  * 出題中の問題の答えが黙って変わらないため（prd/13 §6.1）。
@@ -574,7 +543,7 @@ export const drills = table(
   {
     id: identityId(),
     kifuId: idRef().notNull(),
-    /** 出題局面（= その手を指す前の局面。`moveAnalyses.moveNumber` と同じ数え方） */
+    /** 出題局面（= その手を指す前の局面。`kifuAnalyses.detail` の添字と同じ数え方） */
     moveNumber: integer().notNull(),
     /**
      * 出題の種類（prd/13 §2）。`mate` は詰み上がりまで指し継ぎ、`best` は初手のみ。
@@ -595,7 +564,7 @@ export const drills = table(
     answerPv: jsonb().$type<string[]>(),
     /**
      * 出題時点の候補手（rank 順・pv を除く）。**採点はここを引く**ので、
-     * `candidateMoves` の再解析に影響されない（prd/13 §5.1）。
+     * 解析の再実行に影響されない（prd/13 §5.1）。
      */
     candidates: jsonb()
       .$type<{ rank: number; move: string; scoreType: string; scoreValue: number }[]>()
@@ -686,8 +655,7 @@ export const drillAttempts = table(
 export const relations = defineRelations(
   {
     kifus,
-    moveAnalyses,
-    candidateMoves,
+    kifuAnalyses,
     kifuTactics,
     videoKifuSources,
     kifuPositions,
@@ -701,7 +669,10 @@ export const relations = defineRelations(
   },
   (r) => ({
     kifus: {
-      moveAnalyses: r.many.moveAnalyses(),
+      analysis: r.one.kifuAnalyses({
+        from: r.kifus.id,
+        to: r.kifuAnalyses.kifuId,
+      }),
       videoSource: r.one.videoKifuSources({
         from: r.kifus.id,
         to: r.videoKifuSources.kifuId,
@@ -713,17 +684,10 @@ export const relations = defineRelations(
         to: r.kifus.id,
       }),
     },
-    moveAnalyses: {
+    kifuAnalyses: {
       kifu: r.one.kifus({
-        from: r.moveAnalyses.kifuId,
+        from: r.kifuAnalyses.kifuId,
         to: r.kifus.id,
-      }),
-      candidateMoves: r.many.candidateMoves(),
-    },
-    candidateMoves: {
-      moveAnalysis: r.one.moveAnalyses({
-        from: r.candidateMoves.moveAnalysisId,
-        to: r.moveAnalyses.id,
       }),
     },
     drills: {

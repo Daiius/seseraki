@@ -45,7 +45,6 @@ const IconSearch = () => (
 );
 
 interface Analysis {
-  id: number;
   moveNumber: number;
   /**
    * 解析段階（prd/05 §1.1d）。full の進行中は 1 棋譜の中で quick と full が混ざりうる。
@@ -55,7 +54,6 @@ interface Analysis {
    */
   profile: AnalysisProfile;
   candidates: {
-    id: number;
     rank: number;
     move: string;
     scoreType: string;

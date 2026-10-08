@@ -8,7 +8,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from './db';
-import { kifus, moveAnalyses, videoKifuSources } from './db/schema';
+import { kifuAnalyses, kifus, videoKifuSources } from './db/schema';
 import { composeKifVerified } from './kif/compose';
 import { ANALYSIS_STATE_RESET } from './analysis-submit';
 import { replaceTactics } from './tactics';
@@ -194,7 +194,7 @@ export async function importVideoKifu(
         analysisRevision: sql`${kifus.analysisRevision} + 1`,
       })
       .where(eq(kifus.id, existing.kifuId));
-    await tx.delete(moveAnalyses).where(eq(moveAnalyses.kifuId, existing.kifuId));
+    await tx.delete(kifuAnalyses).where(eq(kifuAnalyses.kifuId, existing.kifuId));
     await replaceTactics(tx, existing.kifuId, input.usi);
     await replacePositions(tx, existing.kifuId, input.usi);
 

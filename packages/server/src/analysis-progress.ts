@@ -1,6 +1,6 @@
 // 解析の進捗（server のメモリ上の揮発状態）。
 //
-// **DB に永続化しない**: (1) チャンク submit が入れば `moveAnalyses` の件数から導出できるため、
+// **DB に永続化しない**: (1) チャンク submit が入れば `kifuAnalyses` の局面数から導出できるため、
 // 列を足すと捨てることになる（migration を 2 回打つ）、(2) 数十分の解析中に DB へ UPDATE を
 // 繰り返さない、(3) 完了すれば `analysisCompletedAt` が正になる揮発的な情報である。
 // server 再起動で消えるが worker の次の報告で復活し、**stale が自動で消える利点**にもなる。

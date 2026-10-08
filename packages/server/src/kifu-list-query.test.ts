@@ -233,14 +233,15 @@ describe('kifuListWhere', () => {
 
   it('取りこぼしは「自分の手番の rank=1 の詰み」かつ「負け」で絞る', () => {
     const { sql, params } = render(kifuListWhere(parse({ missedMate: '10' })));
-    expect(sql).toContain('exists (select 1 from "move_analyses"');
-    expect(sql).toContain('exists (select 1 from "candidate_moves"');
-    // 自分の手番は moveNumber の parity（先手なら偶数・後手なら奇数。prd/03 §2.3）
-    expect(sql).toContain('mod("move_analyses"."move_number", 2) =');
+    // 手番ごとの最小の詰み手数は書き込み時に列へ計算してある（prd/16 §3.2）
+    expect(sql).toContain('exists (select 1 from "kifu_analyses"');
+    // 自分の手番の列を見る（先手なら sente・後手なら gote）
+    expect(sql).toContain('"kifu_analyses"."min_mate_sente" <= ?');
+    expect(sql).toContain('"kifu_analyses"."min_mate_gote" <= ?');
     expect(params[0]).toBe(OWN);
-    expect(params.slice(1, 8)).toEqual(['sente', '%GOTE_WIN%', 0, 1, 'mate', 1, 10]);
+    expect(params.slice(1, 4)).toEqual(['sente', '%GOTE_WIN%', 10]);
     // ⚠ 負け条件を内包する（outcome=loss を別途付ける必要はない。prd/09 §3.1）
-    expect(params.slice(8)).toEqual(['gote', '%SENTE_WIN%', 1, 1, 'mate', 1, 10]);
+    expect(params.slice(4)).toEqual(['gote', '%SENTE_WIN%', 10]);
   });
 
   it('複数の条件は AND で結合される', () => {

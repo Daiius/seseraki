@@ -29,7 +29,7 @@
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
 | [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。認証の段階 1 だけ実装済み・他は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。移行本体まで実装済み・データ移行と切り替えは未） |
-| [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。未実装） |
+| [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。実装済み・本番未反映） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
 
@@ -95,7 +95,7 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 ```
 
 > **DB は Postgres 18**（[prd/15](./prd/15-postgres.md)）。日時は `timestamptz` で、接続の時刻帯に依存しない。
-> **ロールを 2 つに分ける**: 管理ロール（DDL。`migrate.js` とデータ移行の `migrate-from-mysql.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）と
+> **ロールを 2 つに分ける**: 管理ロール（DDL。`migrate.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）と
 > server ロール（DML のみ。常駐の server と一括処理。`DB_USER` / `DB_PASSWORD`）。dev は
 > `scripts/postgres-init/10-server-role.sh` が空の volume の初回に server ロールを作る。
 >
@@ -147,7 +147,6 @@ server の本番イメージ（`packages/server/Dockerfile.prod`）には、常�
 | `/app/redetect-tactics.js` | 戦型ラベルの一括再判定（[prd/01](./prd/01-domain.md) §6.4） | dry-run | `REDETECT_APPLY=1` |
 | `/app/rebuild-subjects.js` | 主体側の一括再導出（[prd/11](./prd/11-users.md) §4.2） | dry-run | `REBUILD_SUBJECTS_APPLY=1` |
 | `/app/link-owner-account.js` | Google ログインへの移行で、初回ログインの account を所有者（`"1"`）へ付け替える（移行時に 1 回。`--provider` / `--email`。[prd/07](./prd/07-auth-and-privacy.md) §4.1） | dry-run | `LINK_OWNER_APPLY=1` |
-| `/app/migrate-from-mysql.js` | MySQL → Postgres のデータ移行（切り替えで 1 回。管理ロール。**後片付けの PR で消す**。[prd/15](./prd/15-postgres.md) §6） | dry-run（全部入れてみて ROLLBACK） | `MIGRATE_APPLY=1` |
 
 ```bash
 docker compose run --rm --no-deps <server サービス> /app/<entry>.js
@@ -179,19 +178,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > （`import.meta.url`）で解くので、dev では `packages/server/drizzle`、イメージ内では `/app/drizzle`
 > を指す。**`migrate.ts` をパッケージルート直下から動かすとこの対応が壊れる。**
 
-> **MySQL からのデータ移行**（[prd/15](./prd/15-postgres.md) §6・一度きり。後片付けの PR で消す）:
-> 移行先は **0000 を当てた直後の空の Postgres** でなければ始まらない（二重実行・取り違えの防止）。
-> **既定は dry-run**（同じトランザクションで全部入れてみて、CHECK・FK の違反を全件と表ごとの件数を出し、ROLLBACK）。
-> `MIGRATE_APPLY=1` で COMMIT。**違反か件数の不一致があれば apply でも ROLLBACK して非 0 で終わる。**
-> 局面索引（`kifu_positions`）は移さないので、**COMMIT の後に `rebuild-positions` を流す**。
-> MySQL の接続先は `MYSQL_HOST` / `MYSQL_PORT` / `MYSQL_*`（dev は `db-mysql`）。**ホストからは MySQL に届かないので compose 網の中から流す**:
-> ```bash
-> docker compose run --rm --no-deps server pnpm --filter server db:migrate-from-mysql
-> docker compose run --rm --no-deps -e MIGRATE_APPLY=1 server pnpm --filter server db:migrate-from-mysql
-> docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 server pnpm --filter server exec tsx rebuild-positions.ts
-> ```
-> 🔒 **MySQL には一切書かない**（READ ONLY のトランザクションで読む。戻し方の前提）。
-> 🔴 読み取りの接続は最初の SELECT より前にセッションを UTC に固定し、読み返して UTC でなければ何も書かずに止まる。
+> **MySQL からのデータ移行エントリ（`migrate-from-mysql.js`）は外した**（2026-10-08・[prd/16](./prd/16-analysis-storage.md) の実装で、移行先の解析の表が変わったため）。移行のやり直しが要るときは、本番で固定中の切り替え時のイメージ（エントリを含む）で移し、その後に新しいイメージの `migrate.js` で詰め替える（[prd/15](./prd/15-postgres.md) §6）。
 
 > **戦型ラベルの一括再判定**（`prd/01` §6.4「判定ロジックを更新したら一括再判定する」）:
 > 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。
@@ -219,7 +206,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > docker compose run --rm --no-deps -e REBUILD_POSITIONS_APPLY=1 <server サービス> /app/rebuild-positions.js
 > ```
 >
-> 🔴 **MySQL からのデータ移行でも `kifu_positions` は運ばずに作り直す**（prd/15 §6.2・§7 の 5）。
+> 🔴 **MySQL からのデータ移行でも `kifu_positions` は運ばずに作り直した**（prd/15 §6.2・§7 の 5）。
 > 索引は派生値で `usiMoves` から作り直せる（[prd/14](./prd/14-multi-user.md) §6.3）。
 > **流すまで局面検索は空**（初期局面すら 404・検討盤の棋譜解析の再利用も効かない）。
 > 🔴 **ハッシュ関数（`shared` の `position-hash.ts`）を変えたときも全件の作り直しが要る**——

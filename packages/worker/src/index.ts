@@ -13,6 +13,7 @@ import {
   analyzeKifu,
   buildGoCommand,
   ChunkSubmitError,
+  SubmitRejectedError,
 } from "./kifu-analysis.js";
 import {
   drainEvaluationJobs,
@@ -272,6 +273,8 @@ async function main() {
                   provenance,
                 );
               } catch (err) {
+                // 入力の誤りとしての拒否（4xx）はそのまま投げる（恒久失敗。下で analysisError を記録）
+                if (err instanceof SubmitRejectedError) throw err;
                 throw new ChunkSubmitError(err);
               }
             },
@@ -280,6 +283,18 @@ async function main() {
           // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で続きから再開 ---
           if (err instanceof ChunkSubmitError) {
             console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
+            return;
+          }
+          // --- server が入力の誤りとして拒否した（4xx）: 送り直しても同じなので恒久失敗。
+          // analysisError を記録して poll から外す（記録しないと同じ棋譜の解析と拒否を繰り返し、
+          // 後続が進まない）。エンジンは正常なので再起動しない ---
+          if (err instanceof SubmitRejectedError) {
+            console.error(`[Worker] Submit rejected for kifu ${kifu.id}:`, err.message);
+            try {
+              await client.reportError(kifu.id, kifu.analysisRevision, err.message);
+            } catch (reportErr) {
+              console.error("[Worker] Failed to report error:", reportErr);
+            }
             return;
           }
           // --- 検討局面の評価でエンジンが落ちた: 棋譜は無関係なので analysisError は

@@ -63,7 +63,7 @@ export const Route = createFileRoute('/stats')({
       mateMax: isValidMateMax(mateMax) ? mateMax : undefined,
     };
   },
-  // ⚠ **`mateMax` は依存に入れる。** 取りこぼしは `candidate_moves` を読まないと出せず、
+  // ⚠ **`mateMax` は依存に入れる。** 取りこぼしは解析結果（`kifuAnalyses.minMate*`）を読まないと出せず、
   // ブラウザには送れないので、変えれば server に問い直す（prd/09 §6.3）
   loaderDeps: ({ search }) => ({
     from: search.from,
@@ -136,7 +136,7 @@ function StatsPage() {
   };
 
   // 詰み手数は**打鍵ごとに反映しない**。1 打鍵ごとに server の集計をやり直すことになり、
-  // 取りこぼしは `candidate_moves` への `EXISTS` を含む重いクエリ（prd/09 §6.2）。
+  // 取りこぼしは解析結果（`kifu_analyses`）への `EXISTS` を含むクエリ（prd/09 §6.2）。
   // 空欄や途中の値を弾いて入力を止めないよう、入力欄はドラフトを持つ（一覧の検索欄と同じ形）
   const [mateMaxDraft, setMateMaxDraft] = useState(String(mateMax));
 
@@ -167,7 +167,7 @@ function StatsPage() {
   // 戦型・側・期間だけでは引き分け・結果不明・自分未確定が一覧に混ざり、表の局数より
   // 件数が多くなる（指摘 `OCL-35520A6B`。§2.1 が約束した一致が崩れる）。
   // 取りこぼしのセルは分子が「解析済み」に限られるので `status` も揃える
-  // （途中まで解析された棋譜に部分的な `candidateMoves` が残りうる。指摘 `OCL-2D4D27E5`）。
+  // （途中まで解析された棋譜に部分的な解析結果が残りうる。指摘 `OCL-2D4D27E5`）。
   const listSearch = (
     row: StatsTreeRow,
     missedMate?: number,

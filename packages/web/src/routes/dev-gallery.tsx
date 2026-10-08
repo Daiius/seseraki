@@ -67,12 +67,10 @@ function analysisAt(
   profile: 'quick' | 'full' = 'full',
 ) {
   return {
-    id: moveNumber + 1,
     moveNumber,
     profile,
     candidates: [
       {
-        id: (moveNumber + 1) * 10,
         rank: 1,
         move,
         scoreType,

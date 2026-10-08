@@ -100,9 +100,9 @@ describe('解析結果の詰め替え（prd/16 §7）', () => {
 
   it('局面・候補手・来歴・時刻を失わずに 1 行へ詰め、minMate は TS の計算と一致する', async () => {
     const client = await databaseBeforeTarget();
-    const T1 = '2026-09-01T00:00:00.000Z';
-    const T2 = '2026-09-02T00:00:00.000Z';
-    const T3 = '2026-09-03T00:00:00.123Z';
+    const T1 = '2026-09-01T00:00:00.000000Z';
+    const T2 = '2026-09-02T00:00:00.000000Z';
+    const T3 = '2026-09-03T00:00:00.123456Z';
     const analyzed = await insertKifu(client);
     const untouched = await insertKifu(client);
     await insertOld(client, analyzed, [

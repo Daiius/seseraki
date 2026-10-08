@@ -82,7 +82,7 @@ WITH positions AS (
       'movetimeMs', ma.movetime_ms,
       'targetDepth', ma.target_depth,
       'multiPv', ma.multi_pv,
-      'at', to_char(ma.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      'at', to_char(ma.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
     ) AS run_body,
     coalesce(
       (

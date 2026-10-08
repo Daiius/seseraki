@@ -248,9 +248,6 @@ SELECT label FROM kifu_tactics
 > 2026-10-07 に、局面ごと（`moveAnalyses`）・候補手ごと（`candidateMoves`）の 2 表から置き換えた。
 > 設計と理由・容量の実測は [16](./16-analysis-storage.md)。局面番号・スコアの視点・完了と再開の考え方は変えていない。
 
-> **置き換え予定**（2026-10-07）: §3・§4 の 2 表は、1 棋譜の 1 回の解析を 1 行に詰めた `kifuAnalyses` に置き換える（[16](./16-analysis-storage.md)）。
-> 局面番号・スコアの視点・完了と再開の考え方は変えない。実装までは本節が現行の形を表す。
-
 ```
 kifuAnalyses
 ├── kifuId: FK → kifus.id (CASCADE)  PK

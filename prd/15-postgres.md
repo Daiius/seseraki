@@ -3,7 +3,7 @@
 本章は、DB を MySQL 8.4 から **Postgres 18** へ移す設計を定める。
 [14](./14-multi-user.md) §9 の「当面 MySQL のまま」を改め、**所有者スコープ（[14](./14-multi-user.md) §4）の前に**移る。
 
-> **データ移行エントリまで実装済み・本番の切り替えは未**（2026-10-04。§9 の 3 まで。dev での練習はこれから）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
+> **本番切り替え済み**（2026-10-06）。残りは MySQL 側の後片付け（移行エントリは [16](./16-analysis-storage.md) の実装で外した。`mysql2` と dev の `db-mysql` が残る）と、所有者スコープ（§11）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
 > 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres を Postgres 18 に当てた）で確かめた事実を §3・§5 に書く。
 
 ---

@@ -32,6 +32,7 @@
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
+> 判断を覆したら、覆された側の節の見出し直下に「⚠ 改定済み →（新しい節）」を置く（書式はファイル冒頭）。
 
 ## 技術スタック / 構成
 

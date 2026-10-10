@@ -14,7 +14,7 @@
 
 | ルート | 対象 | 変換 | フェーズ |
 |---|---|---|---|
-| **swars 一括取り込み** | swars の対局履歴 | CSA→KIF→USI（server） | **無効化**（実装は残置・フロント/API 遮断。§4） |
+| **swars 一括取り込み** | swars の対局履歴 | CSA→KIF→USI（server） | **無効化**（エンドポイントと画面を外した・コードは `swars/` に残置。§4） |
 | **KIF 貼り付け** | 他ソフトのエクスポート等 | KIF→USI（server） | 実装済み |
 | **CSA 直接貼り付け** | 他ソフトの CSA 出力 | CSA→KIF→USI（server） | 計画中（既存の CSA→KIF 変換器を再利用） |
 
@@ -64,21 +64,20 @@
 
 ## 4. swars 一括取り込み（無効化）
 
-> 🚫 **このルートは恒常的に無効化している（フロント/API 遮断）。** swars 側で KIF を手軽にコピーできる
+> 🚫 **このルートは恒常的に無効化している（エンドポイントと画面を外した・2026-10-12）。** swars 側で KIF を手軽にコピーできる
 > ようになり自動取り込みが不要になったこと、およびグレー領域の機能なので露出を絞ることが理由
 > （決定・[decisions](./_grilling/decisions.md)）。**実装は残置**し、KIF は §3 の貼り付け（+ クリップボード
-> ペースト。[05](./05-analysis.md) §2.5）で入れる。
+> ペースト。[05](./05-analysis.md) §2.5）で入れる。複数ユーザー開放（[14](./14-multi-user.md) §4.3）に合わせ、所有者用も含めて閉じた。
 
 **遮断のかたち**:
 
 - **フロント**: 一覧（`/`）の「更新」ボタン・ページ数セレクト・ポーリングは**撤去**した。
-- **API**: `POST /api/swars/import` / `GET /api/swars/import/status` は**常時 404**（`swars import is disabled`）。
-  ガードは `sessionRequired` より前に置き、認証状態を晒さず 404 する。
+- **API**: `POST /api/swars/import` / `GET /api/swars/import/status` は**ルートごと外した**（以前は `swarsDisabled` ミドルウェアで常時 404 を返していた）。
 - **実装は残す**: `swars/` モジュール（履歴/CSA 取得・CSA→KIF 変換・ジョブストア）と server 側のジョブ起動
-  ロジックはコードに残る（到達不能だが削除しない）。再有効化は **env フラグではなくコード上の定数
-  （`SWARS_IMPORT_DISABLED`）を落とす明示的なコード変更**を要する。
+  ロジックは、ルートから外したので `route.ts` には無い。`swars/` の取得・CSA→KIF 変換は将来の CSA 直接貼り付けで
+  再利用しうるため削除しない（どこからも呼ばれない）。`SWARS_*` 環境変数も server は読まない。再有効化はルートの書き直しを要する。
 
-以下は無効化前の仕様（実装が残っているため参考として残す）:
+以下は無効化前の仕様（`swars/` のコードが残っているため参考として残す）:
 
 - swars の対局履歴からまとめて棋譜を取り込むルート。手動トリガーの**非同期ジョブ**で走った。
   遡るページ数は Web から指定（1〜10・既定 1・非永続）。
@@ -116,8 +115,8 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | POST | `/api/kifus/:id/reanalyze` | `kifText` を再パースし `usiMoves`＋メタ列を再生成、**旧 `moveAnalyses` を削除**し `analysisError`/`analysisCompletedAt` をクリア、**`analysisRevision` を +1** して再キュー（`title`/`memo` は温存）。トランザクション実行。パーサ修正後の既存棋譜の復旧と失敗棋譜の再試行を兼ねる（[05](./05-analysis.md) §1.1a / [03](./03-data-model.md)） |
 | DELETE | `/api/kifus/:id` | 棋譜削除（解析結果も CASCADE） |
 | GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuId, revision, profile, analyzed, total, updatedAt }` または `null`）。`profile`（`'quick'` \| `'full'`）は web が**解析中の表示（円環 / 進捗バー）の見え方**を出し分けるために返す（quick 進行中は半透明・full 進行中は通常。**文字では出さない**。[05](./05-analysis.md) §1.1b・§2.5）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
-| ~~POST~~ | ~~`/api/swars/import`~~ | **無効（常時 404）**。swars 取り込みジョブ起動だったもの（§4） |
-| ~~GET~~ | ~~`/api/swars/import/status`~~ | **無効（常時 404）**。swars 取り込みジョブ状態だったもの（§4） |
+| ~~POST~~ | ~~`/api/swars/import`~~ | **外した**（2026-10-12）。swars 取り込みジョブ起動だったもの（§4） |
+| ~~GET~~ | ~~`/api/swars/import/status`~~ | **外した**（2026-10-12）。swars 取り込みジョブ状態だったもの（§4） |
 
 ### 6.1 `GET /api/kifus` のクエリ
 

@@ -27,7 +27,7 @@
 | パッケージ | 役割 | 主要技術 |
 |---|---|---|
 | `web` | 棋譜管理 UI | React 19, Vite 8, TanStack Router, Tailwind v4 + daisyUI, clsx |
-| `server` | API + DB + KIF パース + プロンプト生成（+ 無効化済み swars 一括取り込みの残置実装。04 §4） | Hono, Drizzle ORM (1.0.0-rc.3), Postgres（node-postgres）, zod |
+| `server` | API + DB + KIF パース + プロンプト生成（+ swars 一括取り込みの残置コード（ルートは外した）。04 §4） | Hono, Drizzle ORM (1.0.0-rc.3), Postgres（node-postgres）, zod |
 | `worker` | 棋譜解析 | USI プロトコル, やねうら王 |
 | `shared` | 将棋ドメインの純ロジック + zod 検証スキーマ（§3）。**`board.ts` まで実装済み**、残りは gap（§3.2） | TypeScript（React/node 非依存の純 TS）, zod |
 | `commentator`（将来） | LLM 解説の自動生成（薄い監視スクリプト・独立 container） | [06](./06-llm-commentary.md) |

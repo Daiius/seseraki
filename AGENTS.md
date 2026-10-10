@@ -108,6 +108,10 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > 足し忘れても何もエラーにならず、`updatedAt` が作成時刻のまま止まる（`test:db` が表とトリガーの対応を照合する）。
 > ⚠ **`drizzle-kit push` もトリガーを作らない**ので `db:push` は廃止した。dev も `db:migrate:dev` で当てる。
 >
+> 🔴 **`kifus` 配下に表を足したら `ownerId` と複合 FK を付ける**（`schema.ts` の `ownerRef` / `ownedBy`。prd/14 §4.1）。
+> 子の表の `ownerId` は親の写しで、**書き込み側が親と同じ値を入れる**（`KifuRef` で ID と組で渡す）。RLS のポリシーがこの列を見る
+> （`test:db` が「`kifu_id` / `drill_id` を持つ表はすべて `owner_id` NOT NULL」を検査する）。
+>
 > 🔴 **Better Auth の表の ID は DB の既定値（`gen_random_uuid()`）で振る。** pg 方言の Better Auth は
 > `generateId: 'uuid'` の ID を JS 側で振らず DB に任せるので、既定値が無いと user の作成が NOT NULL で落ちる。
 >

@@ -30,6 +30,14 @@
 
 - リレーション: `kifus 1 — 0..1 kifuAnalyses`、`kifus 1 — N kifuTactics`。
   いずれも FK は **CASCADE 削除**。
+- 🔒 **`kifus` 配下の子の表はすべて `ownerId`（`varchar(36)` NOT NULL）を持つ**（`kifuAnalyses` / `kifuTactics` /
+  `kifuPositions` / `videoKifuSources` / `drills` / `drillAttempts`。[14](./14-multi-user.md) §4.1）。値は親の `ownerId` の写しで、
+  **親と食い違わないことを複合 FK で DB が保証する**: `kifus` に `UNIQUE(id, ownerId)` を張り、子は
+  `(kifuId, ownerId) → kifus(id, ownerId)`（`drillAttempts` は `(drillId, ownerId) → drills(id, ownerId)`）。
+  FK は **ON DELETE CASCADE / ON UPDATE CASCADE**——親の所有者を付け替えると子が追随する
+  （CASCADE でないと、親と子のどちらを先に変えても FK に反し、付け替える手段が無くなる）。
+  書き込み側（取り込み・解析報告・局面索引・出題・解答・動画取り込み・一括処理）は**親と同じ値を必ず入れる**（既定値は持たない）。
+  持つ理由は RLS のポリシーを全表で `owner_id = …` の一様な形にするため（[14](./14-multi-user.md) §4）
 - **認証は Google ログイン**（[07](./07-auth-and-privacy.md)）。所有者スコープが入るまでは所有者（`"1"`）以外を通さない
   （所有者ゲート。[07](./07-auth-and-privacy.md) §5.1）が、**データ側には所有者を持つ**（`kifus.ownerId`。[11](./11-users.md) §3）。
   **`users.id` は `varchar(36)`**、既存の所有者は `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。
@@ -137,7 +145,7 @@ kifus
 
 ```
 kifuTactics
-├── kifuId: FK → kifus.id (CASCADE)
+├── kifuId / ownerId: FK → kifus(id, ownerId) (CASCADE)   -- ownerId は親の写し（§1）
 ├── side: enum('sente','gote','both')  -- ラベルの帰属先（下記 §2.1.1）
 ├── label: varchar(32)                 -- 一次 / 二次ラベル名（例 "四間飛車" "角換わり"）
 ├── turn: int                          -- 成立手数（表示の抑制に使う。下記 §2.1.2）
@@ -250,7 +258,8 @@ SELECT label FROM kifu_tactics
 
 ```
 kifuAnalyses
-├── kifuId: FK → kifus.id (CASCADE)  PK
+├── kifuId: PK
+├── ownerId                           -- 親の写し。(kifuId, ownerId) → kifus(id, ownerId) (CASCADE)（§1）
 ├── fullCount: int notNull            -- 先頭から何局面までが full か（既定値なし。アプリが常に書く）
 ├── runs: json notNull                -- submit 1 回ごとの来歴と時刻（下記）
 ├── minMateSente: int?                -- 先手番の局面で、rank 1 が「自分が N 手で詰ませる」だった最小の N
@@ -343,7 +352,8 @@ MoveAnalysis  = { moveNumber, candidates: CandidateMove[] }
 ```
 drills
 ├── (kifuId, moveNumber, kind): UNIQUE  -- 1 局面 1 問
-├── kifuId: FK → kifus.id (CASCADE)
+├── kifuId / ownerId: FK → kifus(id, ownerId) (CASCADE)   -- ownerId は親の写し（§1）
+├── (id, ownerId): UNIQUE                -- drillAttempts の複合 FK の参照先
 ├── kind: 'mate' | 'best' / reason: 'missed_mate' | 'own_blunder'
 ├── answerMove / answerScoreType / answerScoreValue / answerPv  -- 正解（rank1）
 ├── candidates: json                     -- 出題時点の候補手（採点はここを引く）
@@ -351,7 +361,7 @@ drills
 └── analysisRevision / blunderCp / mateMaxPlies / generatorRev  -- 生成来歴
 
 drillAttempts
-├── drillId: FK → drills.id (CASCADE)
+├── drillId / ownerId: FK → drills(id, ownerId) (CASCADE)  -- ownerId は出題の写し（解答した人ではない）
 ├── move / verdict: 'correct' | 'close' | 'wrong' / lossCp（**null 可**）
 └── excluded: boolean                     -- 「自明だった」（[13](./13-drills.md) §7）
 ```

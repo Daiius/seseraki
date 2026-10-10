@@ -40,13 +40,13 @@ async function main() {
       // 行ロックを取る）。取得順が揃うのでデッドロックしない。
       const n = await db.transaction(async (tx) => {
         const [row] = await tx
-          .select({ usiMoves: kifus.usiMoves })
+          .select({ usiMoves: kifus.usiMoves, ownerId: kifus.ownerId })
           .from(kifus)
           .where(eq(kifus.id, id))
           .for('update');
         // ロック取得までに消えた / usiMoves が null になった場合は空に置換して終わり
         if (!row) return 0;
-        return replaceTactics(tx, id, row.usiMoves);
+        return replaceTactics(tx, { id, ownerId: row.ownerId }, row.usiMoves);
       });
       if (n > 0) changed++;
       labels += n;

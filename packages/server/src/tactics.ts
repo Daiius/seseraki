@@ -20,6 +20,16 @@ import { kifuTactics } from './db/schema';
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
+ * 子の表（`kifuTactics` / `kifuPositions` / `kifuAnalyses` など）に書くときの棋譜の指し方。
+ * **棋譜の ID と所有者を組で渡す**（prd/14 §4.1）。子の表の `ownerId` は親の写しで、
+ * 食い違えば複合 FK が書き込みを落とす。
+ */
+export interface KifuRef {
+  id: number;
+  ownerId: string;
+}
+
+/**
  * 1 局ぶんの戦型ラベルを**原子的に置き換える**（prd/03 §2.1）。
  *
  * 旧ラベルの DELETE と新ラベルの INSERT を**同じトランザクションで**行う。
@@ -33,10 +43,10 @@ export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  */
 export async function replaceTactics(
   tx: Tx,
-  kifuId: number,
+  kifu: KifuRef,
   usiMoves: string[] | null,
 ): Promise<number> {
-  await tx.delete(kifuTactics).where(eq(kifuTactics.kifuId, kifuId));
+  await tx.delete(kifuTactics).where(eq(kifuTactics.kifuId, kifu.id));
   if (!usiMoves || usiMoves.length === 0) return 0;
 
   const labels = detectTactics(usiMoves);
@@ -44,7 +54,8 @@ export async function replaceTactics(
 
   await tx.insert(kifuTactics).values(
     labels.map((l) => ({
-      kifuId,
+      kifuId: kifu.id,
+      ownerId: kifu.ownerId,
       side: l.side,
       label: l.label,
       turn: l.turn,

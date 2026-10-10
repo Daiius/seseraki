@@ -20,7 +20,7 @@ import {
   type Side,
 } from 'shared';
 import { kifuPositions } from './db/schema';
-import type { Tx } from './tactics';
+import type { KifuRef, Tx } from './tactics';
 
 /** 局面キー文字列 → 索引に入れる 8 バイト（drizzle の bytea 列は Buffer を受ける） */
 export function hashOf(key: string): Buffer {
@@ -120,10 +120,10 @@ const CHUNK = 500;
  */
 export async function replacePositions(
   tx: Tx,
-  kifuId: number,
+  kifu: KifuRef,
   usiMoves: string[] | null,
 ): Promise<number> {
-  await tx.delete(kifuPositions).where(eq(kifuPositions.kifuId, kifuId));
+  await tx.delete(kifuPositions).where(eq(kifuPositions.kifuId, kifu.id));
   if (!usiMoves || usiMoves.length === 0) return 0;
 
   // buildPositions は [初期局面, 1手目後, ...] を返す。
@@ -132,7 +132,8 @@ export async function replacePositions(
   const rows = states.map((state, i) => {
     const key = positionKey(state);
     return {
-      kifuId,
+      kifuId: kifu.id,
+      ownerId: kifu.ownerId,
       moveNumber: i,
       move: i === 0 ? null : usiMoves[i - 1],
       // 🔒 文字列は保存しない（prd/14 §6.3）。検索はハッシュで引いて盤・持ち駒で照合する

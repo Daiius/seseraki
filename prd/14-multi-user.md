@@ -83,8 +83,22 @@
 
 - 🔒 **アプリ層と RLS の両方でスコープする**（§9。Postgres へ移ってから行う。[15](./15-postgres.md) §11）。
   - アプリ層: 取り違えを構造で防ぐため、**所有者を引数に取るクエリ関数からしか `kifus` 系のテーブルに触れない**形にし、テストで検査する
-  - RLS: アプリ層の書き忘れを DB が止める多層防御。ロールの設計・リクエストごとに「誰として動くか」を DB に伝える仕組み・
-    全員ぶんを扱う経路（worker の報告・一括処理）の迂回ロールを所有者スコープの PR で決める
+  - RLS: アプリ層の書き忘れを DB が止める多層防御。仕組みは下の「RLS の形」（2026-10-11 決定）
+- 🔒 **RLS の形**（2026-10-11 決定。経緯は [決定ログ](./_grilling/decisions.md)「所有者スコープの RLS の形」）:
+  - **「誰として動くか」はリクエストごとのトランザクションで DB に伝える。** ログインしたリクエストごとにトランザクションを開き、
+    最初に `set_config('app.user_id', <ユーザー ID>, true)`（`true` = そのトランザクションの間だけ。`SET LOCAL` と同じ）を流す。
+    `kifus` 系に触るクエリ関数は**その tx を引数で受け取る**（モジュールの `db` を直接使わない）。プールの接続を使い回しても
+    設定が次のリクエストに漏れない
+  - **全員ぶんを扱う経路は BYPASSRLS の別ロール＋別プール。** worker の報告（API_KEY）・一括処理のエントリ（`rebuild-positions.js` など）は
+    ユーザーとして動かないので、RLS を迂回するロールで繋ぐ。常駐 server のリクエスト用のプールとは分け、取り違えを接続の単位で防ぐ。
+    🔒 **ロールは migration で作らない**——BYPASSRLS の付与には superuser が要り、管理ロール（`migrate.js`）には無い。
+    dev は `scripts/postgres-init/` が、本番は手順で作る（PR 2。[15](./15-postgres.md) §2・§11）
+  - 🔒 **`app.user_id` が未設定なら常に 0 件（fail-closed）。** `current_setting('app.user_id', true)` は未設定で NULL を返し、
+    `owner_id = NULL` は真にならない。⚠ 一度 `set_config` した接続では、トランザクションが終わると NULL ではなく**空文字**に戻る
+    （Postgres の独自設定の性質）が、`owner_id` に空文字は無いのでやはり 0 件。tx を通し忘れたクエリは「全件見える」ではなく
+    「何も見えない」で表に出る
+  - **子の表すべてに `owner_id` と複合 FK を持たせ、ポリシーは全表で一様に `owner_id = current_setting('app.user_id', true)`**（§4.1）。
+    子の表から親（`kifus`）を引いて判定する形にしない
 - 他人の棋譜・問題は **404**（存在を明かさない。[13](./13-drills.md) の既存の扱いと同じ）
 - 現状で `ownerId` を見ているのは**出題系だけ**。一覧・詳細・統計・削除・再解析・局面検索・worker 系を直す。
   加えて、棋譜を直接引かないので見落としやすい次の 2 つも直す（2026-10-11 のコード調査で判明）:
@@ -96,9 +110,12 @@
 
 ### 4.1 スキーマ変更
 
+> ✅ **実装済み**（2026-10-11・所有者スコープの PR 1。[15](./15-postgres.md) §11）。クエリの読み取り側のスコープと RLS は PR 2。
+
 | 対象 | 変更 | 理由 |
 |---|---|---|
-| `kifu_positions` | `ownerId` を非正規化して持ち、索引を `(ownerId, 局面ハッシュ)` 等にする（§6.3） | join 後に絞るのでは、初期局面で**全ユーザーぶん読んでから捨てる** |
+| `kifus` 配下の子の表すべて（`kifu_analyses` / `kifu_tactics` / `kifu_positions` / `video_kifu_sources` / `drills` / `drill_attempts`） | `ownerId`（NOT NULL）を親の写しとして持ち、`kifus` に `UNIQUE(id, ownerId)`・子は複合 FK `(kifuId, ownerId) → kifus(id, ownerId)`（`drill_attempts` は `drills(id, ownerId)` へ）。ON DELETE / ON UPDATE CASCADE（[03](./03-data-model.md) §1） | RLS のポリシーを全表で一様な `owner_id = …` にするため。親と食い違わないことは**複合 FK で DB が保証する**（アプリが写し損ねると書き込みが落ちる） |
+| `kifu_positions` | 索引を `(ownerId, 局面ハッシュ)`・`(ownerId, moveNumber)` にする（§6.3） | join 後に絞るのでは、初期局面で**全ユーザーぶん読んでから捨てる** |
 | `user_aliases.name` | UNIQUE を **`(userId, name)`** に（[11](./11-users.md) §2.1 の `name` 単独 UNIQUE を改める） | 主体側の判定は所有者の名前候補と所有者の棋譜だけで完結する（`refreshSubjectSide`）。全体 UNIQUE は**他人による名前の先取り**を生むだけ。名前の所有の証明は作らない |
 
 🔒 **動画解析の取り込みは所有者専用のまま**（`POST /video-analysis/kifus` は API_KEY 認証で、手元の走査ツールから送る）。
@@ -222,7 +239,7 @@
 
 ### 6.3 局面検索の索引
 
-> ✅ **実装済み**（ハッシュ化と照合。`ownerId` の非正規化と `/positions/similar` の所有者専用化は、一般公開を決めたときに行う）。
+> ✅ **実装済み**（ハッシュ化と照合・`ownerId` の非正規化と所有者を先頭にした索引。`/positions/similar` の所有者専用化と検索の所有者での絞り込みは所有者スコープの PR 2）。
 > 列と検索の形は [10](./10-video-analysis.md) §3.2・§5.1、ハッシュ関数は `shared` の `position-hash.ts`。
 
 - 🔒 **局面の文字列ではなく 8 バイトのハッシュで索引し、引いた後に盤のバイト列で照合する。** 誤ヒットは起きない

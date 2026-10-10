@@ -9,7 +9,7 @@ import {
   minMateBySide,
   type StoredAnalysis,
 } from './kifu-analysis-detail.js';
-import type { Tx } from './tactics.js';
+import type { KifuRef, Tx } from './tactics.js';
 
 /**
  * 1 棋譜ぶんを読む。行が無ければ（未解析）空。
@@ -38,7 +38,7 @@ export async function loadAnalysis(
  */
 export async function saveAnalysis(
   tx: Tx,
-  kifuId: number,
+  kifu: KifuRef,
   analysis: StoredAnalysis,
 ): Promise<void> {
   const mate = minMateBySide(analysis.detail);
@@ -51,6 +51,6 @@ export async function saveAnalysis(
   };
   await tx
     .insert(kifuAnalyses)
-    .values({ kifuId, ...values })
+    .values({ kifuId: kifu.id, ownerId: kifu.ownerId, ...values })
     .onConflictDoUpdate({ target: kifuAnalyses.kifuId, set: values });
 }

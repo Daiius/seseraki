@@ -40,3 +40,9 @@ export const client = new pg.Pool(connectionConfig('server'));
 export const db = createDb(client);
 
 export type Db = typeof db;
+
+/**
+ * `db.transaction` のコールバックが受け取るトランザクションハンドル。
+ * 手で型を書くと drizzle の更新で静かにずれるので、**db から導出する**。
+ */
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];

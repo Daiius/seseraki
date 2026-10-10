@@ -7,8 +7,8 @@
  * 認証は Google ログイン（prd/07）。所有者スコープ（prd/14 §4）が入るまでは所有者ゲート
  * （prd/07 §5.1）で**所有者（`OWNER_USER_ID`）以外のセッションを通さない**。
  */
-import { and, eq, isNull } from 'drizzle-orm';
-import { db } from './db';
+import { and, count, eq, isNull } from 'drizzle-orm';
+import type { Db } from './db/index.js';
 import { kifus, userAliases, users, videoKifuSources } from './db/schema';
 import type { Tx } from './tactics';
 import { drillConfigFromEnv, syncDrills } from './drills';
@@ -94,7 +94,7 @@ export function subjectSideFromVideo(bottomIsSente: boolean): SubjectSide {
 }
 
 /** 所有者の名前候補を読む */
-export async function aliasesOf(tx: Tx | typeof db, userId: string): Promise<Alias[]> {
+export async function aliasesOf(tx: Tx | Db, userId: string): Promise<Alias[]> {
   return tx
     .select({
       name: userAliases.name,
@@ -151,7 +151,7 @@ export function computeSubjectSide(
 
 /** 導出に要る値を 1 局ぶん読む */
 export async function subjectInputOf(
-  tx: Tx | typeof db,
+  tx: Tx | Db,
   kifuId: number,
 ): Promise<SubjectRow | null> {
   const [row] = await tx
@@ -239,12 +239,12 @@ export async function rebuildSubjectSides(tx: Tx, userId: string): Promise<numbe
  * 🔒 **黙って落とさない**（prd/10 §3.3）。結果が少ない理由が「似た局面が無い」のか
  * 「主体が決まらない棋譜を外した」のか、画面から区別できるようにする。
  */
-export async function countUnresolvedSubjects(userId: string): Promise<number> {
-  const rows = await db
-    .select({ id: kifus.id })
+export async function countUnresolvedSubjects(tx: Tx | Db, userId: string): Promise<number> {
+  const [row] = await tx
+    .select({ n: count() })
     .from(kifus)
     .where(and(eq(kifus.ownerId, userId), isNull(kifus.subjectSide)));
-  return rows.length;
+  return row?.n ?? 0;
 }
 
 /** 名前候補を追加する。⚠ 呼び出し側が主体側の再導出まで同じトランザクションで行う */
@@ -262,25 +262,42 @@ export async function addAlias(
   });
 }
 
-/** 期間だけを更新する（衝突に気づいたときに調整する。prd/11 §5.2） */
+/**
+ * 期間だけを更新する（衝突に気づいたときに調整する。prd/11 §5.2）。
+ *
+ * 🔒 **本人の名前候補だけ**（prd/14 §4）。ID だけで引くと他人の名前候補を書き換えられ、
+ * 相手の棋譜の主体側が NULL に落ちて成績から棋譜が黙って消える。
+ *
+ * @returns 更新したか（本人のものでなければ false。呼び出し側は 404 にする）
+ */
 export async function updateAliasPeriod(
   tx: Tx,
+  userId: string,
   aliasId: number,
   period: { validFrom: string | null; validTo: string | null },
-): Promise<void> {
-  await tx
+): Promise<boolean> {
+  const updated = await tx
     .update(userAliases)
     .set({ validFrom: period.validFrom, validTo: period.validTo })
-    .where(eq(userAliases.id, aliasId));
+    .where(and(eq(userAliases.id, aliasId), eq(userAliases.userId, userId)))
+    .returning({ id: userAliases.id });
+  return updated.length > 0;
 }
 
 /**
  * 名前候補を消す。
  * ⚠ **旧名を消してはいけない**（prd/11 §2.2）——その名前で指した過去の棋譜が
  * 「自分の対局」でなくなり、成績から静かに落ちる。**呼び出し側で警告すること。**
+ * 🔒 **本人の名前候補だけ**（prd/14 §4。{@link updateAliasPeriod} と同じ理由）。
+ *
+ * @returns 消したか（本人のものでなければ false。呼び出し側は 404 にする）
  */
-export async function removeAlias(tx: Tx, aliasId: number): Promise<void> {
-  await tx.delete(userAliases).where(eq(userAliases.id, aliasId));
+export async function removeAlias(tx: Tx, userId: string, aliasId: number): Promise<boolean> {
+  const removed = await tx
+    .delete(userAliases)
+    .where(and(eq(userAliases.id, aliasId), eq(userAliases.userId, userId)))
+    .returning({ id: userAliases.id });
+  return removed.length > 0;
 }
 
 /** 期間の重なりを持つ別名があるか（同じ名前は UNIQUE で弾かれるので、これは参考情報） */

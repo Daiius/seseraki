@@ -8,7 +8,7 @@
  * エンジンを呼ばない（prd/13 §5.1）。
  */
 import { positionSfen, type BoardState, type Side } from 'shared';
-import { db } from './db';
+import type { Tx } from './db/index.js';
 import { isMateAfter, scoreMove, type DrillAnswerKey, type DrillScoring } from './drill-answer';
 import { rememberLine } from './drill-lines';
 import { recordAttempt } from './drill-query';
@@ -40,6 +40,10 @@ export type EngineAnswer =
   | { status: 'busy' };
 
 export interface ResolveInput {
+  /** ユーザーとして開いたトランザクション（解答の記録・棋譜解析の再利用に使う。`user-tx.ts`） */
+  tx: Tx;
+  /** 要求者（🔒 セッションから取った ID）。評価ジョブの持ち主・再利用する棋譜の所有者 */
+  userId: string;
   drill: DrillAnswerKey & { id: number; ownerId: string };
   /** ユーザーが手を指す**直前**の局面 */
   state: BoardState;
@@ -50,17 +54,18 @@ export interface ResolveInput {
 }
 
 export async function resolveWithEngine(input: ResolveInput): Promise<EngineAnswer> {
-  const { drill, state, move, line, scoring } = input;
+  const { tx, userId, drill, state, move, line, scoring } = input;
   const sfen = positionSfen(state);
 
   // 🔴 **エンジンに積む前に、既存の棋譜解析から引く**（prd/12 §2.6）。出題は棋譜の局面
   // そのものなので、**実戦で指した手を答えたときはここで即答できる**
-  const reused = await lookupKifuEvaluation({ sfen, move });
+  // 🔴 再利用は**要求者の棋譜からだけ**（prd/14 §4）
+  const reused = await lookupKifuEvaluation(tx, userId, { sfen, move });
   const outcome =
     reused ??
     (() => {
       try {
-        const started = startEvaluation({ sfen, move });
+        const started = startEvaluation({ sfen, move }, userId);
         return started.state === 'settled' ? started.outcome : started;
       } catch (err) {
         if (err instanceof EvaluationQueueFullError) return { state: 'busy' as const };
@@ -83,12 +88,12 @@ export async function resolveWithEngine(input: ResolveInput): Promise<EngineAnsw
     // **その手で詰んでいる**ことを意味するので、詰みと同じ扱いで正解にする（prd/13 §5.2）
     const solved = isMateAfter(state, move, state.sideToMove);
     const scored = { verdict: solved ? ('correct' as const) : ('wrong' as const), lossCp: null };
-    await recordAttempt(db, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...scored });
+    await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...scored });
     return { status: 'done', ...scored };
   }
 
   const scored = scoreMove(drill, best, scoring);
-  await recordAttempt(db, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...scored });
+  await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...scored });
   return {
     status: 'done',
     ...scored,
@@ -102,7 +107,7 @@ async function mateAnswer(
   _sfen: string,
   best: EvalCandidate | undefined,
 ): Promise<EngineAnswer> {
-  const { drill, state, move, line } = input;
+  const { tx, drill, state, move, line } = input;
   const attacker: Side = state.sideToMove;
 
   // 🔴 **「候補なし」を「詰みません」と読まない**（prd/13 §5.2・レビュー `OCL-7ABC2973`）。
@@ -115,7 +120,7 @@ async function mateAnswer(
     const verdict = solved ? ('correct' as const) : ('wrong' as const);
     // 🔒 **不正解も記録する。** 記録を落とすと `wrongBefore`・解答済み件数・復習順の
     // どれにも表れない（レビュー `OCL-2652C1DA`）
-    await recordAttempt(db, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict, lossCp: null });
+    await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict, lossCp: null });
     return { status: 'done', verdict, lossCp: null };
   }
 
@@ -125,13 +130,13 @@ async function mateAnswer(
     const reply = best.pv[1] ?? null;
     if (reply === null) {
       // 読み筋がこの手で終わっている ＝ 詰み上がり。**`done` で返す**（上と同じ理由）
-      await recordAttempt(db, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict: 'correct', lossCp: null });
+      await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict: 'correct', lossCp: null });
       return { status: 'done', verdict: 'correct', lossCp: null };
     }
     rememberLine(drill.id, [...line, ...best.pv.slice(1)]);
     return { status: 'continue', reply };
   }
   // 詰まない。咎め筋（受けの手）を見せる
-  await recordAttempt(db, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict: 'wrong', lossCp: null });
+  await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, verdict: 'wrong', lossCp: null });
   return { status: 'done', verdict: 'wrong', lossCp: null, refutation: best.pv.slice(1) };
 }

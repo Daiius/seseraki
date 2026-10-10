@@ -23,7 +23,13 @@
  *
  * 🔒 **棋譜の解析状態（`analysisError` / `analysisRevision`）には一切触れない。**
  * interactive なジョブには対応する棋譜も世代も無い（prd/12 §2.5）。
+ *
+ * 🔒 **ジョブと結果は要求者のもの**（prd/14 §4.2）。ジョブは要求したユーザーの ID を持ち、
+ * 結果の取得は要求者だけ（他人には「知らない」= 404 と同じ `unknown` を返す）。ID は推測できない値
+ * （`randomUUID`）にする。⚠ **局面評価のキャッシュ（`cache`）は共有してよい**——局面だけで決まり、
+ * 個人の情報を含まない。同じ局面の同時要求が 1 本のジョブに相乗りしたときは、相乗りした全員が要求者になる。
  */
+import { randomUUID } from 'node:crypto';
 
 /** 候補手 1 本。項目は解析結果の候補手（`kifu-analysis-detail.ts` の `CandidateMove`）に合わせるが、**DB には保存しない** */
 export interface EvalCandidate {
@@ -119,6 +125,8 @@ const RESULT_LIMIT = 200;
 interface Job extends EvalRequest {
   id: string;
   key: string;
+  /** 結果を取りに来てよいユーザー（要求者。相乗りした人も含む） */
+  requesters: Set<string>;
   status: 'queued' | 'running';
   timer: ReturnType<typeof setTimeout> | null;
 }
@@ -130,9 +138,10 @@ const byKey = new Map<string, Job>();
 /** キー → 成功した評価。失敗は載せない（次の要求で再試行できるように） */
 const cache = new Map<string, Extract<EvalOutcome, { status: 'done' }>>();
 /** jobId → 完了した結果（失敗も含む）。{@link RESULT_TTL_MS} で消える */
-const results = new Map<string, { outcome: EvalOutcome; expiresAt: number }>();
-
-let sequence = 0;
+const results = new Map<
+  string,
+  { outcome: EvalOutcome; expiresAt: number; requesters: Set<string> }
+>();
 
 /**
  * キャッシュとジョブのキー（prd/12 §2.4）。
@@ -156,17 +165,17 @@ function settleJob(job: Job, outcome: EvalOutcome): void {
       cache.delete(oldest.value);
     }
   }
-  retainResult(job.id, outcome);
+  retainResult(job.id, outcome, job.requesters);
 }
 
 /** 完了した結果を jobId で引けるように置く（TTL と件数で掃除する） */
-function retainResult(id: string, outcome: EvalOutcome): void {
+function retainResult(id: string, outcome: EvalOutcome, requesters: Set<string>): void {
   const now = Date.now();
   for (const [key, entry] of results) {
     if (entry.expiresAt > now) break; // 挿入順 = 期限順（TTL は一定）
     results.delete(key);
   }
-  results.set(id, { outcome, expiresAt: now + RESULT_TTL_MS });
+  results.set(id, { outcome, expiresAt: now + RESULT_TTL_MS, requesters });
   while (results.size > RESULT_LIMIT) {
     const oldest = results.keys().next();
     if (oldest.done) break;
@@ -207,22 +216,30 @@ export type EvalPoll =
  *
  * - キャッシュにあれば即座に結果を返す（**棋譜をなぞっている間は 1 往復のまま**）
  * - 同じキーのジョブが既にあれば**相乗りする**（同じ局面を二重にエンジンへ流さない）。
- *   このとき返るのは**既存ジョブの id** なので、要求を投げ直しても仕事は増えない
+ *   このとき返るのは**既存ジョブの id** なので、要求を投げ直しても仕事は増えない。
+ *   相乗りした人も要求者に加わる（結果を取りに来られる）
+ *
+ * @param requesterId 要求したユーザー（🔒 セッションから取った ID）。結果の取得をこの人に限る
  */
-export function startEvaluation(request: EvalRequest): EvalStart {
+export function startEvaluation(request: EvalRequest, requesterId: string): EvalStart {
   const key = evaluationKey(request);
 
   const cached = cache.get(key);
   if (cached) return { state: 'settled', outcome: cached };
 
   const existing = byKey.get(key);
-  if (existing) return { state: 'pending', jobId: existing.id };
+  if (existing) {
+    existing.requesters.add(requesterId);
+    return { state: 'pending', jobId: existing.id };
+  }
 
   if (jobs.size >= MAX_JOBS) throw new EvaluationQueueFullError();
 
   const job: Job = {
-    id: `eval-${++sequence}`,
+    // 🔒 推測できない ID（連番だと他人のジョブの ID を当てられる。prd/14 §4.2）
+    id: randomUUID(),
     key,
+    requesters: new Set([requesterId]),
     sfen: request.sfen,
     move: request.move,
     status: 'queued',
@@ -244,15 +261,18 @@ export function startEvaluation(request: EvalRequest): EvalStart {
  *
  * 🔒 **`unknown` と `pending` を混ぜない。** 取り違えると、クライアントは永久に
  * 出ない結果を待ち続ける（または、出ている結果を捨てて最初からやり直す）。
+ * 🔒 **要求者でなければ `unknown`**（存在を明かさない。prd/14 §4.2）。
  */
-export function getEvaluationResult(id: string): EvalPoll {
+export function getEvaluationResult(id: string, requesterId: string): EvalPoll {
   const done = results.get(id);
   if (done) {
+    if (!done.requesters.has(requesterId)) return { state: 'unknown' };
     if (done.expiresAt > Date.now()) return { state: 'settled', outcome: done.outcome };
     results.delete(id);
     return { state: 'unknown' };
   }
-  return jobs.has(id) ? { state: 'pending' } : { state: 'unknown' };
+  const job = jobs.get(id);
+  return job?.requesters.has(requesterId) ? { state: 'pending' } : { state: 'unknown' };
 }
 
 /**
@@ -322,5 +342,4 @@ export function resetEvaluations(): void {
   byKey.clear();
   cache.clear();
   results.clear();
-  sequence = 0;
 }

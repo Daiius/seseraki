@@ -1,79 +1,28 @@
+/**
+ * API のルート（Hono RPC。`AppType` が web / worker の型の出所）。
+ *
+ * 🔒 **ログインの経路（`sessionRequired`）は、ユーザーとして開いたトランザクション（`c.get('tx')`）だけを使う**
+ * （prd/14 §4「RLS の形」）。グローバルの `db` を import しない（`db-import-boundary.test.ts` が検査する）。
+ * 棋譜系の表に触れる処理は、所有者（`c.get('userId')`。🔒 セッションから取る）と tx を引数に取るクエリ関数
+ * （`kifu-queries.ts` / `position-queries.ts` / `drill-query.ts` / `users.ts` など）に置く。
+ * 他人の棋譜・問題・名前候補・評価ジョブは 404（存在を明かさない）。
+ *
+ * 全員ぶんを扱う経路（worker の報告・動画解析の取り込み。API_KEY）は `worker-routes.ts`。
+ */
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { alias } from 'drizzle-orm/pg-core';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gte,
-  inArray,
-  isNotNull,
-  isNull,
-  lte,
-  ne,
-  not,
-  notExists,
-  or,
-  sql,
-} from 'drizzle-orm';
-import { db } from './db/index.js';
+import { asc, eq } from 'drizzle-orm';
 import { isUniqueViolation } from './db/errors.js';
-import {
-  kifus,
-  kifuAnalyses,
-  kifuTactics,
-  videoKifuSources,
-  kifuPositions,
-  users,
-  userAliases,
-} from './db/schema.js';
-import {
-  kifuListOrderBy,
-  kifuListQuerySchema,
-  kifuListWhere,
-  playedOrCreatedAt,
-} from './kifu-list-query.js';
-import {
-  statsTacticsJoinOn,
-  statsTacticsOrderBy,
-  statsTacticsPeriodWhere,
-  statsTacticsQuerySchema,
-  statsTacticsRowsSelect,
-  statsTacticsSummarySelect,
-  statsTacticsWhere,
-} from './stats-tactics-query.js';
-import { apiKeyRequired } from './middlewares.js';
-import {
-  formatDiff,
-  importVideoKifu,
-  videoKifuInputSchema,
-} from './video-analysis.js';
-import { auth, sessionRequired, settings as authSettings } from './auth.js';
+import { users, userAliases } from './db/schema.js';
+import { kifuListQuerySchema } from './kifu-list-query.js';
+import { statsTacticsQuerySchema } from './stats-tactics-query.js';
+import { auth, sessionRequired, sessionUser, settings as authSettings } from './auth.js';
 import { devLoginRoutes } from './dev-login.js';
+import { getProgressFor, clearProgress } from './analysis-progress.js';
 import {
-  clearProgress,
-  getClearToken,
-  getProgress,
-  setProgress,
-} from './analysis-progress.js';
-import {
-  ANALYSIS_STATE_RESET,
-  isAnalysisComplete,
-  isChunkAcceptable,
-  isChunkInRange,
-  isStageComplete,
-  nextKifuProfile,
-} from './analysis-submit.js';
-import { decodeAll, hasContiguousRanks, mergeChunk } from './kifu-analysis-detail.js';
-import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
-import {
-  claimEvaluationJob,
-  completeEvaluationJob,
   EvaluationQueueFullError,
   getEvaluationResult,
   startEvaluation,
@@ -81,28 +30,14 @@ import {
 import { lookupKifuEvaluation } from './position-kifu-reuse.js';
 import {
   applyMove,
-  attributionOf,
   buildPositions,
-  createInitialState,
   parseSfen,
-  positionDiff,
   positionSfen,
   validateMoveOnPosition,
   validatePositionForEngine,
   type BoardState,
-  type PositionDiff,
-  type TacticLabel,
 } from 'shared';
-import { replaceTactics } from './tactics';
-import {
-  hashOf,
-  parsePositionKey,
-  replacePositions,
-  samePosition,
-  sameSideLayout,
-  sfenOfRow,
-} from './positions';
-import { drillConfigFromEnv, syncDrills } from './drills';
+import { parsePositionKey } from './positions.js';
 import {
   DEFAULT_SCORING,
   isPrefixOf,
@@ -110,12 +45,11 @@ import {
   mateStep,
   scoreFromCandidates,
   type DrillScoring,
-} from './drill-answer';
-import { forgetLine, recallLine } from './drill-lines';
-import { resolveWithEngine, type ResolveInput } from './drill-engine';
+} from './drill-answer.js';
+import { forgetLine, recallLine } from './drill-lines.js';
+import { resolveWithEngine, type ResolveInput } from './drill-engine.js';
 import {
   drillCounts,
-  drillSfen,
   listDrillAttempts,
   listDrills,
   loadDrill,
@@ -123,40 +57,35 @@ import {
   pickNextDrill,
   recordAttempt,
   unexcludeDrill,
-} from './drill-query';
-import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query';
+} from './drill-query.js';
+import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query.js';
 import {
   addAlias,
   countUnresolvedSubjects,
+  OWNER_USER_ID,
   rebuildSubjectSides,
-  refreshSubjectSide,
   removeAlias,
   updateAliasPeriod,
-} from './users';
+} from './users.js';
 import {
-  detectLegacyUtcTimezone,
-  parseKif,
-  type KifTimezone,
-} from './kif/parser.js';
+  createKifu,
+  deleteKifu,
+  getKifuDetail,
+  listKifus,
+  listVideoKifus,
+  reanalyzeKifu,
+  statsTactics,
+  updateKifuMemo,
+} from './kifu-queries.js';
+import {
+  findPositionGames,
+  findSimilarPositions,
+  findSubjectGames,
+  INITIAL_SFEN,
+} from './position-queries.js';
+import { workerRoutes } from './worker-routes.js';
 
-/** 投入時の TZ 指定。'auto' は自動判定＝現状 JST 固定（[parseKif]） */
-export type SourceTzChoice = 'auto' | KifTimezone;
-
-/** 局面検索の起点。`pos` 未指定ならここから辿る（prd/10 §6.2） */
-const INITIAL_SFEN = positionSfen(createInitialState());
-
-/**
- * 1 つの局面について返す到達行の上限。
- * ⚠ **切ったことは `total` / `hasMore` で必ず知らせる**（prd/10 §6.2）。初期局面は
- * 全棋譜が通るので、棋譜が増えれば必ずここに当たる。
- */
-const POSITION_GAMES_LIMIT = 200;
-
-/**
- * 近い局面の探索で読み出す行の上限。手数帯で絞った後の行数なので、
- * 数百局なら普通は数千行で収まる。⚠ **当たったら `truncated` で知らせる**。
- */
-const SIMILAR_SCAN_LIMIT = 20000;
+export type { SourceTzChoice } from './kifu-queries.js';
 
 /** `YYYY-MM-DD` の日付。名前候補の有効期間（prd/11 §5） */
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -213,66 +142,6 @@ if (authSettings.isDev) {
   app.route('/dev', devLoginRoutes(auth));
 }
 
-interface KifIngestion {
-  /** パースエラー・非平手・空のときは null（壊れた部分列を worker に渡さない） */
-  usiMoves: string[] | null;
-  meta: {
-    sente: string | null;
-    gote: string | null;
-    senteDan: number | null;
-    goteDan: number | null;
-    result: string | null;
-    playedAt: Date | null;
-    sourceTz: string;
-  };
-}
-
-/**
- * KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用）。
- * @param tz 開始日時の解釈 TZ。'auto'（既定）は JST。
- *   投入時にユーザーが選んだ値、再解析では保存済み sourceTz を渡す。
- */
-function convertKif(kifText: string, tz: SourceTzChoice = 'auto'): KifIngestion {
-  const parsed = parseKif(kifText, tz === 'auto' ? undefined : tz);
-  const isHeihei = !parsed.header.handicap || parsed.header.handicap === '平手';
-  const usiMoves =
-    parsed.errors.length === 0 && isHeihei && parsed.moves.length > 0
-      ? parsed.moves.map((m) => m.usi)
-      : null;
-  return {
-    usiMoves,
-    meta: {
-      sente: parsed.header.sente,
-      gote: parsed.header.gote,
-      senteDan: parsed.header.senteDan,
-      goteDan: parsed.header.goteDan,
-      result: parsed.header.result,
-      playedAt: parsed.header.playedAt,
-      sourceTz: parsed.header.sourceTz,
-    },
-  };
-}
-
-/** タイトル未指定時に対局メタから自動生成する */
-function autoTitle(meta: KifIngestion['meta']): string {
-  if (meta.sente || meta.gote) {
-    return `${meta.sente ?? '?'} vs ${meta.gote ?? '?'}`;
-  }
-  if (meta.playedAt) {
-    return meta.playedAt.toISOString().slice(0, 10);
-  }
-  return '無題';
-}
-
-const candidateMoveSchema = z.object({
-  rank: z.number(),
-  move: z.string(),
-  scoreType: z.enum(['cp', 'mate']),
-  scoreValue: z.number(),
-  pv: z.array(z.string()).optional(),
-  depth: z.number(),
-});
-
 /** 出題局面（`moveNumber` 手を指す直前の局面）。指し手列が足りなければ null */
 function drillPosition(usiMoves: string[] | null, moveNumber: number): BoardState | null {
   if (!usiMoves || moveNumber > usiMoves.length) return null;
@@ -308,95 +177,15 @@ async function answerWithEngine(input: ResolveInput, reveal: Record<string, unkn
       return { body: { ...answer, ...reveal }, status: 200 as const };
   }
 }
-
 const route = app
   // --- 認証 ---
   // ログイン中の自分（prd/07 §5.3）。未ログインは 401・所有者以外は 403（所有者ゲート。§5.1）。
-  // web のルートガードがこれを叩く。⚠ /auth/* の外に置く（/auth/* は Better Auth が丸ごと受ける）
-  .get('/me', sessionRequired, (c) => c.json({ userId: c.get('userId') }))
-  // --- Web 向け（セッション認証） ---
-  .get(
-    '/kifus',
-    sessionRequired,
-    zv('query', kifuListQuerySchema),
-    async (c) => {
-      const query = c.req.valid('query');
-      const { page } = query;
-      const limit = 50;
-      const offset = (page - 1) * limit;
-
-      const where = kifuListWhere(query);
-
-      const [{ total }] = await db
-        .select({ total: count() })
-        .from(kifus)
-        .where(where);
-
-      const rows = await db
-        .select({
-          id: kifus.id,
-          title: kifus.title,
-          sente: kifus.sente,
-          gote: kifus.gote,
-          senteDan: kifus.senteDan,
-          goteDan: kifus.goteDan,
-          result: kifus.result,
-          playedAt: kifus.playedAt,
-          createdAt: kifus.createdAt,
-          analyzedAt: kifus.analysisCompletedAt,
-          // 完了した段階のうち最も高いもの（prd/05 §1.1d）。一覧は「解析済み」に quick を
-          // 含めたうえで、簡易のみの棋譜に「簡易」の印を添えるためにこれを見る
-          analysisProfile: kifus.analysisProfile,
-          analysisError: kifus.analysisError,
-          hasMemo: sql<boolean>`${kifus.memo} IS NOT NULL`,
-          // 主体の手番（prd/11 §4）。web はこれで自分/相手を出せる——
-          // 名前候補から毎回判定しなくてよくなる（移行は prd/11 §6 の段階 B）
-          subjectSide: kifus.subjectSide,
-        })
-        .from(kifus)
-        .where(where)
-        .orderBy(...kifuListOrderBy(query))
-        .limit(limit)
-        .offset(offset);
-
-      // 戦型ラベルはページ内の棋譜ぶんをまとめて引く（N+1 を避ける）。
-      // **保存値をそのまま返す**（経由形も含む）。表示の抑制と関係ラベルの導出は
-      // shared の純関数で web 側が行う（prd/03 §2.1.2）
-      const ids = rows.map((r) => r.id);
-      const tacticRows =
-        ids.length === 0
-          ? []
-          : await db
-              .select({
-                kifuId: kifuTactics.kifuId,
-                side: kifuTactics.side,
-                label: kifuTactics.label,
-                turn: kifuTactics.turn,
-              })
-              .from(kifuTactics)
-              .where(inArray(kifuTactics.kifuId, ids));
-      const tacticsByKifu = new Map<number, TacticLabel[]>();
-      for (const { kifuId, ...t } of tacticRows) {
-        const list = tacticsByKifu.get(kifuId);
-        if (list) list.push(t);
-        else tacticsByKifu.set(kifuId, [t]);
-      }
-
-      return c.json({
-        kifus: rows.map(({ analyzedAt, analysisError, hasMemo, ...r }) => ({
-          ...r,
-          analyzed: analyzedAt !== null,
-          failed: analysisError !== null,
-          hasMemo: Boolean(hasMemo),
-          tactics: tacticsByKifu.get(r.id) ?? [],
-        })),
-        pagination: {
-          page,
-          totalPages: Math.ceil(total / limit),
-          total,
-        },
-      });
-    },
+  // web のルートガードがこれを叩く。⚠ /auth/* の外に置く（/auth/* は Better Auth が丸ごと受ける）。
+  // 表に触れないのでトランザクションを開かない（`sessionUser`）
+  .get('/me', sessionUser, (c) => c.json({ userId: c.get('userId') }))
+  // --- Web 向け（セッション認証 + ユーザーとして開いたトランザクション） ---
+  .get('/kifus', sessionRequired, zv('query', kifuListQuerySchema), async (c) =>
+    c.json(await listKifus(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
   .get(
     '/kifus/:id',
@@ -404,72 +193,14 @@ const route = app
     zv('param', z.object({ id: z.coerce.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const [kifu] = await db.select().from(kifus).where(eq(kifus.id, id));
+      const kifu = await getKifuDetail(c.get('tx'), c.get('userId'), id);
       if (!kifu) return c.json({ error: 'not found' }, 404);
-
-      // 解析は 1 行を展開して、局面ごとの形で返す（prd/16 §5。web が読む形は局面と候補手の並び）。
-      // 局面ごとの段階・来歴・時刻はその局面を書いた submit（run）の値
-      const stored = await loadAnalysis(db, id);
-      const analysesWithCandidates = decodeAll(stored.detail, stored.runs).map(
-        ({ moveNumber, run, candidates }) => ({
-          moveNumber,
-          profile: run.profile,
-          engineName: run.engineName,
-          movetimeMs: run.movetimeMs,
-          targetDepth: run.targetDepth,
-          multiPv: run.multiPv,
-          // 以前の局面ごとの `createdAt` と同じ意味（その局面を書いた submit の時刻）
-          createdAt: run.at,
-          candidates,
-        }),
-      );
-
-      // 戦型ラベルは**保存値をそのまま返す**（経由形も含む）。表示の抑制と関係ラベルの導出は
-      // shared の純関数で web 側が行う（prd/03 §2.1.2）
-      const tactics = await db
-        .select({
-          side: kifuTactics.side,
-          label: kifuTactics.label,
-          turn: kifuTactics.turn,
-        })
-        .from(kifuTactics)
-        .where(eq(kifuTactics.kifuId, id));
-
-      return c.json({ ...kifu, analyses: analysesWithCandidates, tactics });
+      return c.json(kifu);
     },
   )
-  // 戦型別成績（prd/09）。**生ラベルで数える平坦な行**を返し、階層（`IMPLIES`）は web で組む。
-  // 局数の合計は総局数を超える（各行は独立した問いへの答えで分割ではない。prd/09 §2.1）
-  .get(
-    '/stats/tactics',
-    sessionRequired,
-    zv('query', statsTacticsQuerySchema),
-    async (c) => {
-      const query = c.req.valid('query');
-
-      // 総局数と除外の内訳は期間内の全局が母集団（ラベルとは無関係）。
-      // 集計対象が空でも 1 行返るので `[summary]` で受けられる
-      const [summary] = await db
-        .select(statsTacticsSummarySelect(query))
-        .from(kifus)
-        .where(statsTacticsPeriodWhere(query));
-
-      const rows = await db
-        .select(statsTacticsRowsSelect(query))
-        .from(kifus)
-        .innerJoin(kifuTactics, statsTacticsJoinOn(query))
-        .where(statsTacticsWhere(query))
-        .groupBy(kifuTactics.label)
-        .orderBy(...statsTacticsOrderBy());
-
-      const { totalGames, ...excluded } = summary;
-      return c.json({
-        totalGames,
-        excluded,
-        // 帰属は判定側（shared）が単一の出所。web が帰属バッジ・分母の説明に使う（prd/09 §2.2）
-        rows: rows.map((r) => ({ ...r, attribution: attributionOf(r.label) })),
-      });
-    },
+  // 戦型別成績（prd/09）。**生ラベルで数える平坦な行**を返し、階層（`IMPLIES`）は web で組む
+  .get('/stats/tactics', sessionRequired, zv('query', statsTacticsQuerySchema), async (c) =>
+    c.json(await statsTactics(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
   .post(
     '/kifus',
@@ -484,37 +215,8 @@ const route = app
       }),
     ),
     async (c) => {
-      const { title, kifText, sourceTz } = c.req.valid('json');
-      const { usiMoves, meta } = convertKif(kifText, sourceTz ?? 'auto');
-      const finalTitle = title?.trim() || autoTitle(meta);
-      // **usiMoves の書き込みと戦型の判定は同一トランザクション**（prd/01 §6.4）。
-      // 別にすると、戦型判定で落ちたときに「指し手はあるがラベルが無い」棋譜が残り、
-      // 一覧の絞り込みから黙って外れる
-      const id = await db.transaction(async (tx) => {
-        const ownerId = c.get('userId');
-        const [result] = await tx
-          .insert(kifus)
-          .values({
-            title: finalTitle,
-            kifText,
-            usiMoves,
-            sente: meta.sente,
-            gote: meta.gote,
-            senteDan: meta.senteDan,
-            goteDan: meta.goteDan,
-            result: meta.result,
-            playedAt: meta.playedAt,
-            sourceTz: meta.sourceTz,
-            ownerId,
-          })
-          .returning({ id: kifus.id });
-        const kifu = { id: result.id, ownerId };
-        await replaceTactics(tx, kifu, usiMoves);
-        await replacePositions(tx, kifu, usiMoves);
-        // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
-        await refreshSubjectSide(tx, result.id);
-        return result.id;
-      });
+      // 🔒 所有者はセッションのユーザー（本文から取らない）
+      const id = await createKifu(c.get('tx'), c.get('userId'), c.req.valid('json'));
       return c.json({ id }, 201);
     },
   )
@@ -523,12 +225,13 @@ const route = app
   // 手動の再導出に頼ると、変えた直後に画面の数字が古いまま残り、
   // しかも間違っていることが画面から分からない。
   .get('/users/me', sessionRequired, async (c) => {
+    const tx = c.get('tx');
     const userId = c.get('userId');
-    const [user] = await db
+    const [user] = await tx
       .select({ id: users.id, displayName: users.displayName })
       .from(users)
       .where(eq(users.id, userId));
-    const aliases = await db
+    const aliases = await tx
       .select({
         id: userAliases.id,
         name: userAliases.name,
@@ -542,7 +245,7 @@ const route = app
       ...user,
       aliases,
       /** 主体側が決まらない棋譜の数（名前候補の設定を促すために出す） */
-      unresolvedSubjects: await countUnresolvedSubjects(userId),
+      unresolvedSubjects: await countUnresolvedSubjects(tx, userId),
     });
   })
   .patch(
@@ -551,8 +254,11 @@ const route = app
     zv('json', z.object({ displayName: z.string().trim().min(1).max(100) })),
     async (c) => {
       const { displayName } = c.req.valid('json');
-      const userId = c.get('userId');
-      await db.update(users).set({ displayName }).where(eq(users.id, userId));
+      await c
+        .get('tx')
+        .update(users)
+        .set({ displayName })
+        .where(eq(users.id, c.get('userId')));
       return c.json({ ok: true } as const);
     },
   )
@@ -564,13 +270,15 @@ const route = app
       const { name, validFrom, validTo } = c.req.valid('json');
       const userId = c.get('userId');
       try {
-        const updated = await db.transaction(async (tx) => {
+        // ⚠ savepoint（入れ子のトランザクション）で囲む。一意制約違反でリクエストの tx 全体が
+        // 中断状態にならないように（409 を返した後にコミットできるように）
+        const updated = await c.get('tx').transaction(async (tx) => {
           await addAlias(tx, userId, name, { validFrom, validTo });
           return rebuildSubjectSides(tx, userId);
         });
         return c.json({ ok: true, rederived: updated } as const, 201);
       } catch (e) {
-        // `name` は UNIQUE（大文字小文字を区別する。prd/11 §2.1）
+        // `(userId, name)` は UNIQUE（大文字小文字を区別する。prd/11 §2.1・prd/14 §4.1）
         if (isUniqueViolation(e)) {
           return c.json({ error: 'この名前は既に登録されている' } as const, 409);
         }
@@ -586,11 +294,13 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { validFrom, validTo } = c.req.valid('json');
+      const tx = c.get('tx');
       const userId = c.get('userId');
-      const updated = await db.transaction(async (tx) => {
-        await updateAliasPeriod(tx, id, { validFrom, validTo });
-        return rebuildSubjectSides(tx, userId);
-      });
+      // 🔒 本人の名前候補だけ（prd/14 §4）。他人のもの・無いものは 404
+      if (!(await updateAliasPeriod(tx, userId, id, { validFrom, validTo }))) {
+        return c.json({ error: 'not found' } as const, 404);
+      }
+      const updated = await rebuildSubjectSides(tx, userId);
       return c.json({ ok: true, rederived: updated } as const);
     },
   )
@@ -602,11 +312,13 @@ const route = app
       // ⚠ **旧名を消すと、その名前で指した過去の棋譜が「自分の対局」でなくなる**
       // （prd/11 §2.2）。画面側で警告してから呼ぶ
       const { id } = c.req.valid('param');
+      const tx = c.get('tx');
       const userId = c.get('userId');
-      const updated = await db.transaction(async (tx) => {
-        await removeAlias(tx, id);
-        return rebuildSubjectSides(tx, userId);
-      });
+      // 🔒 本人の名前候補だけ（prd/14 §4）。他人のもの・無いものは 404
+      if (!(await removeAlias(tx, userId, id))) {
+        return c.json({ error: 'not found' } as const, 404);
+      }
+      const updated = await rebuildSubjectSides(tx, userId);
       return c.json({ ok: true, rederived: updated } as const);
     },
   )
@@ -614,6 +326,7 @@ const route = app
   // 🔒 **ここには `ownGamesOnly` を掛けない。** 一覧・集計は「自分の成績」なので動画解析を
   // 外すが、局面検索は**自分の対局と動画解析を横断して探す**のが目的そのもの（prd/10 §5.3）。
   // 結果には `source` を添えて、どちらの出所かを画面で区別できるようにする。
+  // 🔒 **所有者の棋譜だけを探す**（prd/14 §4・§6.3）
   .get(
     '/positions',
     sessionRequired,
@@ -624,97 +337,13 @@ const route = app
       // 読めない SFEN はどの棋譜も通っていないので 404（文字列で引いていた頃と同じ）
       const key = parsePositionKey(c.req.valid('query').pos ?? INITIAL_SFEN);
       if (!key) return c.json({ error: 'not found' } as const, 404);
-      const sfen = key.sfen;
-
-      // この局面を通った棋譜。**同じ棋譜が同じ局面を 2 度通ることもある**（千日手模様）ので
-      // kifuId では畳まず、到達した手数ごとに 1 行返す。
-      //
-      // 🔒 **打ち切ったことを黙らない。** 初期局面は全棋譜が通るので、棋譜が増えれば
-      // 必ず上限に当たる。件数を返さないと、UI の「N 件」が実数と食い違ううえ、
-      // 「この局面を通った棋譜はこれで全部」と誤読される。
-      // ⚠ **総数は `count(*) over ()` で同じクエリから取る。** count を別クエリにすると
-      // 2 つのスナップショットになり、その間に取り込み・削除・再構築が走ると
-      // 「total 199 なのに games 200 件」のような食い違いが出る（0 件なら 404 を返すので、
-      // 総数が取れない場合を扱う必要はない）
-      const rows = await db
-        .select({
-          kifuId: kifuPositions.kifuId,
-          moveNumber: kifuPositions.moveNumber,
-          board: kifuPositions.board,
-          hands: kifuPositions.hands,
-          sideToMove: kifuPositions.sideToMove,
-          title: kifus.title,
-          source: kifus.source,
-          playedAt: kifus.playedAt,
-          total: sql<number>`count(*) over ()`.mapWith(Number),
-        })
-        .from(kifuPositions)
-        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
-        // ⭐ 照合（盤・持ち駒・手番）まで SQL に入れているので、上限と総数は照合後の行にかかる
-        .where(samePosition(kifuPositions, key))
-        // ⚠ **並びは打ち切りとセットで意味を持つ。** 序盤の局面はどの棋譜も通るので
-        // 必ず上限に当たる。そこで残るのが「古い棋譜」では使い物にならないので、
-        // 到達が早い順 → **新しい対局順**に並べる（基準は一覧と同じ playedOrCreatedAt）
-        .orderBy(
-          asc(kifuPositions.moveNumber),
-          desc(playedOrCreatedAt),
-          desc(kifuPositions.kifuId),
-        )
-        .limit(POSITION_GAMES_LIMIT);
-      if (rows.length === 0) return c.json({ error: 'not found' } as const, 404);
-
-      // 枝の列挙。**次の局面が持つ `move` で集計する**——局面キーだけでは
-      // 「同じ局面から指された別の手」を区別できない（prd/10 §5.3）。
-      // 次の局面の SFEN は保存していないので、盤・持ち駒・手番で束ねて後から組み立てる
-      // （この局面は照合済みなので、同じ手なら次の局面も同じ。束ね方は文字列の頃と一致する）
-      const next = alias(kifuPositions, 'next');
-      const branchRows = await db
-        .select({
-          move: next.move,
-          board: next.board,
-          hands: next.hands,
-          sideToMove: next.sideToMove,
-          games: sql<number>`count(*)`.mapWith(Number),
-        })
-        .from(kifuPositions)
-        .innerJoin(
-          next,
-          and(
-            eq(next.kifuId, kifuPositions.kifuId),
-            eq(next.moveNumber, sql`${kifuPositions.moveNumber} + 1`),
-          ),
-        )
-        .where(samePosition(kifuPositions, key))
-        .groupBy(next.move, next.board, next.hands, next.sideToMove)
-        .orderBy(desc(sql`count(*)`), asc(next.move));
-      const branches = branchRows.map(({ board, hands, sideToMove, ...b }) => ({
-        move: b.move,
-        sfen: sfenOfRow({ board, hands, sideToMove }),
-        games: b.games,
-      }));
-
-      // 盤・持ち駒はこの局面のものなのでどの行でも同じ。web が盤を描くのに使う
-      const [first] = rows;
-      const total = Number(first.total);
-      return c.json({
-        sfen,
-        isInitial: sfen === INITIAL_SFEN,
-        board: [...first.board],
-        hands: [...first.hands],
-        sideToMove: first.sideToMove,
-        games: rows.map(
-          ({ board: _b, hands: _h, sideToMove: _s, total: _t, ...g }) => g,
-        ),
-        /** 到達の総数。`games` は上限で切れていることがある（`hasMore`） */
-        total,
-        hasMore: total > rows.length,
-        branches: branches.map((b) => ({ ...b, games: Number(b.games) })),
-      });
+      const found = await findPositionGames(c.get('tx'), c.get('userId'), key);
+      if (!found) return c.json({ error: 'not found' } as const, 404);
+      return c.json(found);
     },
   )
   // 主体側モード（prd/10 §3.3）。**自分の駒の配置**が同じ棋譜を、先後をまたいで探す。
-  // 🔒 `subjectSide` が NULL の棋譜は除外し、**その件数を返す**——黙って落とすと、
-  // 結果が少ない理由が「似た形が無い」のか「主体が決まらない棋譜を外した」のか分からない
+  // 読み出す行数に上限がある（当たったら `truncated`。prd/14 §6.3）
   .get(
     '/positions/subject',
     sessionRequired,
@@ -728,99 +357,16 @@ const route = app
     ),
     async (c) => {
       const { pos, side } = c.req.valid('query');
-
-      // 基準局面。⚠ `goteSfen` は 180 度回して書くので、先後をまたいでそのまま比べられる
-      // （prd/10 §3.2）。片側の配置は保存していないので、読み直した局面から組み立てる
       const key = parsePositionKey(pos);
       if (!key) return c.json({ error: 'not found' } as const, 404);
-      const [base] = await db
-        .select({ one: sql`1` })
-        .from(kifuPositions)
-        .where(samePosition(kifuPositions, key))
-        .limit(1);
-      if (!base) return c.json({ error: 'not found' } as const, 404);
-      const baseSideSfen = side === 'sente' ? key.senteSfen : key.goteSfen;
-      // 🔴 引く・比べるのは**小文字にした**配置（先後をまたいで一致させる。`sideLayoutKey`）。
-      // 応答の `sideSfen` は従来どおり `sideSfen` の文字列を返す
-      const baseLayoutKey = baseSideSfen.toLowerCase();
-      const baseSideHash = hashOf(baseLayoutKey);
-
-      // 🔒 **ハッシュで引いて、片側の配置を組み立て直して照合する**（prd/14 §6.3）。
-      // 片側の配置（相手の駒を空にし、後手なら 180 度回したもの）は SQL で素直に比べられない
-      // ので、照合はアプリ側で行う。⚠ **そのため SQL では上限をかけない**——照合で落とす行を
-      // `limit` の後に捨てると件数がずれる。一致した行を全部読み、照合してから数えて切る。
-      // 読む行数は「この配置に一致する局面の数」（+ 衝突ぶん）で、文字列で引いていた頃に
-      // `count(*) over ()` が数えていた行と同じ
-      const matched = await db
-        .select({
-          kifuId: kifuPositions.kifuId,
-          moveNumber: kifuPositions.moveNumber,
-          board: kifuPositions.board,
-          hands: kifuPositions.hands,
-          sideToMove: kifuPositions.sideToMove,
-          title: kifus.title,
-          source: kifus.source,
-          subjectSide: kifus.subjectSide,
-          playedAt: kifus.playedAt,
-        })
-        .from(kifuPositions)
-        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
-        .where(
-          and(
-            isNotNull(kifus.subjectSide),
-            or(
-              and(
-                eq(kifus.subjectSide, 'sente'),
-                eq(kifuPositions.senteSfenHash, baseSideHash),
-              ),
-              and(
-                eq(kifus.subjectSide, 'gote'),
-                eq(kifuPositions.goteSfenHash, baseSideHash),
-              ),
-            ),
-          ),
-        )
-        .orderBy(
-          asc(kifuPositions.moveNumber),
-          desc(playedOrCreatedAt),
-          desc(kifuPositions.kifuId),
-        );
-      const verified = matched.filter(
-        (row) =>
-          row.subjectSide !== null && sameSideLayout(row, row.subjectSide, baseLayoutKey),
-      );
-      const rows = verified
-        .slice(0, POSITION_GAMES_LIMIT)
-        .map(({ board, hands, sideToMove, ...g }) => ({
-          kifuId: g.kifuId,
-          moveNumber: g.moveNumber,
-          sfen: sfenOfRow({ board, hands, sideToMove }),
-          title: g.title,
-          source: g.source,
-          subjectSide: g.subjectSide,
-          playedAt: g.playedAt,
-        }));
-
-      // 主体側が決まらない棋譜の数（この検索の対象外になっているもの）
-      const [{ unresolved }] = await db
-        .select({ unresolved: count() })
-        .from(kifus)
-        .where(isNull(kifus.subjectSide));
-
-      const total = verified.length;
-      return c.json({
-        base: { sfen: key.sfen, side, sideSfen: baseSideSfen },
-        games: rows,
-        total,
-        hasMore: total > rows.length,
-        /** 🔒 主体側が決まらないので除外した棋譜の数（prd/10 §3.3） */
-        unresolvedSubjects: unresolved,
-      });
+      const found = await findSubjectGames(c.get('tx'), c.get('userId'), key, side);
+      if (!found) return c.json({ error: 'not found' } as const, 404);
+      return c.json(found);
     },
   )
   // 近い局面（prd/10 §5.2）。完全一致は `/positions` が返すので、ここは**別枠**。
-  // 距離の計算はアプリ側に置く——「近い」が何を意味するかは使ってみないと決まらないので、
-  // 定義を SQL に焼き込まない
+  // 🔒 **所有者（サイトの持ち主）だけ**（prd/14 §6.3）。手数帯の全局面を読み出して盤を比べる処理で
+  // server のメインスレッドを使い、局数が多いほど打ち切りで結果も不正確になる
   .get(
     '/positions/similar',
     sessionRequired,
@@ -834,99 +380,16 @@ const route = app
       }),
     ),
     async (c) => {
+      const userId = c.get('userId');
+      if (userId !== OWNER_USER_ID) {
+        return c.json({ error: 'この機能は使えません' } as const, 403);
+      }
       const { pos, window, limit } = c.req.valid('query');
       const key = parsePositionKey(pos);
       if (!key) return c.json({ error: 'not found' } as const, 404);
-
-      // 基準の局面。**最初に到達した手数**を手数帯の中心にする
-      // （同じ局面でも棋譜ごとに到達手数が違う）
-      const [base] = await db
-        .select({
-          moveNumber: kifuPositions.moveNumber,
-          board: kifuPositions.board,
-          hands: kifuPositions.hands,
-        })
-        .from(kifuPositions)
-        .where(samePosition(kifuPositions, key))
-        .orderBy(asc(kifuPositions.moveNumber))
-        .limit(1);
-      if (!base) return c.json({ error: 'not found' } as const, 404);
-
-      // この局面を既に通った棋譜を外すためのエイリアス（下の NOT EXISTS で使う）
-      const exact = alias(kifuPositions, 'exact');
-      const from = Math.max(0, base.moveNumber - window);
-      const to = base.moveNumber + window;
-
-      // 粗く絞ってから全件に距離を掛ける。手数帯で絞れば 1 棋譜あたり高々
-      // `2 * window + 1` 行なので、数百局でも数千行に収まる
-      const candidates = await db
-        .select({
-          kifuId: kifuPositions.kifuId,
-          moveNumber: kifuPositions.moveNumber,
-          board: kifuPositions.board,
-          hands: kifuPositions.hands,
-          sideToMove: kifuPositions.sideToMove,
-          title: kifus.title,
-          source: kifus.source,
-          playedAt: kifus.playedAt,
-        })
-        .from(kifuPositions)
-        .innerJoin(kifus, eq(kifus.id, kifuPositions.kifuId))
-        .where(
-          and(
-            gte(kifuPositions.moveNumber, from),
-            lte(kifuPositions.moveNumber, to),
-            // 完全一致は `/positions` の側で出ているので、ここでは除く
-            // ⚠ ハッシュの不一致（`ne(sfenHash, …)`）で代えない。衝突した別の局面まで落ちる
-            not(samePosition(kifuPositions, key)),
-            // 🔒 **この局面を通った棋譜そのものを外す。** 外さないと、序盤では
-            // 「1 手前の局面（距離 2）」が全棋譜ぶん並ぶだけになる——どの棋譜も
-            // 通っているので**当たり前の結果しか出ない**。近さが意味を持つのは
-            // 「完全一致はしないが似ている棋譜」で、それを探すのがこの機能の目的
-            notExists(
-              db
-                .select({ one: sql`1` })
-                .from(exact)
-                .where(
-                  and(eq(exact.kifuId, kifuPositions.kifuId), samePosition(exact, key)),
-                ),
-            ),
-          ),
-        )
-        .limit(SIMILAR_SCAN_LIMIT);
-
-      // ⭐ **棋譜ごとに最も近い 1 局面へ畳む。** 隣接する局面は高々 2 マスしか違わないので、
-      // 畳まないと**同じ棋譜の連続する局面が上位を埋め尽くす**（似た棋譜が 1 局しか出ない）
-      const best = new Map<number, (typeof candidates)[number] & { diff: PositionDiff }>();
-      for (const row of candidates) {
-        const diff = positionDiff(base, row);
-        const current = best.get(row.kifuId);
-        if (!current || diff.total < current.diff.total) {
-          best.set(row.kifuId, { ...row, diff });
-        }
-      }
-
-      const similar = [...best.values()]
-        .sort((a, b) => a.diff.total - b.diff.total || a.moveNumber - b.moveNumber)
-        .slice(0, limit)
-        .map(({ board, hands, diff, ...r }) => ({
-          // 文字列は保存していないので、返す行（上位 `limit` 件）だけ盤から組み立てる
-          sfen: sfenOfRow({ board, hands, sideToMove: r.sideToMove }),
-          ...r,
-          distance: diff.total,
-          boardDiff: diff.board,
-          handsDiff: diff.hands,
-        }));
-
-      return c.json({
-        base: { sfen: key.sfen, moveNumber: base.moveNumber, from, to },
-        similar,
-        /** 距離を掛けた行数と、読み出しを打ち切ったか（🔒 黙って切らない） */
-        scanned: candidates.length,
-        truncated: candidates.length === SIMILAR_SCAN_LIMIT,
-        /** 畳む前に見つかった棋譜の数（`similar` は limit で切れている） */
-        matchedGames: best.size,
-      });
+      const found = await findSimilarPositions(c.get('tx'), userId, key, { window, limit });
+      if (!found) return c.json({ error: 'not found' } as const, 404);
+      return c.json(found);
     },
   )
   // 検討局面の評価（prd/12 §2）。**受け付けて即座に返す**（決定 2026-08-29）。
@@ -934,6 +397,7 @@ const route = app
   // `status: 'pending'` と `jobId` を返す。要求側は GET /positions/evaluate/:jobId で取りに来る。
   // 🔴 long-poll をやめたのは、前段にタイムアウトを持つ層があり、その期限が server の期限より
   //    ずっと短いため。**成功しているのに失敗して見える**事故が本番で起きた（prd/12 §2.4）。
+  //    ⚠ リクエストの tx の中で待たないことにもなる（接続を握ったまま待たない。prd/14 §4）
   // `move` を付けると名指し評価（`go searchmoves`。その手のスコアと咎め筋）になる。
   // 🔒 評価は**手番側から見た値**（検討モードでは自分。prd/12 §2.3）。
   .post(
@@ -977,20 +441,26 @@ const route = app
       // キャッシュ・ジョブのキーは**読み直して書き戻した SFEN**にする。
       // 手数の有無や書き方の揺れで同じ局面が別扱いになるのを防ぐ（prd/12 §2.4）
       const normalized = positionSfen(state);
+      const userId = c.get('userId');
 
       // 🔴 **エンジンにジョブを積む前に、既存の棋譜解析から引く**（prd/12 §2.6）。
       // 検討の起点は閲覧中の棋譜の局面なので、数手動かすまでは解析済みの局面を
       // なぞっているだけのことが多い。⚠ 局面の検証（上）はこの判定より**前**のまま
       // 保つ——エンジンに渡さないとしても、壊れた局面を受け付けてよいことにはならない。
-      // ⚠ **`source` で出所を隠さない**（解析時のエンジン設定は今と違いうる）
-      const reused = await lookupKifuEvaluation({ sfen: normalized, move });
+      // ⚠ **`source` で出所を隠さない**（解析時のエンジン設定は今と違いうる）。
+      // 🔴 **要求者の棋譜からだけ引く**（prd/14 §4。利用者をまたいで解析結果を流さない）
+      const reused = await lookupKifuEvaluation(c.get('tx'), userId, {
+        sfen: normalized,
+        move,
+      });
       if (reused) {
         // `reused` が `source: 'kifu'` を持つ（出所の付与は position-kifu-reuse.ts の責務）
         return c.json({ sfen: normalized, move, ...reused });
       }
 
       try {
-        const started = startEvaluation({ sfen: normalized, move });
+        // 🔒 ジョブは要求者のもの（結果の取得は要求者だけ。prd/14 §4.2）
+        const started = startEvaluation({ sfen: normalized, move }, userId);
         if (started.state === 'settled') {
           return c.json({
             sfen: normalized,
@@ -1021,13 +491,15 @@ const route = app
   // 評価結果の取得（prd/12 §2.4）。**ポーリングされる前提の軽い口**。
   // 🔒 `pending`（まだ出ていない）と 404（もう取れない）を混ぜない。404 は TTL 切れか
   //    server の再起動で、要求側は**同じ body を投げ直す**（キャッシュにあれば即答）。
+  // 🔒 **要求者でなければ 404**（存在を明かさない。prd/14 §4.2）。メモリだけを見るので
+  //    DB のトランザクションは開かない（`sessionUser`）
   .get(
     '/positions/evaluate/:jobId',
-    sessionRequired,
+    sessionUser,
     zv('param', z.object({ jobId: z.string().min(1).max(64) })),
     (c) => {
       const { jobId } = c.req.valid('param');
-      const poll = getEvaluationResult(jobId);
+      const poll = getEvaluationResult(jobId, c.get('userId'));
       if (poll.state === 'unknown') {
         return c.json({ error: '評価ジョブが見つかりません' } as const, 404);
       }
@@ -1047,12 +519,12 @@ const route = app
     zv('query', z.object({ kind: z.enum(['mate', 'best']).optional() })),
     async (c) => {
       const { kind } = c.req.valid('query');
-      const drill = await pickNextDrill(c.get('userId'), kind);
+      const drill = await pickNextDrill(c.get('tx'), c.get('userId'), kind);
       return c.json({ drill });
     },
   )
   .get('/drills/counts', sessionRequired, async (c) =>
-    c.json(await drillCounts(c.get('userId'))),
+    c.json(await drillCounts(c.get('tx'), c.get('userId'))),
   )
   // 解答履歴の一覧（prd/13 §7.3）。⚠ **`/drills/:id` より先に登録する**——
   // `:id` を先に置くと固定の口を飲み込む
@@ -1060,11 +532,11 @@ const route = app
     '/drills/attempts',
     sessionRequired,
     zv('query', drillAttemptQuerySchema),
-    async (c) => c.json(await listDrillAttempts(c.get('userId'), c.req.valid('query'))),
+    async (c) => c.json(await listDrillAttempts(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
   // 問題の一覧（prd/13 §7.2）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
   .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>
-    c.json(await listDrills(c.get('userId'), c.req.valid('query'))),
+    c.json(await listDrills(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
   // 一覧から名指しで開いた 1 問（prd/13 §5.4）。返す形は `/drills/next` と同じ
   .get(
@@ -1073,7 +545,7 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrillQuestion(id, c.get('userId'));
+      const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), id);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       return c.json({ drill });
     },
@@ -1085,9 +557,9 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrill(id, c.get('userId'));
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
-      await unexcludeDrill(id);
+      await unexcludeDrill(c.get('tx'), c.get('userId'), id);
       return c.json({ ok: true } as const);
     },
   )
@@ -1099,9 +571,9 @@ const route = app
     zv('param', z.object({ id: z.coerce.number().int().positive() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const drill = await loadDrill(id, c.get('userId'));
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
-      await recordAttempt(db, {
+      await recordAttempt(c.get('tx'), {
         drillId: id,
         ownerId: drill.ownerId,
         move: null,
@@ -1133,7 +605,7 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { line, correctMargin, closeMargin } = c.req.valid('json');
-      const drill = await loadDrill(id, c.get('userId'));
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       const scoring: DrillScoring = {
         correctMargin: correctMargin ?? DEFAULT_SCORING.correctMargin,
@@ -1191,7 +663,7 @@ const route = app
             // 途中。受方の応手だけ返す（**残りの手順は渡さない**）
             return c.json({ status: 'continue' as const, reply: step.reply });
           }
-          await recordAttempt(db, {
+          await recordAttempt(c.get('tx'), {
             drillId: id,
             ownerId: drill.ownerId,
             move,
@@ -1209,112 +681,24 @@ const route = app
           });
         }
         // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）
-        const deviated = await answerWithEngine({ drill, state, move, line, scoring }, reveal);
+        const deviated = await answerWithEngine({ tx: c.get('tx'), userId: c.get('userId'), drill, state, move, line, scoring }, reveal);
         return c.json(deviated.body, deviated.status);
       }
 
       // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
       const scored = scoreFromCandidates(drill, move, scoring);
       if (scored) {
-        await recordAttempt(db, { drillId: id, ownerId: drill.ownerId, move, line, ...scored });
+        await recordAttempt(c.get('tx'), { drillId: id, ownerId: drill.ownerId, move, line, ...scored });
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
-      const resolved = await answerWithEngine({ drill, state, move, line, scoring }, reveal);
+      const resolved = await answerWithEngine({ tx: c.get('tx'), userId: c.get('userId'), drill, state, move, line, scoring }, reveal);
       return c.json(resolved.body, resolved.status);
     },
   )
   // --- 動画解析（prd/10）---
-  // 一覧は動画ごと → 局ごと。件数が少ない（1 動画 2〜3 局）ためページングは持たない
-  .get('/video-analysis/kifus', sessionRequired, async (c) => {
-    const rows = await db
-      .select({
-        kifuId: kifus.id,
-        title: kifus.title,
-        videoId: videoKifuSources.videoId,
-        gameIndex: videoKifuSources.gameIndex,
-        startedAtSec: videoKifuSources.startedAtSec,
-        endedAtSec: videoKifuSources.endedAtSec,
-        bottomIsSente: videoKifuSources.bottomIsSente,
-        extractorRev: videoKifuSources.extractorRev,
-        updatedAt: videoKifuSources.updatedAt,
-        // 一覧に要るのは手数だけ。指し手列そのものを載せると 1 局 100 手ぶんが無駄に流れる
-        moveCount: sql<number>`jsonb_array_length(${kifus.usiMoves})`,
-        analyzedAt: kifus.analysisCompletedAt,
-        analysisError: kifus.analysisError,
-      })
-      .from(videoKifuSources)
-      .innerJoin(kifus, eq(kifus.id, videoKifuSources.kifuId))
-      .orderBy(
-        asc(videoKifuSources.videoId),
-        asc(videoKifuSources.gameIndex),
-      );
-
-    // 戦型ラベルはまとめて引く（一覧と同じ形。N+1 を避ける）
-    const ids = rows.map((r) => r.kifuId);
-    const tacticRows =
-      ids.length === 0
-        ? []
-        : await db
-            .select({
-              kifuId: kifuTactics.kifuId,
-              side: kifuTactics.side,
-              label: kifuTactics.label,
-              turn: kifuTactics.turn,
-            })
-            .from(kifuTactics)
-            .where(inArray(kifuTactics.kifuId, ids));
-    const tacticsByKifu = new Map<number, TacticLabel[]>();
-    for (const { kifuId, ...t } of tacticRows) {
-      const list = tacticsByKifu.get(kifuId);
-      if (list) list.push(t);
-      else tacticsByKifu.set(kifuId, [t]);
-    }
-
-    return c.json({
-      games: rows.map(({ analyzedAt, analysisError, ...r }) => ({
-        ...r,
-        moveCount: Number(r.moveCount ?? 0),
-        analyzed: analyzedAt !== null,
-        failed: analysisError !== null,
-        analysisError,
-        tactics: tacticsByKifu.get(r.kifuId) ?? [],
-      })),
-    });
-  })
-  // 復元側（実験パッケージ）から叩く。session ではなく API_KEY で通す：
-  // 呼ぶのはブラウザではなく CLI で、worker と同じ立場にある
-  .post(
-    '/video-analysis/kifus',
-    apiKeyRequired,
-    zv('json', videoKifuInputSchema),
-    async (c) => {
-      const input = c.req.valid('json');
-      const tag = `${input.videoId}#${input.gameIndex}`;
-      let result: Awaited<ReturnType<typeof importVideoKifu>>;
-      try {
-        result = await importVideoKifu(input);
-      } catch (e) {
-        // 往復検証に落ちた棋譜は保存しない（prd/10 §4.2）
-        const reason = e instanceof Error ? e.message : String(e);
-        console.warn(`[VideoAnalysis] 取り込み中止 ${tag}: ${reason}`);
-        return c.json({ error: reason }, 422);
-      }
-      if (result.created) {
-        console.log(
-          `[VideoAnalysis] 新規 ${tag} kifu=${result.kifuId} ${input.usi.length} 手`,
-        );
-      } else if (result.changed) {
-        // 🔒 上書きで何が変わったかは、ここでしか残らない（prd/10 §4.3）
-        console.log(
-          `[VideoAnalysis] 上書き ${tag} kifu=${result.kifuId} 差分 ${result.diff.length} 件: ${formatDiff(result.diff)}`,
-        );
-        // 解析をやり直させたので、旧解析の進捗表示を落とす（reanalyze と同じ）
-        clearProgress(result.kifuId);
-      } else {
-        console.log(`[VideoAnalysis] 変化なし ${tag} kifu=${result.kifuId}`);
-      }
-      return c.json(result, result.created ? 201 : 200);
-    },
+  // 一覧は動画ごと → 局ごと（所有者の棋譜だけ）。取り込み（API_KEY）は `worker-routes.ts`
+  .get('/video-analysis/kifus', sessionRequired, async (c) =>
+    c.json(await listVideoKifus(c.get('tx'), c.get('userId'))),
   )
   .post(
     '/kifus/:id/reanalyze',
@@ -1322,58 +706,11 @@ const route = app
     zv('param', z.object({ id: z.coerce.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      const [kifu] = await db
-        .select({ kifText: kifus.kifText, sourceTz: kifus.sourceTz, ownerId: kifus.ownerId })
-        .from(kifus)
-        .where(eq(kifus.id, id));
-      if (!kifu) return c.json({ error: 'not found' }, 404);
-
-      // kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
-      // 解析状態をリセットして worker に拾い直させる。title/memo は温存。
-      // TZ は投入時のユーザー選択（保存済み sourceTz）を維持する。未設定（旧データ＝TZ を
-      // 記録し始める前の投入分）は、当時 UTC で書き出していたアプリの棋譜がありうるので
-      // 旧署名で補う（新規取り込みは JST 固定。[detectLegacyUtcTimezone]）。
-      const tz =
-        (kifu.sourceTz as KifTimezone | null) ??
-        detectLegacyUtcTimezone(kifu.kifText);
-      const { usiMoves, meta } = convertKif(kifu.kifText, tz);
-      await db.transaction(async (tx) => {
-        // 先に kifus を UPDATE して行ロックを取り、analysisRevision を +1（実行中の旧解析の
-        // submit/error 報告は世代不一致で弾かれる）。/worker/analyses も kifus を先ロックするため
-        // kifuAnalyses との取得順が揃いデッドロックしない。
-        await tx
-          .update(kifus)
-          .set({
-            usiMoves,
-            sente: meta.sente,
-            gote: meta.gote,
-            senteDan: meta.senteDan,
-            goteDan: meta.goteDan,
-            result: meta.result,
-            playedAt: meta.playedAt,
-            sourceTz: meta.sourceTz,
-            // 解析状態は 3 列まとめて戻す（両段階を最初から。prd/05 §1.1d）。
-            // 動画棋譜の上書き（`video-analysis.ts`）と同じ定数を使い、
-            // **リセットの取りこぼしが片方だけ起きない**ようにする
-            ...ANALYSIS_STATE_RESET,
-            analysisRevision: sql`${kifus.analysisRevision} + 1`,
-          })
-          .where(eq(kifus.id, id));
-        // 旧解析結果を削除（未解析状態で旧結果が残らないように。prd/16 §4.3）
-        await tx.delete(kifuAnalyses).where(eq(kifuAnalyses.kifuId, id));
-        // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
-        // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
-        await replaceTactics(tx, { id, ownerId: kifu.ownerId }, usiMoves);
-        // 局面索引も同じトランザクションで作り直す（派生値なので usiMoves に追随する。prd/10 §3.2）
-        await replacePositions(tx, { id, ownerId: kifu.ownerId }, usiMoves);
-        // 再変換で対局者名が変わりうるので、主体側も引き直す（prd/11 §4.2）
-        await refreshSubjectSide(tx, id);
-        // 出題は解析結果からの派生値（prd/13 §6.1）。解析を消した以上ここも空になる
-        // ——古い指し手列で作った問題を残すと、盤面と答えが噛み合わない
-        await syncDrills(tx, id, drillConfigFromEnv());
-      });
-      // 旧解析の進捗を落とす。以降に届く旧世代の報告は世代照合で弾かれる
-      clearProgress(id);
+      if (!(await reanalyzeKifu(c.get('tx'), c.get('userId'), id))) {
+        return c.json({ error: 'not found' }, 404);
+      }
+      // 旧解析の進捗を落とす（**コミットの後**。以降に届く旧世代の報告は世代照合で弾かれる）
+      c.get('afterCommit')(() => clearProgress(id));
       return c.json({ ok: true }, 201);
     },
   )
@@ -1383,17 +720,18 @@ const route = app
     zv('param', z.object({ id: z.coerce.number() })),
     async (c) => {
       const { id } = c.req.valid('param');
-      await db.delete(kifus).where(eq(kifus.id, id));
+      if (!(await deleteKifu(c.get('tx'), c.get('userId'), id))) {
+        return c.json({ error: 'not found' }, 404);
+      }
       // 消えた棋譜の「解析中」が残らないように（行が無くなるので以降の報告も弾かれる）
-      clearProgress(id);
+      c.get('afterCommit')(() => clearProgress(id));
       return c.json({ ok: true });
     },
   )
   // 解析中の棋譜の進捗（メモリ参照のみ・DB を触らない）。解析中は高々 1 件なので、
-  // 一覧も詳細もこれ 1 つを見て自分の id と一致したら表示する
-  .get('/analysis/progress', sessionRequired, (c) => {
-    return c.json(getProgress());
-  })
+  // 一覧も詳細もこれ 1 つを見て自分の id と一致したら表示する。
+  // 🔒 **解析中の棋譜の所有者にだけ見せる**（prd/14 §4.2）。他人には null
+  .get('/analysis/progress', sessionUser, (c) => c.json(getProgressFor(c.get('userId'))))
   .patch(
     '/kifus/:id',
     sessionRequired,
@@ -1402,372 +740,13 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const { memo } = c.req.valid('json');
-      const normalized = memo && memo.length > 0 ? memo : null;
-      await db.update(kifus).set({ memo: normalized }).where(eq(kifus.id, id));
+      if (!(await updateKifuMemo(c.get('tx'), c.get('userId'), id, memo))) {
+        return c.json({ error: 'not found' }, 404);
+      }
       return c.json({ ok: true });
     },
   )
-  // --- Worker 向け（API_KEY 必須） ---
-  // 解析すべき棋譜を 1 件返す（2 段階解析。prd/05 §1.1d）。
-  // 優先順位は **quick 未完 → quick 完了・full 未完**で、いずれも
-  // `coalesce(playedAt, createdAt)` 昇順の最古 1 件（失敗棋譜は除外）。
-  //
-  // worker は**自分が quick の設定を持つか**を `?quick=1` で伝える。持たない worker には
-  // quick 未完の棋譜を `full` として渡す（後方互換。`ENGINE_QUICK_*` 未設定なら 1 段階のまま）。
-  .get(
-    '/worker/kifus',
-    apiKeyRequired,
-    zv(
-      'query',
-      z.object({
-        // クエリはそのまま `?quick=1` と読める形にしておく（ヘッダだと RPC の型に出ない）
-        quick: z
-          .enum(['0', '1'])
-          .default('0')
-          .transform((v) => v === '1'),
-      }),
-    ),
-    async (c) => {
-      const { quick: quickCapable } = c.req.valid('query');
-      const selection = {
-        id: kifus.id,
-        title: kifus.title,
-        kifText: kifus.kifText,
-        usiMoves: kifus.usiMoves,
-        analysisRevision: kifus.analysisRevision,
-      };
-      const oldestFirst = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`;
-
-      // (1) quick 未完（まだ 1 度も全局面が揃っていない）
-      const [pendingQuick] = await db
-        .select(selection)
-        .from(kifus)
-        .where(
-          and(
-            isNull(kifus.analysisCompletedAt),
-            isNull(kifus.analysisError),
-            isNotNull(kifus.usiMoves),
-          ),
-        )
-        .orderBy(oldestFirst)
-        .limit(1);
-
-      // (2) quick 完了・full 未完
-      const [pendingFull] = pendingQuick
-        ? []
-        : await db
-            .select(selection)
-            .from(kifus)
-            .where(
-              and(
-                eq(kifus.analysisProfile, 'quick'),
-                isNull(kifus.analysisError),
-                isNotNull(kifus.usiMoves),
-              ),
-            )
-            .orderBy(oldestFirst)
-            .limit(1);
-
-      const kifu = pendingQuick ?? pendingFull;
-      if (!kifu) return c.json(null);
-      // quick を持たない worker には (1) も full として渡す（1 段階運用）
-      // ⚠ 型注釈は**リテラル union をそのまま書く**（`AnalysisProfile` の別名を使うと、
-      // Hono RPC の応答型が worker 側から名前で参照できず TS2742 になる）
-      const profile: 'quick' | 'full' =
-        pendingQuick && quickCapable ? 'quick' : 'full';
-
-      // 既に入っている局面数を返し、worker はその続き（moveNumber = analyzedCount）から解析する
-      // （チャンク submit の中断からの再開。prd/05 §1.1c）。チャンク submit の失敗は解析ごと中断する
-      // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる。
-      // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick は `detail` の長さ、full は `fullCount`
-      // （full は 0 から順に上書きするので、常に先頭からの連続区間になる。prd/16 §4.2）
-      const [counts] = await db
-        .select({
-          quick: sql<number>`jsonb_array_length(${kifuAnalyses.detail})`.mapWith(Number),
-          full: kifuAnalyses.fullCount,
-        })
-        .from(kifuAnalyses)
-        .where(eq(kifuAnalyses.kifuId, kifu.id));
-      const analyzedCount = counts ? counts[profile] : 0;
-      return c.json({ ...kifu, analyzedCount, profile });
-    },
-  )
-  .post(
-    '/worker/kifus/:id/error',
-    apiKeyRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
-    zv('json', z.object({ error: z.string(), revision: z.number() })),
-    async (c) => {
-      const { id } = c.req.valid('param');
-      const { error, revision } = c.req.valid('json');
-      // 同一世代 かつ **進行中だった段階が未完了** のときだけ記録（compare-and-set・単文で原子的）。
-      //
-      // 🔴 **`analysisCompletedAt IS NULL` では読まない**（改定・2026-09-05。prd/03 §2）。
-      // それは quick 完了で立つので、条件に使うと **quick 完了後の full の失敗を記録できない**
-      // （失敗した棋譜が永久に poll され続ける）。代わりに「最も高い段階＝full がまだ完了していない」
-      // ことを見る——失敗しうるのは進行中の段階だけで、full 完了済みの棋譜はそもそも poll に出ない。
-      // 帰結として **`analysisCompletedAt` と `analysisError` の排他は緩む**（quick 完了 + full 失敗で
-      // 両方が非 null）。UI は quick の結果を見せたまま「詳細解析に失敗」を示す（prd/05 §2.5）。
-      const result = await db
-        .update(kifus)
-        .set({ analysisError: error })
-        .where(
-          and(
-            eq(kifus.id, id),
-            eq(kifus.analysisRevision, revision),
-            or(
-              isNull(kifus.analysisProfile),
-              ne(kifus.analysisProfile, 'full'),
-            ),
-          ),
-        );
-      const applied = (result.rowCount ?? 0) > 0;
-      if (applied) clearProgress(id);
-      return c.json({ ok: true, applied }, 201);
-    },
-  )
-  .post(
-    '/worker/analyses/progress',
-    apiKeyRequired,
-    zv(
-      'json',
-      z.object({
-        kifuId: z.number(),
-        revision: z.number(),
-        profile: z.enum(['quick', 'full']),
-        analyzed: z.number().min(0),
-        total: z.number().min(1),
-      }),
-    ),
-    async (c) => {
-      const { kifuId, revision, profile, analyzed, total } = c.req.valid('json');
-      // 進捗は表示専用でメモリにしか残らないため、トランザクションも行ロックも張らない。
-      // ただし submit / error 報告と同じ世代照合はする（reanalyze 後に届いた旧解析の進捗を出さない）。
-      // 完了・失敗済みも弾く＝ submit と進捗報告が前後しても「終わったのに解析中」が残らない。
-      //
-      // ⚠ DB を読む `await` の間に submit / error / reanalyze / 削除が完了しうる。その場合は
-      // 古い判定のまま書き込むと「終わったのに解析中」が復活するため、読む前に clear トークンを
-      // 取り、記録時に一致を確かめる（compare-and-set。`analysis-progress.ts`）。
-      const token = getClearToken();
-      const [kifu] = await db
-        .select({
-          revision: kifus.analysisRevision,
-          completedAt: kifus.analysisCompletedAt,
-          analysisProfile: kifus.analysisProfile,
-          error: kifus.analysisError,
-        })
-        .from(kifus)
-        .where(eq(kifus.id, kifuId));
-      // 🔴 完了は**報告された段階**で読む（prd/05 §1.1b）。`analysisCompletedAt` は quick 完了で
-      // 立つため、段階と無関係に見ると **full の進捗が最初から全部拒否される**。
-      // quick 完了後の full 進捗は受理し、full 完了後の報告だけ拒否する
-      const valid =
-        kifu !== undefined &&
-        kifu.revision === revision &&
-        kifu.error === null &&
-        !isStageComplete(kifu, profile);
-      const applied =
-        valid &&
-        setProgress({ kifuId, revision, profile, analyzed, total }, token);
-      return c.json({ ok: true, applied });
-    },
-  )
-  .post(
-    '/worker/analyses',
-    apiKeyRequired,
-    zv(
-      'json',
-      z.object({
-        kifuId: z.number(),
-        revision: z.number(),
-        /** 実行した段階（`GET /api/worker/kifus` で指示されたもの。prd/05 §1.1d） */
-        profile: z.enum(['quick', 'full']),
-        // 来歴（prd/03 §3）。**記録するだけ**で、上書き・再開の条件には使わない
-        engineName: z.string().max(255).nullish(),
-        movetimeMs: z.number().int().positive().nullish(),
-        targetDepth: z.number().int().positive().nullish(),
-        multiPv: z.number().int().positive().nullish(),
-        analyses: z.array(
-          z.object({
-            // 上限（棋譜の手数）は usiMoves を読んでからでないと判定できないのでハンドラ内で見る
-            moveNumber: z.number().int().min(0),
-            candidates: z.array(candidateMoveSchema),
-          }),
-        ),
-      }),
-    ),
-    async (c) => {
-      const {
-        kifuId,
-        revision,
-        profile,
-        engineName,
-        movetimeMs,
-        targetDepth,
-        multiPv,
-        analyses,
-      } = c.req.valid('json');
-      // 🔴 候補手の rank は局面ごとに 1..n の連番であること（prd/16 §4.1）。保存形は rank を
-      // 配列の位置から戻すので、欠番のまま受けると黙って書き換わる。DB を読む前に弾く
-      if (!analyses.every((a) => hasContiguousRanks(a.candidates))) {
-        return c.json({ error: 'candidate ranks not contiguous' } as const, 400);
-      }
-      let applied = false;
-      let completed = false;
-      // 棋譜の手数を超える moveNumber が入ると、必要な局面が欠けたまま件数だけが達して
-      // 完了扱いになりうる（完了すると poll 対象から外れ、自動再開でも直らない）
-      let outOfRange = false;
-      // 局面が連続していない・受理条件の先頭を越えた（prd/16 §4.2）
-      let notContiguous = false;
-      await db.transaction(async (tx) => {
-        // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析のチャンクは破棄）。
-        // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
-        // 世代が進むのを防ぐ）。reanalyze も kifus を先にロックするためデッドロックしない。
-        const [current] = await tx
-          .select({
-            revision: kifus.analysisRevision,
-            error: kifus.analysisError,
-            completedAt: kifus.analysisCompletedAt,
-            analysisProfile: kifus.analysisProfile,
-            usiMoves: kifus.usiMoves,
-            ownerId: kifus.ownerId,
-            // 今回の run の時刻（prd/16 §3.1）。トランザクションの時刻なので 1 回の submit の中で揃う。
-            // ⚠ `sql` 断片の日時はオフセット付きの文字列で返る（列の変換を通らない）
-            now: sql<string>`now()`.mapWith((v: string) => new Date(v).toISOString()),
-          })
-          .from(kifus)
-          .where(eq(kifus.id, kifuId))
-          .for('update');
-        // 同一世代 かつ 失敗記録なし かつ **その段階が未完了** のときだけ適用。既に error が
-        // 立っていれば結果は保存しない（行ロック下で error 報告と直列化する）。
-        // 完了済みも弾く＝完了後の解析結果は不変（遅れて届いたチャンクで部分的に上書きされない）。
-        // ⚠ **完了の判定は段階ごと**（prd/05 §1.1d）——full 完了済みへのチャンクは破棄し、
-        // quick 完了済みの棋譜への full チャンクは受理する。`analysisCompletedAt` と
-        // `analysisError` の排他は**意図して緩めた**（quick 完了 + full 失敗で両方が非 null）
-        if (!isChunkAcceptable(current, revision, profile)) return;
-        // 有効範囲（0..usiMoves.length）を保証してはじめて「件数 = 揃った局面数」が成り立つ
-        // （UNIQUE(kifuId, moveNumber) が値の重複を防ぐため）。範囲外は書かずに 400 で返す
-        if (!isChunkInRange(analyses, current.usiMoves)) {
-          outOfRange = true;
-          return;
-        }
-        // チャンクは**重ねる**（DELETE しない）。前世代の全消去は `reanalyze` の DELETE が
-        // 唯一の経路になる（prd/03 §3・prd/16 §4.3）。重なり・段階の後退防止・full の連続性は
-        // `mergeChunk` が決める（prd/16 §4）
-        const stored = await loadAnalysis(tx, kifuId, { forUpdate: true });
-        const merged = mergeChunk(stored, analyses, {
-          profile,
-          engineName: engineName ?? null,
-          movetimeMs: movetimeMs ?? null,
-          targetDepth: targetDepth ?? null,
-          multiPv: multiPv ?? null,
-          at: current.now,
-        });
-        if (!merged.ok) {
-          notContiguous = true;
-          return;
-        }
-        applied = true;
-        if (merged.wrote) await saveAnalysis(tx, { id: kifuId, ownerId: current.ownerId }, merged.next);
-
-        // 完了は **server が局面数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
-        // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick = `detail` の長さ / full = `fullCount`
-        const quickDone = isAnalysisComplete(merged.next.detail.length, current.usiMoves);
-        const fullDone = isAnalysisComplete(merged.next.fullCount, current.usiMoves);
-        // 進捗表示を落とすのは**報告された段階**が終わったとき（full 進行中に quick の
-        // 完了で落とすと、まだ動いている解析の表示が消える）
-        completed = profile === 'full' ? fullDone : quickDone;
-        const profileAfter = nextKifuProfile(current.analysisProfile, {
-          quick: quickDone,
-          full: fullDone,
-        });
-        // 🔴 **full が揃った時点で出題を生成する**（prd/13 §8）。quick では作らない
-        // ——出題の答えが探索の浅さで揺れると問題として成立しない（prd/13 §2）。
-        // upsert なので、既に解いた問題の履歴は再生成でも消えない（prd/13 §6.1）
-        if (fullDone) await syncDrills(tx, kifuId, drillConfigFromEnv());
-        if (profileAfter !== current.analysisProfile) {
-          await tx
-            .update(kifus)
-            .set({
-              analysisProfile: profileAfter,
-              // `analysisCompletedAt` は「**初めて**全局面が揃った時刻」（prd/05 §1.1d）。
-              // 既に立っていれば触らない（full 完了で上書きしない）
-              ...(current.completedAt === null && (quickDone || fullDone)
-                ? { analysisCompletedAt: new Date() }
-                : {}),
-            })
-            .where(eq(kifus.id, kifuId));
-        }
-      });
-      if (outOfRange) {
-        return c.json({ error: 'moveNumber out of range' } as const, 400);
-      }
-      if (notContiguous) {
-        return c.json({ error: 'moveNumber not contiguous' } as const, 400);
-      }
-      // 完了したときだけ「解析中」を落とす。途中のチャンクで落とすと、進捗表示が次の報告まで
-      // 消えてしまう（旧世代の破棄されたチャンクでも触らない）
-      if (completed) clearProgress(kifuId);
-      return c.json({ ok: true, applied, completed }, 201);
-    },
-  )
-  // 検討局面の評価ジョブ（prd/12 §2.1）。worker は棋譜解析の**局面境界**でここを叩き、
-  // 待っているジョブがあれば先に処理する。無ければ null（inbound の口は増やさない）
-  // 🔴 応答に「**quick 待ちの棋譜がある**」印を相乗りさせる（prd/05 §1.1d / prd/12 §2.1）。
-  // worker は局面境界でここを既に叩いているので、**full の解析を中断して quick を先に処理する**
-  // 判断を**通信を増やさずに**下せる。判定は軽い EXISTS 1 本（`analysisCompletedAt` に INDEX）
-  .get('/worker/position-jobs', apiKeyRequired, async (c) => {
-    const job = claimEvaluationJob();
-    const [pending] = await db
-      .select({ id: kifus.id })
-      .from(kifus)
-      .where(
-        and(
-          isNull(kifus.analysisCompletedAt),
-          isNull(kifus.analysisError),
-          isNotNull(kifus.usiMoves),
-        ),
-      )
-      .limit(1);
-    return c.json({ job, quickPending: pending !== undefined });
-  })
-  // 評価結果の報告。**失敗も完了**として扱う（結果もエラーも出ないまま宙に浮かせない。
-  // prd/12 §2.4）。報告された結果は jobId で取りに来られるよう保持される。
-  // 🔒 ここは棋譜の `analysisError` / `analysisRevision` に触れない——interactive な
-  // ジョブには対応する棋譜も世代も無い（prd/12 §2.5）
-  .post(
-    '/worker/position-jobs/:id/result',
-    apiKeyRequired,
-    zv('param', z.object({ id: z.string() })),
-    zv(
-      'json',
-      z.union([
-        z.object({
-          candidates: z.array(candidateMoveSchema),
-          /** 名指し評価を符号反転のフォールバックで求めたか（prd/12 §2.2） */
-          fallback: z.boolean().default(false),
-        }),
-        z.object({ error: z.string().min(1).max(500) }),
-      ]),
-    ),
-    (c) => {
-      const { id } = c.req.valid('param');
-      const body = c.req.valid('json');
-      const applied = completeEvaluationJob(
-        id,
-        'error' in body
-          ? { error: body.error }
-          : {
-              candidates: body.candidates.map((candidate) => ({
-                ...candidate,
-                pv: candidate.pv ?? [],
-              })),
-              fallback: body.fallback,
-            },
-      );
-      // applied=false は期限切れで既に落ちたジョブ（worker 側は次へ進んでよい）
-      return c.json({ ok: true, applied } as const, 201);
-    },
-  );
+  // --- 全員ぶんを扱う経路（API_KEY）: worker の報告・動画解析の取り込み ---
+  .route('/', workerRoutes);
 
 export type AppType = typeof route;

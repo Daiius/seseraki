@@ -12,6 +12,11 @@ import type { AnalysisProfile } from './analysis-submit.js';
 
 export interface AnalysisProgress {
   kifuId: number;
+  /**
+   * 解析中の棋譜の所有者（`kifus.ownerId`）。🔒 **読み取りをこの人に限る**（prd/14 §4.2）。
+   * 応答には載せない（{@link getProgressFor}）
+   */
+  ownerId: string;
   /** 取得時の解析世代（reanalyze で +1）。どの世代の進捗かを示す */
   revision: number;
   /**
@@ -39,6 +44,16 @@ let clearToken = 0;
 
 export function getProgress(): AnalysisProgress | null {
   return current;
+}
+
+/**
+ * `GET /api/analysis/progress` の読み取り。🔒 **解析中の棋譜の所有者にだけ見せる**（prd/14 §4.2）。
+ * 他人には「解析中のものは無い」（null）と同じに見える——解析中の `kifuId` を明かさない。
+ */
+export function getProgressFor(userId: string): Omit<AnalysisProgress, 'ownerId'> | null {
+  if (!current || current.ownerId !== userId) return null;
+  const { ownerId: _owner, ...progress } = current;
+  return progress;
 }
 
 /** 進捗報告を始める前に取り、`setProgress` に渡す（clear と直列化するためのトークン） */

@@ -17,7 +17,7 @@ import {
   labelOf,
   type Thresholds,
 } from 'shared';
-import { db } from './db';
+import type { Db } from './db/index.js';
 import { drills, kifus } from './db/schema';
 import { decodeAll } from './kifu-analysis-detail.js';
 import { loadAnalysis } from './kifu-analysis-store.js';
@@ -185,7 +185,7 @@ export function extractDrills(input: ExtractInput): ExtractedDrill[] {
  * full は先頭からの連続区間なので、それより後ろの局面は quick（出題には使わない。prd/13 §2）。
  */
 export async function loadFullAnalyses(
-  tx: Tx | typeof db,
+  tx: Tx | Db,
   kifuId: number,
 ): Promise<DrillAnalysis[]> {
   const stored = await loadAnalysis(tx, kifuId);

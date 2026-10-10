@@ -232,7 +232,7 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
 |---|---|---|
 | Better Auth | `/api/auth/*`（サインイン・コールバック・サインアウト・セッション取得） | Better Auth 自身 |
 | セッション | 棋譜・出題・設定など web 向けのエンドポイント | `sessionRequired`（Better Auth のセッション + 所有者ゲート。§5.1） |
-| （無効） | `/api/swars/*`（一括取り込み系） | **常時 404**。認証前に遮断（[04](./04-ingestion.md) §4。[14](./14-multi-user.md) §4.3 で撤去） |
+| （外した） | `/api/swars/*`（一括取り込み系） | エンドポイントを外した（2026-10-12。[04](./04-ingestion.md) §4。[14](./14-multi-user.md) §4.3） |
 | API_KEY | `/api/worker/*`・動画解析の取り込み（`POST /video-analysis/kifus`） | `Authorization: Bearer <API_KEY>`（別系統・変更なし） |
 | dev のみ | `/api/dev/login` | 手元の development（§6）のときだけ登録 |
 

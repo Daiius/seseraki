@@ -1,4 +1,4 @@
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { alias } from 'drizzle-orm/pg-core';
 import { logger } from 'hono/logger';
@@ -79,9 +79,6 @@ import {
   startEvaluation,
 } from './position-eval.js';
 import { lookupKifuEvaluation } from './position-kifu-reuse.js';
-import { swarsToKif, formatTitle, parsePlayedAt } from './swars/csa-to-kif.js';
-import { fetchHistoryKeys, fetchGameData } from './swars/fetch.js';
-import { getJob, startJob } from './swars/job-store.js';
 import {
   applyMove,
   attributionOf,
@@ -275,21 +272,6 @@ const candidateMoveSchema = z.object({
   pv: z.array(z.string()).optional(),
   depth: z.number(),
 });
-
-// swars 自動取り込み（`/swars/*`）は恒常的に無効。swars 側で KIF を手軽にコピーできる
-// ようになり自動取り込みが不要になったこと、およびグレー領域の機能なので露出を絞ることが理由
-// （prd/04 §4）。**実装（swars/ モジュール・下のジョブ起動ロジック）は残す**が、フロント/API から
-// は到達できない。env フラグではなくコード上の定数なので、再有効化には明示的なコード変更が要る。
-// 型は boolean（リテラル true にしない）——後続のハンドラ実装を「到達不能コード」にしないため。
-const SWARS_IMPORT_DISABLED: boolean = true;
-
-// 無効化ガード。認証・body 検証より前に置き、**常時 404** にする（無効な口では認証状態も晒さない）。
-const swarsDisabled: MiddlewareHandler = async (c, next) => {
-  if (SWARS_IMPORT_DISABLED) {
-    return c.json({ error: 'swars import is disabled' } as const, 404);
-  }
-  await next();
-};
 
 /** 出題局面（`moveNumber` 手を指す直前の局面）。指し手列が足りなければ null */
 function drillPosition(usiMoves: string[] | null, moveNumber: number): BoardState | null {
@@ -1786,96 +1768,6 @@ const route = app
       // applied=false は期限切れで既に落ちたジョブ（worker 側は次へ進んでよい）
       return c.json({ ok: true, applied } as const, 201);
     },
-  )
-  // --- swars 棋譜取得 ---
-  .post(
-    '/swars/import',
-    swarsDisabled,
-    sessionRequired,
-    zv(
-      'json',
-      z.object({
-        userId: z.string(),
-        gtype: z.enum(['', 'sb', 's1']).default(''),
-        pages: z.number().min(1).max(10).default(1),
-      }),
-    ),
-    async (c) => {
-      const { userId, gtype, pages } = c.req.valid('json');
-      // 取り込んだ棋譜の所有者（ログイン中の自分）。ジョブは応答の後も走るので先に取り出す
-      const ownerId = c.get('userId');
-      const cookie = process.env.SWARS_SESSION_COOKIE;
-      if (!cookie) {
-        return c.json({ error: 'SWARS_SESSION_COOKIE not configured' }, 500);
-      }
-
-      const state = startJob(async () => {
-        const imported: { id: number; gameKey: string }[] = [];
-        const skipped: string[] = [];
-        const errors: { gameKey: string; error: string }[] = [];
-
-        const allKeys: string[] = [];
-        for (let page = 1; page <= pages; page++) {
-          const keys = await fetchHistoryKeys(userId, gtype, page, cookie);
-          allKeys.push(...keys);
-          if (keys.length === 0) break;
-        }
-
-        for (const gameKey of allKeys) {
-          const [existing] = await db
-            .select({ id: kifus.id })
-            .from(kifus)
-            .where(eq(kifus.swarsGameKey, gameKey))
-            .limit(1);
-          if (existing) {
-            skipped.push(gameKey);
-            continue;
-          }
-
-          try {
-            const gameData = await fetchGameData(gameKey);
-            const kifText = swarsToKif(gameData);
-            const { usiMoves } = convertKif(kifText);
-            const title = formatTitle(gameData);
-            const playedAt = parsePlayedAt(gameKey);
-            const newId = await db.transaction(async (tx) => {
-              const [result] = await tx
-                .insert(kifus)
-                .values({
-                  ownerId,
-                  title,
-                  kifText,
-                  usiMoves,
-                  sente: gameData.sente,
-                  gote: gameData.gote,
-                  senteDan: gameData.sente_dan,
-                  goteDan: gameData.gote_dan,
-                  result: gameData.result,
-                  swarsGameKey: gameKey,
-                  playedAt,
-                  sourceTz: 'JST',
-                })
-                .returning({ id: kifus.id });
-              await replaceTactics(tx, { id: result.id, ownerId }, usiMoves);
-              await replacePositions(tx, { id: result.id, ownerId }, usiMoves);
-        // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
-        await refreshSubjectSide(tx, result.id);
-              return result.id;
-            });
-            imported.push({ id: newId, gameKey });
-          } catch (e) {
-            errors.push({ gameKey, error: String(e) });
-          }
-        }
-
-        return { imported, skipped, errors };
-      });
-
-      return c.json(state, 202);
-    },
-  )
-  .get('/swars/import/status', swarsDisabled, sessionRequired, (c) => {
-    return c.json(getJob());
-  });
+  );
 
 export type AppType = typeof route;

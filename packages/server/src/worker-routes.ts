@@ -4,15 +4,15 @@
  * - worker の報告（`/worker/*`）: 解析すべき棋譜の取得・解析結果・失敗・進捗・評価ジョブ
  * - 動画解析の取り込み（`POST /video-analysis/kifus`）: 所有者専用の手元ツールから（prd/14 §4.1）
  *
- * 🔒 **ログインの経路（`route.ts`）と分けたモジュールに置く。** グローバルの `db` を使ってよいのは
- * ここ（と一括処理のエントリ）だけで、`db-import-boundary.test.ts` が import を検査する。
- * 2b（RLS）で、ここは BYPASSRLS のロールの別プールに移す（リクエスト用のプールと接続の単位で分ける）。
+ * 🔒 **ログインの経路（`route.ts`）と分けたモジュールに置く。** RLS を迂回する system ロールのプール
+ * （`db/system.ts`）を使ってよいのはここ（と動画解析の取り込み・一括処理のエントリ）だけで、
+ * `db-import-boundary.test.ts` が import を検査する。リクエスト用のプール（server ロール）とは接続の単位で分ける。
  */
 import { Hono } from 'hono';
 import { zValidator as zv } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
-import { db } from './db/index.js';
+import { systemDb } from './db/system.js';
 import { kifus, kifuAnalyses } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
 import { formatDiff, importVideoKifu, videoKifuInputSchema } from './video-analysis.js';
@@ -106,7 +106,7 @@ export const workerRoutes = new Hono()
       const oldestFirst = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt}) asc`;
 
       // (1) quick 未完（まだ 1 度も全局面が揃っていない）
-      const [pendingQuick] = await db
+      const [pendingQuick] = await systemDb()
         .select(selection)
         .from(kifus)
         .where(
@@ -122,7 +122,7 @@ export const workerRoutes = new Hono()
       // (2) quick 完了・full 未完
       const [pendingFull] = pendingQuick
         ? []
-        : await db
+        : await systemDb()
             .select(selection)
             .from(kifus)
             .where(
@@ -148,7 +148,7 @@ export const workerRoutes = new Hono()
       // ため moveNumber に穴が空かず、**件数がそのまま再開位置**になる。
       // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick は `detail` の長さ、full は `fullCount`
       // （full は 0 から順に上書きするので、常に先頭からの連続区間になる。prd/16 §4.2）
-      const [counts] = await db
+      const [counts] = await systemDb()
         .select({
           quick: sql<number>`jsonb_array_length(${kifuAnalyses.detail})`.mapWith(Number),
           full: kifuAnalyses.fullCount,
@@ -175,7 +175,7 @@ export const workerRoutes = new Hono()
       // ことを見る——失敗しうるのは進行中の段階だけで、full 完了済みの棋譜はそもそも poll に出ない。
       // 帰結として **`analysisCompletedAt` と `analysisError` の排他は緩む**（quick 完了 + full 失敗で
       // 両方が非 null）。UI は quick の結果を見せたまま「詳細解析に失敗」を示す（prd/05 §2.5）。
-      const result = await db
+      const result = await systemDb()
         .update(kifus)
         .set({ analysisError: error })
         .where(
@@ -216,7 +216,7 @@ export const workerRoutes = new Hono()
       // 古い判定のまま書き込むと「終わったのに解析中」が復活するため、読む前に clear トークンを
       // 取り、記録時に一致を確かめる（compare-and-set。`analysis-progress.ts`）。
       const token = getClearToken();
-      const [kifu] = await db
+      const [kifu] = await systemDb()
         .select({
           revision: kifus.analysisRevision,
           completedAt: kifus.analysisCompletedAt,
@@ -288,7 +288,7 @@ export const workerRoutes = new Hono()
       let outOfRange = false;
       // 局面が連続していない・受理条件の先頭を越えた（prd/16 §4.2）
       let notContiguous = false;
-      await db.transaction(async (tx) => {
+      await systemDb().transaction(async (tx) => {
         // 取得時と同一世代のときだけ適用（reanalyze 後に届いた旧解析のチャンクは破棄）。
         // FOR UPDATE で kifus 行をロックし reanalyze と直列化する（確認〜completed 更新の間に
         // 世代が進むのを防ぐ）。reanalyze も kifus を先にロックするためデッドロックしない。
@@ -387,7 +387,7 @@ export const workerRoutes = new Hono()
   // 判断を**通信を増やさずに**下せる。判定は軽い EXISTS 1 本（`analysisCompletedAt` に INDEX）
   .get('/worker/position-jobs', apiKeyRequired, async (c) => {
     const job = claimEvaluationJob();
-    const [pending] = await db
+    const [pending] = await systemDb()
       .select({ id: kifus.id })
       .from(kifus)
       .where(

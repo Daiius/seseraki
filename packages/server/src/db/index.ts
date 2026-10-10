@@ -1,12 +1,14 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
-import { relations } from './schema.js';
+import { connectionConfig, createDb } from './connection.js';
 
 /**
  * DB 接続（Postgres。node-postgres + drizzle。prd/15 §2）。
  *
- * **ロールを 2 つに分ける**（prd/15 §2）:
- * - **server ロール**（DML のみ）… 常駐の server と一括処理のエントリ。`DB_USER` / `DB_PASSWORD`
+ * **ロールを 3 つに分ける**（prd/15 §2・prd/14 §4「RLS の形」）:
+ * - **server ロール**（DML のみ・RLS が効く）… 常駐の server のログインの経路。`DB_USER` / `DB_PASSWORD`。
+ *   このファイルの `db`。リクエストごとに `user-tx.ts` がユーザーとして tx を開く
+ * - **system ロール**（DML のみ・BYPASSRLS）… 全員ぶんを扱う経路（worker の報告・動画解析の取り込み・
+ *   一括処理のエントリ）。`DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`。別のプール（`db/system.ts`）
  * - **管理ロール**（DDL）… マイグレーションの適用（`migrate.ts`）だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`
  *
  * 接続先（`DB_HOST` / `DB_PORT` / `DB_NAME`）は共通。ホストから dev の DB へ繋ぐ `*:dev` の scripts は
@@ -17,32 +19,12 @@ import { relations } from './schema.js';
  * ⚠ **node-postgres は bigint（`count(*)`・`sum(…)`）を文字列で返す。** 列ではなく `sql` 断片で
  * 集計を取るときは `.mapWith(Number)` を通す（prd/15 §3.5）。
  */
-export type DbRole = 'server' | 'admin';
+export { connectionConfig, createDb, type Db, type DbRole, type Tx } from './connection.js';
 
-export function connectionConfig(role: DbRole, env: NodeJS.ProcessEnv = process.env): pg.PoolConfig {
-  return {
-    host: env.DB_HOST ?? 'localhost',
-    port: env.DB_PORT ? Number(env.DB_PORT) : 5432,
-    database: env.DB_NAME ?? 'seseraki',
-    user: role === 'admin' ? env.DB_ADMIN_USER : env.DB_USER,
-    password: role === 'admin' ? env.DB_ADMIN_PASSWORD : env.DB_PASSWORD,
-  };
-}
-
-/** プールから drizzle を組み立てる（server 用の `db` と、migrate・実 DB テストが同じ形で使う） */
-export function createDb(client: pg.Pool) {
-  return drizzle({ client, relations });
-}
-
-/** server ロールの接続。接続は最初のクエリまで張られない（import しただけでは繋がない） */
+/**
+ * server ロールの接続（RLS が効く。ログインの経路）。接続は最初のクエリまで張られない（import しただけでは繋がない）。
+ * 🔒 ログインの経路でこれを直接使ってよいのは `user-tx.ts` だけ（`db-import-boundary.test.ts`）
+ */
 export const client = new pg.Pool(connectionConfig('server'));
 
 export const db = createDb(client);
-
-export type Db = typeof db;
-
-/**
- * `db.transaction` のコールバックが受け取るトランザクションハンドル。
- * 手で型を書くと drizzle の更新で静かにずれるので、**db から導出する**。
- */
-export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];

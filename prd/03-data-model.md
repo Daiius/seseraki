@@ -38,6 +38,10 @@
   （CASCADE でないと、親と子のどちらを先に変えても FK に反し、付け替える手段が無くなる）。
   書き込み側（取り込み・解析報告・局面索引・出題・解答・動画取り込み・一括処理）は**親と同じ値を必ず入れる**（既定値は持たない）。
   持つ理由は RLS のポリシーを全表で `owner_id = …` の一様な形にするため（[14](./14-multi-user.md) §4）
+- 🔒 **`kifus` と子の表 6 つ・`userAliases` には RLS が掛かっている**（`owner_id`／`user_id` = `app.user_id`。USING と WITH CHECK。
+  [14](./14-multi-user.md) §4・[15](./15-postgres.md) §11）。ログインの経路は `app.user_id` を設定した tx からしか読み書きできず、
+  全員ぶんの経路は BYPASSRLS の system ロールで繋ぐ（[15](./15-postgres.md) §2.1）。**所有者を持つ表を足したら `ownerPolicy` も付ける**
+  （付け忘れは test:db の `rls.db.test.ts` が落とす）
 - **認証は Google ログイン**（[07](./07-auth-and-privacy.md)）。所有者スコープが入るまでは所有者（`"1"`）以外を通さない
   （所有者ゲート。[07](./07-auth-and-privacy.md) §5.1）が、**データ側には所有者を持つ**（`kifus.ownerId`。[11](./11-users.md) §3）。
   **`users.id` は `varchar(36)`**、既存の所有者は `"1"` のまま（[07](./07-auth-and-privacy.md) §3.1）。

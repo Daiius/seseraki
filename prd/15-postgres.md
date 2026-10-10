@@ -37,10 +37,30 @@
 | 版 | **Postgres 18**（dev・本番とも同じ。公式イメージ） |
 | 配置 | dev は compose のサービス、本番は VPS の docker（姿勢のみ。具体は `.claude-personal/`） |
 | ドライバ | **node-postgres（`pg`）** + `drizzle-orm/node-postgres` |
-| ロール | **管理ロール**（DDL。`migrate.js` とデータ移行の `migrate-from-mysql.js`）と **server ロール**（DML のみ。常駐の server と一括処理のエントリ）を分ける。今の MySQL と同じ分け方で、RLS の土台になる。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。dev は `scripts/postgres-init/` が server ロールと default privileges を作る |
+| ロール | **管理ロール**（DDL。`migrate.js`）・**server ロール**（DML のみ・RLS が効く。常駐の server のログインの経路）・**system ロール**（DML のみ・**BYPASSRLS**。全員ぶんを扱う経路＝worker の報告・動画解析の取り込み・一括処理のエントリ。2026-10-11・所有者スコープ 2b）の 3 つ。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・system ロールが `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。server と system は**別のプール**（`db/index.ts` / `db/system.ts`）。dev は `scripts/postgres-init/` が server ロール・system ロールと default privileges を作る |
 | 設定 | 本番は 1GB 級の VPS に載るので小さめ（`shared_buffers` は既定・`max_connections` は 20 程度）。具体の値は `.claude-personal/` |
 
 - worker は HTTP の API を通すだけで DB に触らないので、**worker は変わらない**
+
+### 2.1 system ロール（RLS を迂回する）の作り方（2026-10-11）
+
+- 🔒 **マイグレーションでは作らない。** BYPASSRLS の付与には superuser が要り、管理ロール（`migrate.js`）には無い
+- 🔒 **`DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD` が無ければ server は起動しない**（fail-closed。`src/index.ts`）。一括処理のエントリも
+  接続の時点で止まる。未設定のまま別のロールで繋ぐと、worker の報告が RLS で 0 行になり**黙って何もしない**ため
+- 作るのは `scripts/postgres-init/20-system-role.sh`（**冪等**。superuser で流す。`--check` で現状を表示するだけ）:
+  ロールが無ければ作り、`LOGIN BYPASSRLS`（superuser・DB 作成・ロール作成は持たせない）とパスワードを揃え、
+  server ロールと同じ DML 権限（既存の表・シーケンスと、管理ロールが今後作るものへの default privileges）を付ける
+  - dev の空の volume: compose の db が初回に流す（`10-server-role.sh` の後）
+  - dev の既存の volume: `.env.database` に `DB_SYSTEM_*` を足して db を作り直し、db コンテナの中で同じスクリプトを流す
+  - 本番: 下の順で行う（具体のホスト・資格情報は `.claude-personal/`）
+- **本番の手順**（RLS のマイグレーションを入れたイメージに切り替えるとき。順序が大事）:
+  1. 本番の DB の env に `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD` を足す（server・一括処理のコンテナも同じ値を読む）
+  2. superuser で `20-system-role.sh --check` → `20-system-role.sh` を流してロールを作る（`--check` で `rolbypassrls = t` を確かめる）
+  3. 新しいイメージの `migrate.js` を流す（RLS とポリシーが入る。🔴 **これより後の古い server は、worker の報告が RLS で 0 行になる**——
+     旧 server はグローバルの接続で `app.user_id` を設定しないため。2 と 3 の後は**すぐ** 4 へ進む）
+  4. server を新しいイメージに入れ替える（system ロールで worker の報告を受ける）
+  - 切り戻し: 前のイメージの server は `app.user_id` を設定せず、system ロールも使わないので、RLS の下では**何も読めず書けない**。
+    server を前のイメージに戻すときは、管理ロールで 8 表の RLS を外す（`ALTER TABLE … DISABLE ROW LEVEL SECURITY`）
 
 ## 3. 型の対応
 
@@ -264,11 +284,15 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
    マイグレーションは列を NULL 可で足し、親から埋め戻してから NOT NULL と FK を付ける（1 トランザクション）。
    書き込み側は親と同じ `ownerId` を入れる。読み取りの挙動は変えない
 2. クエリのスコープと **RLS**（2026-10-11 に形を決めた。[14](./14-multi-user.md) §4「RLS の形」）:
-   - ✅ アプリ層のスコープ（2a。tx の張り方・クエリ関数の所有者・import の境界）は実装済み（2026-10-11）。RLS と別プールは 2b
+   - ✅ アプリ層のスコープ（2a。tx の張り方・クエリ関数の所有者・import の境界）は実装済み（2026-10-11）
+   - ✅ RLS と別プール（2b）は実装済み（2026-10-11）。ポリシーは schema の `ownerPolicy`（drizzle-kit の `pgPolicy` が生成）、
+     system ロールは §2.1。test:db がカタログ（掛け忘れ・素通りの関数とビュー）と非 superuser のロールでの振る舞いを照合する
    - リクエストごとにトランザクションを開いて `set_config('app.user_id', <id>, true)`。クエリ関数はその tx を引数で受け取る
    - worker の報告・一括処理など全員ぶんを扱う経路は **BYPASSRLS の別ロール＋別プール**。🔒 **ロールは migration で作らない**
      （BYPASSRLS の付与は superuser が要る。§2 の管理ロールには無い）。dev は `scripts/postgres-init/`、本番は手順で作る
    - ポリシーは子の表を含む全表で一様に `owner_id = current_setting('app.user_id', true)`。未設定は常に 0 件（fail-closed）
-   - ⚠ 表の所有者（管理ロール）には RLS が効かない（`FORCE ROW LEVEL SECURITY` を付けない限り）。server ロールは表の所有者でないので効く
+   - ⚠ 表の所有者（管理ロール）には RLS が効かない（`FORCE ROW LEVEL SECURITY` を付けない限り）。server ロールは表の所有者でないので効く。
+     🔒 **`FORCE` は付けない**——付けると管理ロールのマイグレーションの埋め戻し（`UPDATE … FROM kifus`）が `app.user_id` 未設定で
+     **黙って 0 行**になる。アプリは表の所有者で繋がないので、FORCE が無くてもアプリの経路はすべて RLS の下にある
 3. swars を閉じる
 4. **所有者ゲートを外し、同時に新規登録を既定で開く**（[07](./07-auth-and-privacy.md) §5.2）

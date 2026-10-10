@@ -7,7 +7,7 @@
  */
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from './db';
+import { systemDb } from './db/system.js';
 import { kifuAnalyses, kifus, videoKifuSources } from './db/schema';
 import { composeKifVerified } from './kif/compose';
 import { ANALYSIS_STATE_RESET } from './analysis-submit';
@@ -113,7 +113,8 @@ export async function importVideoKifu(
   // どちらであってもそのまま残してよい状態ではない（prd/10 §4.2）
   const kifText = composeKifVerified(input.usi);
 
-  return db.transaction(async (tx) => {
+  // 🔒 全員ぶんの経路（API_KEY。所有者専用の手元ツールから）。RLS を迂回する system ロールで書く
+  return systemDb().transaction(async (tx) => {
     const [existing] = await tx
       .select({
         kifuId: videoKifuSources.kifuId,

@@ -1,9 +1,10 @@
 #!/bin/sh
 # dev の Postgres の初期化（compose の db が /docker-entrypoint-initdb.d から**空の volume の初回だけ**流す）。
 #
-# ロールを 2 つに分ける（prd/15 §2）:
+# ロールを 3 つに分ける（prd/15 §2）:
 # - 管理ロール … POSTGRES_USER（公式イメージが作る。DDL・マイグレーション）。アプリは DB_ADMIN_USER として使う
-# - server ロール … DB_USER（ここで作る。DML のみ。常駐の server と一括処理）
+# - server ロール … DB_USER（ここで作る。DML のみ・RLS が効く。常駐の server のログインの経路）
+# - system ロール … DB_SYSTEM_USER（20-system-role.sh が作る。DML のみ・BYPASSRLS。worker の報告・一括処理）
 #
 # server ロールには**テーブルを作る権限を渡さない**（Postgres 15 以降は public スキーマの CREATE が既定で無い）。
 # 表はマイグレーション（管理ロール）が後から作るので、**default privileges** で「管理ロールが作る表・
@@ -16,14 +17,23 @@ set -eu
 : "${DB_USER:?DB_USER（server ロール）が未設定です}"
 : "${DB_PASSWORD:?DB_PASSWORD（server ロール）が未設定です}"
 
-psql -v ON_ERROR_STOP=1 \
+# 🔒 パスワードはコマンドラインに載せず（`ps` で見える）、psql の `\getenv` で環境変数から読む。
+# このセッションだけサーバーのログに文を出さない（20-system-role.sh と同じ扱い。レビュー OCL-D6CF61B0）
+psql -v ON_ERROR_STOP=1 -q \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   -v server_user="$DB_USER" \
-  -v server_password="$DB_PASSWORD" \
   -v admin_user="$POSTGRES_USER" \
   -v db_name="$POSTGRES_DB" \
   <<'SQL'
+\getenv server_password DB_PASSWORD
+\set VERBOSITY terse
+-- パスワードを含む文をサーバーのログに残さない（このセッションだけ。設定には superuser が要る）。
+-- log_statement=all などの設定でも文を出さず、失敗したときも文と CONTEXT（EXECUTE した SQL）を出さない
+SET log_statement = 'none';
+SET log_min_duration_statement = -1;
+SET log_min_error_statement = 'panic';
+SET log_error_verbosity = 'terse';
 CREATE ROLE :"server_user" LOGIN PASSWORD :'server_password';
 GRANT CONNECT ON DATABASE :"db_name" TO :"server_user";
 GRANT USAGE ON SCHEMA public TO :"server_user";

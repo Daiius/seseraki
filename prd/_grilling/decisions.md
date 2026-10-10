@@ -1797,3 +1797,20 @@ PR #122 のレビューで、採点の契約に 2 つの穴が見つかった。
 
 **帰結**: PR 1 でスキーマ（子の表の `owner_id`・複合 FK・局面索引の索引・名前候補の UNIQUE）と書き込み側を入れた。
 [14](../14-multi-user.md) §4・§4.1・§6.3、[15](../15-postgres.md) §11、[03](../03-data-model.md) §1・§2.1・§3・§5.5、[11](../11-users.md) §2.1 を合わせた。
+
+### 所有者スコープの RLS の実装（2026-10-11・2b。上の「RLS の形」の続き）
+
+- **決定: `FORCE ROW LEVEL SECURITY` は付けない。** 表の所有者（管理ロール）にまで効かせると、マイグレーションの埋め戻し
+  （`UPDATE … FROM kifus` のような全員ぶんの書き換え）が `app.user_id` 未設定で**エラーにならず 0 行**になる。
+  アプリは表の所有者で繋がない（server / system ロール）ので、FORCE が無くてもアプリの経路はすべて RLS の下にある。
+- **決定: ポリシーは schema の `pgPolicy` で書き、drizzle-kit に生成させる**（手書きの SQL にしない）。drizzle 1.0 rc.3 の generate は
+  ポリシーのある表に `ENABLE ROW LEVEL SECURITY` と `CREATE POLICY` を出し、snapshot にも載る。表とポリシーが同じ場所に並び、
+  次に表を足すときに見落としにくい（トリガーのように「生成されないので手で足す」ものを増やさない）。
+- **決定: system ロール（BYPASSRLS）の資格情報が無ければ server を起動させない（fail-closed）。** 遅らせると、
+  worker の報告が別のロールで RLS に絞られて**黙って 0 行**になるか、最初の報告で初めて落ちる。
+- **決定: Better Auth の表（`users` / `session` / `account` / `verification`）には RLS を掛けない。** 所有者で絞る行ではない。
+  ログインの経路は自分の `users` の行を ID で引くだけで、Better Auth・dev ログイン・所有者の付け替えは server ロールのまま動く。
+  掛けない表は許可リストにし、test:db が「public の表は RLS ありか許可リストか」を照合する（新しい表で決め忘れない）。
+- **決定: 接続の組み立て（`db/connection.ts`）とプール（`db/index.ts` = server・`db/system.ts` = system）を分け、
+  import の境界をテストで限る。** ログインの経路が system のプールを import したら落ちる。
+

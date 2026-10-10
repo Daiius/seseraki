@@ -8,6 +8,7 @@ import {
   index,
   integer,
   jsonb,
+  pgPolicy,
   snakeCase,
   primaryKey,
   smallint,
@@ -152,6 +153,34 @@ function ownedBy(
 }
 
 /**
+ * 所有者の行だけを見せる・書かせる RLS のポリシー（prd/14 §4「RLS の形」・prd/15 §11）。
+ * `kifus` と子の表 6 つは `owner_id`、名前候補は `user_id` に付ける。**全表で一様な形**にする。
+ *
+ * - `app.user_id` はログインしたリクエストの tx が `set_config(…, true)` で入れる（`user-tx.ts`）
+ * - 🔒 **未設定なら常に 0 件（fail-closed）**。`current_setting(…, true)` は未設定で NULL、一度設定した
+ *   接続では tx の後に空文字に戻る。どちらも `owner_id` と一致しない
+ * - **USING と WITH CHECK の両方**: 他人の行は読めず・更新も削除もできず、他人の `owner_id` で
+ *   挿入・更新もできない
+ * - 全員ぶんを扱う経路（worker・一括処理）は BYPASSRLS のロール（`DB_SYSTEM_USER`）で繋ぐので、ここを素通りする
+ * - ⚠ **`FORCE ROW LEVEL SECURITY` は付けない。** 表の所有者（管理ロール。`migrate.js`）にまで効くと、
+ *   マイグレーションの埋め戻し（`UPDATE … FROM kifus`）が `app.user_id` 未設定で**黙って 0 行**になる
+ *   （エラーにならない）。管理ロールは DDL 専用で、アプリは表の所有者で繋がない（prd/15 §2）
+ *
+ * 🔴 **`kifus` 配下・所有者を持つ表を足したら、ここを付ける。** test:db がカタログで照合する
+ * （`rls.db.test.ts`）。drizzle-kit はポリシーがある表に `ENABLE ROW LEVEL SECURITY` も生成する。
+ */
+function ownerPolicy(column: AnyPgColumn) {
+  const owned = sql`${column} = current_setting('app.user_id', true)`;
+  return pgPolicy('owner_scope', {
+    as: 'permissive',
+    for: 'all',
+    to: 'public',
+    using: owned,
+    withCheck: owned,
+  });
+}
+
+/**
  * ユーザー。**Better Auth の user 表を兼ねる**（prd/07 §3.1。`user.modelName: 'users'`）。
  *
  * 🔒 **既存の所有者の行は ID `"1"`**（bigint から varchar(36) へ作り替えたときの値そのまま）。
@@ -286,6 +315,7 @@ export const userAliases = table(
     createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.userId),
     foreignKey({
       columns: [table.userId],
       foreignColumns: [users.id],
@@ -351,6 +381,7 @@ export const kifus = table(
     updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
     // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
     index('kifus_source_idx').on(table.source),
@@ -404,6 +435,7 @@ export const videoKifuSources = table(
     updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     primaryKey({ columns: [table.kifuId] }),
     ownedBy('video_kifu_sources_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     // 「同じ動画の同じ局」は 1 つの実体。再取り込みはこのキーで上書きする（prd/10 §4.3）
@@ -452,6 +484,7 @@ export const kifuAnalyses = table(
     updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     ownedBy('kifu_analyses_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     jsonArrayCheck('kifu_analyses_detail_array', table.detail),
     jsonArrayCheck('kifu_analyses_runs_array', table.runs),
@@ -483,6 +516,7 @@ export const kifuTactics = table(
     turn: integer().notNull(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     primaryKey({ columns: [table.kifuId, table.side, table.label] }),
     ownedBy('kifu_tactics_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     index('kifu_tactics_label_idx').on(table.label),
@@ -541,6 +575,7 @@ export const kifuPositions = table(
     sideToMove: SIDE_TO_MOVE.column().notNull(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     primaryKey({ columns: [table.kifuId, table.moveNumber] }),
     ownedBy('kifu_positions_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     // 🔒 **検索の索引は所有者を先頭に置く**（prd/14 §4.1・§6.3）。検索は「所有者の棋譜の中で」
@@ -625,6 +660,7 @@ export const drills = table(
     updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     uniqueIndex('drills_kifu_id_move_number_kind_uq').on(
       table.kifuId,
       table.moveNumber,
@@ -681,6 +717,7 @@ export const drillAttempts = table(
     createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownerPolicy(table.ownerId),
     ownedBy('drill_attempts_drill_owner_fkey', [table.drillId, table.ownerId], [drills.id, drills.ownerId]),
     index('drill_attempts_drill_id_idx').on(table.drillId),
     // 解答履歴の一覧は**新しい順**に 50 件ずつ引く（prd/13 §7.3）

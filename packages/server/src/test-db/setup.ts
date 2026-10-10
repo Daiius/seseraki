@@ -14,5 +14,10 @@ process.env.DB_PORT = url.port || '5432';
 process.env.DB_NAME = decodeURIComponent(url.pathname.slice(1));
 process.env.DB_USER = decodeURIComponent(url.username);
 process.env.DB_PASSWORD = decodeURIComponent(url.password);
+// RLS を迂回する system ロールのプール（`db/system.ts`）も同じ接続先へ。テストの接続ロールは
+// 表の所有者（か superuser）なので RLS は効かない——RLS の振る舞いは `roles.db.test.ts` が
+// 非 superuser のロールを作って確かめる
+process.env.DB_SYSTEM_USER = process.env.DB_USER;
+process.env.DB_SYSTEM_PASSWORD = process.env.DB_PASSWORD;
 // node-postgres は PGOPTIONS を接続の起動オプションとして送る
 process.env.PGOPTIONS = '-c TimeZone=Asia/Tokyo';

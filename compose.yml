@@ -145,10 +145,11 @@ services:
       # ローカルは localhost（＝リモート差分なし）。
       DEV_ALLOWED_HOST: '${DEV_ALLOWED_HOST:-localhost}'
     command: pnpm --filter web dev --host
-    # ローカルは 5173 を公開。リモートは .env.remote の WEB_BIND=127.0.0.1:<port> で
+    # ローカルは 127.0.0.1:5173 だけで待ち受ける（LAN から dev ログインで所有者になれないように）。
+    # 実機確認などで LAN に開くときだけ WEB_BIND=5173 を明示する。リモートは .env.remote の WEB_BIND=127.0.0.1:<port> で
     # cloudflared 向けに 127.0.0.1 の1ポートだけ公開する。
     ports:
-      - '${WEB_BIND:-5173}:5173'
+      - '${WEB_BIND:-127.0.0.1:5173}:5173'
     depends_on:
       - server
     develop:

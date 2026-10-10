@@ -1,7 +1,8 @@
 services:
   # Postgres 18（prd/15）。server はこれに繋ぐ。
-  # 🔒 ロールを 2 つに分ける（prd/15 §2）: 管理ロール = POSTGRES_USER（DDL・マイグレーション）、
-  # server ロール = DB_USER（DML のみ。scripts/postgres-init/10-server-role.sh が空の volume の初回に作る）
+  # 🔒 ロールを 3 つに分ける（prd/15 §2）: 管理ロール = POSTGRES_USER（DDL・マイグレーション）、
+  # server ロール = DB_USER（DML のみ・RLS が効く。scripts/postgres-init/10-server-role.sh が空の volume の初回に作る）、
+  # system ロール = DB_SYSTEM_USER（DML のみ・BYPASSRLS。20-system-role.sh。既存の volume にはスクリプトの冒頭の手順で）
   db:
     image: postgres:18-alpine
     environment:

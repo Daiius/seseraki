@@ -20,7 +20,7 @@
 import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
-import { connectionConfig, createDb } from './src/db/index.js';
+import { connectionConfig, createDb } from './src/db/connection.js';
 
 // ⚠ **cwd 相対にしない。** 実行のしかた（どこから叩くか）で壊れる。
 // `pnpm --filter` は cwd を packages/server へ移すが、本番の使い捨てコンテナは WORKDIR 次第。

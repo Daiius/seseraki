@@ -10,13 +10,14 @@
  * 🔒 **upsert なので、既に解いた問題の解答履歴は作り直しでも消えない**（prd/13 §6.1）。
  * 条件から外れた問題だけが履歴ごと消える。
  *
- * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と server ロールの `DB_USER` / `DB_PASSWORD` から取る（`rebuild-positions.ts` と同じ規約）。
+ * 接続先は呼び出し環境の `DB_HOST` / `DB_PORT` / `DB_NAME` と system ロールの `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`（RLS を迂回する）から取る（`rebuild-positions.ts` と同じ規約）。
  * **ホストにポートを開けない compose 網内からの実行を推奨する**（AGENTS.md）。
  *
  *   docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 server pnpm --filter server exec tsx generate-drills.ts
  */
 import { eq, isNotNull } from 'drizzle-orm';
-import { client, db } from './src/db';
+// 🔒 全員ぶんを扱うので RLS を迂回する system ロールで繋ぐ（prd/14 §4・prd/15 §2）。未設定なら throw
+import { endSystemDb, systemDb } from './src/db/system';
 import { kifus } from './src/db/schema';
 import {
   drillConfigFromEnv,
@@ -24,6 +25,8 @@ import {
   loadFullAnalyses,
   syncDrills,
 } from './src/drills';
+
+const db = systemDb();
 
 const APPLY = process.env.GENERATE_DRILLS_APPLY === '1';
 
@@ -94,10 +97,10 @@ async function main() {
 }
 
 main()
-  .then(() => client.end())
+  .then(() => endSystemDb())
   .catch(async (e) => {
     console.error(e);
-    await client.end();
+    await endSystemDb();
     // 本番のランナーが失敗を検知できるよう非ゼロで落とす
     process.exit(1);
   });

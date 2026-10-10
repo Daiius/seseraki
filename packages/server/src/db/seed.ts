@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
-import { db } from './index.js';
+// 「表が空か」は全員ぶんを見る問いなので、RLS を迂回する system ロールで繋ぐ（prd/15 §2）
+import { endSystemDb, systemDb } from './system.js';
 import { eq } from 'drizzle-orm';
 import { kifus, users } from './schema.js';
 import { OWNER_USER_ID } from '../users.js';
@@ -16,6 +17,8 @@ const kifText = readFileSync(sampleKifPath, 'utf-8');
 const sente = kifText.match(/先手：(.+)/)?.[1] ?? '不明';
 const gote = kifText.match(/後手：(.+)/)?.[1] ?? '不明';
 const title = `${sente} vs ${gote}`;
+
+const db = systemDb();
 
 const [existing] = await db
   .select({ id: kifus.id })
@@ -38,4 +41,4 @@ if (existing) {
   console.log(`Seed inserted: id=${result.id} "${title}"`);
 }
 
-await db.$client.end();
+await endSystemDb();

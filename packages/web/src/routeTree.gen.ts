@@ -9,45 +9,20 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as VideoAnalysisRouteImport } from './routes/video-analysis'
-import { Route as StatsRouteImport } from './routes/stats'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as PositionsRouteImport } from './routes/positions'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as DrillsRouteImport } from './routes/drills'
-import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as KifusNewRouteImport } from './routes/kifus/new'
+import { Route as DevGalleryRouteImport } from './routes/dev-gallery'
+import { Route as DrillsRouteImport } from './routes/drills'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as PositionsRouteImport } from './routes/positions'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as StatsRouteImport } from './routes/stats'
+import { Route as VideoAnalysisRouteImport } from './routes/video-analysis'
 import { Route as KifusIdRouteImport } from './routes/kifus/$id'
+import { Route as KifusNewRouteImport } from './routes/kifus/new'
 
-const VideoAnalysisRoute = VideoAnalysisRouteImport.update({
-  id: '/video-analysis',
-  path: '/video-analysis',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StatsRoute = StatsRouteImport.update({
-  id: '/stats',
-  path: '/stats',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PositionsRoute = PositionsRouteImport.update({
-  id: '/positions',
-  path: '/positions',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DrillsRoute = DrillsRouteImport.update({
-  id: '/drills',
-  path: '/drills',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DevGalleryRoute = DevGalleryRouteImport.update({
@@ -55,19 +30,44 @@ const DevGalleryRoute = DevGalleryRouteImport.update({
   path: '/dev-gallery',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const DrillsRoute = DrillsRouteImport.update({
+  id: '/drills',
+  path: '/drills',
   getParentRoute: () => rootRouteImport,
 } as any)
-const KifusNewRoute = KifusNewRouteImport.update({
-  id: '/kifus/new',
-  path: '/kifus/new',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PositionsRoute = PositionsRouteImport.update({
+  id: '/positions',
+  path: '/positions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StatsRoute = StatsRouteImport.update({
+  id: '/stats',
+  path: '/stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VideoAnalysisRoute = VideoAnalysisRouteImport.update({
+  id: '/video-analysis',
+  path: '/video-analysis',
   getParentRoute: () => rootRouteImport,
 } as any)
 const KifusIdRoute = KifusIdRouteImport.update({
   id: '/kifus/$id',
   path: '/kifus/$id',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const KifusNewRoute = KifusNewRouteImport.update({
+  id: '/kifus/new',
+  path: '/kifus/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -162,46 +162,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/video-analysis': {
-      id: '/video-analysis'
-      path: '/video-analysis'
-      fullPath: '/video-analysis'
-      preLoaderRoute: typeof VideoAnalysisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stats': {
-      id: '/stats'
-      path: '/stats'
-      fullPath: '/stats'
-      preLoaderRoute: typeof StatsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/positions': {
-      id: '/positions'
-      path: '/positions'
-      fullPath: '/positions'
-      preLoaderRoute: typeof PositionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/drills': {
-      id: '/drills'
-      path: '/drills'
-      fullPath: '/drills'
-      preLoaderRoute: typeof DrillsRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dev-gallery': {
@@ -211,18 +176,46 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DevGalleryRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/drills': {
+      id: '/drills'
+      path: '/drills'
+      fullPath: '/drills'
+      preLoaderRoute: typeof DrillsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/kifus/new': {
-      id: '/kifus/new'
-      path: '/kifus/new'
-      fullPath: '/kifus/new'
-      preLoaderRoute: typeof KifusNewRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/positions': {
+      id: '/positions'
+      path: '/positions'
+      fullPath: '/positions'
+      preLoaderRoute: typeof PositionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/stats': {
+      id: '/stats'
+      path: '/stats'
+      fullPath: '/stats'
+      preLoaderRoute: typeof StatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/video-analysis': {
+      id: '/video-analysis'
+      path: '/video-analysis'
+      fullPath: '/video-analysis'
+      preLoaderRoute: typeof VideoAnalysisRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/kifus/$id': {
@@ -230,6 +223,13 @@ declare module '@tanstack/react-router' {
       path: '/kifus/$id'
       fullPath: '/kifus/$id'
       preLoaderRoute: typeof KifusIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/kifus/new': {
+      id: '/kifus/new'
+      path: '/kifus/new'
+      fullPath: '/kifus/new'
+      preLoaderRoute: typeof KifusNewRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

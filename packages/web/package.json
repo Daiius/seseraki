@@ -11,12 +11,12 @@
     "gen:logo": "node scripts/gen-logo.mjs"
   },
   "dependencies": {
-    "@tanstack/react-router": "^1.168.24",
+    "@tanstack/react-router": "^1.170.41",
     "@visx/responsive": "^4.0.0",
     "@visx/scale": "^4.0.0",
     "@visx/shape": "^4.0.0",
     "clsx": "^2.1.1",
-    "hono": "^4.12.25",
+    "hono": "^4.13.13",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "shared": "workspace:*",
@@ -25,7 +25,7 @@
   "devDependencies": {
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "4.2.2",
-    "@tanstack/router-plugin": "^1.167.27",
+    "@tanstack/router-plugin": "^1.168.42",
     "@types/node": "^22.19.17",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

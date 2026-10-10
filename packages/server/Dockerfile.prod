@@ -25,7 +25,9 @@ RUN pnpm --filter server build
 # ========================================
 # Stage 2: 本番イメージ
 # ========================================
-FROM gcr.io/distroless/nodejs22-debian12:debug
+# 🔒 nonroot（uid 65532）で動かす。server はファイルを書かないので権限は要らない。
+# :debug（root・busybox のシェル入り）にすると侵入後の足場が増える
+FROM gcr.io/distroless/nodejs22-debian12:nonroot
 
 WORKDIR /app
 

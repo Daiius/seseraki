@@ -22,6 +22,7 @@ import {
   drills,
   kifuAnalyses,
   kifuPositions,
+  kifuTactics,
   kifus,
   session,
   userAliases,
@@ -65,6 +66,9 @@ async function failure(p: Promise<unknown>): Promise<PgError> {
 const CHECK_VIOLATION = '23514';
 const FK_VIOLATION = '23503';
 
+/** 所有者の棋譜の指し方（子の表の書き込み関数が受け取る形） */
+const owned = (id: number) => ({ id, ownerId: OWNER_USER_ID });
+
 /** 1 局ぶんの最小の棋譜を足して id を返す */
 async function insertKifu(values: Partial<typeof kifus.$inferInsert> = {}): Promise<number> {
   const [row] = await db
@@ -86,7 +90,7 @@ async function insertUser(): Promise<string> {
 /** 解析 1 行（局面 0..n-1 をすべて full で、1 回の submit で書いたものとして入れる） */
 async function insertAnalysis(kifuId: number, positions: CandidateMove[][]): Promise<void> {
   await db.transaction((tx) =>
-    saveAnalysis(tx, kifuId, {
+    saveAnalysis(tx, owned(kifuId), {
       runs: [
         {
           profile: 'full',
@@ -113,14 +117,15 @@ const cand = (move: string, scoreValue: number, rank = 1, scoreType: 'cp' | 'mat
 });
 
 /** 正しい形の解析 1 行（上書きして不正な行を作る） */
-function analysisRow(kifuId: number): typeof kifuAnalyses.$inferInsert {
-  return { kifuId, fullCount: 0, runs: [], detail: [] };
+function analysisRow(kifuId: number, ownerId = OWNER_USER_ID): typeof kifuAnalyses.$inferInsert {
+  return { kifuId, ownerId, fullCount: 0, runs: [], detail: [] };
 }
 
 /** 正しい形の出題 1 行（上書きして不正な行を作る） */
-function drillRow(kifuId: number, moveNumber = 0): typeof drills.$inferInsert {
+function drillRow(kifuId: number, moveNumber = 0, ownerId = OWNER_USER_ID): typeof drills.$inferInsert {
   return {
     kifuId,
+    ownerId,
     moveNumber,
     kind: 'best',
     reason: 'own_blunder',
@@ -138,9 +143,10 @@ function drillRow(kifuId: number, moveNumber = 0): typeof drills.$inferInsert {
 }
 
 const bytes = (n: number) => Buffer.alloc(n, 1);
-function positionRow(kifuId: number, moveNumber: number, move: string | null) {
+function positionRow(kifuId: number, moveNumber: number, move: string | null, ownerId = OWNER_USER_ID) {
   return {
     kifuId,
+    ownerId,
     moveNumber,
     move,
     sfenHash: bytes(8),
@@ -184,6 +190,7 @@ describe('意味の制約（prd/15 §4.2）', () => {
     ['video_kifu_sources の区間は 0 <= 開始 <= 終了', 'video_kifu_sources_range', async () =>
       db.insert(videoKifuSources).values({
         kifuId: await insertKifu({ source: 'video' }),
+        ownerId: OWNER_USER_ID,
         videoId: randomUUID().slice(0, 32),
         gameIndex: 1,
         startedAtSec: 10,
@@ -195,6 +202,7 @@ describe('意味の制約（prd/15 §4.2）', () => {
     ['video_kifu_sources.gameIndex >= 0', 'video_kifu_sources_game_index_nonneg', async () =>
       db.insert(videoKifuSources).values({
         kifuId: await insertKifu({ source: 'video' }),
+        ownerId: OWNER_USER_ID,
         videoId: randomUUID().slice(0, 32),
         gameIndex: -1,
         startedAtSec: 0,
@@ -236,7 +244,7 @@ describe('意味の制約（prd/15 §4.2）', () => {
         .insert(drills)
         .values(drillRow(await insertKifu()))
         .returning({ id: drills.id });
-      return db.insert(drillAttempts).values({ drillId: drill.id, line: raw('7g7f') });
+      return db.insert(drillAttempts).values({ drillId: drill.id, ownerId: OWNER_USER_ID, line: raw('7g7f') });
     }],
   ];
 
@@ -260,8 +268,8 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
       insertKifu({ analysisProfile: raw('deep') })],
     ['kifus.subjectSide', 'kifus_subject_side_check', () => insertKifu({ subjectSide: raw('both') })],
     ['kifu_tactics.side', 'kifu_tactics_side_check', async () =>
-      db.execute(sql`insert into kifu_tactics (kifu_id, side, label, turn)
-        values (${await insertKifu()}, 'nobody', '四間飛車', 1)`)],
+      db.execute(sql`insert into kifu_tactics (kifu_id, owner_id, side, label, turn)
+        values (${await insertKifu()}, ${OWNER_USER_ID}, 'nobody', '四間飛車', 1)`)],
     ['kifu_positions.sideToMove', 'kifu_positions_side_to_move_check', async () =>
       db.insert(kifuPositions).values({ ...positionRow(await insertKifu(), 0, null), sideToMove: raw('x') })],
     ['drills.kind', 'drills_kind_check', async () =>
@@ -273,7 +281,7 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
         .insert(drills)
         .values(drillRow(await insertKifu()))
         .returning({ id: drills.id });
-      return db.insert(drillAttempts).values({ drillId: drill.id, verdict: raw('maybe') });
+      return db.insert(drillAttempts).values({ drillId: drill.id, ownerId: OWNER_USER_ID, verdict: raw('maybe') });
     }],
   ];
 
@@ -435,10 +443,10 @@ describe('集計の戻り値（node-postgres は bigint を文字列で返す。
   it('出題の件数・一覧の集計は number で返り、日時は ISO 文字列になる', async () => {
     const ownerId = await insertUser();
     const kifuId = await insertKifu({ ownerId });
-    const [drill] = await db.insert(drills).values(drillRow(kifuId)).returning({ id: drills.id });
+    const [drill] = await db.insert(drills).values(drillRow(kifuId, 0, ownerId)).returning({ id: drills.id });
     const [attempt] = await db
       .insert(drillAttempts)
-      .values({ drillId: drill.id, move: '2g2f', verdict: 'correct', line: ['2g2f'] })
+      .values({ drillId: drill.id, ownerId, move: '2g2f', verdict: 'correct', line: ['2g2f'] })
       .returning({ createdAt: drillAttempts.createdAt });
 
     const counts = await drillCounts(ownerId);
@@ -506,7 +514,7 @@ describe('FK（CASCADE の有無）', () => {
     await insertAnalysis(kifuId, [[cand('7g7f', 0)]]);
     await db.insert(kifuPositions).values(positionRow(kifuId, 0, null));
     const [drill] = await db.insert(drills).values(drillRow(kifuId)).returning({ id: drills.id });
-    await db.insert(drillAttempts).values({ drillId: drill.id, excluded: true });
+    await db.insert(drillAttempts).values({ drillId: drill.id, ownerId: OWNER_USER_ID, excluded: true });
 
     await db.delete(kifus).where(eq(kifus.id, kifuId));
 
@@ -536,6 +544,106 @@ describe('FK（CASCADE の有無）', () => {
   });
 });
 
+describe('所有者の写し（子の表の owner_id と複合 FK。prd/14 §4.1）', () => {
+  it('kifus を参照する表・drills を参照する表のすべてが owner_id（NOT NULL）を持つ', async () => {
+    // DB の側から「親を指す列を持つ表」を数える（表を足したときの付け忘れを拾う）
+    const result = await db.execute<{ table_name: string; nullable: string | null }>(sql`
+      select c.table_name, o.is_nullable as nullable
+      from information_schema.columns c
+      left join information_schema.columns o
+        on o.table_schema = c.table_schema and o.table_name = c.table_name and o.column_name = 'owner_id'
+      where c.table_schema = 'public' and c.column_name in ('kifu_id', 'drill_id')
+      order by c.table_name`);
+    expect(result.rows.map((r) => r.table_name)).toEqual([
+      'drill_attempts', 'drills', 'kifu_analyses', 'kifu_positions', 'kifu_tactics', 'video_kifu_sources',
+    ]);
+    expect(result.rows.filter((r) => r.nullable !== 'NO')).toEqual([]);
+  });
+
+  /** 子の行を書く関数（`ownerId` に親と違う値を渡すと複合 FK に反する） */
+  const children: [string, string, (kifuId: number, ownerId: string) => Promise<unknown>][] = [
+    ['kifu_analyses', 'kifu_analyses_kifu_owner_fkey', (kifuId, ownerId) =>
+      db.insert(kifuAnalyses).values(analysisRow(kifuId, ownerId))],
+    ['kifu_tactics', 'kifu_tactics_kifu_owner_fkey', (kifuId, ownerId) =>
+      db.insert(kifuTactics).values({ kifuId, ownerId, side: 'sente', label: '四間飛車', turn: 1 })],
+    ['kifu_positions', 'kifu_positions_kifu_owner_fkey', (kifuId, ownerId) =>
+      db.insert(kifuPositions).values(positionRow(kifuId, 0, null, ownerId))],
+    ['drills', 'drills_kifu_owner_fkey', (kifuId, ownerId) =>
+      db.insert(drills).values(drillRow(kifuId, 0, ownerId))],
+    ['video_kifu_sources', 'video_kifu_sources_kifu_owner_fkey', (kifuId, ownerId) =>
+      db.insert(videoKifuSources).values({
+        kifuId,
+        ownerId,
+        videoId: randomUUID().slice(0, 32),
+        gameIndex: 1,
+        startedAtSec: 0,
+        endedAtSec: 5,
+        bottomIsSente: true,
+        extractorRev: 'r',
+        raw: {},
+      })],
+    ['drill_attempts', 'drill_attempts_drill_owner_fkey', async (kifuId, ownerId) => {
+      // 出題そのものは親（棋譜）と同じ所有者で作り、解答履歴の所有者だけを変える
+      const [drill] = await db.insert(drills).values(drillRow(kifuId)).returning({ id: drills.id });
+      return db.insert(drillAttempts).values({ drillId: drill.id, ownerId, excluded: true });
+    }],
+  ];
+
+  it.each(children)('%s: 親と違う所有者の行は入らない', async (_table, constraint, write) => {
+    const other = await insertUser();
+    const kifuId = await insertKifu();
+    const err = await failure(write(kifuId, other));
+    expect(err).toMatchObject({ code: FK_VIOLATION, constraint });
+  });
+
+  it.each(children)('%s: 親と同じ所有者の行は入る', async (_table, _constraint, write) => {
+    await write(await insertKifu(), OWNER_USER_ID);
+  });
+
+  it('子の owner_id だけを書き換えることはできない', async () => {
+    const other = await insertUser();
+    const kifuId = await insertKifu();
+    await db.insert(kifuPositions).values(positionRow(kifuId, 0, null));
+    const err = await failure(
+      db.update(kifuPositions).set({ ownerId: other }).where(eq(kifuPositions.kifuId, kifuId)),
+    );
+    expect(err).toMatchObject({ code: FK_VIOLATION, constraint: 'kifu_positions_kifu_owner_fkey' });
+  });
+
+  it('棋譜の所有者を付け替えると、子の表（解答履歴まで）が追随する（ON UPDATE CASCADE）', async () => {
+    const other = await insertUser();
+    const kifuId = await insertKifu({ usiMoves: ['7g7f'] });
+    await db.transaction(async (tx) => {
+      await replacePositions(tx, owned(kifuId), ['7g7f']);
+    });
+    await insertAnalysis(kifuId, [[cand('7g7f', 0)]]);
+    const [drill] = await db.insert(drills).values(drillRow(kifuId)).returning({ id: drills.id });
+    await db.insert(drillAttempts).values({ drillId: drill.id, ownerId: OWNER_USER_ID, excluded: true });
+
+    await db.update(kifus).set({ ownerId: other }).where(eq(kifus.id, kifuId));
+
+    const owners = async () => [
+      ...(await db.select({ o: kifuPositions.ownerId }).from(kifuPositions).where(eq(kifuPositions.kifuId, kifuId))),
+      ...(await db.select({ o: kifuAnalyses.ownerId }).from(kifuAnalyses).where(eq(kifuAnalyses.kifuId, kifuId))),
+      ...(await db.select({ o: drills.ownerId }).from(drills).where(eq(drills.kifuId, kifuId))),
+      ...(await db.select({ o: drillAttempts.ownerId }).from(drillAttempts).where(eq(drillAttempts.drillId, drill.id))),
+    ].map((r) => r.o);
+    const after = await owners();
+    expect(after).toHaveLength(5); // 局面 2 + 解析 1 + 出題 1 + 解答 1
+    expect(new Set(after)).toEqual(new Set([other]));
+  });
+
+  it('名前候補は同じ名前を別のユーザーが持てる（UNIQUE は (userId, name)。prd/14 §4.1）', async () => {
+    const name = `shared${randomUUID().slice(0, 8)}`;
+    const a = await insertUser();
+    const b = await insertUser();
+    await db.insert(userAliases).values({ userId: a, name });
+    await db.insert(userAliases).values({ userId: b, name });
+    const err = await failure(db.insert(userAliases).values({ userId: a, name }));
+    expect(err).toMatchObject({ code: '23505', constraint: 'user_aliases_user_id_name_uq' });
+  });
+});
+
 describe('出題の追随（upsert。prd/13 §6.1）', () => {
   it('作り直しても ID と解答履歴が残り、条件から外れた行だけが消える', async () => {
     const moves = ['7g7f', '3c3d', '2g2f', '8c8d', '2f2e'];
@@ -546,7 +654,7 @@ describe('出題の追随（upsert。prd/13 §6.1）', () => {
     const first = await db.transaction((tx) => syncDrills(tx, kifuId, config));
     expect(first).toEqual({ upserted: 1, removed: 0 });
     const [drill] = await db.select().from(drills).where(eq(drills.kifuId, kifuId));
-    await db.insert(drillAttempts).values({ drillId: drill.id, move: '2g2f', verdict: 'correct' });
+    await db.insert(drillAttempts).values({ drillId: drill.id, ownerId: OWNER_USER_ID, move: '2g2f', verdict: 'correct' });
     // 条件から外れる行（抽出されない局面）を紛れ込ませる
     await db.insert(drills).values(drillRow(kifuId, 2));
 
@@ -573,12 +681,12 @@ describe('解析結果の 1 行（kifu_analyses。prd/16）', () => {
       candidates: [cand('7g7f', 0)],
     })), run('quick', '2026-10-01T00:00:00.000Z'));
     if (!quick.ok) throw new Error('rejected');
-    await db.transaction((tx) => saveAnalysis(tx, kifuId, quick.next));
+    await db.transaction((tx) => saveAnalysis(tx, owned(kifuId), quick.next));
     stored = await loadAnalysis(db, kifuId);
     const full = mergeChunk(stored, [{ moveNumber: 0, candidates: [cand('7g7f', 9, 1, 'mate')] }],
       run('full', '2026-10-02T00:00:00.000Z'));
     if (!full.ok) throw new Error('rejected');
-    await db.transaction((tx) => saveAnalysis(tx, kifuId, full.next));
+    await db.transaction((tx) => saveAnalysis(tx, owned(kifuId), full.next));
 
     const [row] = await db.select().from(kifuAnalyses).where(eq(kifuAnalyses.kifuId, kifuId));
     expect(row.fullCount).toBe(1);
@@ -595,9 +703,9 @@ describe('解析結果の 1 行（kifu_analyses。prd/16）', () => {
 
   it('局面の再利用は full の局面だけを、その局面の submit の時刻付きで引く', async () => {
     const kifuId = await insertKifu({ usiMoves: ['7g7f', '3c3d'] });
-    await db.transaction((tx) => replacePositions(tx, kifuId, ['7g7f', '3c3d']));
+    await db.transaction((tx) => replacePositions(tx, owned(kifuId), ['7g7f', '3c3d']));
     await db.transaction((tx) =>
-      saveAnalysis(tx, kifuId, {
+      saveAnalysis(tx, owned(kifuId), {
         runs: [
           { profile: 'full', engineName: null, movetimeMs: null, targetDepth: null, multiPv: 3, at: '2026-10-05T00:00:00.000Z' },
           { profile: 'quick', engineName: null, movetimeMs: null, targetDepth: null, multiPv: 3, at: '2026-10-06T00:00:00.000Z' },

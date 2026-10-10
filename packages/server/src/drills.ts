@@ -223,6 +223,7 @@ export async function syncDrills(
       subjectSide: kifus.subjectSide,
       analysisRevision: kifus.analysisRevision,
       source: kifus.source,
+      ownerId: kifus.ownerId,
     })
     .from(kifus)
     .where(eq(kifus.id, kifuId));
@@ -245,6 +246,8 @@ export async function syncDrills(
       .values(
         extracted.map((d) => ({
           kifuId,
+          // 棋譜の所有者の写し（prd/14 §4.1）。upsert の衝突時は書き換えない（同じ棋譜なら同じ値）
+          ownerId: kifu.ownerId,
           moveNumber: d.moveNumber,
           kind: d.kind,
           reason: d.reason,

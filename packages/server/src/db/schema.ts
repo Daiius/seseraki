@@ -122,6 +122,35 @@ function byteLengthCheck(name: string, column: AnyPgColumn, length: number) {
 /** 条件 a と b が同値（両方真か両方偽）であること */
 const sameTruth = (a: SQL, b: SQL) => sql`(${a}) = (${b})`;
 
+// --- 所有者（prd/14 §4・§4.1）---
+
+/**
+ * 子の表の所有者の列。**親（`kifus` / `drills`）の `ownerId` の写し**で、食い違わないことは
+ * 複合 FK（`ownedBy`）で DB が保証する。RLS のポリシーを全表で `owner_id = …` の一様な形に
+ * するために持つ（prd/14 §4・prd/15 §11）。
+ *
+ * 🔒 **書き込み側が必ず親と同じ値を入れる**（既定値は持たせない）。違う値は FK 違反で落ちる。
+ */
+const ownerRef = () => varchar({ length: 36 }).notNull();
+
+/**
+ * 子の表から親への**複合 FK** `(子の参照列, ownerId) → 親(id, ownerId)`（prd/14 §4.1）。
+ * 親側に `UNIQUE(id, ownerId)` が要る（`kifus_id_owner_id_uq` / `drills_id_owner_id_uq`）。
+ *
+ * - **ON DELETE CASCADE**: 単独の FK だった頃の振る舞いをそのまま引き継ぐ（棋譜を消せば子も消える）。
+ *   ⚠ 単独の FK は残さない——`ownerId` は NOT NULL なので、複合 FK が親の存在も確かめる
+ * - **ON UPDATE CASCADE**: 親の `ownerId` を変えたら子も追随させる。`ownerId` は親の写しにすぎず、
+ *   正は親の側にある。CASCADE にしないと**所有者を付け替える手段が無くなる**（親を先に変えれば子が、
+ *   子を先に変えれば親が FK に反する）。付け替えを 1 文で原子的に行えるようにしておく
+ */
+function ownedBy(
+  name: string,
+  columns: [AnyPgColumn, AnyPgColumn],
+  foreignColumns: [AnyPgColumn, AnyPgColumn],
+) {
+  return foreignKey({ name, columns, foreignColumns }).onDelete('cascade').onUpdate('cascade');
+}
+
 /**
  * ユーザー。**Better Auth の user 表を兼ねる**（prd/07 §3.1。`user.modelName: 'users'`）。
  *
@@ -228,8 +257,9 @@ export const verification = table(
 /**
  * 対局者名と突き合わせる名前候補（prd/11 §2）。
  *
- * 🔒 **`name` に UNIQUE を張る。** 別のユーザーが同じ対局者名を登録できると、
- * **同じ棋譜が 2 人の「自分の対局」になり、両方の成績に入る**。
+ * 🔒 **UNIQUE は `(userId, name)`**（prd/14 §4.1）。主体側の判定は**所有者の名前候補と所有者の棋譜だけ**で
+ * 完結する（`refreshSubjectSide`）ので、別のユーザーが同じ名前を持っても互いの成績には混ざらない。
+ * 全体の UNIQUE（`name` 単独。当初の形）は**他人による名前の先取り**を生むだけだった。
  *
  * ⚠ **旧名を消してはいけない**（prd/11 §2.2）。消すと、その名前で指した過去の棋譜が
  * 「自分の対局」でなくなり、成績から静かに落ちる。名前を変えたときは**足す**。
@@ -260,7 +290,7 @@ export const userAliases = table(
       columns: [table.userId],
       foreignColumns: [users.id],
     }).onDelete('cascade'),
-    uniqueIndex('user_aliases_name_uq').on(table.name),
+    uniqueIndex('user_aliases_user_id_name_uq').on(table.userId, table.name),
     check('user_aliases_name_not_empty', sql`${table.name} <> ''`),
     check(
       'user_aliases_valid_range',
@@ -327,6 +357,8 @@ export const kifus = table(
     // 🔒 ユーザーを消しても棋譜は道連れにしない（CASCADE にしない。prd/14 §3.1）。
     // ユーザー行を 1 度誤って消しただけで全データが道連れになるため。削除は退会のバッチが明示的に行う
     foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
+    // 子の表の複合 FK（`ownedBy`）の参照先。`id` だけで一意だが、FK は参照先に UNIQUE を要る
+    uniqueIndex('kifus_id_owner_id_uq').on(table.id, table.ownerId),
     ANALYSIS_PROFILE.check('kifus_analysis_profile_check', table.analysisProfile),
     KIFU_SOURCE.check('kifus_source_check', table.source),
     SIDE.check('kifus_subject_side_check', table.subjectSide),
@@ -353,6 +385,8 @@ export const videoKifuSources = table(
     // **単一列 PK のテーブルでは生成 SQL から `ON DELETE CASCADE` が落ちる**
     // （複合 PK の kifuTactics では落ちない）。CASCADE が無いと棋譜を消せなくなる
     kifuId: idRef().notNull(),
+    /** 棋譜（`kifus.ownerId`）の写し（`ownerRef`） */
+    ownerId: ownerRef(),
     /** 動画の識別子 */
     videoId: varchar({ length: 32 }).notNull(),
     /** その動画の何局目か（1 始まり） */
@@ -371,10 +405,7 @@ export const videoKifuSources = table(
   },
   (table) => [
     primaryKey({ columns: [table.kifuId] }),
-    foreignKey({
-      columns: [table.kifuId],
-      foreignColumns: [kifus.id],
-    }).onDelete('cascade'),
+    ownedBy('video_kifu_sources_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     // 「同じ動画の同じ局」は 1 つの実体。再取り込みはこのキーで上書きする（prd/10 §4.3）
     uniqueIndex('video_kifu_sources_video_id_game_index_uq').on(
       table.videoId,
@@ -398,9 +429,9 @@ export const videoKifuSources = table(
 export const kifuAnalyses = table(
   'kifu_analyses',
   {
-    kifuId: idRef()
-      .primaryKey()
-      .references(() => kifus.id, { onDelete: 'cascade' }),
+    kifuId: idRef().primaryKey(),
+    /** 棋譜（`kifus.ownerId`）の写し（`ownerRef`） */
+    ownerId: ownerRef(),
     /**
      * 先頭から何局面までが full か（prd/16 §4.2）。full は 0 から順に上書きするので常に連続区間。
      * 🔒 **既定値は持たせない**（アプリが常に明示して書く）
@@ -421,6 +452,7 @@ export const kifuAnalyses = table(
     updatedAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
+    ownedBy('kifu_analyses_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     jsonArrayCheck('kifu_analyses_detail_array', table.detail),
     jsonArrayCheck('kifu_analyses_runs_array', table.runs),
     check(
@@ -440,9 +472,9 @@ export const kifuAnalyses = table(
 export const kifuTactics = table(
   'kifu_tactics',
   {
-    kifuId: idRef()
-      .notNull()
-      .references(() => kifus.id, { onDelete: 'cascade' }),
+    kifuId: idRef().notNull(),
+    /** 棋譜（`kifus.ownerId`）の写し（`ownerRef`） */
+    ownerId: ownerRef(),
     /** ラベルの**帰属先**。「立った手番」ではない（prd/03 §2.1.1） */
     side: TACTIC_SIDE.column().notNull(),
     /** 一次 / 二次ラベル名。**表示名そのもの**（enum やコード値にしない） */
@@ -452,6 +484,7 @@ export const kifuTactics = table(
   },
   (table) => [
     primaryKey({ columns: [table.kifuId, table.side, table.label] }),
+    ownedBy('kifu_tactics_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
     index('kifu_tactics_label_idx').on(table.label),
     TACTIC_SIDE.check('kifu_tactics_side_check', table.side),
   ],
@@ -470,6 +503,11 @@ export const kifuPositions = table(
   'kifu_positions',
   {
     kifuId: idRef().notNull(),
+    /**
+     * 棋譜（`kifus.ownerId`）の写し（`ownerRef`）。**索引の先頭列**でもある——検索を所有者で絞るとき、
+     * join 後に絞るのでは初期局面で全ユーザーぶんを読んでから捨てることになる（prd/14 §4.1・§6.3）
+     */
+    ownerId: ownerRef(),
     /** 0 = 初期局面。N は N 手適用後の局面 */
     moveNumber: integer().notNull(),
     /**
@@ -504,17 +542,17 @@ export const kifuPositions = table(
   },
   (table) => [
     primaryKey({ columns: [table.kifuId, table.moveNumber] }),
-    foreignKey({
-      columns: [table.kifuId],
-      foreignColumns: [kifus.id],
-    }).onDelete('cascade'),
-    index('kifu_positions_sfen_hash_idx').on(table.sfenHash),
-    index('kifu_positions_sente_sfen_hash_idx').on(table.senteSfenHash),
-    index('kifu_positions_gote_sfen_hash_idx').on(table.goteSfenHash),
+    ownedBy('kifu_positions_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
+    // 🔒 **検索の索引は所有者を先頭に置く**（prd/14 §4.1・§6.3）。検索は「所有者の棋譜の中で」
+    // ハッシュ・手数で引く。所有者で絞らない問い合わせ（所有者スコープの前の今の形）も
+    // Postgres 18 の B-tree の skip scan で同じ索引を使える（所有者の種類が少ない間は安い）
+    index('kifu_positions_owner_id_sfen_hash_idx').on(table.ownerId, table.sfenHash),
+    index('kifu_positions_owner_id_sente_sfen_hash_idx').on(table.ownerId, table.senteSfenHash),
+    index('kifu_positions_owner_id_gote_sfen_hash_idx').on(table.ownerId, table.goteSfenHash),
     // 近い局面の検索は `moveNumber` の範囲で候補を粗く絞る（prd/10 §5.2）。
     // ⚠ **PK は `(kifuId, moveNumber)` なので、この範囲条件には使えない**
     //（先頭列が kifuId のため）。索引が無いと全局面を走査することになる
-    index('kifu_positions_move_number_idx').on(table.moveNumber),
+    index('kifu_positions_owner_id_move_number_idx').on(table.ownerId, table.moveNumber),
     SIDE_TO_MOVE.check('kifu_positions_side_to_move_check', table.sideToMove),
     byteLengthCheck('kifu_positions_sfen_hash_len', table.sfenHash, 8),
     byteLengthCheck('kifu_positions_sente_sfen_hash_len', table.senteSfenHash, 8),
@@ -543,6 +581,8 @@ export const drills = table(
   {
     id: identityId(),
     kifuId: idRef().notNull(),
+    /** 棋譜（`kifus.ownerId`）の写し（`ownerRef`）。解答履歴の複合 FK の参照先でもある */
+    ownerId: ownerRef(),
     /** 出題局面（= その手を指す前の局面。`kifuAnalyses.detail` の添字と同じ数え方） */
     moveNumber: integer().notNull(),
     /**
@@ -590,10 +630,9 @@ export const drills = table(
       table.moveNumber,
       table.kind,
     ),
-    foreignKey({
-      columns: [table.kifuId],
-      foreignColumns: [kifus.id],
-    }).onDelete('cascade'),
+    ownedBy('drills_kifu_owner_fkey', [table.kifuId, table.ownerId], [kifus.id, kifus.ownerId]),
+    // 解答履歴の複合 FK（`ownedBy`）の参照先
+    uniqueIndex('drills_id_owner_id_uq').on(table.id, table.ownerId),
     // 出題順（未出題 > 間違えた > 正解済み。prd/13 §6.3）は種類で絞ってから引く
     index('drills_kind_idx').on(table.kind),
     DRILL_KIND.check('drills_kind_check', table.kind),
@@ -619,6 +658,8 @@ export const drillAttempts = table(
   {
     id: identityId(),
     drillId: idRef().notNull(),
+    /** 出題（`drills.ownerId`）の写し（`ownerRef`）。⚠ 解答した人ではなく棋譜の所有者 */
+    ownerId: ownerRef(),
     /** 解答した手（USI）。除外だけを記録する行では null */
     move: varchar({ length: 16 }),
     /**
@@ -640,10 +681,7 @@ export const drillAttempts = table(
     createdAt: timestamptz().notNull().defaultNow(),
   },
   (table) => [
-    foreignKey({
-      columns: [table.drillId],
-      foreignColumns: [drills.id],
-    }).onDelete('cascade'),
+    ownedBy('drill_attempts_drill_owner_fkey', [table.drillId, table.ownerId], [drills.id, drills.ownerId]),
     index('drill_attempts_drill_id_idx').on(table.drillId),
     // 解答履歴の一覧は**新しい順**に 50 件ずつ引く（prd/13 §7.3）
     index('drill_attempts_created_at_idx').on(table.createdAt),

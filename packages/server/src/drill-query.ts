@@ -107,6 +107,7 @@ export async function loadDrill(id: number, ownerId: string) {
     .select({
       id: drills.id,
       kifuId: drills.kifuId,
+      ownerId: drills.ownerId,
       kind: drills.kind,
       reason: drills.reason,
       moveNumber: drills.moveNumber,
@@ -131,6 +132,8 @@ export async function recordAttempt(
   tx: Tx | typeof db,
   attempt: {
     drillId: number;
+    /** 出題（`drills.ownerId`）の所有者。食い違えば複合 FK が落とす（prd/14 §4.1） */
+    ownerId: string;
     move: string | null;
     /** 解答の手順（出題局面から・最後が `move`）。表記を作る盤面がこれで決まる（prd/13 §6.2） */
     line?: string[] | null;
@@ -141,6 +144,7 @@ export async function recordAttempt(
 ): Promise<void> {
   await tx.insert(drillAttempts).values({
     drillId: attempt.drillId,
+    ownerId: attempt.ownerId,
     move: attempt.move,
     line: attempt.line ?? null,
     verdict: attempt.verdict,

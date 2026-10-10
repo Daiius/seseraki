@@ -37,12 +37,12 @@ async function main() {
       // kifus の行ロックを取ってから usiMoves を読むので、reanalyze と直列化される
       const n = await db.transaction(async (tx) => {
         const [row] = await tx
-          .select({ usiMoves: kifus.usiMoves })
+          .select({ usiMoves: kifus.usiMoves, ownerId: kifus.ownerId })
           .from(kifus)
           .where(eq(kifus.id, id))
           .for('update');
         if (!row) return 0;
-        return replacePositions(tx, id, row.usiMoves);
+        return replacePositions(tx, { id, ownerId: row.ownerId }, row.usiMoves);
       });
       if (n > 0) games++;
       rows += n;

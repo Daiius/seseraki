@@ -117,6 +117,7 @@ export async function importVideoKifu(
     const [existing] = await tx
       .select({
         kifuId: videoKifuSources.kifuId,
+        ownerId: kifus.ownerId,
         usiMoves: kifus.usiMoves,
       })
       .from(videoKifuSources)
@@ -152,11 +153,12 @@ export async function importVideoKifu(
           subjectSide: subjectSideFromVideo(input.bottomIsSente),
         })
         .returning({ id: kifus.id });
+      const kifu = { id: inserted.id, ownerId: OWNER_USER_ID };
       await tx
         .insert(videoKifuSources)
-        .values({ kifuId: inserted.id, ...source });
-      await replaceTactics(tx, inserted.id, input.usi);
-      await replacePositions(tx, inserted.id, input.usi);
+        .values({ kifuId: kifu.id, ownerId: kifu.ownerId, ...source });
+      await replaceTactics(tx, kifu, input.usi);
+      await replacePositions(tx, kifu, input.usi);
       return { kifuId: inserted.id, created: true, changed: true, diff: [] };
     }
 
@@ -195,8 +197,9 @@ export async function importVideoKifu(
       })
       .where(eq(kifus.id, existing.kifuId));
     await tx.delete(kifuAnalyses).where(eq(kifuAnalyses.kifuId, existing.kifuId));
-    await replaceTactics(tx, existing.kifuId, input.usi);
-    await replacePositions(tx, existing.kifuId, input.usi);
+    const kifu = { id: existing.kifuId, ownerId: existing.ownerId };
+    await replaceTactics(tx, kifu, input.usi);
+    await replacePositions(tx, kifu, input.usi);
 
     return { kifuId: existing.kifuId, created: false, changed: true, diff };
   });

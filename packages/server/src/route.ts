@@ -526,8 +526,9 @@ const route = app
             ownerId,
           })
           .returning({ id: kifus.id });
-        await replaceTactics(tx, result.id, usiMoves);
-        await replacePositions(tx, result.id, usiMoves);
+        const kifu = { id: result.id, ownerId };
+        await replaceTactics(tx, kifu, usiMoves);
+        await replacePositions(tx, kifu, usiMoves);
         // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
         await refreshSubjectSide(tx, result.id);
         return result.id;
@@ -1120,6 +1121,7 @@ const route = app
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       await recordAttempt(db, {
         drillId: id,
+        ownerId: drill.ownerId,
         move: null,
         verdict: null,
         lossCp: null,
@@ -1209,6 +1211,7 @@ const route = app
           }
           await recordAttempt(db, {
             drillId: id,
+            ownerId: drill.ownerId,
             move,
             line,
             verdict: 'correct',
@@ -1231,7 +1234,7 @@ const route = app
       // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
       const scored = scoreFromCandidates(drill, move, scoring);
       if (scored) {
-        await recordAttempt(db, { drillId: id, move, line, ...scored });
+        await recordAttempt(db, { drillId: id, ownerId: drill.ownerId, move, line, ...scored });
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
       const resolved = await answerWithEngine({ drill, state, move, line, scoring }, reveal);
@@ -1338,7 +1341,7 @@ const route = app
     async (c) => {
       const { id } = c.req.valid('param');
       const [kifu] = await db
-        .select({ kifText: kifus.kifText, sourceTz: kifus.sourceTz })
+        .select({ kifText: kifus.kifText, sourceTz: kifus.sourceTz, ownerId: kifus.ownerId })
         .from(kifus)
         .where(eq(kifus.id, id));
       if (!kifu) return c.json({ error: 'not found' }, 404);
@@ -1378,9 +1381,9 @@ const route = app
         await tx.delete(kifuAnalyses).where(eq(kifuAnalyses.kifuId, id));
         // 指し手列を作り直したので戦型も置き換える（prd/01 §6.4）。
         // 再変換に失敗して usiMoves が null になった場合はラベルを空にする
-        await replaceTactics(tx, id, usiMoves);
+        await replaceTactics(tx, { id, ownerId: kifu.ownerId }, usiMoves);
         // 局面索引も同じトランザクションで作り直す（派生値なので usiMoves に追随する。prd/10 §3.2）
-        await replacePositions(tx, id, usiMoves);
+        await replacePositions(tx, { id, ownerId: kifu.ownerId }, usiMoves);
         // 再変換で対局者名が変わりうるので、主体側も引き直す（prd/11 §4.2）
         await refreshSubjectSide(tx, id);
         // 出題は解析結果からの派生値（prd/13 §6.1）。解析を消した以上ここも空になる
@@ -1645,6 +1648,7 @@ const route = app
             completedAt: kifus.analysisCompletedAt,
             analysisProfile: kifus.analysisProfile,
             usiMoves: kifus.usiMoves,
+            ownerId: kifus.ownerId,
             // 今回の run の時刻（prd/16 §3.1）。トランザクションの時刻なので 1 回の submit の中で揃う。
             // ⚠ `sql` 断片の日時はオフセット付きの文字列で返る（列の変換を通らない）
             now: sql<string>`now()`.mapWith((v: string) => new Date(v).toISOString()),
@@ -1682,7 +1686,7 @@ const route = app
           return;
         }
         applied = true;
-        if (merged.wrote) await saveAnalysis(tx, kifuId, merged.next);
+        if (merged.wrote) await saveAnalysis(tx, { id: kifuId, ownerId: current.ownerId }, merged.next);
 
         // 完了は **server が局面数で判定**する（worker の申告に依らない。prd/05 §1.1c）。
         // ⚠ **段階ごとに数える**（prd/05 §1.1d）: quick = `detail` の長さ / full = `fullCount`
@@ -1852,8 +1856,8 @@ const route = app
                   sourceTz: 'JST',
                 })
                 .returning({ id: kifus.id });
-              await replaceTactics(tx, result.id, usiMoves);
-        await replacePositions(tx, result.id, usiMoves);
+              await replaceTactics(tx, { id: result.id, ownerId }, usiMoves);
+              await replacePositions(tx, { id: result.id, ownerId }, usiMoves);
         // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
         await refreshSubjectSide(tx, result.id);
               return result.id;

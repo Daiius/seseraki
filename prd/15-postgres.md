@@ -259,7 +259,15 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 [14](./14-multi-user.md) §4 を Postgres の上で行う。PR は 4 本に分ける:
 
-1. スキーマ（`kifu_positions.ownerId` の非正規化・`user_aliases` の UNIQUE を `(userId, name)` に）
-2. クエリのスコープと **RLS**（ロールの設計・リクエストごとの `SET LOCAL`・全員ぶんを扱う経路の迂回ロール）
+1. スキーマ（✅ 2026-10-11）: `kifus` 配下の子の表すべてに `ownerId`（親の写し）と複合 FK `(kifuId, ownerId) → kifus(id, ownerId)`、
+   `kifu_positions` の索引を所有者付きに、`user_aliases` の UNIQUE を `(userId, name)` に（[14](./14-multi-user.md) §4.1・[03](./03-data-model.md) §1）。
+   マイグレーションは列を NULL 可で足し、親から埋め戻してから NOT NULL と FK を付ける（1 トランザクション）。
+   書き込み側は親と同じ `ownerId` を入れる。読み取りの挙動は変えない
+2. クエリのスコープと **RLS**（2026-10-11 に形を決めた。[14](./14-multi-user.md) §4「RLS の形」）:
+   - リクエストごとにトランザクションを開いて `set_config('app.user_id', <id>, true)`。クエリ関数はその tx を引数で受け取る
+   - worker の報告・一括処理など全員ぶんを扱う経路は **BYPASSRLS の別ロール＋別プール**。🔒 **ロールは migration で作らない**
+     （BYPASSRLS の付与は superuser が要る。§2 の管理ロールには無い）。dev は `scripts/postgres-init/`、本番は手順で作る
+   - ポリシーは子の表を含む全表で一様に `owner_id = current_setting('app.user_id', true)`。未設定は常に 0 件（fail-closed）
+   - ⚠ 表の所有者（管理ロール）には RLS が効かない（`FORCE ROW LEVEL SECURITY` を付けない限り）。server ロールは表の所有者でないので効く
 3. swars を閉じる
 4. **所有者ゲートを外し、同時に新規登録を既定で開く**（[07](./07-auth-and-privacy.md) §5.2）

@@ -50,7 +50,7 @@ users                            -- Better Auth の user 表を兼ねる（[07](
 userAliases
 ├── id: serial PK
 ├── userId: varchar(36) FK → users.id (CASCADE)
-├── name: varchar(100) UNIQUE    -- 棋譜の対局者名と突き合わせる値
+├── name: varchar(100)          -- 棋譜の対局者名と突き合わせる値。UNIQUE(userId, name)（§2.1）
 ├── validFrom: date?             -- 有効期間（§4）。既定は無期限
 ├── validTo: date?
 └── createdAt
@@ -68,7 +68,7 @@ userAliases
 **同じ棋譜が 2 人の「自分の対局」になり、両方の成績に入る**。json 列やカンマ区切りでは
 この制約を DB で守れない。
 
-> ⚠ **一般公開（[14](./14-multi-user.md) §4.1）で `(userId, name)` の UNIQUE に改める**（未実装。現状は `name` 単独）。
+> ✅ **`(userId, name)` の UNIQUE に改めた**（2026-10-11・所有者スコープのスキーマ。[14](./14-multi-user.md) §4.1）。
 > 上の懸念は「棋譜を所有者で分けない」前提のもので、所有者スコープの下では主体側の判定が
 > **所有者の名前候補と所有者の棋譜だけで完結する**（`refreshSubjectSide`）。同じ対局を 2 人が取り込めば
 > 別々の行になり、互いの成績には混ざらない。全体 UNIQUE のままだと、**他人が先に登録した名前を

@@ -103,7 +103,12 @@
 - ✅ **アプリ層は実装済み**（2026-10-11・所有者スコープ 2a）: ログインの経路（`sessionRequired`）がリクエストごとに tx を開いて
   `app.user_id` を設定し（`user-tx.ts`）、ハンドラは `c.get('tx')` を使う。棋譜系のクエリ関数（`kifu-queries.ts` / `position-queries.ts` /
   `drill-query.ts` / `users.ts` / `position-kifu-reuse.ts`）は tx と所有者を引数に取る。グローバルの `db` を import してよいモジュールは
-  `db-import-boundary.test.ts` が限る。全員ぶんの経路（worker の報告・動画解析の取り込み）は `worker-routes.ts`。RLS は 2b
+  `db-import-boundary.test.ts` が限る。全員ぶんの経路（worker の報告・動画解析の取り込み）は `worker-routes.ts`
+- ✅ **RLS も実装済み**（2026-10-11・所有者スコープ 2b）: `kifus` と子の表 6 つは `owner_id`、`user_aliases` は `user_id` を
+  `current_setting('app.user_id', true)` と比べるポリシー（USING と WITH CHECK。schema の `ownerPolicy`）。`FORCE` は付けない
+  （[15](./15-postgres.md) §11）。全員ぶんの経路は BYPASSRLS の system ロールの別プール（`db/system.ts`。[15](./15-postgres.md) §2.1）。
+  Better Auth の表（`users` / `session` / `account` / `verification`）には掛けない——所有者で絞る行ではなく、
+  ログインの経路は自分の `users` の行を ID で引くだけ。dev ログイン・Better Auth・所有者の付け替えは server ロールのまま
 - 現状で `ownerId` を見ているのは**出題系だけ**。一覧・詳細・統計・削除・再解析・局面検索・worker 系を直す。
   加えて、棋譜を直接引かないので見落としやすい次の 2 つも直す（2026-10-11 のコード調査で判明）:
   - **名前候補の更新・削除**（`users.ts` の `updateAliasPeriod` / `removeAlias`）: ID だけで引いている。所有者の条件を付ける

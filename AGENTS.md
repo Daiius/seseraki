@@ -103,6 +103,15 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > 🔴 **ログインの経路はグローバルの `db` を使わない**（[prd/14](./prd/14-multi-user.md) §4）。ハンドラは `sessionRequired` が開いた
 > `c.get('tx')`（`app.user_id` を設定済み）を使い、棋譜系のクエリ関数は tx と所有者（`c.get('userId')`。セッションから取る）を受け取って
 > `owner_id` で絞る。他人の行は 404。`db` を import してよいモジュールは `db-import-boundary.test.ts` の許可リストだけ。
+> 全員ぶんを扱う経路（worker の報告・動画解析の取り込み・一括処理）は RLS を迂回する **system ロールの別プール**（`db/system.ts`。
+> `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`。🔒 未設定なら server は起動しない）。ログインの経路から import すると同じテストが落とす。
+>
+> 🔴 **`kifus` 配下・所有者を持つ表を足したら、RLS のポリシー（`schema.ts` の `ownerPolicy`）も付ける。** drizzle-kit が
+> `ENABLE ROW LEVEL SECURITY` と `CREATE POLICY` を生成する。付け忘れると test:db（`rls.db.test.ts`）が落ちる——public の表は
+> 「RLS あり」か「掛けない許可リスト（Better Auth の表）」のどちらかでないといけない。⚠ `FORCE ROW LEVEL SECURITY` は付けない
+> （管理ロールのマイグレーションの埋め戻しが黙って 0 行になる。prd/15 §11）。
+> ⚠ **system ロールはマイグレーションでは作らない**（superuser が要る）。dev は `scripts/postgres-init/20-system-role.sh`
+> （既存の volume にも冪等に流せる。`--check` あり）、本番は [prd/15](./prd/15-postgres.md) §2.1 の順で。
 >
 > 🔴 **DB の列名は snake_case、TS は camelCase**（prd/15 §3.6）。変換は drizzle の casing で、**表を `schema.ts` の `table`（`snakeCase.table`）で定義すると付く**
 > （drizzle 1.0 では `drizzle()` ではなく表の定義に付く）。**`pgTable` で足すとその表だけ camelCase の列になる**——`test:db` が全列の名前を検査する。手書きの SQL・`sql` 断片・トリガーは DB の名前（`updated_at`）で書く。
@@ -163,7 +172,9 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 ```
 
 - 🔒 **起動時の自動適用にはしない。** 失敗時の挙動と、将来インスタンスを増やしたときの競合が読めなくなる。
-- 🔴 **`migrate.js` は server の入れ替えより先に流す。** 新しい server は列やテーブルが無いと動かない
+- 🔒 **一括処理のエントリは RLS を迂回する system ロールで繋ぐ**（`DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD` が要る。無ければ止まる）。
+- 🔴 **`migrate.js` は server の入れ替えより先に流す。** ⚠ ただし RLS のマイグレーション（`owner_scope_rls`）だけは、流した瞬間から
+  古い server が何も読み書きできなくなる——system ロールを先に作り、migrate の後**すぐ**入れ替える（[prd/15](./prd/15-postgres.md) §2.1）。 新しい server は列やテーブルが無いと動かない
   （`analysisProfile` が無いと poll が落ちる／`drills` が無いと解析報告・reanalyze・名前候補の編集が落ちる）。
   **管理ロール（`DB_ADMIN_USER`）で流す**——常駐 server のロールには DDL の権限が無い。
 - 🔴 **新しいテーブルを作るマイグレーションの後は、対応する一括生成を一度流す**（`generate-drills.js` /

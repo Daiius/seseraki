@@ -29,12 +29,21 @@ ALTER TABLE "kifu_tactics" ADD COLUMN "owner_id" varchar(36);--> statement-break
 ALTER TABLE "video_kifu_sources" ADD COLUMN "owner_id" varchar(36);--> statement-breakpoint
 -- 2. 親から埋め戻す。外した FK が親の存在を保証していたので、埋まらない行は無い
 --    （残れば 3. の NOT NULL で止まる）。drill_attempts は drills を埋めた後に drills から引く
+--    🔴 埋め戻しの間は updated_at のトリガーを止める（レビュー OCL-03235CFA）。止めないと
+--    全行の updated_at が移行時刻に変わり、動画の最終更新日時などが「更新された」ように見える。
+--    トリガーを持つ子の表は drills / kifu_analyses / video_kifu_sources（同じトランザクションの中で戻す）
+ALTER TABLE "drills" DISABLE TRIGGER "drills_set_updated_at";--> statement-breakpoint
+ALTER TABLE "kifu_analyses" DISABLE TRIGGER "kifu_analyses_set_updated_at";--> statement-breakpoint
+ALTER TABLE "video_kifu_sources" DISABLE TRIGGER "video_kifu_sources_set_updated_at";--> statement-breakpoint
 UPDATE "drills" c SET "owner_id" = k."owner_id" FROM "kifus" k WHERE k."id" = c."kifu_id";--> statement-breakpoint
 UPDATE "kifu_analyses" c SET "owner_id" = k."owner_id" FROM "kifus" k WHERE k."id" = c."kifu_id";--> statement-breakpoint
 UPDATE "kifu_positions" c SET "owner_id" = k."owner_id" FROM "kifus" k WHERE k."id" = c."kifu_id";--> statement-breakpoint
 UPDATE "kifu_tactics" c SET "owner_id" = k."owner_id" FROM "kifus" k WHERE k."id" = c."kifu_id";--> statement-breakpoint
 UPDATE "video_kifu_sources" c SET "owner_id" = k."owner_id" FROM "kifus" k WHERE k."id" = c."kifu_id";--> statement-breakpoint
 UPDATE "drill_attempts" c SET "owner_id" = d."owner_id" FROM "drills" d WHERE d."id" = c."drill_id";--> statement-breakpoint
+ALTER TABLE "drills" ENABLE TRIGGER "drills_set_updated_at";--> statement-breakpoint
+ALTER TABLE "kifu_analyses" ENABLE TRIGGER "kifu_analyses_set_updated_at";--> statement-breakpoint
+ALTER TABLE "video_kifu_sources" ENABLE TRIGGER "video_kifu_sources_set_updated_at";--> statement-breakpoint
 -- 3. NOT NULL にする
 ALTER TABLE "drill_attempts" ALTER COLUMN "owner_id" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "drills" ALTER COLUMN "owner_id" SET NOT NULL;--> statement-breakpoint

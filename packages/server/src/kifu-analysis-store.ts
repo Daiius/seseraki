@@ -2,7 +2,7 @@
 // ここは行の取得と保存（`minMate*` の計算し直しを含む）だけを持つ。
 
 import { eq } from 'drizzle-orm';
-import { db } from './db/index.js';
+import type { Db } from './db/index.js';
 import { kifuAnalyses } from './db/schema.js';
 import {
   EMPTY_ANALYSIS,
@@ -16,7 +16,7 @@ import type { KifuRef, Tx } from './tactics.js';
  * `forUpdate` はチャンク submit 用（読み → 重ねる → 書き戻すの間に他の submit を挟ませない。prd/16 §4.1）。
  */
 export async function loadAnalysis(
-  tx: Tx | typeof db,
+  tx: Tx | Db,
   kifuId: number,
   options: { forUpdate?: boolean } = {},
 ): Promise<StoredAnalysis & { exists: boolean }> {

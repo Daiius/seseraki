@@ -4,10 +4,13 @@
  * 🔴 **答えを含む列（`answerMove` / `candidates` / `playedMove`）は出題時に返さない。**
  * クライアントへ渡した時点で答えが見えているのと同じで、`/drills` を専用ページにした
  * 意味（prd/13 §7）が消える。返すのは**盤面と問いだけ**。
+ *
+ * 🔒 **読み書きは所有者（要求者）の問題だけ**（prd/14 §4）。各関数は tx（ユーザーとして開いた
+ * トランザクション。`user-tx.ts`）と所有者を引数に取る。他人の問題は「無い」（null → 404）。
  */
 import { and, count, eq, sql } from 'drizzle-orm';
 import { buildPositions, positionSfen, usiToJapaneseWithPiece, type BoardState } from 'shared';
-import { db } from './db';
+import type { Db, Tx } from './db/index.js';
 import { drillAttempts, drills, kifus } from './db/schema';
 import {
   ANSWER_COUNT,
@@ -25,7 +28,6 @@ import {
   type DrillListQuery,
 } from './drill-list-query';
 import { stateOfAnswer } from './drill-answer';
-import type { Tx } from './tactics';
 
 /** 出題 1 問（クライアントに返す形。**答えは含まない**） */
 export interface DrillQuestion {
@@ -52,10 +54,11 @@ const TIER = sql`case
  * 出題を作り直しても残る。
  */
 export async function pickNextDrill(
+  tx: Tx,
   ownerId: string,
   kind?: 'mate' | 'best',
 ): Promise<DrillQuestion | null> {
-  const [row] = await db
+  const [row] = await tx
     .select({
       id: drills.id,
       kind: drills.kind,
@@ -102,8 +105,8 @@ export function drillSfen(usiMoves: string[] | null, moveNumber: number): string
 }
 
 /** 採点に要る 1 問ぶん（**答えを含む**。server 内でしか使わない） */
-export async function loadDrill(id: number, ownerId: string) {
-  const [row] = await db
+export async function loadDrill(tx: Tx, ownerId: string, id: number) {
+  const [row] = await tx
     .select({
       id: drills.id,
       kifuId: drills.kifuId,
@@ -129,7 +132,7 @@ export async function loadDrill(id: number, ownerId: string) {
 
 /** 解答を 1 件記録する（prd/13 §6.2） */
 export async function recordAttempt(
-  tx: Tx | typeof db,
+  tx: Tx | Db,
   attempt: {
     drillId: number;
     /** 出題（`drills.ownerId`）の所有者。食い違えば複合 FK が落とす（prd/14 §4.1） */
@@ -154,8 +157,8 @@ export async function recordAttempt(
 }
 
 /** 成績（prd/13 §7 の「初版では持たない」に備えた最小の数え方） */
-export async function drillCounts(ownerId: string) {
-  const [row] = await db
+export async function drillCounts(tx: Tx, ownerId: string) {
+  const [row] = await tx
     .select({
       total: sql<number>`count(distinct ${drills.id})`.mapWith(Number),
       answered: sql<number>`count(distinct case when ${drillAttempts.move} is not null then ${drills.id} end)`.mapWith(
@@ -178,10 +181,11 @@ export async function drillCounts(ownerId: string) {
  * 一覧から明示的に開いた問題を「無い」と言うのは筋が通らない。
  */
 export async function loadDrillQuestion(
-  id: number,
+  tx: Tx,
   ownerId: string,
+  id: number,
 ): Promise<DrillQuestion | null> {
-  const [row] = await db
+  const [row] = await tx
     .select({
       id: drills.id,
       kind: drills.kind,
@@ -217,7 +221,7 @@ export async function loadDrillQuestion(
  * ⚠ **棋譜名・手数は未解答の問題でも返す**（決定・2026-09-10。prd/13 §5.4）——伏せるのは
  * 解く画面の規則で、一覧は解く画面ではない。
  */
-export async function listDrills(ownerId: string, query: DrillListQuery) {
+export async function listDrills(tx: Tx, ownerId: string, query: DrillListQuery) {
   const where = and(
     eq(kifus.ownerId, ownerId),
     query.kind ? eq(drills.kind, query.kind) : undefined,
@@ -226,7 +230,7 @@ export async function listDrills(ownerId: string, query: DrillListQuery) {
 
   // 件数は**同じ条件で数える**（prd/04 §6.1 と同じ姿勢）。集計に対する条件なので、
   // 絞り込み済みの行を副問い合わせにしてから数える
-  const grouped = db
+  const grouped = tx
     .select({ id: drills.id })
     .from(drills)
     .innerJoin(kifus, eq(kifus.id, drills.kifuId))
@@ -235,10 +239,10 @@ export async function listDrills(ownerId: string, query: DrillListQuery) {
     .groupBy(drills.id)
     .having(having)
     .as('grouped');
-  const [totals] = await db.select({ total: count() }).from(grouped);
+  const [totals] = await tx.select({ total: count() }).from(grouped);
   const total = totals?.total ?? 0;
 
-  const rows = await db
+  const rows = await tx
     .select({
       id: drills.id,
       kind: drills.kind,
@@ -296,10 +300,10 @@ export async function listDrills(ownerId: string, query: DrillListQuery) {
  * 🔒 **同じ問題の複数回はまとめない**——間違えた後に正解した経過が読めなくなる。
  * ⚠ **「自明だった」の行（`move` / `verdict` が null）も出す**（prd/13 §6.2）。
  */
-export async function listDrillAttempts(ownerId: string, query: DrillAttemptQuery) {
+export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAttemptQuery) {
   const where = drillAttemptWhere(ownerId, query);
 
-  const [totals] = await db
+  const [totals] = await tx
     .select({ total: count() })
     .from(drillAttempts)
     .innerJoin(drills, eq(drills.id, drillAttempts.drillId))
@@ -307,7 +311,7 @@ export async function listDrillAttempts(ownerId: string, query: DrillAttemptQuer
     .where(where);
   const total = totals?.total ?? 0;
 
-  const rows = await db
+  const rows = await tx
     .select({
       id: drillAttempts.id,
       drillId: drillAttempts.drillId,
@@ -370,9 +374,16 @@ export async function listDrillAttempts(ownerId: string, query: DrillAttemptQuer
  *
  * 🔒 **除外の行そのものを消す**——印を取り消す操作なので、印を残さない。
  * 解答の行（`move` を持つ行）は触らないので、**解答履歴は消えない**。
+ * 🔒 **所有者の行だけ**（prd/14 §4）。呼び出し側は先に `loadDrill` で問題が本人のものか確かめる。
  */
-export async function unexcludeDrill(drillId: number): Promise<void> {
-  await db
+export async function unexcludeDrill(tx: Tx, ownerId: string, drillId: number): Promise<void> {
+  await tx
     .delete(drillAttempts)
-    .where(and(eq(drillAttempts.drillId, drillId), eq(drillAttempts.excluded, true)));
+    .where(
+      and(
+        eq(drillAttempts.drillId, drillId),
+        eq(drillAttempts.ownerId, ownerId),
+        eq(drillAttempts.excluded, true),
+      ),
+    );
 }

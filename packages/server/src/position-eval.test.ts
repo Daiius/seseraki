@@ -11,6 +11,10 @@ import {
   type EvalCandidate,
 } from './position-eval.js';
 
+/** 要求者（セッションのユーザー ID） */
+const ME = 'user-a';
+const OTHER = 'user-b';
+
 const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
 
 const CANDIDATE: EvalCandidate = {
@@ -58,12 +62,12 @@ const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 describe('startEvaluation', () => {
   it('待たずに jobId を返し、worker の報告後に取りに来られる', async () => {
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     expect(started.state).toBe('pending');
     if (started.state !== 'pending') return;
 
     // まだ出ていない（**「取れない」ではない**）
-    expect(getEvaluationResult(started.jobId)).toEqual({ state: 'pending' });
+    expect(getEvaluationResult(started.jobId, ME)).toEqual({ state: 'pending' });
 
     const job = claimEvaluationJob();
     expect(job).not.toBeNull();
@@ -77,7 +81,7 @@ describe('startEvaluation', () => {
       }),
     ).toBe(true);
 
-    const poll = getEvaluationResult(started.jobId);
+    const poll = getEvaluationResult(started.jobId, ME);
     expect(poll.state).toBe('settled');
     if (poll.state !== 'settled' || poll.outcome.status !== 'done') return;
     expect(poll.outcome.candidates).toEqual([CANDIDATE]);
@@ -85,12 +89,12 @@ describe('startEvaluation', () => {
   });
 
   it('同一局面の再訪はキャッシュから即答する（1 往復・worker を通さない）', () => {
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     const job = claimEvaluationJob()!;
     completeEvaluationJob(job.id, { candidates: [CANDIDATE], fallback: false });
     expect(started.state).toBe('pending');
 
-    const again = startEvaluation({ sfen: SFEN, move: null });
+    const again = startEvaluation({ sfen: SFEN, move: null }, ME);
     expect(again.state).toBe('settled');
     if (again.state === 'settled') expect(again.outcome.status).toBe('done');
     // ジョブは作られない
@@ -99,8 +103,8 @@ describe('startEvaluation', () => {
   });
 
   it('同じキーの同時要求は 1 つのジョブに相乗りし、同じ jobId が返る', () => {
-    const first = startEvaluation({ sfen: SFEN, move: null });
-    const second = startEvaluation({ sfen: SFEN, move: null });
+    const first = startEvaluation({ sfen: SFEN, move: null }, ME);
+    const second = startEvaluation({ sfen: SFEN, move: null }, ME);
     expect(evaluationStats().queued).toBe(1);
     expect(first).toEqual(second);
 
@@ -109,40 +113,40 @@ describe('startEvaluation', () => {
     completeEvaluationJob(job.id, { candidates: [CANDIDATE], fallback: false });
 
     if (first.state !== 'pending' || second.state !== 'pending') return;
-    expect(getEvaluationResult(first.jobId)).toEqual(
-      getEvaluationResult(second.jobId),
+    expect(getEvaluationResult(first.jobId, ME)).toEqual(
+      getEvaluationResult(second.jobId, ME),
     );
   });
 
   it('名指し評価は局面評価と別のジョブになる', () => {
-    startEvaluation({ sfen: SFEN, move: null });
-    startEvaluation({ sfen: SFEN, move: '7g7f' });
+    startEvaluation({ sfen: SFEN, move: null }, ME);
+    startEvaluation({ sfen: SFEN, move: '7g7f' }, ME);
     expect(evaluationStats().queued).toBe(2);
   });
 
   it('失敗も完了として取りに来られ、キャッシュには載せない', () => {
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     const job = claimEvaluationJob()!;
     completeEvaluationJob(job.id, { error: 'engine died' });
 
     if (started.state !== 'pending') return;
-    expect(getEvaluationResult(started.jobId)).toEqual({
+    expect(getEvaluationResult(started.jobId, ME)).toEqual({
       state: 'settled',
       outcome: { status: 'failed', error: 'engine died' },
     });
     expect(evaluationStats().cached).toBe(0);
 
     // 失敗は載らないので、次の要求では改めてジョブができる
-    startEvaluation({ sfen: SFEN, move: null });
+    startEvaluation({ sfen: SFEN, move: null }, ME);
     expect(evaluationStats().queued).toBe(1);
   });
 
   it('worker が取りに来なければ期限切れで failed にする', async () => {
     process.env.POSITION_EVAL_QUEUE_TIMEOUT_MS = '10';
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     await tick(30);
     if (started.state !== 'pending') return;
-    const poll = getEvaluationResult(started.jobId);
+    const poll = getEvaluationResult(started.jobId, ME);
     expect(poll.state).toBe('settled');
     if (poll.state === 'settled') expect(poll.outcome.status).toBe('failed');
     // 期限切れのジョブは残らない
@@ -152,11 +156,11 @@ describe('startEvaluation', () => {
   it('claim 後に報告が来なくても期限切れで failed にする', async () => {
     process.env.POSITION_EVAL_QUEUE_TIMEOUT_MS = '60000';
     process.env.POSITION_EVAL_RUN_TIMEOUT_MS = '10';
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     const job = claimEvaluationJob()!;
     await tick(30);
     if (started.state !== 'pending') return;
-    const poll = getEvaluationResult(started.jobId);
+    const poll = getEvaluationResult(started.jobId, ME);
     expect(poll.state).toBe('settled');
     if (poll.state === 'settled') expect(poll.outcome.status).toBe('failed');
     // 落ちた後の報告は反映しない（worker はそのまま次へ進んでよい）
@@ -168,10 +172,10 @@ describe('startEvaluation', () => {
   it('キューが一杯なら断る（worker 停止時に積み上げない）', () => {
     // キーが別なら別ジョブになるので、局面を少しずつ変えて上限まで積む
     for (let i = 0; i < 32; i++) {
-      startEvaluation({ sfen: `${SFEN} ${i}`, move: null });
+      startEvaluation({ sfen: `${SFEN} ${i}`, move: null }, ME);
     }
     expect(() =>
-      startEvaluation({ sfen: `${SFEN} overflow`, move: null }),
+      startEvaluation({ sfen: `${SFEN} overflow`, move: null }, ME),
     ).toThrowError(EvaluationQueueFullError);
   });
 });
@@ -182,24 +186,60 @@ describe('startEvaluation', () => {
  */
 describe('getEvaluationResult', () => {
   it('知らない jobId は unknown（要求側は投げ直す合図）', () => {
-    expect(getEvaluationResult('eval-999')).toEqual({ state: 'unknown' });
+    expect(getEvaluationResult('eval-999', ME)).toEqual({ state: 'unknown' });
   });
 
   it('完了した結果はしばらく jobId で引ける（ポーリングが取りに来る前に消えない）', () => {
-    const started = startEvaluation({ sfen: SFEN, move: null });
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
     const job = claimEvaluationJob()!;
     completeEvaluationJob(job.id, { candidates: [CANDIDATE], fallback: false });
     if (started.state !== 'pending') return;
     // 2 回引いても消えない（ポーリングは何度も来る）
-    expect(getEvaluationResult(started.jobId).state).toBe('settled');
-    expect(getEvaluationResult(started.jobId).state).toBe('settled');
+    expect(getEvaluationResult(started.jobId, ME).state).toBe('settled');
+    expect(getEvaluationResult(started.jobId, ME).state).toBe('settled');
+  });
+});
+
+/** 🔒 ジョブと結果は要求者のもの（prd/14 §4.2） */
+describe('要求者の照合', () => {
+  it('ID は推測できない値（連番ではない）', () => {
+    const a = startEvaluation({ sfen: SFEN, move: null }, ME);
+    const b = startEvaluation({ sfen: SFEN, move: '7g7f' }, ME);
+    if (a.state !== 'pending' || b.state !== 'pending') throw new Error('pending のはず');
+    expect(a.jobId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(a.jobId).not.toBe(b.jobId);
+  });
+
+  it('他人は待ち中のジョブも完了した結果も取れない（unknown = 404）', () => {
+    const started = startEvaluation({ sfen: SFEN, move: null }, ME);
+    if (started.state !== 'pending') throw new Error('pending のはず');
+    expect(getEvaluationResult(started.jobId, OTHER)).toEqual({ state: 'unknown' });
+    const job = claimEvaluationJob()!;
+    completeEvaluationJob(job.id, { candidates: [CANDIDATE], fallback: false });
+    expect(getEvaluationResult(started.jobId, OTHER)).toEqual({ state: 'unknown' });
+    expect(getEvaluationResult(started.jobId, ME).state).toBe('settled');
+  });
+
+  it('同じ局面に相乗りした人は要求者に加わる', () => {
+    const mine = startEvaluation({ sfen: SFEN, move: null }, ME);
+    const theirs = startEvaluation({ sfen: SFEN, move: null }, OTHER);
+    if (mine.state !== 'pending' || theirs.state !== 'pending') throw new Error('pending のはず');
+    expect(theirs.jobId).toBe(mine.jobId);
+    expect(getEvaluationResult(theirs.jobId, OTHER)).toEqual({ state: 'pending' });
+  });
+
+  it('キャッシュ（局面だけで決まる）は要求者をまたいで共有する', () => {
+    startEvaluation({ sfen: SFEN, move: null }, ME);
+    const job = claimEvaluationJob()!;
+    completeEvaluationJob(job.id, { candidates: [CANDIDATE], fallback: false });
+    expect(startEvaluation({ sfen: SFEN, move: null }, OTHER).state).toBe('settled');
   });
 });
 
 describe('claimEvaluationJob', () => {
   it('古い順に 1 件ずつ渡し、claim 済みは渡さない', () => {
-    startEvaluation({ sfen: SFEN, move: null });
-    startEvaluation({ sfen: SFEN, move: '7g7f' });
+    startEvaluation({ sfen: SFEN, move: null }, ME);
+    startEvaluation({ sfen: SFEN, move: '7g7f' }, ME);
 
     const first = claimEvaluationJob()!;
     expect(first.move).toBeNull();

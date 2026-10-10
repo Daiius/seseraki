@@ -24,10 +24,15 @@
  * ⚠ DB のスコアは**手番側から見た値**（エンジンが返す生の値）で入っているので、
  * 検討盤の表示視点（prd/12 §2.3）とそのまま噛み合う。符号を触るのは
  * 「実手を次の局面の評価から引く」経路だけ（手番が入れ替わるため）。
+ *
+ * 🔴 **要求者の棋譜からだけ引く**（prd/14 §4）。ブラウザで計算した解析結果は server で正しさを
+ * 検証できない（§5.1）ので、利用者をまたいで解析結果が流れる経路が 1 つでも残ると
+ * 「改ざんの影響は本人に閉じる」が崩れる。局面索引も解析も**両方の表を**所有者で絞る
+ * （局面索引の索引は `(ownerId, 局面ハッシュ)`。prd/14 §6.3）。
  */
 import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import { db } from './db/index.js';
+import type { Db, Tx } from './db/index.js';
 import { kifuAnalyses, kifuPositions } from './db/schema.js';
 import { decodeCandidates, type StoredCandidate } from './kifu-analysis-detail.js';
 import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';
@@ -208,6 +213,14 @@ function positionAnalysis(moveNumber: AnyPgColumn) {
   };
 }
 
+/**
+ * 🔴 **所有者の棋譜だけ**（局面索引と解析の両方。prd/14 §4）。3 つのクエリで共通。
+ * 子の表は `ownerId` を親の写しとして持つので、`kifus` を引かずに絞れる（prd/14 §4.1）
+ */
+function ownedBy(ownerId: string): SQL {
+  return and(eq(kifuPositions.ownerId, ownerId), eq(kifuAnalyses.ownerId, ownerId))!;
+}
+
 /** 解析行の select 句（3 つのクエリで共通） */
 function analysisSelection(moveNumber: AnyPgColumn) {
   const p = positionAnalysis(moveNumber);
@@ -235,13 +248,20 @@ interface AnalysisRow {
  * 見られる形にして、上限が絞り込みより後にかかることをテストで固定するため。
  * 同時刻は `kifuId` の降順（応答が揺れないように順序を決め切る）。
  */
-export function positionEvalAnalysesQuery(sfen: string) {
+export function positionEvalAnalysesQuery(q: Tx | Db, ownerId: string, sfen: string) {
   const p = positionAnalysis(kifuPositions.moveNumber);
-  return db
+  return q
     .select(analysisSelection(kifuPositions.moveNumber))
     .from(kifuPositions)
     .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, kifuPositions.kifuId))
-    .where(and(samePositionAsSfen(kifuPositions, sfen), p.isFull, p.hasCandidates(3)))
+    .where(
+      and(
+        ownedBy(ownerId),
+        samePositionAsSfen(kifuPositions, sfen),
+        p.isFull,
+        p.hasCandidates(3),
+      ),
+    )
     .orderBy(desc(p.analyzedAt), desc(kifuPositions.kifuId))
     .limit(MATCH_LIMIT);
 }
@@ -250,14 +270,20 @@ export function positionEvalAnalysesQuery(sfen: string) {
  * 名指しした手を**候補手に持っている**解析を、解析が新しい順に引く。
  * 本数は問わない（返すのはその手 1 本だから。prd/12 §2.6）。
  */
-export function namedMoveAnalysesQuery(sfen: string, move: string) {
+export function namedMoveAnalysesQuery(
+  q: Tx | Db,
+  ownerId: string,
+  sfen: string,
+  move: string,
+) {
   const p = positionAnalysis(kifuPositions.moveNumber);
-  return db
+  return q
     .select(analysisSelection(kifuPositions.moveNumber))
     .from(kifuPositions)
     .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, kifuPositions.kifuId))
     .where(
       and(
+        ownedBy(ownerId),
         samePositionAsSfen(kifuPositions, sfen),
         p.isFull,
         sql`exists (select 1 from jsonb_array_elements(${p.candidates}) as c where c ->> 0 = ${move})`,
@@ -274,10 +300,15 @@ export function namedMoveAnalysesQuery(sfen: string, move: string) {
  * `kifus.usiMoves` を丸ごと読まずに自己結合で辿れる。
  * 候補手が 1 本も無い解析は符号反転の材料にならないので、SQL の側で落とす。
  */
-export function playedMoveAnalysesQuery(sfen: string, move: string) {
+export function playedMoveAnalysesQuery(
+  q: Tx | Db,
+  ownerId: string,
+  sfen: string,
+  move: string,
+) {
   const nextPositions = alias(kifuPositions, 'next_positions');
   const p = positionAnalysis(nextPositions.moveNumber);
-  return db
+  return q
     .select({
       kifuId: kifuPositions.kifuId,
       moveNumber: nextPositions.moveNumber,
@@ -290,12 +321,20 @@ export function playedMoveAnalysesQuery(sfen: string, move: string) {
       nextPositions,
       and(
         eq(nextPositions.kifuId, kifuPositions.kifuId),
+        eq(nextPositions.ownerId, ownerId),
         eq(nextPositions.moveNumber, sql`${kifuPositions.moveNumber} + 1`),
         eq(nextPositions.move, move),
       ),
     )
     .innerJoin(kifuAnalyses, eq(kifuAnalyses.kifuId, nextPositions.kifuId))
-    .where(and(samePositionAsSfen(kifuPositions, sfen), p.isFull, p.hasCandidates(1)))
+    .where(
+      and(
+        ownedBy(ownerId),
+        samePositionAsSfen(kifuPositions, sfen),
+        p.isFull,
+        p.hasCandidates(1),
+      ),
+    )
     .orderBy(desc(p.analyzedAt), desc(kifuPositions.kifuId))
     .limit(MATCH_LIMIT);
 }
@@ -328,12 +367,14 @@ function emptyMatch(kifuId: number, moveNumber: number): KifuPositionMatch {
  * ①②は**両方引く**。どちらを採るかは `reuseFromKifu` が決める（①が優先）。
  */
 export async function findKifuPositionMatches(
+  q: Tx | Db,
+  ownerId: string,
   request: EvalRequest,
 ): Promise<KifuPositionMatch[]> {
   const { sfen, move } = request;
 
   if (move === null) {
-    const analyses: AnalysisRow[] = await positionEvalAnalysesQuery(sfen);
+    const analyses: AnalysisRow[] = await positionEvalAnalysesQuery(q, ownerId, sfen);
     return analyses.map((a) => ({
       ...emptyMatch(a.kifuId, a.moveNumber),
       candidates: toCandidates(a.candidates),
@@ -343,8 +384,8 @@ export async function findKifuPositionMatches(
 
   const [named, played]: [AnalysisRow[], (AnalysisRow & { fromMoveNumber: number })[]] =
     await Promise.all([
-      namedMoveAnalysesQuery(sfen, move),
-      playedMoveAnalysesQuery(sfen, move),
+      namedMoveAnalysesQuery(q, ownerId, sfen, move),
+      playedMoveAnalysesQuery(q, ownerId, sfen, move),
     ]);
 
   return [
@@ -368,11 +409,15 @@ export async function findKifuPositionMatches(
  *
  * ⚠ **エンジンのキュー / キャッシュ（`position-eval.ts`）には一切触らない。**
  * ここで答えられた要求はジョブを積まずに返る、というのがこの経路の目的。
+ *
+ * @param ownerId 要求者（🔒 セッションから取った ID）。**この人の棋譜からだけ引く**
  */
 export async function lookupKifuEvaluation(
+  q: Tx | Db,
+  ownerId: string,
   request: EvalRequest,
 ): Promise<ReusedEvalOutcome | null> {
-  const matches = await findKifuPositionMatches(request);
+  const matches = await findKifuPositionMatches(q, ownerId, request);
   if (matches.length === 0) return null;
   return reuseFromKifu(request, matches);
 }

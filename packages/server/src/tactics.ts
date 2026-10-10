@@ -10,14 +10,10 @@
  */
 import { eq } from 'drizzle-orm';
 import { detectTactics } from 'shared';
-import { db } from './db';
+import type { Tx } from './db/index.js';
 import { kifuTactics } from './db/schema';
 
-/**
- * `db.transaction` のコールバックが受け取るトランザクションハンドル。
- * 手で型を書くと drizzle の更新で静かにずれるので、**db から導出する**。
- */
-export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type { Tx };
 
 /**
  * 子の表（`kifuTactics` / `kifuPositions` / `kifuAnalyses` など）に書くときの棋譜の指し方。

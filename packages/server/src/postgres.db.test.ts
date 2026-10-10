@@ -41,6 +41,7 @@ import { encodeCandidates, mergeChunk, type CandidateMove } from './kifu-analysi
 import { findKifuPositionMatches } from './position-kifu-reuse.js';
 import { replacePositions } from './positions.js';
 import { addAlias, OWNER_USER_ID } from './users.js';
+import { withUserTx } from './user-tx.js';
 
 afterAll(async () => {
   await client.end();
@@ -449,10 +450,12 @@ describe('集計の戻り値（node-postgres は bigint を文字列で返す。
       .values({ drillId: drill.id, ownerId, move: '2g2f', verdict: 'correct', line: ['2g2f'] })
       .returning({ createdAt: drillAttempts.createdAt });
 
-    const counts = await drillCounts(ownerId);
+    const counts = await withUserTx(db, ownerId, (tx) => drillCounts(tx, ownerId));
     expect(counts).toEqual({ total: 1, answered: 1, correct: 1 });
 
-    const list = await listDrills(ownerId, drillListQuerySchema.parse({}));
+    const list = await withUserTx(db, ownerId, (tx) =>
+      listDrills(tx, ownerId, drillListQuerySchema.parse({})),
+    );
     expect(list.pagination.total).toBe(1);
     expect(list.drills[0]).toMatchObject({ answers: 1, correct: 1, excluded: false, status: 'correct' });
     // 集計で取った日時（sql 断片）も、列から読んだ日時と同じ時刻を指す（セッションは Asia/Tokyo）
@@ -720,18 +723,18 @@ describe('解析結果の 1 行（kifu_analyses。prd/16）', () => {
     );
     const mine = <T extends { kifuId: number }>(ms: T[]) => ms.filter((m) => m.kifuId === kifuId);
 
-    const evalMatches = mine(await findKifuPositionMatches({ sfen: START, move: null }));
+    const evalMatches = mine(await findKifuPositionMatches(db, OWNER_USER_ID, { sfen: START, move: null }));
     expect(evalMatches).toHaveLength(1);
     expect(evalMatches[0].candidates.map((c) => [c.rank, c.move, c.pv])).toEqual([
       [1, '7g7f', []], [2, '2g2f', []], [3, '6i7h', []],
     ]);
     expect(evalMatches[0].analyzedAt).toEqual(new Date('2026-10-05T00:00:00.000Z'));
 
-    const named = mine(await findKifuPositionMatches({ sfen: START, move: '2g2f' }));
+    const named = mine(await findKifuPositionMatches(db, OWNER_USER_ID, { sfen: START, move: '2g2f' }));
     // ① 候補手に持つ（局面 0）と ② 実手ではない → ① だけ
     expect(named.map((m) => [m.moveNumber, m.candidates.length, m.playedMove])).toEqual([[0, 3, null]]);
 
-    const played = mine(await findKifuPositionMatches({ sfen: START, move: '7g7f' }));
+    const played = mine(await findKifuPositionMatches(db, OWNER_USER_ID, { sfen: START, move: '7g7f' }));
     // ① 局面 0 の候補手にある / ② 実手で、次局面（1。full）の解析がある
     expect(played.find((m) => m.playedMove === '7g7f')?.nextCandidates[0].move).toBe('3c3d');
   });

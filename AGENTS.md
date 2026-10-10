@@ -100,6 +100,10 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > server ロール（DML のみ。常駐の server と一括処理。`DB_USER` / `DB_PASSWORD`）。dev は
 > `scripts/postgres-init/10-server-role.sh` が空の volume の初回に server ロールを作る。
 >
+> 🔴 **ログインの経路はグローバルの `db` を使わない**（[prd/14](./prd/14-multi-user.md) §4）。ハンドラは `sessionRequired` が開いた
+> `c.get('tx')`（`app.user_id` を設定済み）を使い、棋譜系のクエリ関数は tx と所有者（`c.get('userId')`。セッションから取る）を受け取って
+> `owner_id` で絞る。他人の行は 404。`db` を import してよいモジュールは `db-import-boundary.test.ts` の許可リストだけ。
+>
 > 🔴 **DB の列名は snake_case、TS は camelCase**（prd/15 §3.6）。変換は drizzle の casing で、**表を `schema.ts` の `table`（`snakeCase.table`）で定義すると付く**
 > （drizzle 1.0 では `drizzle()` ではなく表の定義に付く）。**`pgTable` で足すとその表だけ camelCase の列になる**——`test:db` が全列の名前を検査する。手書きの SQL・`sql` 断片・トリガーは DB の名前（`updated_at`）で書く。
 >

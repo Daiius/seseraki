@@ -264,6 +264,7 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
    マイグレーションは列を NULL 可で足し、親から埋め戻してから NOT NULL と FK を付ける（1 トランザクション）。
    書き込み側は親と同じ `ownerId` を入れる。読み取りの挙動は変えない
 2. クエリのスコープと **RLS**（2026-10-11 に形を決めた。[14](./14-multi-user.md) §4「RLS の形」）:
+   - ✅ アプリ層のスコープ（2a。tx の張り方・クエリ関数の所有者・import の境界）は実装済み（2026-10-11）。RLS と別プールは 2b
    - リクエストごとにトランザクションを開いて `set_config('app.user_id', <id>, true)`。クエリ関数はその tx を引数で受け取る
    - worker の報告・一括処理など全員ぶんを扱う経路は **BYPASSRLS の別ロール＋別プール**。🔒 **ロールは migration で作らない**
      （BYPASSRLS の付与は superuser が要る。§2 の管理ロールには無い）。dev は `scripts/postgres-init/`、本番は手順で作る

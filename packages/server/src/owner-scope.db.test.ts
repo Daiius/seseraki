@@ -105,7 +105,8 @@ async function insertAnalyzedKifu(
         usiMoves: moves,
         sente: 'alice',
         gote: 'bob',
-        result: '先手の勝ち',
+        // 結果コードは `SENTE_WIN_RESIGN` 等（prd/01 §3。統計は `%SENTE_WIN%` の部分一致で勝敗を読む）
+        result: 'SENTE_WIN_RESIGN',
         subjectSide: 'sente',
         playedAt: new Date('2026-01-01T00:00:00Z'),
         memo: 'original',
@@ -114,7 +115,8 @@ async function insertAnalyzedKifu(
       .returning({ id: kifus.id });
     const ref = { id: row.id, ownerId };
     await replacePositions(tx, ref, moves);
-    await tx.insert(kifuTactics).values({ kifuId: row.id, ownerId, side: 'sente', label: '四間飛車', turn: 1 });
+    // 相手（後手）側の戦型。統計の行は「相手が何を採ったか」で数える（prd/09 §2.2）
+    await tx.insert(kifuTactics).values({ kifuId: row.id, ownerId, side: 'gote', label: '四間飛車', turn: 1 });
     const positions = moves.length + 1;
     await saveAnalysis(tx, ref, {
       runs: [
@@ -159,7 +161,11 @@ beforeAll(async () => {
   userB = await insertUser();
   kifuA = await insertAnalyzedKifu(userA, MOVES);
   // B も棋譜を 1 局持つ（初期局面は両方が通る。B からは自分の棋譜だけが見えること）
-  kifuB = await insertAnalyzedKifu(userB, ['2g2f', '8c8d'], { title: 'B の棋譜' });
+  // B の対局は負け（A の勝ちが B の成績に混ざれば勝ち数で分かる）
+  kifuB = await insertAnalyzedKifu(userB, ['2g2f', '8c8d'], {
+    title: 'B の棋譜',
+    result: 'GOTE_WIN_RESIGN',
+  });
 
   // A の動画解析の棋譜（主体側が決まらない棋譜としても数える）
   videoKifuA = await db.transaction(async (tx) => {
@@ -233,9 +239,17 @@ describe('所有者スコープ: B から A の棋譜が見えない（prd/14 §
   });
 
   it('統計は自分の棋譜だけを数える', async () => {
-    const stats = await asB((tx) => statsTactics(tx, userB, statsTacticsQuerySchema.parse({})));
-    // B の棋譜は 1 局（主体の名前候補が無いので「自分が決まらない」に入る）。A の 1 局は数えない
-    expect(stats.totalGames + stats.excluded.ambiguousSelf + stats.excluded.draw + stats.excluded.unknownResult).toBe(1);
+    // 主体側は保存済みの `subjectSide`（どちらも先手）を読む。A は勝ち 1 局、B は負け 1 局。
+    // 動画解析の棋譜は統計から外れる（prd/10 §2.2）
+    const query = statsTacticsQuerySchema.parse({});
+    const mine = await asA((tx) => statsTactics(tx, userA, query));
+    expect(mine.totalGames).toBe(1);
+    expect(mine.rows.map((r) => [r.label, r.games, r.wins])).toEqual([['四間飛車', 1, 1]]);
+
+    const theirs = await asB((tx) => statsTactics(tx, userB, query));
+    expect(theirs.totalGames).toBe(1);
+    expect(theirs.excluded).toEqual({ ambiguousSelf: 0, draw: 0, unknownResult: 0 });
+    expect(theirs.rows.map((r) => [r.label, r.games, r.wins])).toEqual([['四間飛車', 1, 0]]);
   });
 
   it('動画解析の一覧', async () => {

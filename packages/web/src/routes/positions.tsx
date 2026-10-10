@@ -235,6 +235,8 @@ function SubjectSection({ sfen }: { sfen: string }) {
           <p className="text-sm opacity-60 mb-2">
             {`${state.side === 'sente' ? '▲先手' : '△後手'}側の配置に一致 ${state.data.total} 件`}
             {state.data.hasMore && `（先頭 ${state.data.games.length} 件まで）`}
+            {/* 🔒 読み出しの打ち切りを黙らない（prd/14 §6.3） */}
+            {state.data.truncated && '（読み出しの上限に当たったので、件数は下限）'}
             {/* 🔒 除外した件数を黙らない（prd/10 §3.3） */}
             {state.data.unresolvedSubjects > 0 &&
               `／主体側が決まらない ${state.data.unresolvedSubjects} 件は対象外`}

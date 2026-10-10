@@ -100,6 +100,10 @@
   - **子の表すべてに `owner_id` と複合 FK を持たせ、ポリシーは全表で一様に `owner_id = current_setting('app.user_id', true)`**（§4.1）。
     子の表から親（`kifus`）を引いて判定する形にしない
 - 他人の棋譜・問題は **404**（存在を明かさない。[13](./13-drills.md) の既存の扱いと同じ）
+- ✅ **アプリ層は実装済み**（2026-10-11・所有者スコープ 2a）: ログインの経路（`sessionRequired`）がリクエストごとに tx を開いて
+  `app.user_id` を設定し（`user-tx.ts`）、ハンドラは `c.get('tx')` を使う。棋譜系のクエリ関数（`kifu-queries.ts` / `position-queries.ts` /
+  `drill-query.ts` / `users.ts` / `position-kifu-reuse.ts`）は tx と所有者を引数に取る。グローバルの `db` を import してよいモジュールは
+  `db-import-boundary.test.ts` が限る。全員ぶんの経路（worker の報告・動画解析の取り込み）は `worker-routes.ts`。RLS は 2b
 - 現状で `ownerId` を見ているのは**出題系だけ**。一覧・詳細・統計・削除・再解析・局面検索・worker 系を直す。
   加えて、棋譜を直接引かないので見落としやすい次の 2 つも直す（2026-10-11 のコード調査で判明）:
   - **名前候補の更新・削除**（`users.ts` の `updateAliasPeriod` / `removeAlias`）: ID だけで引いている。所有者の条件を付ける

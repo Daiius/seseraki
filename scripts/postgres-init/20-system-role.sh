@@ -26,6 +26,16 @@
 #
 # ⚠ 初期化ディレクトリのスクリプトは、実行ビットが無いと entrypoint に source される（引数は entrypoint のもの）。
 #   `--check` 以外の引数は無視する。
+#
+# 🔒 **パスワードをどこにも表示・記録しない**（レビュー OCL-D6CF61B0）:
+#   - コマンドライン（`ps` で見える）に載せない。psql の `\getenv`（psql 15 以降）で環境変数から psql 変数へ読む
+#   - 標準出力に出さない。値を受け渡す SELECT の結果は `\o /dev/null` に捨て、`-q` で状態表示も出さない。
+#     失敗時も `VERBOSITY terse` で CONTEXT（EXECUTE した SQL＝パスワードを含む）を出さない
+#   - サーバーのログに出さない。このセッションだけ log_statement 等を止める（superuser の権限で SET できる）
+#   - psql の履歴: heredoc（非対話）なので履歴ファイルには書かない
+#   - 受け渡しのセッション変数は `set_config(…, true)`（トランザクションの間だけ）で、COMMIT で消える
+#   ⚠ 残る経路: pg_stat_statements を入れていて `track_utility` が有効なら ALTER ROLE の文が統計に載りうる
+#   （このリポジトリの構成では入れていない）。Postgres に平文で送る以上、サーバー側の拡張までは止められない
 set -eu
 
 : "${POSTGRES_USER:?POSTGRES_USER（superuser）が未設定です}"
@@ -51,18 +61,28 @@ SQL
   exit 0
 fi
 
-psql -v ON_ERROR_STOP=1 \
+psql -v ON_ERROR_STOP=1 -q \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   -v system_user="$DB_SYSTEM_USER" \
-  -v system_password="$DB_SYSTEM_PASSWORD" \
   -v admin_user="${DB_ADMIN_USER:-$POSTGRES_USER}" \
   -v db_name="$POSTGRES_DB" \
   <<'SQL'
-SELECT set_config('seseraki.system_user', :'system_user', false),
-       set_config('seseraki.system_password', :'system_password', false),
-       set_config('seseraki.admin_user', :'admin_user', false),
-       set_config('seseraki.db_name', :'db_name', false);
+\getenv system_password DB_SYSTEM_PASSWORD
+\set VERBOSITY terse
+-- パスワードを含む文をサーバーのログに残さない（このセッションだけ。設定には superuser が要る）。
+-- log_statement=all などの設定でも文を出さず、失敗したときも文と CONTEXT（EXECUTE した SQL）を出さない
+SET log_statement = 'none';
+SET log_min_duration_statement = -1;
+SET log_min_error_statement = 'panic';
+SET log_error_verbosity = 'terse';
+BEGIN;
+\o /dev/null
+SELECT set_config('seseraki.system_user', :'system_user', true),
+       set_config('seseraki.system_password', :'system_password', true),
+       set_config('seseraki.admin_user', :'admin_user', true),
+       set_config('seseraki.db_name', :'db_name', true);
+\o
 DO $do$
 DECLARE
   r text := current_setting('seseraki.system_user');
@@ -82,4 +102,5 @@ BEGIN
   EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO %I', a, r);
 END
 $do$;
+COMMIT;
 SQL

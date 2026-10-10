@@ -17,14 +17,23 @@ set -eu
 : "${DB_USER:?DB_USER（server ロール）が未設定です}"
 : "${DB_PASSWORD:?DB_PASSWORD（server ロール）が未設定です}"
 
-psql -v ON_ERROR_STOP=1 \
+# 🔒 パスワードはコマンドラインに載せず（`ps` で見える）、psql の `\getenv` で環境変数から読む。
+# このセッションだけサーバーのログに文を出さない（20-system-role.sh と同じ扱い。レビュー OCL-D6CF61B0）
+psql -v ON_ERROR_STOP=1 -q \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   -v server_user="$DB_USER" \
-  -v server_password="$DB_PASSWORD" \
   -v admin_user="$POSTGRES_USER" \
   -v db_name="$POSTGRES_DB" \
   <<'SQL'
+\getenv server_password DB_PASSWORD
+\set VERBOSITY terse
+-- パスワードを含む文をサーバーのログに残さない（このセッションだけ。設定には superuser が要る）。
+-- log_statement=all などの設定でも文を出さず、失敗したときも文と CONTEXT（EXECUTE した SQL）を出さない
+SET log_statement = 'none';
+SET log_min_duration_statement = -1;
+SET log_min_error_statement = 'panic';
+SET log_error_verbosity = 'terse';
 CREATE ROLE :"server_user" LOGIN PASSWORD :'server_password';
 GRANT CONNECT ON DATABASE :"db_name" TO :"server_user";
 GRANT USAGE ON SCHEMA public TO :"server_user";

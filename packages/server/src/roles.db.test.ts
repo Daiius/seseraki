@@ -24,7 +24,8 @@ const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 
 /**
  * 初期化スクリプトの heredoc（psql に渡す SQL）のうち `marker` を含むものに psql 変数を埋めて返す
- * （`20-system-role.sh` は `--check` の heredoc も持つ）
+ * （`20-system-role.sh` は `--check` の heredoc も持つ）。
+ * psql のメタコマンドの行（`\getenv` / `\o` / `\set` など）は落とす——変数はここで埋め、出力の切り替えは要らない
  */
 function initSql(script: string, marker: string, vars: Record<string, string>): string {
   const source = readFileSync(scriptPath(script), 'utf8');
@@ -33,6 +34,9 @@ function initSql(script: string, marker: string, vars: Record<string, string>): 
     .find((b) => b.includes(marker));
   if (!body) throw new Error(`${script} から SQL を取り出せない`);
   return body
+    .split('\n')
+    .filter((line) => !line.startsWith('\\'))
+    .join('\n')
     .replace(/:"(\w+)"/g, (_, k: string) => `"${vars[k]}"`)
     .replace(/:'(\w+)'/g, (_, k: string) => `'${vars[k]}'`);
 }

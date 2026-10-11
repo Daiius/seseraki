@@ -96,9 +96,11 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 ```
 
 > **DB は Postgres 18**（[prd/15](./prd/15-postgres.md)）。日時は `timestamptz` で、接続の時刻帯に依存しない。
-> **ロールを 2 つに分ける**: 管理ロール（DDL。`migrate.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）と
-> server ロール（DML のみ。常駐の server と一括処理。`DB_USER` / `DB_PASSWORD`）。dev は
+> **ロールを 3 つに分ける**: 管理ロール（DDL。`migrate.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）・
+> server ロール（DML のみ・RLS が効く。常駐の server のログインの経路。`DB_USER` / `DB_PASSWORD`）・system ロール（下記）。dev は
 > `scripts/postgres-init/10-server-role.sh` が空の volume の初回に server ロールを作る。
+> 🔒 **本番は管理ロールの資格情報を常駐の server の env に入れない**（server が侵害されても DDL・RLS の解除まで届かないように）。
+> `migrate.js` は**管理用のサービス**（server と同じイメージ・普段は起動しない profile・管理ロールの env だけを読む）で流す（[prd/15](./prd/15-postgres.md) §2）。
 >
 > 🔴 **ログインの経路はグローバルの `db` を使わない**（[prd/14](./prd/14-multi-user.md) §4）。ハンドラは `sessionRequired` が開いた
 > `c.get('tx')`（`app.user_id` を設定済み）を使い、棋譜系のクエリ関数は tx と所有者（`c.get('userId')`。セッションから取る）を受け取って
@@ -180,7 +182,8 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 - 🔴 **`migrate.js` は server の入れ替えより先に流す。** ⚠ ただし RLS のマイグレーション（`owner_scope_rls`）だけは、流した瞬間から
   古い server が何も読み書きできなくなる——system ロールを先に作り、migrate の後**すぐ**入れ替える（[prd/15](./prd/15-postgres.md) §2.1）。 新しい server は列やテーブルが無いと動かない
   （`analysisProfile` が無いと poll が落ちる／`drills` が無いと解析報告・reanalyze・名前候補の編集が落ちる）。
-  **管理ロール（`DB_ADMIN_USER`）で流す**——常駐 server のロールには DDL の権限が無い。
+  **管理ロール（`DB_ADMIN_USER`）で流す**——常駐 server のロールには DDL の権限が無い。本番は管理用のサービスで流す
+  （`<管理用サービス>`。常駐の server の env に管理ロールは無い）。一括処理のエントリは system ロールが要るので `<server サービス>` のまま。
 - 🔴 **新しいテーブルを作るマイグレーションの後は、対応する一括生成を一度流す**（`generate-drills.js` /
   `rebuild-positions.js`）。**マイグレーションは空のテーブルを作るだけ**なので、流さないと
   **既存棋譜ぶんが 1 行も入らない**（局面検索なら 404、出題なら 1 問も出ない）。**発現するのは画面を見たとき。**
@@ -190,7 +193,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 
 > **本番のマイグレーションはイメージに同梱したエントリで流す**（`dist/migrate.js`）:
 > ```bash
-> docker compose run --rm --no-deps <server サービス> /app/migrate.js
+> docker compose run --rm --no-deps <管理用サービス> /app/migrate.js
 > ```
 > **同梱する理由はポートを開けずに済むことではなく、適用する SQL とコードのバージョンが
 > 構造的に一致すること。** ホストから `pnpm db:migrate` を流す方式は「手元にある SQL を、本番で

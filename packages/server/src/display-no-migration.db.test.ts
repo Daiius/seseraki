@@ -81,12 +81,13 @@ describe('棋譜の番号の埋め戻し（prd/14 §4.4）', () => {
         )
       ).rows[0].id;
 
-    // 所有者（"1"）の棋譜 3 局。2 局目を消して欠番を作る（今の URL の番号がそのまま残ること）
-    const ownerIds = [await kifu('1'), await kifu('1'), await kifu('1')];
-    await client.query(`delete from kifus where id = $1`, [ownerIds[1]]);
     // 前提の外（所有者以外の棋譜）が混ざっていても、所有者ごとの一意は崩れない
     const other = await user('other@example.invalid');
     const otherId = await kifu(other);
+    // 所有者（"1"）の棋譜 4 局。2 局目を消して欠番を作り（今の URL の番号がそのまま残ること）、
+    // 🔴 末尾（4 局目）も消す——消した番号を次の取り込みが再利用しないこと（レビュー OCL-7F7C1CC7）
+    const ownerIds = [await kifu('1'), await kifu('1'), await kifu('1'), await kifu('1')];
+    await client.query(`delete from kifus where id = any($1)`, [[ownerIds[1], ownerIds[3]]]);
     const empty = await user('empty@example.invalid');
     await client.query(`update users set updated_at = $1`, [PAST]);
 
@@ -96,9 +97,9 @@ describe('棋譜の番号の埋め戻し（prd/14 §4.4）', () => {
       `select id, owner_id, display_no, updated_at from kifus order by id`,
     );
     expect(rows.rows.map((r) => [Number(r.id), r.owner_id, r.display_no])).toEqual([
+      [otherId, other, otherId],
       [ownerIds[0], '1', ownerIds[0]],
       [ownerIds[2], '1', ownerIds[2]],
-      [otherId, other, otherId],
     ]);
     expect(rows.rows.every((r) => r.updated_at.toISOString() === PAST)).toBe(true);
 
@@ -106,17 +107,18 @@ describe('棋譜の番号の埋め戻し（prd/14 §4.4）', () => {
       `select id, last_kifu_no, updated_at from users order by id`,
     );
     expect(Object.fromEntries(counters.rows.map((r) => [r.id, r.last_kifu_no]))).toEqual({
-      '1': ownerIds[2],
+      // 残っている最大（ownerIds[2]）ではなく、消した末尾まで（identity が発行した番号）
+      '1': ownerIds[3],
       [other]: otherId,
       [empty]: 0,
     });
     expect(counters.rows.every((r) => r.updated_at.toISOString() === PAST)).toBe(true);
 
-    // 次の番号は最大値 + 1（消した番号は再利用しない）
+    // 次の番号は消した末尾 + 1（消した番号は再利用しない）
     const next = await client.query<{ n: number }>(
       `update users set last_kifu_no = last_kifu_no + 1 where id = '1' returning last_kifu_no as n`,
     );
-    expect(next.rows[0].n).toBe(ownerIds[2] + 1);
+    expect(next.rows[0].n).toBe(ownerIds[3] + 1);
 
     // トリガーは戻っている（以後の更新では updated_at が進む）
     await client.query(`update kifus set title = 'u' where id = $1`, [ownerIds[0]]);

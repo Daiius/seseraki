@@ -37,7 +37,7 @@
 | 版 | **Postgres 18**（dev・本番とも同じ。公式イメージ） |
 | 配置 | dev は compose のサービス、本番は VPS の docker（姿勢のみ。具体は `.claude-personal/`） |
 | ドライバ | **node-postgres（`pg`）** + `drizzle-orm/node-postgres` |
-| ロール | **管理ロール**（DDL。`migrate.js`）・**server ロール**（DML のみ・RLS が効く。常駐の server のログインの経路）・**system ロール**（DML のみ・**BYPASSRLS**。全員ぶんを扱う経路＝worker の報告・動画解析の取り込み・一括処理のエントリ。2026-10-11・所有者スコープ 2b）の 3 つ。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・system ロールが `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。server と system は**別のプール**（`db/index.ts` / `db/system.ts`）。dev は `scripts/postgres-init/` が server ロール・system ロールと default privileges を作る |
+| ロール | **管理ロール**（DDL。`migrate.js`）・**server ロール**（DML のみ・RLS が効く。常駐の server のログインの経路）・**system ロール**（DML のみ・**BYPASSRLS**。全員ぶんを扱う経路＝worker の報告・動画解析の取り込み・一括処理のエントリ。2026-10-11・所有者スコープ 2b）の 3 つ。接続先は `DB_HOST` / `DB_PORT` / `DB_NAME`、資格情報は server ロールが `DB_USER` / `DB_PASSWORD`・system ロールが `DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD`・管理ロールが `DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`。server と system は**別のプール**（`db/index.ts` / `db/system.ts`）。dev は `scripts/postgres-init/` が server ロール・system ロールと default privileges を作る。🔒 **本番は管理ロールの資格情報を常駐の server の env に置かない**（2026-10-12）: `migrate.js` は server と同じイメージの**管理用サービス**（普段は起動しない profile・管理ロールの env だけを読む・env は所有者だけが読める権限）で流す。`migrate.js` が読むのは接続先と `DB_ADMIN_*` だけなので、アプリの改修は要らない |
 | 設定 | 本番は 1GB 級の VPS に載るので小さめ（`shared_buffers` は既定・`max_connections` は 20 程度）。具体の値は `.claude-personal/` |
 
 - worker は HTTP の API を通すだけで DB に触らないので、**worker は変わらない**

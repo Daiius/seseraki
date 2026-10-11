@@ -125,6 +125,10 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 > 子の表の `ownerId` は親の写しで、**書き込み側が親と同じ値を入れる**（`KifuRef` で ID と組で渡す）。RLS のポリシーがこの列を見る
 > （`test:db` が「`kifu_id` / `drill_id` を持つ表はすべて `owner_id` NOT NULL」を検査する）。
 >
+> 🔴 **`kifus` を作る経路は番号の採番（`kifu-number.ts` の `insertKifu`）を通す**（prd/14 §4.4）。棋譜は所有者ごとの番号
+> `displayNo` で URL・web 向けの API に出し、**内部の主キーは出さない**（ルートを足したら `display-no.db.test.ts` にも足す）。
+> `insert(kifus)` を他所に書くと `kifu-number.test.ts` が落とす。
+>
 > 🔴 **Better Auth の表の ID は DB の既定値（`gen_random_uuid()`）で振る。** pg 方言の Better Auth は
 > `generateId: 'uuid'` の ID を JS 側で振らず DB に任せるので、既定値が無いと user の作成が NOT NULL で落ちる。
 >

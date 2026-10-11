@@ -78,7 +78,8 @@ drizzle とは `Date` で往復する。**接続のセッションの時刻帯�
 
 ```
 kifus
-├── id: serial PK
+├── id: serial PK                -- 内部の主キー（通しの連番）。🔒 web 向けの API・URL には出さない（[14](./14-multi-user.md) §4.4）
+├── displayNo: int notNull       -- 所有者ごとの番号。UNIQUE(ownerId, displayNo)。URL・web 向けの API はこれで指す（[14](./14-multi-user.md) §4.4）
 ├── title: varchar(255)          -- 対局タイトル（メタから自動生成 / 手入力）
 ├── kifText: text                -- KIF 形式の棋譜テキスト（原本保管用）
 ├── usiMoves: json (string[])?   -- USI 形式の指し手列（登録時に KIF から変換）
@@ -94,7 +95,7 @@ kifus
 ├── analysisProfile: enum?              -- 完了した段階のうち最も高いもの（'quick' | 'full'。[05](./05-analysis.md) §1.1d）
 ├── analysisError: text?                -- 解析失敗理由（worker がエンジン失敗時に記録。ポイズンピル対策）
 ├── analysisRevision: int notNull default 0 -- 解析世代（reanalyze で +1。worker 報告の世代照合用）
-├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:id で編集）
+├── memo: text?                         -- ユーザー自由記述メモ（PATCH /api/kifus/:no で編集）
 ├── source: enum notNull default 'manual'  -- 出所（'manual' | 'swars' | 'video'。[10](./10-video-analysis.md) §2.1）
 ├── ownerId: varchar(36) → users.id     -- このデータを持っている人（対局者ではない。[11](./11-users.md) §3）。FK は CASCADE にしない（[14](./14-multi-user.md) §3.1）
 ├── subjectSide: enum?                  -- 主体の手番（'sente' | 'gote'。[11](./11-users.md) §4）
@@ -102,6 +103,16 @@ kifus
 └── updatedAt: timestamp
 ```
 
+- 🔒 **`displayNo` は所有者ごとの番号**（[14](./14-multi-user.md) §4.4）。`/kifus/42` は「セッションの所有者の 42 番」で、
+  server は所有者と番号で引く。内部の主キー（`id`）は通しの連番でサービス全体の棋譜数が分かるので、
+  **web 向けの API のパスにも応答にも出さない**（worker の API・一括処理・ログは内部 ID のまま）。
+  - 採番は所有者の **`users.lastKifuNo`（最後に振った番号）を取り込みの tx の中で `UPDATE … RETURNING` で進める**
+    （`kifu-number.ts` の `insertKifu`）。その行のロックで同じユーザーの取り込みが順に並び、他のユーザーは待たない。
+    ⚠ 進めると `users.updatedAt` もトリガーで進む
+  - 🔒 **消した番号は再利用しない**（欠番を許す。カウンタは戻さない）。`max(displayNo) + 1` で振らない
+  - 🔴 **`kifus` を作る経路はすべて `insertKifu` を通す**（KIF/CSA 貼り付け・動画解析の取り込み・seed・テスト）。
+    `insert(kifus)` を書いてよいのは `kifu-number.ts` だけ（`kifu-number.test.ts` が検査する）
+  - 移行（`kifu_display_no`）: 既存の棋譜は `displayNo = id`、カウンタは所有者ごとの最大値で埋めた（今の URL がそのまま生きる）
 - **`kifText` は原本**（KIF）。`usiMoves` は登録時に変換した派生物で、解析前でも盤面表示に使える（[05](./05-analysis.md)）。
 - **`swarsGameKey`** は swars 由来棋譜の一意キー。UNIQUE 制約で**重複取得を検知**する（[04](./04-ingestion.md)）。
   KIF 貼り付け等では null。
@@ -122,7 +133,7 @@ kifus
   **full 完了時刻の列を別に持つかは実装判断**（[05](./05-analysis.md) §1.1d）。
 - **`analysisError`**: worker がエンジンの異常終了/illegal move/timeout を検知したときに理由を記録する。これにより
   poll から除外され、**解析できない棋譜がキューを詰まらせない**（ポイズンピル対策。[05](./05-analysis.md) §1.1a）。
-  再試行は `POST /api/kifus/:id/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
+  再試行は `POST /api/kifus/:no/reanalyze`（`kifText` を再変換して `usiMoves`・メタを作り直し error をクリア。[04](./04-ingestion.md) §6）。
   🔴 **`analysisCompletedAt` と `analysisError` の排他は緩めた**（改定・2026-09-05。2 段階解析。
   [05](./05-analysis.md) §1.1d）。**quick 完了後に full が失敗すると両方が非 null になる**。
   `analysisError` は「**進行中だった段階の失敗**」を表し、失敗棋譜が poll から除外されることは変わらない。
@@ -143,7 +154,7 @@ kifus
   （旧成功で completed 復活・旧失敗で error 復活を弾く。[05](./05-analysis.md) §1.1a）。
 - 対局メタ（sente/gote/dan/result/playedAt）は**一括取り込み・KIF 貼り付けの両経路とも登録時に抽出**して埋める
   （KIF 経路は `result` を終局マーカー＋手番 parity から導出。[04](./04-ingestion.md) §3）。取れなければ null。
-- **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /api/kifus/:id`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
+- **`memo`** はユーザーの自由記述。棋譜詳細で編集し（`PATCH /api/kifus/:no`）、一覧は有無（`hasMemo`）のみ返す（[05](./05-analysis.md)）。
 
 ### 2.1 `kifuTactics`（戦型ラベル・計画中）
 
@@ -302,7 +313,7 @@ kifuAnalyses
 | quick が末尾を越えて飛ばないこと | **quick のチャンクは先頭が `detail` の長さ以下**。`fullCount` は変えない |
 | 段階の後退防止 | quick のチャンクのうち **`moveNumber < fullCount` の局面は捨てる**（既存が full の局面を quick で上書きしない） |
 | 再送が同じ結果になること | 重なった局面は上書き（以前の `UNIQUE(kifuId, moveNumber)` による upsert と同じ性質） |
-| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:id/reanalyze`。submit 側は消さない） |
+| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:no/reanalyze`。submit 側は消さない） |
 | 完了の確定 | **段階ごとの**局面数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = `detail` の長さ / full = `fullCount` |
 
 - 範囲と連続性を保証すれば `detail` に隙間は生じないので、**長さ = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。
@@ -375,6 +386,8 @@ drillAttempts
 - 🔴 **再生成は upsert で、DELETE → INSERT にしない。** `drillAttempts` が CASCADE で
   ぶら下がっているので、作り直すと**解答履歴が道連れで消える**。条件から外れた行だけを消す。
 - 🔒 **除外フラグは履歴側に置く**——出題側に持つと再生成で消えうる。
+- 🔒 **web 向けの API は出題を `(棋譜の displayNo, moveNumber, kind)` で指す**（一意制約と同じ組。[14](./14-multi-user.md) §4.4）。
+  `drills.id` / `drillAttempts.id` は応答に載せない（作り直しで行の ID が変わりうるうえ、通しの連番）。
 
 ## 6. `commentaries`（LLM 解説・計画中）
 

@@ -27,12 +27,14 @@ import {
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillHistory, DrillList } from '../components/DrillTables';
 import {
+  drillRefOf,
   nextDrillSearch,
   option,
   pinnedSearch,
   STATUSES,
   validateDrillsSearch,
   VERDICTS,
+  type DrillRef,
   type DrillsSearch,
 } from '../lib/drillSearch';
 
@@ -62,7 +64,7 @@ type Drill = NonNullable<SolveResponse['drill']>;
 
 /**
  * 解くタブの読み込みの通し番号。**読み込むたびに盤を作り直す**ための `key`。
- * ⚠ 問題の id だけを `key` にすると、「次の問題」で**同じ問題がまた選ばれた**とき
+ * ⚠ 問題（棋譜の番号・手数・種類）だけを `key` にすると、「次の問題」で**同じ問題がまた選ばれた**とき
  * （出題順は段の中でランダム。prd/13 §6.3）に作り直されず、解答後の表示が残る
  */
 let solveLoads = 0;
@@ -71,15 +73,16 @@ let solveLoads = 0;
 async function loadTab(search: DrillsSearch) {
   if (search.tab === 'list') return { tab: 'list' as const, ...(await loadList(search)) };
   if (search.tab === 'history') return { tab: 'history' as const, ...(await loadHistory(search)) };
-  if (search.drill) {
-    return { tab: 'solve' as const, load: ++solveLoads, ...(await loadOne(search.drill)) };
+  const ref = drillRefOf(search);
+  if (ref) {
+    return { tab: 'solve' as const, load: ++solveLoads, ...(await loadOne(ref)) };
   }
   const next = await loadNext(search.kind);
   // 🔒 **選んだ問題を URL に載せる**（prd/13 §7.4）。載せないと、棋譜詳細から戻ったときに
   // loader が**別の問題を選び直す**。loader の redirect は router が **replace** で扱うので
-  // 履歴は積まれない。置き換え先は `drill` を持つので 2 度目は `loadOne` に入り、ループしない
-  // ⚠ 取得は 2 回になる（next → :id）が、**取得経路を loader の 1 本に保つ**方を取る
-  const pinned = next.drill ? pinnedSearch(search, next.drill.id) : null;
+  // 履歴は積まれない。置き換え先は問題を指すので 2 度目は `loadOne` に入り、ループしない
+  // ⚠ 取得は 2 回になる（next → 名指し）が、**取得経路を loader の 1 本に保つ**方を取る
+  const pinned = next.drill ? pinnedSearch(search, refOf(next.drill)) : null;
   if (pinned) throw redirect({ to: '/drills', search: pinned });
   return { tab: 'solve' as const, load: ++solveLoads, ...next };
 }
@@ -95,10 +98,26 @@ async function loadNext(kind?: 'mate' | 'best') {
   }
 }
 
+/** 問題を指す組（棋譜の番号・手数・種類。prd/14 §4.4）を API のパス引数へ */
+function refParam(ref: DrillRef) {
+  return {
+    kifuNo: String(ref.kifuNo),
+    moveNumber: String(ref.moveNumber),
+    kind: ref.kind,
+  };
+}
+
+/** 出題（`/drills/next` などが返す 1 問）から、それを指す組を取り出す */
+function refOf(drill: DrillRef): DrillRef {
+  return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
+}
+
 /** 一覧から名指しで開いた 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
-async function loadOne(id: number) {
+async function loadOne(ref: DrillRef) {
   try {
-    const res = await client.api.drills[':id'].$get({ param: { id: String(id) } });
+    const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].$get({
+      param: refParam(ref),
+    });
     if (res.status === 404) return { drill: null, error: '出題が見つかりません' };
     if (!res.ok) return { drill: null, error: `サーバーエラー (${res.status})` };
     const body = await res.json();
@@ -147,7 +166,8 @@ interface Reveal {
   verdict: 'correct' | 'close' | 'wrong';
   lossCp: number | null;
   refutation?: string[];
-  kifuId: number;
+  /** 棋譜の番号（所有者ごと。prd/14 §4.4） */
+  kifuNo: number;
   moveNumber: number;
   reason: 'missed_mate' | 'own_blunder';
   answerMove: string;
@@ -190,12 +210,14 @@ function DrillsPage() {
     navigate({ search: { tab: search.tab } });
   }
 
-  async function unexclude(id: number) {
+  async function unexclude(ref: DrillRef) {
     // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
     // GET が成功すると、**除外されたままの一覧が普通に描き直される**——押した側からは
     // 「効かなかった」ことも理由も分からない
     try {
-      const res = await client.api.drills[':id'].unexclude.$post({ param: { id: String(id) } });
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].unexclude.$post({
+        param: refParam(ref),
+      });
       if (!res.ok) {
         setActionError(`除外を戻せませんでした (${res.status})`);
         return;
@@ -218,8 +240,8 @@ function DrillsPage() {
         <DrillRunner
           key={data.load}
           initial={data}
-          // 🔒 **次の問題も loader に選ばせる**（prd/13 §7.4）。`drill` を落として replace で
-          // 移ると、loader が次の 1 問を選んでその id を URL に載せ直す（履歴は積まない）
+          // 🔒 **次の問題も loader に選ばせる**（prd/13 §7.4）。問題を指す組を落として replace で
+          // 移ると、loader が次の 1 問を選んで URL に載せ直す（履歴は積まない）
           onNext={() => navigate({ search: nextDrillSearch, replace: true })}
         />
       )}
@@ -359,7 +381,14 @@ function DrillTabs({ search }: { search: DrillsSearch }) {
           <Link
             key={label}
             to="/drills"
-            search={{ ...search, kind: value, page: undefined, drill: undefined }}
+            search={{
+              ...search,
+              kind: value,
+              page: undefined,
+              kifu: undefined,
+              ply: undefined,
+              drillKind: undefined,
+            }}
             className={`btn btn-xs join-item ${search.kind === value ? 'btn-active' : ''}`}
           >
             {label}
@@ -440,8 +469,8 @@ function DrillRunner({
     const deadline = Date.now() + POLL_BUDGET_MS;
     try {
       while (Date.now() < deadline) {
-        const res = await client.api.drills[':id'].answer.$post({
-          param: { id: String(drill.id) },
+        const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
+          param: refParam(drill),
           json: body,
         });
         // ⚠ **本文のパースはステータス判定より後**（前段が返す HTML で落ちると、
@@ -482,7 +511,9 @@ function DrillRunner({
 
   async function exclude() {
     if (!drill) return;
-    await client.api.drills[':id'].exclude.$post({ param: { id: String(drill.id) } });
+    await client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({
+      param: refParam(drill),
+    });
     onNext();
   }
 
@@ -644,7 +675,7 @@ function Result({
         */}
         <Link
           to="/kifus/$id"
-          params={{ id: String(reveal.kifuId) }}
+          params={{ id: String(reveal.kifuNo) }}
           search={{ ply: reveal.moveNumber + 1 }}
           className="btn btn-sm"
         >

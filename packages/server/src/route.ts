@@ -7,6 +7,11 @@
  * （`kifu-queries.ts` / `position-queries.ts` / `drill-query.ts` / `users.ts` など）に置く。
  * 他人の棋譜・問題・名前候補・評価ジョブは 404（存在を明かさない）。
  *
+ * 🔒 **棋譜はパスでも応答でも番号（`kifus.displayNo`。所有者ごとの連番）で扱う**（prd/14 §4.4）。
+ * 内部の主キーは通しの連番でサービス全体の棋譜数が分かるので、ログインの経路の応答に載せない
+ * （`display-no.db.test.ts` が全エンドポイントの応答を検査する）。出題は棋譜の番号・手数・種類の組で指す。
+ * worker の経路（API_KEY。`worker-routes.ts`）は内部経路なので内部 ID のまま。
+ *
  * 全員ぶんを扱う経路（worker の報告・動画解析の取り込み。API_KEY）は `worker-routes.ts`。
  */
 import { Hono } from 'hono';
@@ -86,6 +91,24 @@ import {
 import { workerRoutes } from './worker-routes.js';
 
 export type { SourceTzChoice } from './kifu-queries.js';
+
+/**
+ * 棋譜の番号（`kifus.displayNo`。所有者ごとの連番。prd/14 §4.4）。
+ * ⚠ 整数でない・正でない・列（`integer`）に収まらない値は 400
+ * （`z.coerce.number()` だけだと `1.5` や `NaN` が素通りし、範囲外は DB で 500 になる）
+ */
+const kifuNo = z.coerce.number().int().positive().max(2_147_483_647);
+const kifuNoParam = z.object({ no: kifuNo });
+
+/**
+ * 出題を指すパス引数（棋譜の番号・手数・種類。prd/14 §4.4）。`drills` の一意制約と同じ組。
+ * `moveNumber` は出題局面（その手を指す前の局面）
+ */
+const drillRefParam = z.object({
+  kifuNo,
+  moveNumber: z.coerce.number().int().min(0).max(10_000),
+  kind: z.enum(['mate', 'best']),
+});
 
 /** `YYYY-MM-DD` の日付。名前候補の有効期間（prd/11 §5） */
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -188,12 +211,12 @@ const route = app
     c.json(await listKifus(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
   .get(
-    '/kifus/:id',
+    '/kifus/:no',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', kifuNoParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      const kifu = await getKifuDetail(c.get('tx'), c.get('userId'), id);
+      const { no } = c.req.valid('param');
+      const kifu = await getKifuDetail(c.get('tx'), c.get('userId'), no);
       if (!kifu) return c.json({ error: 'not found' }, 404);
       return c.json(kifu);
     },
@@ -215,9 +238,9 @@ const route = app
       }),
     ),
     async (c) => {
-      // 🔒 所有者はセッションのユーザー（本文から取らない）
-      const id = await createKifu(c.get('tx'), c.get('userId'), c.req.valid('json'));
-      return c.json({ id }, 201);
+      // 🔒 所有者はセッションのユーザー（本文から取らない）。返すのは番号（prd/14 §4.4）
+      const { displayNo } = await createKifu(c.get('tx'), c.get('userId'), c.req.valid('json'));
+      return c.json({ no: displayNo }, 201);
     },
   )
   // --- 自分（prd/11）---
@@ -512,7 +535,8 @@ const route = app
   // --- 出題（prd/13）---
   // 🔴 **答えを含む列は返さない**（`answerMove` / `candidates` / `playedMove`）。
   // 渡した時点で答えが見えているのと同じで、専用ページにした意味が消える（prd/13 §7）。
-  // 棋譜名・手数・対局者も伏せる——解答後に `POST /drills/:id/answer` が返す
+  // 棋譜名・対局者も伏せる——解答後に `POST /drills/:kifuNo/:moveNumber/:kind/answer` が返す。
+// ⚠ 問題を指す組（棋譜の番号・手数・種類。prd/14 §4.4）は返す——URL に載せて同じ問題へ戻るため
   .get(
     '/drills/next',
     sessionRequired,
@@ -526,8 +550,7 @@ const route = app
   .get('/drills/counts', sessionRequired, async (c) =>
     c.json(await drillCounts(c.get('tx'), c.get('userId'))),
   )
-  // 解答履歴の一覧（prd/13 §7.3）。⚠ **`/drills/:id` より先に登録する**——
-  // `:id` を先に置くと固定の口を飲み込む
+  // 解答履歴の一覧（prd/13 §7.3）
   .get(
     '/drills/attempts',
     sessionRequired,
@@ -538,41 +561,42 @@ const route = app
   .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>
     c.json(await listDrills(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
-  // 一覧から名指しで開いた 1 問（prd/13 §5.4）。返す形は `/drills/next` と同じ
+  // 一覧から名指しで開いた 1 問（prd/13 §5.4）。返す形は `/drills/next` と同じ。
+  // 問題は（棋譜の番号・手数・種類）で指す（prd/14 §4.4）
   .get(
-    '/drills/:id',
+    '/drills/:kifuNo/:moveNumber/:kind',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    zv('param', drillRefParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), id);
+      const ref = c.req.valid('param');
+      const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), ref);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       return c.json({ drill });
     },
   )
   // 「自明だった」の取り消し（prd/13 §7.2）。除外の行そのものを消すので解答履歴は残る
   .post(
-    '/drills/:id/unexclude',
+    '/drills/:kifuNo/:moveNumber/:kind/unexclude',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    zv('param', drillRefParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
-      await unexcludeDrill(c.get('tx'), c.get('userId'), id);
+      await unexcludeDrill(c.get('tx'), c.get('userId'), drill.id);
       return c.json({ ok: true } as const);
     },
   )
   // 「自明だった」で以後の出題から外す（prd/13 §7）。
   // 🔒 印は**履歴側**に置く——出題を作り直しても残るようにするため（prd/13 §6.2）
   .post(
-    '/drills/:id/exclude',
+    '/drills/:kifuNo/:moveNumber/:kind/exclude',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    zv('param', drillRefParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      // 以下の `id` は出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない）
+      const { id } = drill;
       await recordAttempt(c.get('tx'), {
         drillId: id,
         ownerId: drill.ownerId,
@@ -590,9 +614,9 @@ const route = app
   // `line` は**出題局面からの全手順**（受方の応手を含み、最後がユーザーの手）。
   // `best` は 1 手、`mate` は詰み上がりまで積み上がる（prd/13 §5.2）。
   .post(
-    '/drills/:id/answer',
+    '/drills/:kifuNo/:moveNumber/:kind/answer',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number().int().positive() })),
+    zv('param', drillRefParam),
     zv(
       'json',
       z.object({
@@ -603,10 +627,11 @@ const route = app
       }),
     ),
     async (c) => {
-      const { id } = c.req.valid('param');
       const { line, correctMargin, closeMargin } = c.req.valid('json');
-      const drill = await loadDrill(c.get('tx'), c.get('userId'), id);
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      // 出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない。prd/14 §4.4）
+      const { id } = drill;
       const scoring: DrillScoring = {
         correctMargin: correctMargin ?? DEFAULT_SCORING.correctMargin,
         closeMargin: closeMargin ?? DEFAULT_SCORING.closeMargin,
@@ -645,9 +670,9 @@ const route = app
         return c.json({ error: 'その手は指せません' } as const, 400);
       }
 
-      // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）
+      // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）
       const reveal = {
-        kifuId: drill.kifuId,
+        kifuNo: drill.kifuNo,
         moveNumber: drill.moveNumber,
         reason: drill.reason,
         answerMove: drill.answerMove,
@@ -701,12 +726,13 @@ const route = app
     c.json(await listVideoKifus(c.get('tx'), c.get('userId'))),
   )
   .post(
-    '/kifus/:id/reanalyze',
+    '/kifus/:no/reanalyze',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', kifuNoParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      if (!(await reanalyzeKifu(c.get('tx'), c.get('userId'), id))) {
+      const { no } = c.req.valid('param');
+      const id = await reanalyzeKifu(c.get('tx'), c.get('userId'), no);
+      if (id === null) {
         return c.json({ error: 'not found' }, 404);
       }
       // 旧解析の進捗を落とす（**コミットの後**。以降に届く旧世代の報告は世代照合で弾かれる）
@@ -715,12 +741,13 @@ const route = app
     },
   )
   .delete(
-    '/kifus/:id',
+    '/kifus/:no',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', kifuNoParam),
     async (c) => {
-      const { id } = c.req.valid('param');
-      if (!(await deleteKifu(c.get('tx'), c.get('userId'), id))) {
+      const { no } = c.req.valid('param');
+      const id = await deleteKifu(c.get('tx'), c.get('userId'), no);
+      if (id === null) {
         return c.json({ error: 'not found' }, 404);
       }
       // 消えた棋譜の「解析中」が残らないように（行が無くなるので以降の報告も弾かれる）
@@ -733,14 +760,14 @@ const route = app
   // 🔒 **解析中の棋譜の所有者にだけ見せる**（prd/14 §4.2）。他人には null
   .get('/analysis/progress', sessionUser, (c) => c.json(getProgressFor(c.get('userId'))))
   .patch(
-    '/kifus/:id',
+    '/kifus/:no',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', kifuNoParam),
     zv('json', z.object({ memo: z.string().nullable() })),
     async (c) => {
-      const { id } = c.req.valid('param');
+      const { no } = c.req.valid('param');
       const { memo } = c.req.valid('json');
-      if (!(await updateKifuMemo(c.get('tx'), c.get('userId'), id, memo))) {
+      if (!(await updateKifuMemo(c.get('tx'), c.get('userId'), no, memo))) {
         return c.json({ error: 'not found' }, 404);
       }
       return c.json({ ok: true });

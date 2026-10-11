@@ -10,12 +10,12 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, inject } from 'vitest';
-import { kifus } from './db/schema.js';
+import { kifus, users } from './db/schema.js';
 import { OWNER_USER_ID } from './users.js';
 
 const scriptPath = (name: string) =>
@@ -130,9 +130,15 @@ describe('server ロール（DML のみ）', () => {
   it('管理ロールが作った表に挿入・更新・削除できる（identity・トリガーを含む。所有者として）', async () => {
     await asUser(OWNER_USER_ID, async (c) => {
       const db = drizzle({ client: c });
+      // 棋譜の番号の採番（所有者の行のカウンタを進める。prd/14 §4.4）も server ロールでできる
+      const [{ no }] = await db
+        .update(users)
+        .set({ lastKifuNo: sql`${users.lastKifuNo} + 1` })
+        .where(eq(users.id, OWNER_USER_ID))
+        .returning({ no: users.lastKifuNo });
       const [row] = await db
         .insert(kifus)
-        .values({ title: 't', kifText: '', ownerId: OWNER_USER_ID })
+        .values({ title: 't', kifText: '', ownerId: OWNER_USER_ID, displayNo: no })
         .returning({ id: kifus.id });
       await db.update(kifus).set({ title: 'u' }).where(eq(kifus.id, row.id));
       await db.delete(kifus).where(eq(kifus.id, row.id));
@@ -173,7 +179,10 @@ describe('RLS（prd/14 §4「RLS の形」）', () => {
       const id = Number(
         (
           await systemPool.query<{ id: string }>(
-            `insert into kifus (title, kif_text, owner_id) values ('t', '', $1) returning id`,
+            // 番号は所有者のカウンタを進めて振る（`kifu-number.ts` と同じ。prd/14 §4.4）
+            `with n as (update users set last_kifu_no = last_kifu_no + 1 where id = $1 returning last_kifu_no)
+             insert into kifus (title, kif_text, owner_id, display_no)
+             select 't', '', $1, last_kifu_no from n returning id`,
             [ownerId],
           )
         ).rows[0].id,
@@ -237,7 +246,7 @@ describe('RLS（prd/14 §4「RLS の形」）', () => {
     expect(
       await errorCode(
         asUser(userA, (c) =>
-          c.query(`insert into kifus (title, kif_text, owner_id) values ('t', '', $1)`, [userB]),
+          c.query(`insert into kifus (title, kif_text, owner_id, display_no) values ('t', '', $1, 1)`, [userB]),
         ),
       ),
     ).toBe(INSUFFICIENT_PRIVILEGE);

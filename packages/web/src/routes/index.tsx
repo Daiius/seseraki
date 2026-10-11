@@ -457,13 +457,17 @@ function KifuListPage() {
                   const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
                   const showResultBadge = isSente || isGote;
                   const analyzing =
-                    progress && progress.kifuId === kifu.id ? progress : null;
+                    progress && progress.kifuNo === kifu.no ? progress : null;
                   return (
-                    <tr key={kifu.id} className="hover">
+                    <tr key={kifu.no} className="hover">
                       <td>
+                        {/* 棋譜の番号（所有者ごと。prd/14 §4.4）。「42 番の棋譜」と呼べるように控えめに添える */}
+                        <span className="mr-1 text-xs tabular-nums text-base-content/50">
+                          #{kifu.no}
+                        </span>
                         <Link
                           to="/kifus/$id"
-                          params={{ id: String(kifu.id) }}
+                          params={{ id: String(kifu.no) }}
                           className="link"
                         >
                           {kifu.title}

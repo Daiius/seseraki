@@ -1,17 +1,20 @@
 import { Link } from '@tanstack/react-router';
+import { solveDrillSearch, type DrillRef } from '../lib/drillSearch';
 
 /**
  * 出題の一覧と解答履歴の表（prd/13 §7.2 / §7.3）。
  *
  * 🔴 **答えは出さない**（正解手・実戦の手・損失）。⚠ 棋譜名と手数は**未解答でも出す**
  * （決定・2026-09-10。prd/13 §5.4）——伏せるのは解く画面の規則で、一覧は解く画面ではない。
+ *
+ * 🔒 問題は（棋譜の番号・手数・種類）で指す（prd/14 §4.4）。出題・解答の行の ID は API から来ない。
  */
 export interface DrillListRow {
-  id: number;
   kind: 'mate' | 'best';
   matePlies: number | null;
   moveNumber: number;
-  kifuId: number;
+  /** 棋譜の番号（所有者ごと） */
+  kifuNo: number;
   title: string;
   playedAt: string | null;
   kifuCreatedAt: string;
@@ -23,11 +26,10 @@ export interface DrillListRow {
 }
 
 export interface DrillAttemptRow {
-  id: number;
-  drillId: number;
   kind: 'mate' | 'best';
   moveNumber: number;
-  kifuId: number;
+  /** 棋譜の番号（所有者ごと） */
+  kifuNo: number;
   title: string;
   playedAt: string | null;
   move: string | null;
@@ -46,6 +48,11 @@ export interface Pagination {
 }
 
 const KIND_LABEL = { mate: '詰み', best: '次の一手' } as const;
+
+/** 行が指す問題（棋譜の番号・手数・種類。prd/14 §4.4） */
+function refOf(row: { kifuNo: number; moveNumber: number; kind: 'mate' | 'best' }): DrillRef {
+  return { kifuNo: row.kifuNo, moveNumber: row.moveNumber, kind: row.kind };
+}
 
 const STATUS_BADGE = {
   unanswered: { label: '未解答', className: 'badge-ghost' },
@@ -149,7 +156,7 @@ export function DrillList({
   excludedOnly: boolean;
   onPage: (page: number) => void;
   onClearFilters: () => void;
-  onUnexclude: (id: number) => void;
+  onUnexclude: (ref: DrillRef) => void;
 }) {
   if (rows.length === 0) {
     // 条件に合う問題はあるのに、このページには無い（件数が減った・URL が範囲外）
@@ -191,14 +198,14 @@ export function DrillList({
             {rows.map((row) => {
               const status = STATUS_BADGE[row.status];
               return (
-                <tr key={row.id}>
+                <tr key={`${row.kifuNo}-${row.moveNumber}-${row.kind}`}>
                   <td className="whitespace-nowrap">
                     {dateText(row.playedAt, row.kifuCreatedAt)}
                   </td>
                   <td className="max-w-60 truncate">
                     <Link
                       to="/kifus/$id"
-                      params={{ id: String(row.kifuId) }}
+                      params={{ id: String(row.kifuNo) }}
                       search={{ ply: row.moveNumber + 1 }}
                       className="link link-hover"
                     >
@@ -238,7 +245,7 @@ export function DrillList({
                     <div className="flex gap-1 justify-end">
                       <Link
                         to="/drills"
-                        search={{ kind, drill: row.id }}
+                        search={solveDrillSearch(kind, refOf(row))}
                         className="btn btn-xs btn-primary"
                       >
                         解く
@@ -249,7 +256,7 @@ export function DrillList({
                           type="button"
                           className="btn btn-xs btn-ghost"
                           title="除外を戻す"
-                          onClick={() => onUnexclude(row.id)}
+                          onClick={() => onUnexclude(refOf(row))}
                         >
                           戻す
                         </button>
@@ -315,15 +322,16 @@ export function DrillHistory({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, i) => {
               const verdict = row.verdict ? VERDICT_BADGE[row.verdict] : null;
               return (
-                <tr key={row.id}>
+                // 解答の行の ID は API から来ない（prd/14 §4.4）。並びはページ内で固定なので位置で区別する
+                <tr key={`${row.createdAt}-${i}`}>
                   <td className="whitespace-nowrap">{timeText(row.createdAt)}</td>
                   <td className="max-w-60 truncate">
                     <Link
                       to="/kifus/$id"
-                      params={{ id: String(row.kifuId) }}
+                      params={{ id: String(row.kifuNo) }}
                       search={{ ply: row.moveNumber + 1 }}
                       className="link link-hover"
                     >
@@ -353,7 +361,7 @@ export function DrillHistory({
                   <td className="w-px whitespace-nowrap">
                     <Link
                       to="/drills"
-                      search={{ kind, drill: row.drillId }}
+                      search={solveDrillSearch(kind, refOf(row))}
                       className="btn btn-xs"
                     >
                       解き直す

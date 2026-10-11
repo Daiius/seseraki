@@ -110,8 +110,14 @@ function VideoAnalysisPage() {
               </thead>
               <tbody>
                 {group.games.map((game) => (
-                  <tr key={game.kifuId}>
-                    <td className="whitespace-nowrap">第 {game.gameIndex} 局</td>
+                  <tr key={game.kifuNo}>
+                    <td className="whitespace-nowrap">
+                      第 {game.gameIndex} 局
+                      {/* 棋譜の番号（所有者ごと。prd/14 §4.4） */}
+                      <span className="ml-1 text-xs tabular-nums text-base-content/50">
+                        #{game.kifuNo}
+                      </span>
+                    </td>
                     <td className="whitespace-nowrap font-mono text-sm">
                       {clock(game.startedAtSec)}〜{clock(game.endedAtSec)}
                     </td>
@@ -129,7 +135,7 @@ function VideoAnalysisPage() {
                     <td className="whitespace-nowrap">
                       <Link
                         to="/kifus/$id"
-                        params={{ id: String(game.kifuId) }}
+                        params={{ id: String(game.kifuNo) }}
                         className="btn btn-ghost btn-xs"
                       >
                         開く

@@ -224,6 +224,8 @@ export const workerRoutes = new Hono()
           error: kifus.analysisError,
           // 進捗の読み取りを棋譜の所有者に限るために持たせる（prd/14 §4.2）
           ownerId: kifus.ownerId,
+          // web へは番号で返す（prd/14 §4.4。内部 ID を出さない）
+          kifuNo: kifus.displayNo,
         })
         .from(kifus)
         .where(eq(kifus.id, kifuId));
@@ -237,7 +239,10 @@ export const workerRoutes = new Hono()
         !isStageComplete(kifu, profile);
       const applied =
         valid &&
-        setProgress({ kifuId, ownerId: kifu.ownerId, revision, profile, analyzed, total }, token);
+        setProgress(
+          { kifuId, kifuNo: kifu.kifuNo, ownerId: kifu.ownerId, revision, profile, analyzed, total },
+          token,
+        );
       return c.json({ ok: true, applied });
     },
   )

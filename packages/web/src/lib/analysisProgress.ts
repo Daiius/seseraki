@@ -12,7 +12,8 @@ export type AnalysisProfile = 'quick' | 'full';
 
 /** server のメモリ上の進捗（`packages/server/src/analysis-progress.ts` と対応） */
 export interface AnalysisProgress {
-  kifuId: number;
+  /** 解析中の棋譜の番号（所有者ごと。prd/14 §4.4）。一覧・詳細の棋譜の `no` と照らし合わせる */
+  kifuNo: number;
   revision: number;
   /**
    * 実行中の段階。**文字では出さず**、解析中スピナーの見え方（濃さ）の出し分けに使う
@@ -146,7 +147,7 @@ export const initialPaceState: PaceState = { latest: null, msPerPosition: null }
 /** 同じ解析の続きか（棋譜・世代・段階のいずれかが変われば別の解析＝ペースを引き継がない） */
 export function isSameAnalysisRun(a: AnalysisProgress, b: AnalysisProgress): boolean {
   return (
-    a.kifuId === b.kifuId && a.revision === b.revision && a.profile === b.profile
+    a.kifuNo === b.kifuNo && a.revision === b.revision && a.profile === b.profile
   );
 }
 

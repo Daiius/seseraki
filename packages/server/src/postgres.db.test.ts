@@ -42,6 +42,7 @@ import { findKifuPositionMatches } from './position-kifu-reuse.js';
 import { replacePositions } from './positions.js';
 import { addAlias, OWNER_USER_ID } from './users.js';
 import { withUserTx } from './user-tx.js';
+import { insertKifu as insertNumberedKifu, type NewKifu } from './kifu-number.js';
 
 afterAll(async () => {
   await client.end();
@@ -70,12 +71,11 @@ const FK_VIOLATION = '23503';
 /** 所有者の棋譜の指し方（子の表の書き込み関数が受け取る形） */
 const owned = (id: number) => ({ id, ownerId: OWNER_USER_ID });
 
-/** 1 局ぶんの最小の棋譜を足して id を返す */
-async function insertKifu(values: Partial<typeof kifus.$inferInsert> = {}): Promise<number> {
-  const [row] = await db
-    .insert(kifus)
-    .values({ title: 't', kifText: '', ownerId: OWNER_USER_ID, ...values })
-    .returning({ id: kifus.id });
+/** 1 局ぶんの最小の棋譜を足して id を返す（番号は採番を通す。prd/14 §4.4） */
+async function insertKifu(values: Partial<NewKifu> = {}): Promise<number> {
+  const row = await db.transaction((tx) =>
+    insertNumberedKifu(tx, { title: 't', kifText: '', ownerId: OWNER_USER_ID, ...values }),
+  );
   return row.id;
 }
 

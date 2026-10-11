@@ -125,7 +125,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 
 | 処理 | 今 | 本章 |
 |---|---|---|
-| 棋譜の詳細（`GET /api/kifus/:id`） | 局面と候補手の行を読んで組み立てる | 1 行を読んで展開する。**応答の形は変えない** |
+| 棋譜の詳細（`GET /api/kifus/:no`） | 局面と候補手の行を読んで組み立てる | 1 行を読んで展開する。**応答の形は変えない** |
 | 一覧の詰み見逃し・分析の取りこぼし | 候補手の行を索引で探す（`candidate_moves_score_idx`） | `minMate*` の比較（§3.2）。索引は不要 |
 | 局面の再利用（[12](./12-position-lab.md) §2.6） | `kifuPositions` → 解析の行（full かつ 3 本揃い）→ 候補手 | `kifuPositions` → 行（`moveNumber < fullCount`）→ `detail -> moveNumber`（候補手が 3 本揃っているものだけ。今と同じ） |
 | 出題の抽出（[13](./13-drills.md)） | 1 棋譜ぶんの full の行 | 1 行の先頭 `fullCount` 局面 |

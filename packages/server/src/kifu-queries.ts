@@ -4,6 +4,8 @@
  * 🔒 **各関数は tx（ユーザーとして開いたトランザクション。`user-tx.ts`）と所有者を引数に取り、
  * `owner_id = 所有者` を条件に入れる。** 他人の棋譜は「無い」（null / false → 呼び出し側で 404）。
  * 存在を明かさないため、「他人のもの」と「無い」を区別しない。
+ * 🔒 **棋譜は番号（`displayNo`。prd/14 §4.4）で受け取り・返す。** 内部の主キー（`id`）は応答に載せない
+ * （通しの連番なのでサービス全体の棋譜数が分かる）。番号は所有者ごとなので、所有者と組で引く。
  * ⚠ グローバルの `db` を import しない（`db-import-boundary.test.ts` が検査する）。
  *
  * worker・動画解析の取り込み（API_KEY の経路）は全員ぶんを扱うので、ここではなく `worker-routes.ts`。
@@ -31,6 +33,7 @@ import {
   statsTacticsWhere,
   type StatsTacticsQuery,
 } from './stats-tactics-query.js';
+import { insertKifu } from './kifu-number.js';
 import { replaceTactics } from './tactics.js';
 import { refreshSubjectSide } from './users.js';
 import {
@@ -138,7 +141,9 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
 
   const rows = await tx
     .select({
+      // 内部の主キーは戦型を引くためだけに読む（応答には載せない。prd/14 §4.4）
       id: kifus.id,
+      no: kifus.displayNo,
       title: kifus.title,
       sente: kifus.sente,
       gote: kifus.gote,
@@ -170,12 +175,12 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
   );
 
   return {
-    kifus: rows.map(({ analyzedAt, analysisError, hasMemo, ...r }) => ({
+    kifus: rows.map(({ id, analyzedAt, analysisError, hasMemo, ...r }) => ({
       ...r,
       analyzed: analyzedAt !== null,
       failed: analysisError !== null,
       hasMemo: Boolean(hasMemo),
-      tactics: tactics.get(r.id) ?? [],
+      tactics: tactics.get(id) ?? [],
     })),
     pagination: {
       page,
@@ -185,13 +190,26 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
   };
 }
 
+/** 所有者と番号で棋譜を指す条件（prd/14 §4.4） */
+function byNo(ownerId: string, no: number) {
+  return and(eq(kifus.ownerId, ownerId), eq(kifus.displayNo, no));
+}
+
+/**
+ * 所有者の番号 → 内部の主キー。他人の棋譜・無い棋譜は null。
+ * 子の表・worker・プロセス内の状態（解析の進捗）は内部の主キーで持つので、番号はここで解く
+ */
+export async function kifuIdOf(tx: Tx, ownerId: string, no: number): Promise<number | null> {
+  const [row] = await tx.select({ id: kifus.id }).from(kifus).where(byNo(ownerId, no));
+  return row?.id ?? null;
+}
+
 /** 棋譜の詳細（解析・戦型つき）。他人の棋譜・無い棋譜は null */
-export async function getKifuDetail(tx: Tx, ownerId: string, id: number) {
-  const [kifu] = await tx
-    .select()
-    .from(kifus)
-    .where(and(eq(kifus.id, id), eq(kifus.ownerId, ownerId)));
-  if (!kifu) return null;
+export async function getKifuDetail(tx: Tx, ownerId: string, no: number) {
+  const [row] = await tx.select().from(kifus).where(byNo(ownerId, no));
+  if (!row) return null;
+  // 🔒 内部の主キーは載せない。番号は `no` で返す（一覧と同じ名前。prd/14 §4.4）
+  const { id, displayNo, ...kifu } = row;
 
   // 解析は 1 行を展開して、局面ごとの形で返す（prd/16 §5。web が読む形は局面と候補手の並び）。
   // 局面ごとの段階・来歴・時刻はその局面を書いた submit（run）の値。
@@ -222,7 +240,7 @@ export async function getKifuDetail(tx: Tx, ownerId: string, id: number) {
     .from(kifuTactics)
     .where(and(eq(kifuTactics.kifuId, id), eq(kifuTactics.ownerId, ownerId)));
 
-  return { ...kifu, analyses, tactics };
+  return { no: displayNo, ...kifu, analyses, tactics };
 }
 
 /**
@@ -270,34 +288,33 @@ export async function createKifu(
   tx: Tx,
   ownerId: string,
   input: { title?: string; kifText: string; sourceTz?: SourceTzChoice },
-): Promise<number> {
+): Promise<{ id: number; displayNo: number }> {
   const { usiMoves, meta } = convertKif(input.kifText, input.sourceTz ?? 'auto');
-  const [result] = await tx
-    .insert(kifus)
-    .values({
-      title: input.title?.trim() || autoTitle(meta),
-      kifText: input.kifText,
-      usiMoves,
-      sente: meta.sente,
-      gote: meta.gote,
-      senteDan: meta.senteDan,
-      goteDan: meta.goteDan,
-      result: meta.result,
-      playedAt: meta.playedAt,
-      sourceTz: meta.sourceTz,
-      ownerId,
-    })
-    .returning({ id: kifus.id });
+  // 番号（prd/14 §4.4）もこの tx の中で振る（所有者の行のロックで、同じユーザーの取り込みが順に並ぶ）
+  const result = await insertKifu(tx, {
+    title: input.title?.trim() || autoTitle(meta),
+    kifText: input.kifText,
+    usiMoves,
+    sente: meta.sente,
+    gote: meta.gote,
+    senteDan: meta.senteDan,
+    goteDan: meta.goteDan,
+    result: meta.result,
+    playedAt: meta.playedAt,
+    sourceTz: meta.sourceTz,
+    ownerId,
+  });
   const kifu = { id: result.id, ownerId };
   await replaceTactics(tx, kifu, usiMoves);
   await replacePositions(tx, kifu, usiMoves);
   // 主体側も同じトランザクションで（対局者名から導出する。prd/11 §4）
   await refreshSubjectSide(tx, result.id);
-  return result.id;
+  return result;
 }
 
 /**
- * 再解析（kifText を再変換して解析状態を戻す）。他人の棋譜・無い棋譜は false。
+ * 再解析（kifText を再変換して解析状態を戻す）。棋譜は番号で指す。
+ * 戻り値は内部の主キー（解析の進捗を落とすため）。他人の棋譜・無い棋譜は null。
  *
  * kifText を再変換（パーサ修正・メタ抽出を既存棋譜へ反映）し、
  * 解析状態をリセットして worker に拾い直させる。title/memo は温存。
@@ -305,12 +322,13 @@ export async function createKifu(
  * 記録し始める前の投入分）は、当時 UTC で書き出していたアプリの棋譜がありうるので
  * 旧署名で補う（新規取り込みは JST 固定。[detectLegacyUtcTimezone]）。
  */
-export async function reanalyzeKifu(tx: Tx, ownerId: string, id: number): Promise<boolean> {
+export async function reanalyzeKifu(tx: Tx, ownerId: string, no: number): Promise<number | null> {
   const [kifu] = await tx
-    .select({ kifText: kifus.kifText, sourceTz: kifus.sourceTz })
+    .select({ id: kifus.id, kifText: kifus.kifText, sourceTz: kifus.sourceTz })
     .from(kifus)
-    .where(and(eq(kifus.id, id), eq(kifus.ownerId, ownerId)));
-  if (!kifu) return false;
+    .where(byNo(ownerId, no));
+  if (!kifu) return null;
+  const { id } = kifu;
 
   const tz =
     (kifu.sourceTz as KifTimezone | null) ?? detectLegacyUtcTimezone(kifu.kifText);
@@ -351,30 +369,34 @@ export async function reanalyzeKifu(tx: Tx, ownerId: string, id: number): Promis
   // 出題は解析結果からの派生値（prd/13 §6.1）。解析を消した以上ここも空になる
   // ——古い指し手列で作った問題を残すと、盤面と答えが噛み合わない
   await syncDrills(tx, id, drillConfigFromEnv());
-  return true;
+  return id;
 }
 
-/** 棋譜を消す（子の表は CASCADE）。他人の棋譜・無い棋譜は false */
-export async function deleteKifu(tx: Tx, ownerId: string, id: number): Promise<boolean> {
-  const deleted = await tx
+/**
+ * 棋譜を消す（子の表は CASCADE）。棋譜は番号で指す。戻り値は消した棋譜の内部の主キー
+ * （解析の進捗を落とすため）。他人の棋譜・無い棋譜は null。
+ * 🔒 番号は再利用しない（所有者のカウンタは戻さない。prd/14 §4.4）
+ */
+export async function deleteKifu(tx: Tx, ownerId: string, no: number): Promise<number | null> {
+  const [deleted] = await tx
     .delete(kifus)
-    .where(and(eq(kifus.id, id), eq(kifus.ownerId, ownerId)))
+    .where(byNo(ownerId, no))
     .returning({ id: kifus.id });
-  return deleted.length > 0;
+  return deleted?.id ?? null;
 }
 
-/** メモを書き換える（空文字は null）。他人の棋譜・無い棋譜は false */
+/** メモを書き換える（空文字は null）。棋譜は番号で指す。他人の棋譜・無い棋譜は false */
 export async function updateKifuMemo(
   tx: Tx,
   ownerId: string,
-  id: number,
+  no: number,
   memo: string | null,
 ): Promise<boolean> {
   const normalized = memo && memo.length > 0 ? memo : null;
   const updated = await tx
     .update(kifus)
     .set({ memo: normalized })
-    .where(and(eq(kifus.id, id), eq(kifus.ownerId, ownerId)))
+    .where(byNo(ownerId, no))
     .returning({ id: kifus.id });
   return updated.length > 0;
 }
@@ -386,7 +408,9 @@ export async function updateKifuMemo(
 export async function listVideoKifus(tx: Tx, ownerId: string) {
   const rows = await tx
     .select({
+      // 内部の主キーは戦型を引くためだけに読む（応答には載せない。prd/14 §4.4）
       kifuId: kifus.id,
+      kifuNo: kifus.displayNo,
       title: kifus.title,
       videoId: videoKifuSources.videoId,
       gameIndex: videoKifuSources.gameIndex,
@@ -412,13 +436,13 @@ export async function listVideoKifus(tx: Tx, ownerId: string) {
   );
 
   return {
-    games: rows.map(({ analyzedAt, analysisError, ...r }) => ({
+    games: rows.map(({ kifuId, analyzedAt, analysisError, ...r }) => ({
       ...r,
       moveCount: Number(r.moveCount ?? 0),
       analyzed: analyzedAt !== null,
       failed: analysisError !== null,
       analysisError,
-      tactics: tactics.get(r.kifuId) ?? [],
+      tactics: tactics.get(kifuId) ?? [],
     })),
   };
 }

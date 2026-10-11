@@ -68,7 +68,7 @@ describe('nextPaceState / estimateAnalyzed', () => {
   const sample = (
     over: Partial<ProgressSample> & { analyzed: number; receivedAt: number },
   ): ProgressSample => ({
-    kifuId: 1,
+    kifuNo: 1,
     revision: 0,
     profile: 'quick',
     total: 100,

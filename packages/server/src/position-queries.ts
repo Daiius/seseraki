@@ -6,6 +6,7 @@
  * 持ち、索引も `(ownerId, 局面ハッシュ)` なので、`kifus` を引く前に所有者で絞れる（prd/14 §6.3）。
  * 他人の局面しか無い局面は「無い」（null → 呼び出し側で 404）。
  * ⚠ グローバルの `db` を import しない（`db-import-boundary.test.ts` が検査する）。
+ * 🔒 **応答の棋譜は番号（`kifuNo` = `kifus.displayNo`）で指す**（prd/14 §4.4）。内部の主キーは載せない。
  */
 import { and, asc, count, desc, eq, gte, isNotNull, isNull, lte, not, notExists, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -64,7 +65,7 @@ export async function findPositionGames(tx: Tx, ownerId: string, key: PositionKe
   // 総数が取れない場合を扱う必要はない）
   const rows = await tx
     .select({
-      kifuId: kifuPositions.kifuId,
+      kifuNo: kifus.displayNo,
       moveNumber: kifuPositions.moveNumber,
       board: kifuPositions.board,
       hands: kifuPositions.hands,
@@ -178,7 +179,7 @@ export async function findSubjectGames(
   // 1 行多く読んで、当たったかを判定する
   const matched = await tx
     .select({
-      kifuId: kifuPositions.kifuId,
+      kifuNo: kifus.displayNo,
       moveNumber: kifuPositions.moveNumber,
       board: kifuPositions.board,
       hands: kifuPositions.hands,
@@ -214,7 +215,7 @@ export async function findSubjectGames(
     (row) => row.subjectSide !== null && sameSideLayout(row, row.subjectSide, baseLayoutKey),
   );
   const rows = verified.slice(0, POSITION_GAMES_LIMIT).map(({ board, hands, sideToMove, ...g }) => ({
-    kifuId: g.kifuId,
+    kifuNo: g.kifuNo,
     moveNumber: g.moveNumber,
     sfen: sfenOfRow({ board, hands, sideToMove }),
     title: g.title,
@@ -278,7 +279,7 @@ export async function findSimilarPositions(
   // `2 * window + 1` 行なので、数百局でも数千行に収まる
   const candidates = await tx
     .select({
-      kifuId: kifuPositions.kifuId,
+      kifuNo: kifus.displayNo,
       moveNumber: kifuPositions.moveNumber,
       board: kifuPositions.board,
       hands: kifuPositions.hands,
@@ -319,13 +320,14 @@ export async function findSimilarPositions(
     .limit(SIMILAR_SCAN_LIMIT);
 
   // ⭐ **棋譜ごとに最も近い 1 局面へ畳む。** 隣接する局面は高々 2 マスしか違わないので、
-  // 畳まないと**同じ棋譜の連続する局面が上位を埋め尽くす**（似た棋譜が 1 局しか出ない）
+  // 畳まないと**同じ棋譜の連続する局面が上位を埋め尽くす**（似た棋譜が 1 局しか出ない）。
+  // 所有者の棋譜だけなので、番号で棋譜を区別できる
   const best = new Map<number, (typeof candidates)[number] & { diff: PositionDiff }>();
   for (const row of candidates) {
     const diff = positionDiff(base, row);
-    const current = best.get(row.kifuId);
+    const current = best.get(row.kifuNo);
     if (!current || diff.total < current.diff.total) {
-      best.set(row.kifuId, { ...row, diff });
+      best.set(row.kifuNo, { ...row, diff });
     }
   }
 

@@ -53,11 +53,11 @@
 > **タイトル**: `title` は任意入力。空なら抽出したメタから `${sente} vs ${gote}` を自動生成する
 > （対局者不明時は日付/「無題」）。swars 一括取り込みと同じく自動生成に寄せ、都度命名の摩擦をなくす
 > （旧「KIF 貼り付けはユーザー入力」を改定。[decisions](./_grilling/decisions.md)）。
-> 登録後のタイトル編集は現状未実装（`PATCH /api/kifus/:id` は `memo` のみ。理想では編集可。gap。[08](./08-roadmap.md)）。
+> 登録後のタイトル編集は現状未実装（`PATCH /api/kifus/:no` は `memo` のみ。理想では編集可。gap。[08](./08-roadmap.md)）。
 
 > ✅ **実装済み**: KIF 貼り付け経路（`POST /api/kifus`）も上記 2 のメタ抽出（sente/gote/段級/日時 + `result` 導出）・
 > タイトル自動生成、および §5 の変換ガード（パースエラー/非平手手合割 → `usiMoves = null`）を備える。
-> 残る gap は登録後のタイトル編集（`PATCH /api/kifus/:id` は `memo` のみ）と KIF 貼り付けの重複検知（§8）。
+> 残る gap は登録後のタイトル編集（`PATCH /api/kifus/:no` は `memo` のみ）と KIF 貼り付けの重複検知（§8）。
 
 - **CSA 直接貼り付け**（計画中）も同じ窓口に載せる。CSA→KIF は既存の変換器を再利用し、以降は KIF 経路と共通。
   変換器は一括取り込み専用ではないため、server 内の中立な場所に置く（取り込み専用ディレクトリに縛らない）。
@@ -106,15 +106,18 @@
 
 Web UI が使うエンドポイント（`sessionRequired`。認証エンドポイントは [07](./07-auth-and-privacy.md)）:
 
+🔒 **棋譜はパスでも応答でも番号（`:no` = `kifus.displayNo`。所有者ごとの連番）で扱う**（[14](./14-multi-user.md) §4.4）。
+内部の主キーはここの応答に出さない（一覧・詳細は `no`、他の応答の棋譜の参照は `kifuNo`）。
+
 | Method | Path | 説明 |
 |---|---|---|
 | GET | `/api/kifus` | 棋譜一覧（既定は `coalesce(playedAt, createdAt)` 降順・50件ページネーション。`hasMemo` を返す）。検索・絞り込み・並べ替えのクエリは下表 |
-| GET | `/api/kifus/:id` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
-| POST | `/api/kifus` | KIF 貼り付け登録。body `{ title?, kifText }` → `{ id }`（title 省略時は自動生成。§3） |
-| PATCH | `/api/kifus/:id` | メモ更新。body `{ memo }`（現状 `memo` のみ。タイトル編集は gap。§3） |
-| POST | `/api/kifus/:id/reanalyze` | `kifText` を再パースし `usiMoves`＋メタ列を再生成、**旧 `moveAnalyses` を削除**し `analysisError`/`analysisCompletedAt` をクリア、**`analysisRevision` を +1** して再キュー（`title`/`memo` は温存）。トランザクション実行。パーサ修正後の既存棋譜の復旧と失敗棋譜の再試行を兼ねる（[05](./05-analysis.md) §1.1a / [03](./03-data-model.md)） |
-| DELETE | `/api/kifus/:id` | 棋譜削除（解析結果も CASCADE） |
-| GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuId, revision, profile, analyzed, total, updatedAt }` または `null`）。`profile`（`'quick'` \| `'full'`）は web が**解析中の表示（円環 / 進捗バー）の見え方**を出し分けるために返す（quick 進行中は半透明・full 進行中は通常。**文字では出さない**。[05](./05-analysis.md) §1.1b・§2.5）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
+| GET | `/api/kifus/:no` | 棋譜詳細 + 解析結果（moveAnalyses + candidateMoves） |
+| POST | `/api/kifus` | KIF 貼り付け登録。body `{ title?, kifText }` → `{ no }`（棋譜の番号。title 省略時は自動生成。§3） |
+| PATCH | `/api/kifus/:no` | メモ更新。body `{ memo }`（現状 `memo` のみ。タイトル編集は gap。§3） |
+| POST | `/api/kifus/:no/reanalyze` | `kifText` を再パースし `usiMoves`＋メタ列を再生成、**旧 `moveAnalyses` を削除**し `analysisError`/`analysisCompletedAt` をクリア、**`analysisRevision` を +1** して再キュー（`title`/`memo` は温存）。トランザクション実行。パーサ修正後の既存棋譜の復旧と失敗棋譜の再試行を兼ねる（[05](./05-analysis.md) §1.1a / [03](./03-data-model.md)） |
+| DELETE | `/api/kifus/:no` | 棋譜削除（解析結果も CASCADE） |
+| GET | `/api/analysis/progress` | 解析中の棋譜の進捗（`{ kifuNo, revision, profile, analyzed, total, updatedAt }` または `null`。棋譜は番号で返す）。`profile`（`'quick'` \| `'full'`）は web が**解析中の表示（円環 / 進捗バー）の見え方**を出し分けるために返す（quick 進行中は半透明・full 進行中は通常。**文字では出さない**。[05](./05-analysis.md) §1.1b・§2.5）。server のメモリを読むだけで DB を触らない。解析中は高々 1 件（[05](./05-analysis.md) §1.1b・§2.5） |
 | ~~POST~~ | ~~`/api/swars/import`~~ | **外した**（2026-10-12）。swars 取り込みジョブ起動だったもの（§4） |
 | ~~GET~~ | ~~`/api/swars/import/status`~~ | **外した**（2026-10-12）。swars 取り込みジョブ状態だったもの（§4） |
 

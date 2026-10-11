@@ -11,7 +11,10 @@
 import type { AnalysisProfile } from './analysis-submit.js';
 
 export interface AnalysisProgress {
+  /** 内部の主キー（clear の照合に使う）。🔒 **応答には載せない**（prd/14 §4.4。{@link getProgressFor}） */
   kifuId: number;
+  /** 棋譜の番号（`kifus.displayNo`。prd/14 §4.4）。web はこれで「どの棋譜が解析中か」を照らし合わせる */
+  kifuNo: number;
   /**
    * 解析中の棋譜の所有者（`kifus.ownerId`）。🔒 **読み取りをこの人に限る**（prd/14 §4.2）。
    * 応答には載せない（{@link getProgressFor}）
@@ -48,11 +51,14 @@ export function getProgress(): AnalysisProgress | null {
 
 /**
  * `GET /api/analysis/progress` の読み取り。🔒 **解析中の棋譜の所有者にだけ見せる**（prd/14 §4.2）。
- * 他人には「解析中のものは無い」（null）と同じに見える——解析中の `kifuId` を明かさない。
+ * 他人には「解析中のものは無い」（null）と同じに見える——解析中の棋譜を明かさない。
+ * 🔒 **内部の主キー（`kifuId`）は載せず、番号（`kifuNo`）で返す**（prd/14 §4.4）。
  */
-export function getProgressFor(userId: string): Omit<AnalysisProgress, 'ownerId'> | null {
+export function getProgressFor(
+  userId: string,
+): Omit<AnalysisProgress, 'ownerId' | 'kifuId'> | null {
   if (!current || current.ownerId !== userId) return null;
-  const { ownerId: _owner, ...progress } = current;
+  const { ownerId: _owner, kifuId: _id, ...progress } = current;
   return progress;
 }
 

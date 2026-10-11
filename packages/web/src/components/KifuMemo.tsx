@@ -3,10 +3,11 @@ import { useRouter } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 
 export function KifuMemo({
-  kifuId,
+  kifuNo,
   memo,
 }: {
-  kifuId: number;
+  /** 棋譜の番号（所有者ごと。prd/14 §4.4） */
+  kifuNo: number;
   memo: string | null;
 }) {
   const [draft, setDraft] = useState('');
@@ -18,8 +19,8 @@ export function KifuMemo({
     setError(null);
     setSaving(true);
     try {
-      const res = await client.api.kifus[':id'].$patch({
-        param: { id: String(kifuId) },
+      const res = await client.api.kifus[':no'].$patch({
+        param: { no: String(kifuNo) },
         json: { memo: draft },
       });
       if (!res.ok) {

@@ -192,7 +192,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
   取得しない**（dead なエンジンで後続の正常棋譜まで恒久失敗扱いする連鎖を防ぐ）。以降の poll は kifu 取得前に再起動を再試行する。
 - worker の報告（submit / error）は取得時の **`analysisRevision` を添える**。server は現在の revision と一致するときだけ
   適用するため、reanalyze でリセットした後に届いた**旧解析の報告は破棄**される（世代競合対策。[03](./03-data-model.md)）。
-- UI は「解析失敗」バッジ＋理由を出す。**再試行は `POST /api/kifus/:id/reanalyze`**（[04](./04-ingestion.md) §6）＝
+- UI は「解析失敗」バッジ＋理由を出す。**再試行は `POST /api/kifus/:no/reanalyze`**（[04](./04-ingestion.md) §6）＝
   `kifText` を再変換して `usiMoves`・メタを作り直し、旧 `moveAnalyses` を削除、`analysisError` をクリア、`analysisRevision`
   を +1 して再キューする。これによりパーサ修正が既存の失敗棋譜にも反映される（error クリアだけだと壊れた `usiMoves` のまま再度落ちる）。
 - 投入時の整合チェック（[04](./04-ingestion.md) §5）は best-effort で、完全な合法性保証はしない。取りこぼしはここで受ける。
@@ -699,7 +699,7 @@ props で渡す（同一レンダー内で作り直さない）。理由は [`_g
     削除は成功すると一覧へ遷移するため通知しない。理由は [`_grilling/decisions.md`](./_grilling/decisions.md)。
   - **解析中は小さな円環の toast（中央に %・N/M は title / 読み上げ）**を出す（決定・2026-07-21、
     見た目は 2026-09-27 に改めた）。一覧と同じ
-    `GET /api/analysis/progress` を見て、`kifuId` が一致したときだけ表示する（§2.5 の一覧バッジと同源）。
+    `GET /api/analysis/progress` を見て、`kifuNo`（棋譜の番号。[14](./14-multi-user.md) §4.4）が一致したときだけ表示する（§2.5 の一覧バッジと同源）。
     - **「◯前に更新」の経過時間は出さない**（決定・2026-09-27）。細かすぎる情報で、止まっていることは
       円環が止まって見えることで読める（stale を閾値で消さない方針は変えない）。
     - 🔴 **段階は文言に出さない**（決定・2026-09-05・後段。同日の「文言に出す」を撤回）。

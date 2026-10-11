@@ -132,7 +132,7 @@ function SimilarSection({
                 </thead>
                 <tbody>
                   {state.data.similar.map((s) => (
-                    <tr key={`${s.kifuId}-${s.moveNumber}`}>
+                    <tr key={`${s.kifuNo}-${s.moveNumber}`}>
                       <td className="whitespace-nowrap">
                         <span className="font-mono">{s.distance}</span>
                         <span className="text-xs opacity-60 ml-1">
@@ -257,7 +257,7 @@ function SubjectSection({ sfen }: { sfen: string }) {
                 </thead>
                 <tbody>
                   {state.data.games.map((g) => (
-                    <tr key={`${g.kifuId}-${g.moveNumber}`}>
+                    <tr key={`${g.kifuNo}-${g.moveNumber}`}>
                       <td>
                         <SourceBadge source={g.source} />
                       </td>
@@ -271,7 +271,7 @@ function SubjectSection({ sfen }: { sfen: string }) {
                             手数で、盤の手数と同じ意味。prd/10 §3.2） */}
                         <Link
                           to="/kifus/$id"
-                          params={{ id: String(g.kifuId) }}
+                          params={{ id: String(g.kifuNo) }}
                           search={{ ply: g.moveNumber }}
                           className="btn btn-ghost btn-xs"
                         >
@@ -404,7 +404,7 @@ function PositionView({ position }: { position: Position }) {
                 </thead>
                 <tbody>
                   {visible.map((g) => (
-                    <tr key={`${g.kifuId}-${g.moveNumber}`}>
+                    <tr key={`${g.kifuNo}-${g.moveNumber}`}>
                       <td>
                         <SourceBadge source={g.source} />
                       </td>
@@ -417,7 +417,7 @@ function PositionView({ position }: { position: Position }) {
                             手数で、盤の手数と同じ意味。prd/10 §3.2） */}
                         <Link
                           to="/kifus/$id"
-                          params={{ id: String(g.kifuId) }}
+                          params={{ id: String(g.kifuNo) }}
                           search={{ ply: g.moveNumber }}
                           className="btn btn-ghost btn-xs"
                         >

@@ -62,6 +62,7 @@ import {
 } from './position-eval.js';
 import { addAlias, countUnresolvedSubjects, removeAlias, updateAliasPeriod } from './users.js';
 import { withUserTx } from './user-tx.js';
+import { insertKifu, type NewKifu } from './kifu-number.js';
 
 afterAll(async () => {
   resetEvaluations();
@@ -89,30 +90,27 @@ async function insertUser(): Promise<string> {
   return row.id;
 }
 
-/** 棋譜 1 局と、その局面索引・戦型・解析（全局面 full・候補手 3 本）を入れる */
+/** 棋譜 1 局と、その局面索引・戦型・解析（全局面 full・候補手 3 本）を入れる。内部 ID と番号を返す */
 async function insertAnalyzedKifu(
   ownerId: string,
   moves: string[],
-  values: Partial<typeof kifus.$inferInsert> = {},
-): Promise<number> {
+  values: Partial<NewKifu> = {},
+): Promise<{ id: number; no: number }> {
   return db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(kifus)
-      .values({
-        title: `t-${ownerId}`,
-        kifText: '',
-        ownerId,
-        usiMoves: moves,
-        sente: 'alice',
-        gote: 'bob',
-        // 結果コードは `SENTE_WIN_RESIGN` 等（prd/01 §3。統計は `%SENTE_WIN%` の部分一致で勝敗を読む）
-        result: 'SENTE_WIN_RESIGN',
-        subjectSide: 'sente',
-        playedAt: new Date('2026-01-01T00:00:00Z'),
-        memo: 'original',
-        ...values,
-      })
-      .returning({ id: kifus.id });
+    const row = await insertKifu(tx, {
+      title: `t-${ownerId}`,
+      kifText: '',
+      ownerId,
+      usiMoves: moves,
+      sente: 'alice',
+      gote: 'bob',
+      // 結果コードは `SENTE_WIN_RESIGN` 等（prd/01 §3。統計は `%SENTE_WIN%` の部分一致で勝敗を読む）
+      result: 'SENTE_WIN_RESIGN',
+      subjectSide: 'sente',
+      playedAt: new Date('2026-01-01T00:00:00Z'),
+      memo: 'original',
+      ...values,
+    });
     const ref = { id: row.id, ownerId };
     await replacePositions(tx, ref, moves);
     // 相手（後手）側の戦型。統計の行は「相手が何を採ったか」で数える（prd/09 §2.2）
@@ -139,15 +137,19 @@ async function insertAnalyzedKifu(
       .update(kifus)
       .set({ analysisCompletedAt: new Date(), analysisProfile: 'full' })
       .where(eq(kifus.id, row.id));
-    return row.id;
+    return { id: row.id, no: row.displayNo };
   });
 }
 
 let userA: string;
 let userB: string;
-let kifuA: number;
-let kifuB: number;
-let videoKifuA: number;
+/**
+ * 棋譜の内部 ID と番号（prd/14 §4.4）。A は動画解析の棋譜（1 番）→ 解析済みの棋譜（2 番）の順に作り、
+ * B は 1 番だけを持つ。**B が A の 2 番を指すと「無い」**、B が 1 番を指すと**自分の 1 番**になる
+ */
+let kifuA: { id: number; no: number };
+let kifuB: { id: number; no: number };
+let videoKifuA: { id: number; no: number };
 let drillA: number;
 let aliasA: number;
 
@@ -159,20 +161,16 @@ const asA = <T>(fn: (tx: Tx) => Promise<T>) => withUserTx(db, userA, fn);
 beforeAll(async () => {
   userA = await insertUser();
   userB = await insertUser();
-  kifuA = await insertAnalyzedKifu(userA, MOVES);
-  // B も棋譜を 1 局持つ（初期局面は両方が通る。B からは自分の棋譜だけが見えること）
-  // B の対局は負け（A の勝ちが B の成績に混ざれば勝ち数で分かる）
-  kifuB = await insertAnalyzedKifu(userB, ['2g2f', '8c8d'], {
-    title: 'B の棋譜',
-    result: 'GOTE_WIN_RESIGN',
-  });
 
   // A の動画解析の棋譜（主体側が決まらない棋譜としても数える）
   videoKifuA = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(kifus)
-      .values({ title: 'video', kifText: '', ownerId: userA, source: 'video', subjectSide: null })
-      .returning({ id: kifus.id });
+    const row = await insertKifu(tx, {
+      title: 'video',
+      kifText: '',
+      ownerId: userA,
+      source: 'video',
+      subjectSide: null,
+    });
     await tx.insert(videoKifuSources).values({
       kifuId: row.id,
       ownerId: userA,
@@ -184,14 +182,22 @@ beforeAll(async () => {
       extractorRev: 'r',
       raw: {},
     });
-    return row.id;
+    return { id: row.id, no: row.displayNo };
+  });
+
+  kifuA = await insertAnalyzedKifu(userA, MOVES);
+  // B も棋譜を 1 局持つ（初期局面は両方が通る。B からは自分の棋譜だけが見えること）
+  // B の対局は負け（A の勝ちが B の成績に混ざれば勝ち数で分かる）
+  kifuB = await insertAnalyzedKifu(userB, ['2g2f', '8c8d'], {
+    title: 'B の棋譜',
+    result: 'GOTE_WIN_RESIGN',
   });
 
   // A の出題と「自明だった」の印
   const [drill] = await db
     .insert(drills)
     .values({
-      kifuId: kifuA,
+      kifuId: kifuA.id,
       ownerId: userA,
       moveNumber: 0,
       kind: 'best',
@@ -224,18 +230,24 @@ beforeAll(async () => {
 });
 
 describe('所有者スコープ: B から A の棋譜が見えない（prd/14 §4）', () => {
+  it('番号は所有者ごと（prd/14 §4.4）', () => {
+    expect([videoKifuA.no, kifuA.no, kifuB.no]).toEqual([1, 2, 1]);
+  });
+
   it('一覧', async () => {
     const mine = await asA((tx) => listKifus(tx, userA, kifuListQuerySchema.parse({})));
-    expect(mine.kifus.map((k) => k.id)).toContain(kifuA);
+    expect(mine.kifus.map((k) => k.no)).toContain(kifuA.no);
 
     const theirs = await asB((tx) => listKifus(tx, userB, kifuListQuerySchema.parse({})));
-    expect(theirs.kifus.map((k) => k.id)).toEqual([kifuB]);
+    expect(theirs.kifus.map((k) => k.no)).toEqual([kifuB.no]);
     expect(theirs.pagination.total).toBe(1);
   });
 
-  it('詳細（解析・戦型も）は 404 相当（null）', async () => {
-    expect(await asA((tx) => getKifuDetail(tx, userA, kifuA))).not.toBeNull();
-    expect(await asB((tx) => getKifuDetail(tx, userB, kifuA))).toBeNull();
+  it('詳細（解析・戦型も）は 404 相当（null）。同じ番号は自分の棋譜を指す', async () => {
+    expect((await asA((tx) => getKifuDetail(tx, userA, kifuA.no)))?.title).toBe(`t-${userA}`);
+    expect(await asB((tx) => getKifuDetail(tx, userB, kifuA.no))).toBeNull();
+    // B の 1 番は B の棋譜（A の 1 番ではない）
+    expect((await asB((tx) => getKifuDetail(tx, userB, videoKifuA.no)))?.title).toBe('B の棋譜');
   });
 
   it('統計は自分の棋譜だけを数える', async () => {
@@ -254,7 +266,7 @@ describe('所有者スコープ: B から A の棋譜が見えない（prd/14 §
 
   it('動画解析の一覧', async () => {
     const mine = await asA((tx) => listVideoKifus(tx, userA));
-    expect(mine.games.map((g) => g.kifuId)).toEqual([videoKifuA]);
+    expect(mine.games.map((g) => g.kifuNo)).toEqual([videoKifuA.no]);
     expect((await asB((tx) => listVideoKifus(tx, userB))).games).toEqual([]);
   });
 
@@ -266,28 +278,28 @@ describe('所有者スコープ: B から A の棋譜が見えない（prd/14 §
 
 describe('所有者スコープ: B は A の棋譜を更新・削除・再解析できない', () => {
   it('メモの更新は false で、A の値は変わらない', async () => {
-    expect(await asB((tx) => updateKifuMemo(tx, userB, kifuA, 'hacked'))).toBe(false);
-    const [row] = await db.select({ memo: kifus.memo }).from(kifus).where(eq(kifus.id, kifuA));
+    expect(await asB((tx) => updateKifuMemo(tx, userB, kifuA.no, 'hacked'))).toBe(false);
+    const [row] = await db.select({ memo: kifus.memo }).from(kifus).where(eq(kifus.id, kifuA.id));
     expect(row.memo).toBe('original');
   });
 
-  it('再解析は false で、世代も解析も変わらない', async () => {
+  it('再解析は null で、世代も解析も変わらない', async () => {
     const before = await db
       .select({ revision: kifus.analysisRevision })
       .from(kifus)
-      .where(eq(kifus.id, kifuA));
-    expect(await asB((tx) => reanalyzeKifu(tx, userB, kifuA))).toBe(false);
+      .where(eq(kifus.id, kifuA.id));
+    expect(await asB((tx) => reanalyzeKifu(tx, userB, kifuA.no))).toBeNull();
     const after = await db
       .select({ revision: kifus.analysisRevision })
       .from(kifus)
-      .where(eq(kifus.id, kifuA));
+      .where(eq(kifus.id, kifuA.id));
     expect(after).toEqual(before);
-    expect((await asA((tx) => getKifuDetail(tx, userA, kifuA)))!.analyses.length).toBe(MOVES.length + 1);
+    expect((await asA((tx) => getKifuDetail(tx, userA, kifuA.no)))!.analyses.length).toBe(MOVES.length + 1);
   });
 
-  it('削除は false で、棋譜は残る', async () => {
-    expect(await asB((tx) => deleteKifu(tx, userB, kifuA))).toBe(false);
-    const rows = await db.select({ id: kifus.id }).from(kifus).where(eq(kifus.id, kifuA));
+  it('削除は null で、棋譜は残る', async () => {
+    expect(await asB((tx) => deleteKifu(tx, userB, kifuA.no))).toBeNull();
+    const rows = await db.select({ id: kifus.id }).from(kifus).where(eq(kifus.id, kifuA.id));
     expect(rows).toHaveLength(1);
   });
 });
@@ -298,11 +310,11 @@ describe('所有者スコープ: 局面検索（prd/14 §6.3）', () => {
 
   it('完全一致: 初期局面は自分の棋譜だけ、A だけが通る局面は B には無い（404）', async () => {
     const mine = await asA((tx) => findPositionGames(tx, userA, start));
-    expect(mine!.games.map((g) => g.kifuId)).toEqual([kifuA]);
+    expect(mine!.games.map((g) => g.kifuNo)).toEqual([kifuA.no]);
     expect(mine!.branches.map((b) => b.move)).toEqual(['7g7f']);
 
     const theirs = await asB((tx) => findPositionGames(tx, userB, start));
-    expect(theirs!.games.map((g) => g.kifuId)).toEqual([kifuB]);
+    expect(theirs!.games.map((g) => g.kifuNo)).toEqual([kifuB.no]);
     // 枝も自分の棋譜からだけ数える（A の 7g7f は出ない）
     expect(theirs!.branches.map((b) => b.move)).toEqual(['2g2f']);
 
@@ -313,7 +325,7 @@ describe('所有者スコープ: 局面検索（prd/14 §6.3）', () => {
   it('主体側: A だけが通る局面は B には無い。自分の棋譜だけを数える', async () => {
     expect(await asB((tx) => findSubjectGames(tx, userB, afterA, 'sente'))).toBeNull();
     const theirs = await asB((tx) => findSubjectGames(tx, userB, start, 'sente'));
-    expect(new Set(theirs!.games.map((g) => g.kifuId))).toEqual(new Set([kifuB]));
+    expect(new Set(theirs!.games.map((g) => g.kifuNo))).toEqual(new Set([kifuB.no]));
     expect(theirs!.truncated).toBe(false);
     expect(theirs!.unresolvedSubjects).toBe(0);
   });
@@ -321,7 +333,9 @@ describe('所有者スコープ: 局面検索（prd/14 §6.3）', () => {
   it('近い局面: A だけが通る局面は B には無い。候補も自分の棋譜だけ', async () => {
     expect(await asB((tx) => findSimilarPositions(tx, userB, afterA, { window: 4, limit: 20 }))).toBeNull();
     const mine = await asA((tx) => findSimilarPositions(tx, userA, afterA, { window: 4, limit: 20 }));
-    expect(mine!.similar.every((s) => s.kifuId !== kifuB)).toBe(true);
+    // 候補に出るのは A の棋譜だけ（番号は所有者ごとなので、局面索引を持つ A の棋譜の番号で照らす。
+    // A の 1 番は動画解析の棋譜で局面索引を持たない）
+    expect(mine!.similar.every((s) => s.kifuNo === kifuA.no)).toBe(true);
   });
 });
 
@@ -338,17 +352,18 @@ describe('所有者スコープ: 検討盤の評価で棋譜解析を再利用�
         findKifuPositionMatches(tx, userB, { sfen: INITIAL_SFEN, move }),
       );
       expect(matches.length).toBeGreaterThan(0);
-      expect(matches.every((m) => m.kifuId === kifuB)).toBe(true);
+      expect(matches.every((m) => m.kifuId === kifuB.id)).toBe(true);
     }
   });
 });
 
 describe('所有者スコープ: 出題（prd/13・prd/14 §4）', () => {
-  it('B には A の問題が出ず、名指しでも開けない', async () => {
-    expect(await asA((tx) => loadDrill(tx, userA, drillA))).not.toBeNull();
+  it('B には A の問題が出ず、名指し（棋譜の番号・手数・種類）でも開けない', async () => {
+    const ref = { kifuNo: kifuA.no, moveNumber: 0, kind: 'best' as const };
+    expect(await asA((tx) => loadDrill(tx, userA, ref))).not.toBeNull();
     expect(await asB((tx) => pickNextDrill(tx, userB))).toBeNull();
-    expect(await asB((tx) => loadDrill(tx, userB, drillA))).toBeNull();
-    expect(await asB((tx) => loadDrillQuestion(tx, userB, drillA))).toBeNull();
+    expect(await asB((tx) => loadDrill(tx, userB, ref))).toBeNull();
+    expect(await asB((tx) => loadDrillQuestion(tx, userB, ref))).toBeNull();
   });
 
   it('件数・一覧・解答履歴に A のぶんが入らない', async () => {

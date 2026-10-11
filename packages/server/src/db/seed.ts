@@ -4,6 +4,7 @@ import { endSystemDb, systemDb } from './system.js';
 import { eq } from 'drizzle-orm';
 import { kifus, users } from './schema.js';
 import { OWNER_USER_ID } from '../users.js';
+import { insertKifu } from '../kifu-number.js';
 
 const sampleKifPath = process.argv[2];
 if (!sampleKifPath) {
@@ -34,11 +35,9 @@ if (existing) {
     .from(users)
     .where(eq(users.id, OWNER_USER_ID));
   if (!owner) throw new Error('所有者の行が無い。マイグレーションを先に流す');
-  const [result] = await db
-    .insert(kifus)
-    .values({ title, kifText, ownerId: owner.id })
-    .returning({ id: kifus.id });
-  console.log(`Seed inserted: id=${result.id} "${title}"`);
+  // 番号（prd/14 §4.4）を振って入れる
+  const result = await db.transaction((tx) => insertKifu(tx, { title, kifText, ownerId: owner.id }));
+  console.log(`Seed inserted: id=${result.id} no=${result.displayNo} "${title}"`);
 }
 
 await endSystemDb();

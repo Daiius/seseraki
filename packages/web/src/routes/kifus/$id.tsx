@@ -47,13 +47,17 @@ function plyParam(raw: unknown): number | undefined {
   return Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * 棋譜詳細。🔒 **パスの `$id` は棋譜の番号**（所有者ごとの連番 `no`。prd/14 §4.4）で、内部の主キーではない。
+ * 同じ URL でもログインしている人ごとに別の棋譜を指す
+ */
 export const Route = createFileRoute('/kifus/$id')({
   validateSearch: (search: Record<string, unknown>): KifuDetailSearch => ({
     ply: plyParam(search.ply),
   }),
   loader: async ({ params }) => {
-    const res = await client.api.kifus[':id'].$get({
-      param: { id: params.id },
+    const res = await client.api.kifus[':no'].$get({
+      param: { no: params.id },
     });
     if (!res.ok) throw new Error('Kifu not found');
     return await res.json();
@@ -88,13 +92,13 @@ function KifuDetailPage() {
   // 失敗内容が変わったときは再表示する（再解析を押したときも記録を捨てる——同じ文言で
   // 失敗し直しても出す）
   const [dismissedError, setDismissedError] = useState<{
-    kifuId: number;
+    kifuNo: number;
     error: string;
   } | null>(null);
   const analysisError =
     kifu.analysisError &&
     !(
-      dismissedError?.kifuId === kifu.id &&
+      dismissedError?.kifuNo === kifu.no &&
       dismissedError.error === kifu.analysisError
     )
       ? kifu.analysisError
@@ -107,11 +111,11 @@ function KifuDetailPage() {
   // 手で再読み込みせずに結果へ切り替わる（ポーリングの合間に解析全体が収まっても取りこぼさない）
   const pendingAnalysis =
     kifu.analysisProfile !== 'full' && !kifu.analysisError;
-  // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを id で照合する
+  // 解析中は高々 1 件なので、返ってきた進捗がこの棋譜のものかを番号で照合する
   const { progress, estimated } = useAnalysisProgress({
     pending: pendingAnalysis,
   });
-  const analyzing = progress && progress.kifuId === kifu.id ? progress : null;
+  const analyzing = progress && progress.kifuNo === kifu.no ? progress : null;
 
   // 悪手判定の閾値は localStorage 保持。盤面・グラフ・LLM 解説用テキストで同じ値を使う。
   // 変更 UI は全棋譜に効く設定なので `/settings` にある（§2.5）
@@ -140,8 +144,8 @@ function KifuDetailPage() {
     setActionResult(null);
     setBusy(true);
     try {
-      const res = await client.api.kifus[':id'].$delete({
-        param: { id: String(kifu.id) },
+      const res = await client.api.kifus[':no'].$delete({
+        param: { no: String(kifu.no) },
       });
       if (!res.ok) {
         setActionResult({ kind: 'error', message: `削除に失敗しました (${res.status})` });
@@ -162,8 +166,8 @@ function KifuDetailPage() {
     setDismissedError(null);
     setBusy(true);
     try {
-      const res = await client.api.kifus[':id'].reanalyze.$post({
-        param: { id: String(kifu.id) },
+      const res = await client.api.kifus[':no'].reanalyze.$post({
+        param: { no: String(kifu.no) },
       });
       if (!res.ok) {
         setActionResult({ kind: 'error', message: `再解析に失敗しました (${res.status})` });
@@ -196,7 +200,13 @@ function KifuDetailPage() {
           {/* 🔴 **段階のバッジは置かない**（決定・2026-09-05 後段）。簡易解析だけが
               終わっている状態は直後に詳細解析が走る一時的な状態で、モバイルの横幅を
               恒久的に食う表示に見合わない。段階は解析中の進捗バーの濃さで分かる */}
-          <h2 className="text-2xl font-bold">{kifu.title}</h2>
+          <h2 className="text-2xl font-bold">
+            {/* 棋譜の番号（所有者ごと。prd/14 §4.4）。一覧と同じく控えめに添える */}
+            <span className="mr-2 text-base font-normal tabular-nums text-base-content/50">
+              #{kifu.no}
+            </span>
+            {kifu.title}
+          </h2>
           <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
         </div>
         <div className="dropdown dropdown-end ml-auto">
@@ -280,7 +290,7 @@ function KifuDetailPage() {
             error={analysisError}
             onReanalyze={() => void handleReanalyze()}
             onClose={() =>
-              setDismissedError({ kifuId: kifu.id, error: analysisError })
+              setDismissedError({ kifuNo: kifu.no, error: analysisError })
             }
             busy={busy}
           />
@@ -295,9 +305,9 @@ function KifuDetailPage() {
               入れると**毎手盤が作り直され、反転・分岐の再生位置・検討中の手順が消える**。
               URL → 盤の向きは初期表示の 1 回だけで、以後は盤が真実の側
               （`onMoveIndexChange` で URL を追随させる。prd/05 §2.6）。
-              棋譜を跨ぐ移動で手数が持ち越されないよう、id だけを key にする
+              棋譜を跨ぐ移動で手数が持ち越されないよう、棋譜の番号だけを key にする
             */
-            key={kifu.id}
+            key={kifu.no}
             initialMoveIndex={ply ?? 0}
             onMoveIndexChange={syncPly}
             usiMoves={usiMoves}
@@ -344,7 +354,7 @@ function KifuDetailPage() {
         )}
 
         <LazyDetails title="メモ">
-          <KifuMemo kifuId={kifu.id} memo={kifu.memo} />
+          <KifuMemo kifuNo={kifu.no} memo={kifu.memo} />
         </LazyDetails>
       </div>
     </div>

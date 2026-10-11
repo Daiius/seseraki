@@ -10,7 +10,7 @@
  * ⚠ 所有者ゲート（prd/07 §5.1）があるので、API は所有者（"1"）として叩く。DATABASE はファイル間で共有なので、
  *   所有者の行には他のテストが入れた棋譜も混ざる（それも含めて内部 ID が出ないことを見る）。
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
@@ -375,7 +375,7 @@ beforeAll(async () => {
     await tx.insert(videoKifuSources).values({
       kifuId: row.id,
       ownerId: OWNER,
-      videoId: randomUUID(),
+      videoId: randomBytes(8).toString('hex'), // video_id は varchar(32)
       gameIndex: 1,
       startedAtSec: 0,
       endedAtSec: 5,

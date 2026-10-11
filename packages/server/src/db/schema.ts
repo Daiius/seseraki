@@ -207,12 +207,21 @@ export const users = table('users', {
    * 作成時に `databaseHooks.user.create.before` が `name` から補う（prd/07 §3.1）。以後は触らない
    */
   displayName: varchar({ length: 100 }).notNull(),
+  /**
+   * 最後に振った棋譜の番号（`kifus.displayNo`。prd/14 §4.4）。**次の番号はこれ + 1**。
+   * 取り込みの tx の中で `UPDATE … RETURNING` で進める（`kifu-number.ts`）。行ロックで同じユーザーの
+   * 取り込みどうしが順に並び、他のユーザーは待たない。
+   * 🔒 **減らさない**——棋譜を消しても戻さないので、消した番号は再利用されない（欠番を許す）。
+   * ⚠ `max(displayNo) + 1` で振らないのは、末尾を消すと番号が再利用されるため
+   */
+  lastKifuNo: integer().notNull().default(0),
   createdAt: timestamptz().notNull().defaultNow(),
   /** 更新は DB のトリガー（`set_updated_at`）が書く（prd/15 §3.4）。以下の表も同じ */
   updatedAt: timestamptz().notNull().defaultNow(),
 }, (table) => [
   // `initialDisplayName` は空なら `(未設定)` を入れる
   check('users_display_name_not_empty', sql`${table.displayName} <> ''`),
+  check('users_last_kifu_no_nonneg', sql`${table.lastKifuNo} >= 0`),
 ]);
 
 /**
@@ -333,6 +342,16 @@ export const kifus = table(
   'kifus',
   {
     id: identityId(),
+    /**
+     * **所有者ごとの番号**（prd/14 §4.4）。URL（`/kifus/42`）と web 向けの API は**これで棋譜を指す**。
+     * 🔒 **内部の主キー（`id`）は外に出さない**——通しの連番なのでサービス全体の棋譜数が分かる。
+     * `id` は FK・worker（API_KEY の内部経路）・ログで使う。
+     *
+     * 🔴 **振るのは `kifu-number.ts` の `insertKifu` だけ**（所有者の `users.lastKifuNo` を進めて振る）。
+     * `kifus` を作る経路はすべてそこを通す（`kifu-number.test.ts` が検査する）。
+     * 🔒 消した番号は再利用しない（欠番を許す）
+     */
+    displayNo: integer().notNull(),
     title: varchar({ length: 255 }).notNull(),
     kifText: text().notNull(),
     usiMoves: jsonb().$type<string[]>(),
@@ -390,6 +409,9 @@ export const kifus = table(
     foreignKey({ columns: [table.ownerId], foreignColumns: [users.id] }),
     // 子の表の複合 FK（`ownedBy`）の参照先。`id` だけで一意だが、FK は参照先に UNIQUE を要る
     uniqueIndex('kifus_id_owner_id_uq').on(table.id, table.ownerId),
+    // 番号は所有者ごと（prd/14 §4.4）。web 向けの経路は `(ownerId, displayNo)` で棋譜を引く
+    uniqueIndex('kifus_owner_id_display_no_uq').on(table.ownerId, table.displayNo),
+    check('kifus_display_no_positive', sql`${table.displayNo} > 0`),
     ANALYSIS_PROFILE.check('kifus_analysis_profile_check', table.analysisProfile),
     KIFU_SOURCE.check('kifus_source_check', table.source),
     SIDE.check('kifus_subject_side_check', table.subjectSide),

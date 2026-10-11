@@ -7,6 +7,11 @@
  *
  * 🔒 **読み書きは所有者（要求者）の問題だけ**（prd/14 §4）。各関数は tx（ユーザーとして開いた
  * トランザクション。`user-tx.ts`）と所有者を引数に取る。他人の問題は「無い」（null → 404）。
+ *
+ * 🔒 **出題は「棋譜の番号・手数・種類」の組（{@link DrillRef}）で指す**（prd/14 §4.4）。`drills` の一意制約
+ * （`drills_kifu_id_move_number_kind_uq`）と同じ組で、棋譜の内部 ID を所有者ごとの番号に置き換えたもの。
+ * 出題の行の ID（`drills.id`）は応答に載せない——一括生成の upsert で作り直されることがあり、
+ * 行の ID で指すと作り直しで URL が切れるうえ、通しの連番なので総数が分かる。
  */
 import { and, count, eq, sql } from 'drizzle-orm';
 import { buildPositions, positionSfen, usiToJapaneseWithPiece, type BoardState } from 'shared';
@@ -29,10 +34,31 @@ import {
 } from './drill-list-query';
 import { stateOfAnswer } from './drill-answer';
 
-/** 出題 1 問（クライアントに返す形。**答えは含まない**） */
-export interface DrillQuestion {
-  id: number;
+/**
+ * 出題を指す組（prd/14 §4.4）。「42 番の棋譜の 37 手目の次の一手」。
+ * `moveNumber` は出題局面（その手を指す前の局面。棋譜詳細の `?ply=` と同じ数え方）
+ */
+export interface DrillRef {
+  kifuNo: number;
+  moveNumber: number;
   kind: 'mate' | 'best';
+}
+
+/** `DrillRef` で 1 問を引く条件（所有者の棋譜の番号で引く） */
+function byRef(ownerId: string, ref: DrillRef) {
+  return and(
+    eq(kifus.ownerId, ownerId),
+    eq(kifus.displayNo, ref.kifuNo),
+    eq(drills.moveNumber, ref.moveNumber),
+    eq(drills.kind, ref.kind),
+  );
+}
+
+/**
+ * 出題 1 問（クライアントに返す形。**答えは含まない**）。
+ * 問題は `kifuNo` / `moveNumber` / `kind` の組で指す（{@link DrillRef}）
+ */
+export interface DrillQuestion extends DrillRef {
   /** 出題局面（正規化 SFEN）。盤面はこれだけから描ける */
   sfen: string;
   /** engine の詰み距離（plies）。`kind='mate'` のときだけ。⚠ 詰将棋の「N手詰」ではない */
@@ -60,7 +86,7 @@ export async function pickNextDrill(
 ): Promise<DrillQuestion | null> {
   const [row] = await tx
     .select({
-      id: drills.id,
+      kifuNo: kifus.displayNo,
       kind: drills.kind,
       moveNumber: drills.moveNumber,
       matePlies: drills.matePlies,
@@ -77,7 +103,7 @@ export async function pickNextDrill(
     .innerJoin(kifus, eq(kifus.id, drills.kifuId))
     .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
     .where(and(eq(kifus.ownerId, ownerId), kind ? eq(drills.kind, kind) : undefined))
-    .groupBy(drills.id, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves)
+    .groupBy(drills.id, kifus.displayNo, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves)
     .having(sql`sum(case when ${drillAttempts.excluded} then 1 else 0 end) = 0`)
     .orderBy(TIER, sql`random()`)
     .limit(1);
@@ -86,7 +112,8 @@ export async function pickNextDrill(
   const sfen = drillSfen(row.usiMoves, row.moveNumber);
   if (!sfen) return null;
   return {
-    id: row.id,
+    kifuNo: row.kifuNo,
+    moveNumber: row.moveNumber,
     kind: row.kind,
     sfen,
     matePlies: row.matePlies,
@@ -104,12 +131,15 @@ export function drillSfen(usiMoves: string[] | null, moveNumber: number): string
   return state ? positionSfen(state) : null;
 }
 
-/** 採点に要る 1 問ぶん（**答えを含む**。server 内でしか使わない） */
-export async function loadDrill(tx: Tx, ownerId: string, id: number) {
+/**
+ * 採点に要る 1 問ぶん（**答えを含む**。server 内でしか使わない）。
+ * `id`（行の ID）は解答の記録・手順の記憶に使う内部の値で、応答には載せない
+ */
+export async function loadDrill(tx: Tx, ownerId: string, ref: DrillRef) {
   const [row] = await tx
     .select({
       id: drills.id,
-      kifuId: drills.kifuId,
+      kifuNo: kifus.displayNo,
       ownerId: drills.ownerId,
       kind: drills.kind,
       reason: drills.reason,
@@ -126,7 +156,7 @@ export async function loadDrill(tx: Tx, ownerId: string, id: number) {
     })
     .from(drills)
     .innerJoin(kifus, eq(kifus.id, drills.kifuId))
-    .where(and(eq(drills.id, id), eq(kifus.ownerId, ownerId)));
+    .where(byRef(ownerId, ref));
   return row ?? null;
 }
 
@@ -183,11 +213,11 @@ export async function drillCounts(tx: Tx, ownerId: string) {
 export async function loadDrillQuestion(
   tx: Tx,
   ownerId: string,
-  id: number,
+  ref: DrillRef,
 ): Promise<DrillQuestion | null> {
   const [row] = await tx
     .select({
-      id: drills.id,
+      kifuNo: kifus.displayNo,
       kind: drills.kind,
       moveNumber: drills.moveNumber,
       matePlies: drills.matePlies,
@@ -199,14 +229,15 @@ export async function loadDrillQuestion(
     .from(drills)
     .innerJoin(kifus, eq(kifus.id, drills.kifuId))
     .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
-    .where(and(eq(drills.id, id), eq(kifus.ownerId, ownerId)))
-    .groupBy(drills.id, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves);
+    .where(byRef(ownerId, ref))
+    .groupBy(drills.id, kifus.displayNo, drills.kind, drills.moveNumber, drills.matePlies, kifus.usiMoves);
 
   if (!row) return null;
   const sfen = drillSfen(row.usiMoves, row.moveNumber);
   if (!sfen) return null;
   return {
-    id: row.id,
+    kifuNo: row.kifuNo,
+    moveNumber: row.moveNumber,
     kind: row.kind,
     sfen,
     matePlies: row.matePlies,
@@ -244,11 +275,11 @@ export async function listDrills(tx: Tx, ownerId: string, query: DrillListQuery)
 
   const rows = await tx
     .select({
-      id: drills.id,
+      // 問題は（棋譜の番号・手数・種類）で指す（prd/14 §4.4。行の ID は載せない）
+      kifuNo: kifus.displayNo,
       kind: drills.kind,
       moveNumber: drills.moveNumber,
       matePlies: drills.matePlies,
-      kifuId: drills.kifuId,
       title: kifus.title,
       playedAt: kifus.playedAt,
       kifuCreatedAt: kifus.createdAt,
@@ -263,10 +294,10 @@ export async function listDrills(tx: Tx, ownerId: string, query: DrillListQuery)
     .where(where)
     .groupBy(
       drills.id,
+      kifus.displayNo,
       drills.kind,
       drills.moveNumber,
       drills.matePlies,
-      drills.kifuId,
       kifus.title,
       kifus.playedAt,
       kifus.createdAt,
@@ -313,8 +344,9 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
 
   const rows = await tx
     .select({
-      id: drillAttempts.id,
-      drillId: drillAttempts.drillId,
+      // 🔒 解答履歴の行の ID・出題の行の ID・棋譜の内部 ID は載せない（prd/14 §4.4）。
+      // 問題は（棋譜の番号・手数・種類）で指す
+      kifuNo: kifus.displayNo,
       move: drillAttempts.move,
       verdict: drillAttempts.verdict,
       lossCp: drillAttempts.lossCp,
@@ -323,7 +355,6 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
       createdAt: drillAttempts.createdAt,
       kind: drills.kind,
       moveNumber: drills.moveNumber,
-      kifuId: drills.kifuId,
       title: kifus.title,
       playedAt: kifus.playedAt,
       usiMoves: kifus.usiMoves,
@@ -340,15 +371,16 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
 
   // 日本語表記は**盤面が要る**（`shared` の `board.ts`）。履歴の画面は盤を持たないので
   // server 側で作る。同じ棋譜が並ぶことが多いため局面列は棋譜ごとに 1 度だけ作る
+  // （所有者の棋譜だけなので番号で区別できる）
   const positions = new Map<number, BoardState[] | null>();
-  const stateOf = (kifuId: number, usiMoves: string[] | null, moveNumber: number) => {
-    if (!positions.has(kifuId)) positions.set(kifuId, usiMoves ? buildPositions(usiMoves) : null);
-    return positions.get(kifuId)?.[moveNumber] ?? null;
+  const stateOf = (kifuNo: number, usiMoves: string[] | null, moveNumber: number) => {
+    if (!positions.has(kifuNo)) positions.set(kifuNo, usiMoves ? buildPositions(usiMoves) : null);
+    return positions.get(kifuNo)?.[moveNumber] ?? null;
   };
 
   return {
     attempts: rows.map(({ usiMoves, move, line, ...row }) => {
-      const base = move ? stateOf(row.kifuId, usiMoves, row.moveNumber) : null;
+      const base = move ? stateOf(row.kifuNo, usiMoves, row.moveNumber) : null;
       // 🔴 **表記を作る盤面は「その手を指した局面」**（prd/13 §5.4・レビュー `OCL-A1E622FE`）。
       // 詰将棋は指し継ぎなので、出題局面から読むと**駒名が欠ける・別の駒として表示される**
       const state = base && move ? stateOfAnswer(base, line, move, row.kind) : null;

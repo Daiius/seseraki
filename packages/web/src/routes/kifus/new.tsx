@@ -33,8 +33,9 @@ function NewKifuPage() {
         json: { title: title.trim() || undefined, kifText, sourceTz },
       });
       if (!res.ok) throw new Error('Failed to create kifu');
-      const { id } = await res.json();
-      navigate({ to: '/kifus/$id', params: { id: String(id) } });
+      // 返るのは棋譜の番号（所有者ごと。prd/14 §4.4）
+      const { no } = await res.json();
+      navigate({ to: '/kifus/$id', params: { id: String(no) } });
     } finally {
       setSubmitting(false);
     }

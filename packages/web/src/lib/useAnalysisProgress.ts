@@ -129,12 +129,12 @@ export function useAnalysisProgress(
 
   // 進捗エントリが消えた / 別の棋譜へ移った / 段階が変わった = 直前の解析が一区切りした。
   // 一覧のバッジも詳細の解析結果もローダー経由なので、ここで作り直さないと「解析中」が
-  // 消えた後に古い「未」のまま残る。⚠ `kifuId` だけを見ていると **quick 完了 → 同じ棋譜の
-  // full 開始**（kifuId 据え置き・profile だけ変化）を取りこぼすので、段階も鍵に含める
+  // 消えた後に古い「未」のまま残る。⚠ `kifuNo` だけを見ていると **quick 完了 → 同じ棋譜の
+  // full 開始**（kifuNo 据え置き・profile だけ変化）を取りこぼすので、段階も鍵に含める
   const previousKey = useRef<string | null>(null);
   useEffect(() => {
     const previous = previousKey.current;
-    const current = progress ? `${progress.kifuId}:${progress.profile}` : null;
+    const current = progress ? `${progress.kifuNo}:${progress.profile}` : null;
     previousKey.current = current;
     if (previous !== null && previous !== current) {
       void router.invalidate();

@@ -39,7 +39,8 @@ import { linkOwnerAccount } from './owner-account.js';
 import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
 import { encodeCandidates, mergeChunk, type CandidateMove } from './kifu-analysis-detail.js';
 import { findKifuPositionMatches } from './position-kifu-reuse.js';
-import { replacePositions } from './positions.js';
+import { parsePositionKey, replacePositions } from './positions.js';
+import { INITIAL_SFEN } from './position-queries.js';
 import { addAlias, OWNER_USER_ID } from './users.js';
 import { withUserTx } from './user-tx.js';
 import { insertKifu as insertNumberedKifu, type NewKifu } from './kifu-number.js';
@@ -332,7 +333,11 @@ describe('解析の担当（prd/14 §5.7）', () => {
 describe('bytea（局面索引。prd/15 §3）', () => {
   it('Buffer で往復する', async () => {
     const kifuId = await insertKifu();
-    const board = Buffer.from(Array.from({ length: 81 }, (_, i) => i));
+    // ⚠ **駒として読める盤**を入れる（初期局面）。DATABASE はファイル間で共有で、所有者の局面索引は
+    // 局面検索（近い局面）が盤として読み戻す。0〜80 の連番のような駒にならない値を残すと、
+    // このファイルの後に流れた他のファイルの局面検索が 500 になる（実際に踏んだ）
+    const board = Buffer.from(parsePositionKey(INITIAL_SFEN)!.board);
+    expect(new Set(board).size).toBeGreaterThan(2);
     await db.insert(kifuPositions).values({ ...positionRow(kifuId, 0, null), board });
     const [row] = await db
       .select({ board: kifuPositions.board })

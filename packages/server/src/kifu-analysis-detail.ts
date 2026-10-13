@@ -30,6 +30,48 @@ export interface AnalysisRun {
   multiPv: number | null;
   /** submit のトランザクションの時刻（ISO 8601） */
   at: string;
+  // --- 以下は任意（prd/14 §5.9・prd/16 §3.1）。**項目を足す前の行は持たない**ので、読む側は無いものとして扱う ---
+  /** 実行環境。`native` = 手元 worker / `wasm` = ブラウザ */
+  runtime?: 'native' | 'wasm';
+  /**
+   * エンジンのビルド識別（ブラウザは配信物の manifest の `engine.buildId`）。
+   * 🔒 これと `evalHash` だけは、**途中の解析**をやり直すかの判定に使う（`analysis-report.ts` の `needsRestart`）。
+   * 完了済みの解析の上書き・再開の条件には使わない（prd/05 §1.1d）
+   */
+  engineBuild?: string;
+  /** 評価関数のハッシュ（sha256） */
+  evalHash?: string;
+  /** エンジンに渡した `FV_SCALE`（評価値の尺度） */
+  fvScale?: number;
+  threads?: number;
+  /** 置換表の大きさ（MB） */
+  hashMb?: number;
+  /** 定跡を使ったか */
+  book?: boolean;
+}
+
+/** 来歴の任意の項目（{@link AnalysisRun} の `runtime` 以降） */
+export type AnalysisRunExtras = Pick<
+  AnalysisRun,
+  'runtime' | 'engineBuild' | 'evalHash' | 'fvScale' | 'threads' | 'hashMb' | 'book'
+>;
+
+/**
+ * 来歴の任意の項目のうち、**値があるものだけ**を残す（null / undefined のキーを保存しない）。
+ * 古い worker は項目を送らないので、その run は項目なしのまま保存される。
+ */
+export function runExtras(
+  input: { [K in keyof AnalysisRunExtras]?: AnalysisRunExtras[K] | null },
+): AnalysisRunExtras {
+  const extras: AnalysisRunExtras = {};
+  if (input.runtime != null) extras.runtime = input.runtime;
+  if (input.engineBuild != null) extras.engineBuild = input.engineBuild;
+  if (input.evalHash != null) extras.evalHash = input.evalHash;
+  if (input.fvScale != null) extras.fvScale = input.fvScale;
+  if (input.threads != null) extras.threads = input.threads;
+  if (input.hashMb != null) extras.hashMb = input.hashMb;
+  if (input.book != null) extras.book = input.book;
+  return extras;
 }
 
 /** API・呼び出し側が扱う候補手（旧 `candidateMoves` の行と同じ項目） */

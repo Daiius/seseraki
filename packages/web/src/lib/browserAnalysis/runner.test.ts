@@ -7,10 +7,12 @@ import type {
 import {
   classifyFailureStatus,
   createKifuRunner,
+  errorReportResultOf,
   MAX_STALE_RESTARTS,
   RETRY_DELAYS_MS,
   type AnalysisEngine,
   type ChunkResult,
+  type ErrorReportResult,
   type LocalProgress,
   type RunnerDeps,
   type StartResult,
@@ -79,7 +81,7 @@ function harness(script: {
   /** エンジン（通し番号）が局面を解析するときに呼ぶ。投げればエンジンの失敗 */
   analyze?: (engineNo: number, position: number, h: Harness) => void;
   createEngine?: (engineNo: number) => void;
-  reportError?: () => boolean;
+  reportError?: () => ErrorReportResult;
 }): Harness {
   const h: Harness = {
     starts: 0,
@@ -105,7 +107,7 @@ function harness(script: {
       },
       reportError: async (_no, body) => {
         h.errors.push(body);
-        return script.reportError ? script.reportError() : true;
+        return script.reportError ? script.reportError() : 'recorded';
       },
     },
     createEngine: async () => {
@@ -162,6 +164,15 @@ describe('classifyFailureStatus', () => {
     expect(classifyFailureStatus(429)).toBe('retry');
     expect(classifyFailureStatus(500)).toBe('retry');
     expect(classifyFailureStatus(503)).toBe('retry');
+  });
+});
+
+describe('errorReportResultOf（失敗の報告の 201 の本文）', () => {
+  it('applied: true だけが記録済み。破棄（applied: false）は記録済みにしない', () => {
+    expect(errorReportResultOf({ ok: true, applied: true })).toBe('recorded');
+    expect(errorReportResultOf({ ok: true, applied: false })).toBe('discarded');
+    expect(errorReportResultOf({ ok: true })).toBe('discarded');
+    expect(errorReportResultOf(null)).toBe('discarded');
   });
 });
 
@@ -388,10 +399,53 @@ describe('createKifuRunner', () => {
       analyze: (_engineNo, position) => {
         if (position === 0) throw new Error('boom');
       },
-      reportError: () => false,
+      reportError: () => 'unsent',
     });
     const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
+  });
+
+  it('失敗の報告が破棄された（applied: false）ら、失敗済みにせず開始から聞き直す', async () => {
+    // 同じ局面で 2 回失敗して報告したが、その間に別のタブが完了させていた
+    const h = harness({
+      start: (call) => (call < 2 ? runOf() : { kind: 'skip', reason: 'complete' }),
+      analyze: (_engineNo, position) => {
+        if (position === 0) throw new Error('boom');
+      },
+      reportError: () => 'discarded',
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    expect(h.errors).toHaveLength(1);
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(h.starts).toBe(3);
+  });
+
+  it('拒否（4xx）の後の失敗の報告が破棄されたときも、開始から聞き直す', async () => {
+    const h = harness({
+      start: (call) => (call === 0 ? runOf() : runOf({ revision: 8 })),
+      chunk: (chunk) =>
+        chunk.revision === 7
+          ? { kind: 'rejected', status: 400 }
+          : {
+              kind: 'ok',
+              applied: true,
+              completed: chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length,
+            },
+      reportError: () => 'discarded',
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(h.errors).toEqual([expect.objectContaining({ revision: 7 })]);
+  });
+
+  it('失敗の報告の破棄が続いたら、後回しにする（失敗済みにはしない）', async () => {
+    const h = harness({
+      chunk: () => ({ kind: 'rejected', status: 400 }),
+      reportError: () => 'discarded',
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    expect(outcome.kind).toBe('deferred');
+    expect(h.errors).toHaveLength(MAX_STALE_RESTARTS + 1);
   });
 
   it('エンジンを読み込めないときは、棋譜の失敗にせず止める', async () => {

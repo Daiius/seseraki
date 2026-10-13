@@ -12,12 +12,25 @@
 import type { KifuOutcome, RunnerLog } from './runner';
 import type { AnalysisMode } from './settings';
 
+export type PendingResult =
+  | { kind: 'ok'; kifuNos: number[] }
+  /** セッションが切れた（401）。解析を止め、呼び出し側が `GET /api/me` を取り直す */
+  | { kind: 'unauthorized' };
+
+/** 未解析の一覧の HTTP ステータスの扱い */
+export function pendingStatusKind(
+  status: number,
+): 'ok' | 'unauthorized' | 'error' {
+  if (status === 401) return 'unauthorized';
+  return status >= 200 && status < 300 ? 'ok' : 'error';
+}
+
 export interface SchedulerDeps {
   mode: AnalysisMode;
   /** 1 つの棋譜を解析する（{@link KifuRunner.analyze}） */
   analyze(kifuNo: number, signal: AbortSignal): Promise<KifuOutcome>;
-  /** 未解析の棋譜の番号（新しい順）。失敗したら投げる */
-  pending(): Promise<number[]>;
+  /** 未解析の棋譜の番号（新しい順）。ログイン切れ（401）はそう返す。ほかの失敗は投げる */
+  pending(): Promise<PendingResult>;
   /**
    * 同じブラウザの中で 1 つだけが `fn` を実行するようにする（Web Locks）。
    * 待っている間に `signal` が中断されたら、`fn` を呼ばずに拒否する
@@ -72,12 +85,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const eligible = (kifuNo: number) =>
     (cooldownUntil.get(kifuNo) ?? 0) <= deps.now();
 
-  const pick = async (): Promise<number | null> => {
+  const pick = async (): Promise<number | null | 'unauthorized'> => {
     if (focus !== null && eligible(focus)) return focus;
     if (mode !== 'always') return null;
     let list: number[];
     try {
-      list = await deps.pending();
+      const result = await deps.pending();
+      // 🔒 ログイン切れは通信の失敗と分ける。分けないと、止まらずに 1 分ごとに同じ要求を繰り返す
+      if (result.kind === 'unauthorized') return 'unauthorized';
+      list = result.kifuNos;
     } catch (error) {
       log.warn(
         `pending list failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -122,6 +138,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const seen = changes;
       const kifuNo = await pick();
       if (signal.aborted) return;
+      if (kifuNo === 'unauthorized') {
+        log.warn('halt (unauthorized): pending list returned 401');
+        deps.onHalt({
+          kind: 'halt',
+          reason: 'unauthorized',
+          detail: 'ログインが切れました',
+        });
+        return;
+      }
       if (kifuNo === null) {
         // 選んでいる間に状況が変わっていたら（詳細ページが開かれたなど）、待機に入らず選び直す
         if (changes === seen) await idle(signal);

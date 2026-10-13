@@ -59,17 +59,35 @@ export function classifyFailureStatus(
   return isPermanentSubmitStatus(status) ? 'rejected' : 'retry';
 }
 
+export type ErrorReportResult = 'recorded' | 'discarded' | 'unsent';
+
+/** 失敗の報告の応答（201 の本文）を結果にする。`applied` が true のときだけ記録済み */
+export function errorReportResultOf(body: unknown): ErrorReportResult {
+  return typeof body === 'object' &&
+    body !== null &&
+    'applied' in body &&
+    body.applied === true
+    ? 'recorded'
+    : 'discarded';
+}
+
 export interface RunnerApi {
   start(
     kifuNo: number,
     engine: { engineBuild: string; evalHash: string },
   ): Promise<StartResult>;
   submitChunk(kifuNo: number, chunk: BrowserAnalysisChunk): Promise<ChunkResult>;
-  /** 失敗を記録する。記録できたか（通信の失敗などで送れなければ false） */
+  /**
+   * 失敗を記録する。
+   * - `recorded`: 記録された
+   * - `discarded`: 破棄された（201 `applied: false`。世代が進んだ・別のタブが完了させた・担当が変わった）。
+   *   🔒 **記録済みとして扱わない**——server に失敗は残っていないので、開始の口で今の状態を聞き直す
+   * - `unsent`: 送れなかった（通信の失敗・4xx / 5xx）
+   */
   reportError(
     kifuNo: number,
     body: { revision: number; error: string },
-  ): Promise<boolean>;
+  ): Promise<ErrorReportResult>;
 }
 
 /** 起動済み（`readyok` まで済んだ）のエンジン */
@@ -361,7 +379,12 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
           }
           if (error instanceof RejectedReportError) {
             // 送り直しても同じ結果を送るので、失敗として記録して止める（堂々巡りにしない）
-            return await fail(kifuNo, run.revision, error.message);
+            const outcome = await fail(kifuNo, run.revision, error.message);
+            if (outcome !== 'restart') return outcome;
+            if (++staleRestarts > MAX_STALE_RESTARTS) {
+              return { kind: 'deferred', detail: '報告が受け付けられない状態が続いています' };
+            }
+            continue;
           }
 
           // ここから先はエンジンの失敗（死・時間切れ・`info string Error!`）。エンジンは必ず作り直す
@@ -382,11 +405,18 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
             failedAt.revision === run.revision &&
             failedAt.position === cursor
           ) {
-            return await fail(
+            const outcome = await fail(
               kifuNo,
               run.revision,
               `${cursor} 手目の局面を解析できませんでした: ${detail}`,
             );
+            if (outcome !== 'restart') return outcome;
+            // 失敗の報告が破棄された。数え直して、開始の口に今の状態を聞く
+            failedAt = null;
+            if (++staleRestarts > MAX_STALE_RESTARTS) {
+              return { kind: 'deferred', detail: '報告が受け付けられない状態が続いています' };
+            }
+            continue;
           }
           failedAt = { revision: run.revision, position: cursor };
           log.warn(
@@ -407,23 +437,30 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     }
   };
 
-  /** 棋譜の失敗として記録する。送れなければ後回し（次に同じ失敗をしたときに記録される） */
+  /**
+   * 棋譜の失敗として記録する。送れなければ後回し（次に同じ失敗をしたときに記録される）。
+   * 🔒 **破棄された（`applied: false`）ら `restart`**——失敗は server に残っていない。記録済みとして扱うと、
+   * 未完了の棋譜を「失敗済み」として長く選ばなくなる。開始の口が今の状態（完了・新しい世代）を返す
+   */
   const fail = async (
     kifuNo: number,
     revision: number,
     message: string,
-  ): Promise<KifuOutcome> => {
+  ): Promise<KifuOutcome | 'restart'> => {
     const error = message.slice(0, BROWSER_ANALYSIS_LIMITS.errorMaxLength);
     log.warn(`kifu #${kifuNo}: reporting failure: ${error}`);
-    let recorded = false;
+    let result: ErrorReportResult;
     try {
-      recorded = await api.reportError(kifuNo, { revision, error });
+      result = await api.reportError(kifuNo, { revision, error });
     } catch {
-      recorded = false;
+      result = 'unsent';
     }
-    return recorded
-      ? { kind: 'failed', error }
-      : { kind: 'deferred', detail: '失敗を記録できませんでした' };
+    if (result === 'recorded') return { kind: 'failed', error };
+    if (result === 'discarded') {
+      log.info(`kifu #${kifuNo}: failure report discarded. restarting`);
+      return 'restart';
+    }
+    return { kind: 'deferred', detail: '失敗を記録できませんでした' };
   };
 
   return {

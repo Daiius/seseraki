@@ -3,6 +3,7 @@ import type { KifuOutcome } from './runner';
 import {
   COOLDOWN_MS,
   createScheduler,
+  pendingStatusKind,
   type Scheduler,
   type SchedulerDeps,
 } from './scheduler';
@@ -33,6 +34,8 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
     now: 0,
     pending: pendingList,
     pendingCalls: 0,
+    /** 未解析の一覧が 401 を返す（セッション切れ） */
+    pendingUnauthorized: false,
     /** analyze が呼ばれた順 */
     started: [] as number[],
     running: null as Running | null,
@@ -57,7 +60,8 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
     },
     pending: async () => {
       state.pendingCalls++;
-      return state.pending;
+      if (state.pendingUnauthorized) return { kind: 'unauthorized' };
+      return { kind: 'ok', kifuNos: state.pending };
     },
     withLock: async (signal, fn) => {
       if (signal.aborted) throw new Error('aborted');
@@ -284,6 +288,27 @@ describe('createScheduler — 共通', () => {
     scheduler.poke();
     await flush();
     expect(state.started).toEqual([9]);
+  });
+
+  it('未解析の一覧が 401 を返したら、ログイン切れとして止める（1 分ごとに叩き続けない）', async () => {
+    const { state, scheduler, done } = setup('always', []);
+    await flush();
+    expect(state.pendingCalls).toBe(1);
+
+    // 一覧ページにいる間にセッションが切れた
+    state.pendingUnauthorized = true;
+    scheduler.poke();
+    await done;
+    expect(state.halted).toEqual(['unauthorized']);
+    expect(state.pendingCalls).toBe(2);
+    expect(state.started).toEqual([]);
+  });
+
+  it('未解析の一覧の HTTP ステータスの扱い', () => {
+    expect(pendingStatusKind(200)).toBe('ok');
+    expect(pendingStatusKind(401)).toBe('unauthorized');
+    expect(pendingStatusKind(403)).toBe('error');
+    expect(pendingStatusKind(500)).toBe('error');
   });
 
   it('止めたら、解析中の棋譜も中断する', async () => {

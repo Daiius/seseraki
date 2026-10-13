@@ -7,10 +7,13 @@
 import { client } from '../honoClient';
 import {
   classifyFailureStatus,
+  errorReportResultOf,
   type ChunkResult,
+  type ErrorReportResult,
   type RunnerApi,
   type StartResult,
 } from './runner';
+import { pendingStatusKind, type PendingResult } from './scheduler';
 
 function failure(
   status: number,
@@ -75,18 +78,26 @@ export const runnerApi: RunnerApi = {
     return { kind: 'ok', applied: body.applied, completed: body.completed };
   },
 
-  async reportError(kifuNo, body): Promise<boolean> {
+  async reportError(kifuNo, body): Promise<ErrorReportResult> {
     const res = await client.api.kifus[':no'].analysis.error.$post({
       param: { no: String(kifuNo) },
       json: body,
     });
-    return res.ok;
+    if (!res.ok) return 'unsent';
+    // ⚠ 破棄（古い世代・完了済み・担当違い）も 201 で返る。本文の `applied` を見る
+    return errorReportResultOf(await res.json());
   },
 };
 
-/** 未解析の棋譜の番号（新しい順。prd/14 §5.10「使用中は常に」）。失敗したら投げる */
-export async function fetchPendingKifuNos(): Promise<number[]> {
+/**
+ * 未解析の棋譜の番号（新しい順。prd/14 §5.10「使用中は常に」）。
+ * 401 はログイン切れとして返す（解析を止めて `GET /api/me` を取り直す）。それ以外の失敗は投げる
+ */
+export async function fetchPendingKifuNos(): Promise<PendingResult> {
   const res = await client.api.analysis.pending.$get({ query: {} });
+  if (pendingStatusKind(res.status) === 'unauthorized') {
+    return { kind: 'unauthorized' };
+  }
   if (!res.ok) throw new Error(`status ${res.status}`);
-  return (await res.json()).kifuNos;
+  return { kind: 'ok', kifuNos: (await res.json()).kifuNos };
 }

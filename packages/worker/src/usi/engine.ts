@@ -1,31 +1,40 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
-import { parseInfoLine, parseBestmove } from "./parser.js";
-import type { UsiInfo, UsiSearchResult } from "./types.js";
+import { createInterface } from "node:readline";
+import {
+  createUsiSession,
+  type UsiLog,
+  type UsiSearchResult,
+  type UsiSession,
+  type UsiTimers,
+  type UsiTransport,
+} from "shared";
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+/**
+ * `shared` の解析のループ・USI のセッションに渡すログの出力先（worker は標準出力・標準エラーへ出す）。
+ * `shared` は環境非依存で `console` を持たないので、使う側が注入する。
+ */
+export const consoleLog: UsiLog = {
+  info: (message) => console.log(message),
+  error: (message) => console.error(message),
+};
 
+const timers: UsiTimers = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+};
+
+/**
+ * やねうら王のプロセス。**プロセスの起動と行の入出力（transport）だけ**を持ち、USI の手順
+ * （`usi` / `isready` / `setoption` / `position` + `go`・時間切れ・`id name`）は `shared` の
+ * セッションに任せる（ブラウザの WASM エンジンと共用。prd/14 §5.11）。
+ *
+ * セッションは**プロセス 1 つにつき 1 つ**。再起動すると作り直すので、`setOption` で覚えた値と
+ * `id name` も新しいプロセスのものになる（呼び出し側が setOption / ready() を再適用する）。
+ */
 export class UsiEngine {
   private process: ChildProcess | null = null;
-  private rl: Interface | null = null;
-  private listeners: ((line: string) => void)[] = [];
-  /** プロセス死（close/error）で解決を待っている呼び出しを起こすためのハンドラ */
-  private deathHandlers: ((err: Error) => void)[] = [];
+  private session: UsiSession | null = null;
   private dead = false;
-  /**
-   * `setOption` で送った値を覚えておく（USI にオプション値を問い合わせる術はない）。
-   * 一時的に値を変えて戻したい呼び出し（検討局面の評価が MultiPV を上げる。prd/12 §2.2）が
-   * 「元の値」を知るために使う。
-   */
-  private options = new Map<string, string>();
-  /**
-   * `usi` に対してエンジンが返す `id name`（例 "YaneuraOu NNUE 8.40 ..."）。
-   *
-   * 🔴 **来歴の記録専用**（prd/03 §3 / prd/05 §1.1d）。**上書き・再開の判定には使わない**——
-   * 本番イメージはやねうら王を最新で clone してビルドするため再ビルドで版文字列が変わり、
-   * 識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**を招く。
-   */
-  private name: string | undefined;
 
   constructor(
     private readonly enginePath: string,
@@ -34,10 +43,8 @@ export class UsiEngine {
 
   async start(): Promise<void> {
     this.dead = false;
-    // 新しいプロセスはオプション未設定の状態から始まる（呼び出し側が setOption を再適用する）
-    this.options.clear();
-    // 再起動でエンジンが入れ替わりうるので、版文字列も掴み直す
-    this.name = undefined;
+    // 新しいプロセスはオプション未設定・版文字列も未取得の状態から始まる
+    this.session = null;
     const proc = spawn(this.enginePath, this.args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -46,12 +53,13 @@ export class UsiEngine {
     // 再起動後に旧プロセスの遅延イベントが新プロセスの状態を汚さないようガードする
     const isCurrent = () => this.process === proc;
 
+    let onLine: (line: string) => void = () => {};
+    let onDeath: (err: Error) => void = () => {};
+
     const die = (err: Error) => {
       if (!isCurrent()) return;
       this.dead = true;
-      const handlers = this.deathHandlers;
-      this.deathHandlers = [];
-      for (const handler of handlers) handler(err);
+      onDeath(err);
     };
 
     proc.on("error", (err) => {
@@ -64,12 +72,10 @@ export class UsiEngine {
       die(new Error(`[USI] Engine process exited (code ${code})`));
     });
 
-    this.rl = createInterface({ input: proc.stdout! });
-    this.rl.on("line", (line) => {
+    const rl = createInterface({ input: proc.stdout! });
+    rl.on("line", (line) => {
       if (!isCurrent()) return;
-      for (const listener of this.listeners) {
-        listener(line);
-      }
+      onLine(line);
     });
 
     // stderr logging
@@ -78,109 +84,64 @@ export class UsiEngine {
       console.error("[USI stderr]", line);
     });
 
-    // `id name` は usiok より前に流れてくる。恒久リスナーで拾う（後から `getName()` で読む）
-    this.listeners.push((line) => {
-      if (line.startsWith("id name ")) {
-        this.name = line.slice("id name ".length).trim();
-      }
-    });
-
-    this.sendCommand("usi");
-    await this.waitFor("usiok");
-    console.log("[USI] Engine initialized (usiok)");
+    const transport: UsiTransport = {
+      send: (line) => {
+        proc.stdin!.write(line + "\n");
+      },
+      onLine: (listener) => {
+        onLine = listener;
+      },
+      onDeath: (listener) => {
+        onDeath = listener;
+      },
+    };
+    this.session = createUsiSession(transport, { timers, log: consoleLog });
+    await this.session.start();
   }
 
   /** エンジンを再起動する（呼び出し側は setOption / ready() を再適用すること） */
   async restart(): Promise<void> {
     await this.quit();
     this.process = null;
-    this.rl = null;
-    this.listeners = [];
-    this.deathHandlers = [];
+    this.session = null;
     await this.start();
   }
 
   async ready(): Promise<void> {
-    this.sendCommand("isready");
-    await this.waitFor("readyok");
-    console.log("[USI] Engine ready (readyok)");
+    await this.active().ready();
   }
 
   setOption(name: string, value: string): void {
-    this.options.set(name, value);
-    this.sendCommand(`setoption name ${name} value ${value}`);
+    this.active().setOption(name, value);
   }
 
   /**
-   * エンジンが名乗った `id name`（来歴用）。まだ受け取っていなければ undefined。
-   * 🔒 **判定に使わない**（このクラスのフィールドのコメントを参照）。
+   * エンジンが名乗った `id name`（来歴用。例 "YaneuraOu NNUE 8.40 ..."）。まだ受け取っていなければ undefined。
+   *
+   * 🔴 **来歴の記録専用**（prd/03 §3 / prd/05 §1.1d）。**上書き・再開の判定には使わない**——
+   * 本番イメージはやねうら王を最新で clone してビルドするため再ビルドで版文字列が変わり、
+   * 識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**を招く。
    */
   getName(): string | undefined {
-    return this.name;
+    return this.session?.getName();
   }
 
   /**
    * `setOption` で設定した値。**まだ設定していなければ undefined**
    * （＝エンジンの既定値のまま。呼び出し側が既定を補う）。
+   *
+   * 一時的に値を変えて戻したい呼び出し（検討局面の評価が MultiPV を上げる。prd/12 §2.2）が
+   * 「元の値」を知るために使う（USI にオプション値を問い合わせる術はない）。
    */
   getOption(name: string): string | undefined {
-    return this.options.get(name);
+    return this.session?.getOption(name);
   }
 
   async analyze(
     position: string,
     goCommand: string,
   ): Promise<UsiSearchResult> {
-    this.ensureAlive();
-
-    const infoLines: UsiInfo[] = [];
-
-    return new Promise<UsiSearchResult>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error("[USI] Analysis timed out"));
-      }, DEFAULT_TIMEOUT_MS);
-
-      const onDeath = (err: Error) => {
-        cleanup();
-        reject(err);
-      };
-
-      const listener = (line: string) => {
-        if (line.startsWith("info string Error!")) {
-          console.error("[USI] Engine error:", line);
-          cleanup();
-          reject(new Error(line));
-          return;
-        }
-        if (line.startsWith("info ")) {
-          infoLines.push(parseInfoLine(line));
-        } else if (line.startsWith("bestmove ")) {
-          cleanup();
-          const bestmove = parseBestmove(line);
-          const lastInfo = infoLines.at(-1) ?? {};
-          resolve({ bestmove, infoLines, lastInfo });
-        }
-      };
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        const li = this.listeners.indexOf(listener);
-        if (li !== -1) this.listeners.splice(li, 1);
-        const di = this.deathHandlers.indexOf(onDeath);
-        if (di !== -1) this.deathHandlers.splice(di, 1);
-      };
-
-      this.listeners.push(listener);
-      this.deathHandlers.push(onDeath);
-      try {
-        this.sendCommand(position);
-        this.sendCommand(goCommand);
-      } catch (err) {
-        cleanup();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
-    });
+    return this.active().analyze(position, goCommand);
   }
 
   async quit(): Promise<void> {
@@ -189,7 +150,7 @@ export class UsiEngine {
     const proc = this.process;
     return new Promise<void>((resolve) => {
       proc.on("close", () => resolve());
-      this.sendCommand("quit");
+      this.active().send("quit");
 
       // Force kill after 5 seconds
       setTimeout(() => {
@@ -201,52 +162,11 @@ export class UsiEngine {
     });
   }
 
-  private sendCommand(command: string): void {
-    this.ensureAlive();
-    console.log("[USI >]", command);
-    this.process!.stdin!.write(command + "\n");
-  }
-
-  private waitFor(
-    expected: string,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(
-          new Error(`[USI] Timeout waiting for "${expected}"`),
-        );
-      }, timeoutMs);
-
-      const onDeath = (err: Error) => {
-        cleanup();
-        reject(err);
-      };
-
-      const listener = (line: string) => {
-        if (line.trim() === expected) {
-          cleanup();
-          resolve();
-        }
-      };
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        const li = this.listeners.indexOf(listener);
-        if (li !== -1) this.listeners.splice(li, 1);
-        const di = this.deathHandlers.indexOf(onDeath);
-        if (di !== -1) this.deathHandlers.splice(di, 1);
-      };
-
-      this.listeners.push(listener);
-      this.deathHandlers.push(onDeath);
-    });
-  }
-
-  private ensureAlive(): void {
-    if (this.dead || !this.process) {
+  /** 起動済みのセッション。起動前・起動に失敗した後は投げる */
+  private active(): UsiSession {
+    if (!this.session) {
       throw new Error("[USI] Engine is not running");
     }
+    return this.session;
   }
 }

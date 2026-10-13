@@ -1,4 +1,4 @@
-import type { UsiBestmove, UsiInfo, UsiScore } from "./types.js";
+import type { UsiBestmove, UsiInfo, UsiScore } from "./types";
 
 export function parseInfoLine(line: string): UsiInfo {
   const tokens = line.split(/\s+/);

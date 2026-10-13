@@ -3,8 +3,8 @@ import type { AppType } from "server";
 import {
   isPermanentSubmitStatus,
   SubmitRejectedError,
-  type MoveAnalysis,
-} from "../kifu-analysis.js";
+  type UsiMoveAnalysis,
+} from "shared";
 import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
 
 /** 解析の段階（prd/05 §1.1d）。server の `AnalysisProfile` と同じ 2 値 */
@@ -53,7 +53,7 @@ export function createClient(baseUrl: string, apiKey: string) {
     async submitAnalysis(
       kifuId: number,
       revision: number,
-      analyses: MoveAnalysis[],
+      analyses: UsiMoveAnalysis[],
       provenance: AnalysisProvenance,
     ) {
       const res = await client.api.worker.analyses.$post({

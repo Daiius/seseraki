@@ -4,7 +4,7 @@ import {
   profileSettings,
   type Config,
 } from "./config.js";
-import { UsiEngine } from "./usi/engine.js";
+import { consoleLog, UsiEngine } from "./usi/engine.js";
 import { MockTaskSource } from "./polling/mock.js";
 import type { TaskSource } from "./polling/types.js";
 import { analyzeTask } from "./analysis.js";
@@ -14,7 +14,7 @@ import {
   buildGoCommand,
   ChunkSubmitError,
   SubmitRejectedError,
-} from "./kifu-analysis.js";
+} from "shared";
 import {
   drainEvaluationJobs,
   InteractiveEngineError,
@@ -225,6 +225,8 @@ async function main() {
         let result;
         try {
           result = await analyzeKifu(engine, kifu.usiMoves, {
+            // 解析のループは `shared` にあり `console` を持たないので、出力先を渡す
+            log: consoleLog,
             // 段階ごとの設定（quick は ENGINE_QUICK_*・full は ENGINE_MOVETIME/DEPTH）。
             // 🔒 MultiPV は両段階で共通（悪手判定と検討盤の再利用が本数に依存する）
             depth: settings.depth,

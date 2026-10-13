@@ -9,7 +9,7 @@ import {
   type PositionEvalResult,
   type PositionJobSource,
 } from "./position-eval.js";
-import type { UsiInfo, UsiSearchResult } from "./usi/types.js";
+import type { UsiInfo, UsiSearchResult } from "shared";
 
 /** 局面キー（手数を持たない 3 フィールドの SFEN） */
 const SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -";

@@ -15,9 +15,12 @@
  * （2026-08-28 に dev で実測。prd/12 §2.2 は 3 本と定めている）。
  * 設定した値は探索後に**元へ戻す**ので、割り込まれた棋譜解析の候補手数は変わらない。
  */
-import { extractMultiPvResults, type CandidateMove } from "./kifu-analysis.js";
+import {
+  extractMultiPvResults,
+  type UsiCandidate,
+  type UsiScore,
+} from "shared";
 import type { UsiEngine } from "./usi/engine.js";
-import type { UsiScore } from "./usi/types.js";
 
 /** `evaluateJob` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る） */
 export type EvalEngine = Pick<UsiEngine, "analyze" | "setOption" | "getOption">;
@@ -38,7 +41,7 @@ export interface PositionEvalJob {
 }
 
 export interface PositionEvalResult {
-  candidates: CandidateMove[];
+  candidates: UsiCandidate[];
   /** `searchmoves` ではなく符号反転のフォールバックで求めたか（prd/12 §2.2） */
   fallback: boolean;
 }

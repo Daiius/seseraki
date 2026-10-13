@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.13.13"
+    "hono": "^4.13.13",
+    "shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.19.17",

@@ -314,7 +314,7 @@ kifuAnalyses
 | quick が末尾を越えて飛ばないこと | **quick のチャンクは先頭が `detail` の長さ以下**。`fullCount` は変えない |
 | 段階の後退防止 | quick のチャンクのうち **`moveNumber < fullCount` の局面は捨てる**（既存が full の局面を quick で上書きしない） |
 | 再送が同じ結果になること | 重なった局面は上書き（以前の `UNIQUE(kifuId, moveNumber)` による upsert と同じ性質） |
-| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:no/reanalyze`。submit 側は消さない） |
+| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:no/reanalyze`。submit 側は消さない）。⚠ ブラウザ解析で経路が 2 つ増える（決定・2026-10-14・**未実装**）: 開始の口による**途中の解析**のやり直しと、解析の担当の切り替え。どちらも未完了の解析だけを消し、世代を進める（[16](./16-analysis-storage.md) §4.3）。submit 側が消さないことは変えない |
 | 完了の確定 | **段階ごとの**局面数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = `detail` の長さ / full = `fullCount` |
 
 - 範囲と連続性を保証すれば `detail` に隙間は生じないので、**長さ = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。

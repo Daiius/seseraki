@@ -19,7 +19,7 @@
     "db:migrate:dev": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost DB_PORT=$DB_FORWARD_PORT tsx migrate.ts'",
     "tactics:redetect:dev": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost DB_PORT=$DB_FORWARD_PORT tsx redetect-tactics.ts'",
     "db:seed": "bash scripts/db-forward.sh pnpm --filter server exec sh -c 'set -a && . ../../.env.database && DB_HOST=localhost DB_PORT=$DB_FORWARD_PORT tsx src/db/seed.ts ../../sample.kif'",
-    "deploy:web": "pnpm --filter web build && pnpm --filter deploy-static exec sh -c 'set -a && . ../../.env.deploy && tsx src/cli.ts \"$@\"' sh",
+    "deploy:web": "ENGINE_REQUIRED=1 pnpm --filter web build && pnpm --filter deploy-static exec sh -c 'set -a && . ../../.env.deploy && tsx src/cli.ts \"$@\"' sh",
     "engine:build": "pnpm --filter engine-wasm engine:build && pnpm --filter engine-wasm engine:eval",
     "down": "docker compose down",
     "build": "pnpm -r build",

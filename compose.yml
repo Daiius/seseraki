@@ -22,25 +22,6 @@ services:
       retries: 3
       start_period: 5s
 
-  # 旧 MySQL（prd/15 §8.1）。**server からは使わない。** データ移行（prd/15 §6）の練習で
-  # 移行元として読むためだけに残す（volume は旧 db の db-data のまま）。後片付けの PR で消す。
-  db-mysql:
-    image: mysql:8.4
-    environment:
-      TZ: 'Asia/Tokyo'
-    env_file:
-      - .env.database
-    volumes:
-      - db-data:/var/lib/mysql
-    cap_add:
-      - SYS_NICE
-    healthcheck:
-      test: mysql -u $$MYSQL_USER -p$$MYSQL_PASSWORD $$MYSQL_DATABASE -e "select 1;"
-      interval: 5s
-      timeout: 20s
-      retries: 3
-      start_period: 5s
-
   server:
     # 🔒 dev のイメージには -dev を付ける。本番 worker はローカルビルドの `seseraki-worker:latest` を
     # 参照しているため、compose の既定名（<project>-<service>）のままだと dev のビルドが本番のタグを上書きする
@@ -173,5 +154,3 @@ services:
 
 volumes:
   pg-data:
-  # 旧 MySQL のデータ（db-mysql。データ移行の練習が済んだら消す）
-  db-data:

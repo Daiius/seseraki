@@ -43,7 +43,7 @@
 - フルスタック TypeScript の pnpm monorepo: 現在は `packages/{web,server,worker,shared}`（将来 `commentator`。
   [02](./02-architecture.md) §3 / [08](./08-roadmap.md)）。`shared` は **`board.ts` まで実装済み**で、
   残る抽出（`lib/usi.ts`・悪手判定・kifu-export・zod スキーマ）は gap（[02](./02-architecture.md) §3.2）。
-- MySQL 8.4 / Hono(RPC) / Drizzle ORM 1.0（beta 追従） / React 19 + Vite + TanStack Router + Tailwind v4 + daisyUI。
+- Postgres 18 / Hono(RPC) / Drizzle ORM 1.0（beta 追従） / React 19 + Vite + TanStack Router + Tailwind v4 + daisyUI。
 - worker（Node.js + USI + やねうら王）は server とは分離した実行環境で稼働し、API_KEY で server を polling する。
 - 設計の柱: **API 型共有は Hono RPC に集約**しつつ、**将棋ドメインの純ロジックと zod 検証スキーマは `shared`**
   に置いて web/server（将来 commentator）で共有する（[02](./02-architecture.md) §3）。
@@ -52,7 +52,7 @@
         [ KIF 貼り付け / CSA 直接貼り付け ]（swars 一括取り込みは無効・§4）
                           │  すべて server 側で USI へ変換し kifus に収束
                           ▼
-   web (UI) ──fetch /api──> server (Hono) ──> MySQL
+   web (UI) ──fetch /api──> server (Hono) ──> Postgres
                               ▲   │  API_KEY polling（未解析棋譜取得 / 解析結果登録）
                               │   ▼
                        worker（分離実行環境）── USI ── やねうら王 + 評価関数
@@ -84,6 +84,6 @@
 11. [11-users.md](./11-users.md) — ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出
 12. [12-position-lab.md](./12-position-lab.md) — 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP）
 13. [13-drills.md](./13-drills.md) — 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴）
-14. [14-multi-user.md](./14-multi-user.md) — 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量）。段階 1（認証）と Postgres への移行まで本番反映済み・所有者スコープ以降は未実装
+14. [14-multi-user.md](./14-multi-user.md) — 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量）。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。所有者ゲートの撤去と新規登録の開放・ブラウザ解析以降は未実装
 15. [15-postgres.md](./15-postgres.md) — Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト）。本番切り替え済み（2026-10-06）
 16. [16-analysis-storage.md](./16-analysis-storage.md) — 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める / 検索に使う値だけ列に出す）。本番反映済み

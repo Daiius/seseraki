@@ -268,6 +268,13 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
     ['kifus.analysisProfile', 'kifus_analysis_profile_check', () =>
       insertKifu({ analysisProfile: raw('deep') })],
     ['kifus.subjectSide', 'kifus_subject_side_check', () => insertKifu({ subjectSide: raw('both') })],
+    ['users.analysisAssignee', 'users_analysis_assignee_check', () =>
+      db.insert(users).values({
+        name: 'n',
+        email: `${randomUUID()}@example.invalid`,
+        displayName: 'd',
+        analysisAssignee: raw('gpu'),
+      })],
     ['kifu_tactics.side', 'kifu_tactics_side_check', async () =>
       db.execute(sql`insert into kifu_tactics (kifu_id, owner_id, side, label, turn)
         values (${await insertKifu()}, ${OWNER_USER_ID}, 'nobody', '四間飛車', 1)`)],
@@ -289,6 +296,36 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
   it.each(cases)('%s は値の一覧の外を弾く', async (_name, constraint, write) => {
     const err = await failure(write());
     expect(err).toMatchObject({ code: CHECK_VIOLATION, constraint });
+  });
+});
+
+describe('解析の担当（prd/14 §5.7）', () => {
+  it('既定は browser。所有者の行はマイグレーションが worker に埋め戻している', async () => {
+    const [created] = await db
+      .insert(users)
+      .values({ name: 'n', email: `${randomUUID()}@example.invalid`, displayName: 'd' })
+      .returning({ analysisAssignee: users.analysisAssignee });
+    expect(created.analysisAssignee).toBe('browser');
+    const [owner] = await db
+      .select({ analysisAssignee: users.analysisAssignee })
+      .from(users)
+      .where(eq(users.id, OWNER_USER_ID));
+    expect(owner.analysisAssignee).toBe('worker');
+  });
+
+  it('🔒 worker を選べるのは所有者だけ（CHECK）', async () => {
+    const err = await failure(
+      db.insert(users).values({
+        name: 'n',
+        email: `${randomUUID()}@example.invalid`,
+        displayName: 'd',
+        analysisAssignee: 'worker',
+      }),
+    );
+    expect(err).toMatchObject({
+      code: CHECK_VIOLATION,
+      constraint: 'users_analysis_assignee_worker_owner_only',
+    });
   });
 });
 

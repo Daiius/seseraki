@@ -197,6 +197,16 @@ const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+/** Origin の検査がある書き込み口（ブラウザ解析の受け口・担当の切り替え。prd/14 §5.8）用 */
+const jsonFromBrowser = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
+  body: JSON.stringify(body),
+});
+
+/** ブラウザ解析の来歴（エンジンのビルド識別と評価関数のハッシュ） */
+const ENGINE = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'a'.repeat(64) };
+
 const drillPath = () => `/api/drills/${analyzed.displayNo}/0/best`;
 
 /** 叩く順に並べる（作る → 読む → 書き換える → 消す） */
@@ -264,6 +274,46 @@ const CALLS: Call[] = [
   {
     route: 'PATCH /api/kifus/:no',
     request: () => ({ url: `/api/kifus/${analyzed.displayNo}`, init: json('PATCH', { memo: 'm' }) }),
+    status: 200,
+  },
+  // --- ブラウザ解析の受け口（prd/14 §5.8）。所有者の担当は worker なので、開始は 409・報告は破棄（applied: false）---
+  {
+    route: 'POST /api/kifus/:no/analysis/start',
+    request: () => ({ url: `/api/kifus/${posted}/analysis/start`, init: jsonFromBrowser('POST', ENGINE) }),
+    status: 409,
+  },
+  {
+    route: 'POST /api/kifus/:no/analysis/chunks',
+    request: () => ({
+      url: `/api/kifus/${posted}/analysis/chunks`,
+      init: jsonFromBrowser('POST', {
+        revision: 0,
+        ...ENGINE,
+        fvScale: 16,
+        threads: 4,
+        hashMb: 64,
+        movetimeMs: 300,
+        analyses: [{ moveNumber: 0, candidates: [{ ...cand('7g7f', 30, 1), pv: ['7g7f'] }] }],
+      }),
+    }),
+    status: 201,
+  },
+  {
+    route: 'POST /api/kifus/:no/analysis/error',
+    request: () => ({
+      url: `/api/kifus/${posted}/analysis/error`,
+      init: jsonFromBrowser('POST', { revision: 0, error: 'engine died' }),
+    }),
+    status: 201,
+  },
+  { route: 'GET /api/analysis/pending', request: () => ({ url: '/api/analysis/pending' }), status: 200 },
+  {
+    // 同じ値（worker）なので何も変わらない（所有者の担当を他のテストが前提にしている）
+    route: 'PUT /api/users/me/analysis-assignee',
+    request: () => ({
+      url: '/api/users/me/analysis-assignee',
+      init: jsonFromBrowser('PUT', { assignee: 'worker' }),
+    }),
     status: 200,
   },
   {

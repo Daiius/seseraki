@@ -39,7 +39,8 @@ import { linkOwnerAccount } from './owner-account.js';
 import { loadAnalysis, saveAnalysis } from './kifu-analysis-store.js';
 import { encodeCandidates, mergeChunk, type CandidateMove } from './kifu-analysis-detail.js';
 import { findKifuPositionMatches } from './position-kifu-reuse.js';
-import { replacePositions } from './positions.js';
+import { parsePositionKey, replacePositions } from './positions.js';
+import { INITIAL_SFEN } from './position-queries.js';
 import { addAlias, OWNER_USER_ID } from './users.js';
 import { withUserTx } from './user-tx.js';
 import { insertKifu as insertNumberedKifu, type NewKifu } from './kifu-number.js';
@@ -268,6 +269,13 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
     ['kifus.analysisProfile', 'kifus_analysis_profile_check', () =>
       insertKifu({ analysisProfile: raw('deep') })],
     ['kifus.subjectSide', 'kifus_subject_side_check', () => insertKifu({ subjectSide: raw('both') })],
+    ['users.analysisAssignee', 'users_analysis_assignee_check', () =>
+      db.insert(users).values({
+        name: 'n',
+        email: `${randomUUID()}@example.invalid`,
+        displayName: 'd',
+        analysisAssignee: raw('gpu'),
+      })],
     ['kifu_tactics.side', 'kifu_tactics_side_check', async () =>
       db.execute(sql`insert into kifu_tactics (kifu_id, owner_id, side, label, turn)
         values (${await insertKifu()}, ${OWNER_USER_ID}, 'nobody', '四間飛車', 1)`)],
@@ -292,10 +300,44 @@ describe('enum（text + CHECK。prd/15 §3.1）', () => {
   });
 });
 
+describe('解析の担当（prd/14 §5.7）', () => {
+  it('既定は browser。所有者の行はマイグレーションが worker に埋め戻している', async () => {
+    const [created] = await db
+      .insert(users)
+      .values({ name: 'n', email: `${randomUUID()}@example.invalid`, displayName: 'd' })
+      .returning({ analysisAssignee: users.analysisAssignee });
+    expect(created.analysisAssignee).toBe('browser');
+    const [owner] = await db
+      .select({ analysisAssignee: users.analysisAssignee })
+      .from(users)
+      .where(eq(users.id, OWNER_USER_ID));
+    expect(owner.analysisAssignee).toBe('worker');
+  });
+
+  it('🔒 worker を選べるのは所有者だけ（CHECK）', async () => {
+    const err = await failure(
+      db.insert(users).values({
+        name: 'n',
+        email: `${randomUUID()}@example.invalid`,
+        displayName: 'd',
+        analysisAssignee: 'worker',
+      }),
+    );
+    expect(err).toMatchObject({
+      code: CHECK_VIOLATION,
+      constraint: 'users_analysis_assignee_worker_owner_only',
+    });
+  });
+});
+
 describe('bytea（局面索引。prd/15 §3）', () => {
   it('Buffer で往復する', async () => {
     const kifuId = await insertKifu();
-    const board = Buffer.from(Array.from({ length: 81 }, (_, i) => i));
+    // ⚠ **駒として読める盤**を入れる（初期局面）。DATABASE はファイル間で共有で、所有者の局面索引は
+    // 局面検索（近い局面）が盤として読み戻す。0〜80 の連番のような駒にならない値を残すと、
+    // このファイルの後に流れた他のファイルの局面検索が 500 になる（実際に踏んだ）
+    const board = Buffer.from(parsePositionKey(INITIAL_SFEN)!.board);
+    expect(new Set(board).size).toBeGreaterThan(2);
     await db.insert(kifuPositions).values({ ...positionRow(kifuId, 0, null), board });
     const [row] = await db
       .select({ board: kifuPositions.board })

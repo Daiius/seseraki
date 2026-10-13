@@ -95,6 +95,16 @@ export function clearProgress(kifuId: number): void {
   if (current?.kifuId === kifuId) current = null;
 }
 
+/**
+ * そのユーザーの棋譜の「解析中」を落とす（解析の担当の切り替え。prd/14 §5.7）。
+ * 切り替えは未完了の棋譜の世代をまとめて進めるので、棋譜を 1 つずつ指さずに所有者で落とす。
+ * トークンは {@link clearProgress} と同じく常に進める（検証中の古い報告を弾く）。
+ */
+export function clearProgressForOwner(ownerId: string): void {
+  clearToken++;
+  if (current?.ownerId === ownerId) current = null;
+}
+
 /** テスト用。プロセス状態をリセット */
 export function resetProgress(): void {
   current = null;

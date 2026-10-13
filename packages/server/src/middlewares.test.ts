@@ -1,7 +1,41 @@
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { apiKeyRequired } from './middlewares.js';
+import { apiKeyRequired, isTrustedOrigin, originRequired } from './middlewares.js';
+
+describe('isTrustedOrigin', () => {
+  const trusted = ['https://app.example', 'http://localhost:5173'];
+
+  it('一覧にあるオリジンだけ（完全一致）', () => {
+    expect(isTrustedOrigin('https://app.example', trusted)).toBe(true);
+    expect(isTrustedOrigin('http://localhost:5173', trusted)).toBe(true);
+    expect(isTrustedOrigin('https://app.example.evil.test', trusted)).toBe(false);
+    expect(isTrustedOrigin('http://app.example', trusted)).toBe(false);
+    expect(isTrustedOrigin('https://app.example/', trusted)).toBe(false);
+  });
+
+  it('ヘッダが無い・null・空は通さない', () => {
+    expect(isTrustedOrigin(undefined, trusted)).toBe(false);
+    expect(isTrustedOrigin('null', trusted)).toBe(false);
+    expect(isTrustedOrigin('', trusted)).toBe(false);
+    expect(isTrustedOrigin('https://app.example', [])).toBe(false);
+  });
+});
+
+describe('originRequired', () => {
+  const guarded = new Hono().post('/', originRequired(['https://app.example']), (c) => c.text('ok'));
+  const post = (origin?: string) =>
+    guarded.request('/', { method: 'POST', headers: origin ? { Origin: origin } : {} });
+
+  it('信頼するオリジンは通す', async () => {
+    expect((await post('https://app.example')).status).toBe(200);
+  });
+
+  it('別のオリジン・Origin なしは 403（ハンドラに届かない）', async () => {
+    expect((await post('https://evil.test')).status).toBe(403);
+    expect((await post()).status).toBe(403);
+  });
+});
 
 const app = new Hono().get('/', apiKeyRequired, (c) => c.text('ok'));
 const request = (authorization?: string) =>

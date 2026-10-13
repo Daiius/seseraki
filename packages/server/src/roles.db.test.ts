@@ -15,6 +15,8 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, inject } from 'vitest';
+import { recordAnalysisFailure, startBrowserAnalysis, submitAnalysisChunk } from './analysis-report.js';
+import type { Tx } from './db/index.js';
 import { kifus, users } from './db/schema.js';
 import { OWNER_USER_ID } from './users.js';
 
@@ -268,6 +270,55 @@ describe('RLS（prd/14 §4「RLS の形」）', () => {
     await asUser(userA, async (c) => {
       expect((await c.query(`update kifus set title = 'mine' where id = $1`, [kifuA])).rowCount).toBe(1);
     });
+  });
+
+  it('🔒 ブラウザ解析の受け口の本体は RLS の下で書け、他人の棋譜には届かない（prd/14 §5.8）', async () => {
+    await systemPool.query(`update kifus set usi_moves = '["7g7f"]'::jsonb where id = any($1)`, [[kifuA, kifuB]]);
+    const engine = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'a'.repeat(64) };
+    const chunk = {
+      revision: 0,
+      assignee: 'browser' as const,
+      run: {
+        profile: 'quick' as const,
+        engineName: null,
+        movetimeMs: 300,
+        targetDepth: null,
+        multiPv: 1,
+        runtime: 'wasm' as const,
+        ...engine,
+      },
+      sameEngine: engine,
+      analyses: [
+        { moveNumber: 0, candidates: [{ rank: 1, move: '7g7f', scoreType: 'cp' as const, scoreValue: 30, depth: 10 }] },
+      ],
+    };
+    await asUser(userA, async (c) => {
+      // 関数は tx を受ける（`user-tx.ts` が開くものと同じく、`app.user_id` を設定した server ロールの接続）
+      const tx = drizzle({ client: c }) as unknown as Tx;
+      // 所有者の条件を付けずに内部 ID で指しても、RLS が B の棋譜を隠す（アプリ層の書き忘れを DB が止める）
+      expect(await submitAnalysisChunk(tx, { id: kifuB }, chunk)).toEqual({ status: 'not-found' });
+      expect(
+        await recordAnalysisFailure(tx, { id: kifuB }, { revision: 0, error: 'e', assignee: 'browser', stage: 'quick' }),
+      ).toBeNull();
+      // 自分の棋譜（A の 1 番）は開始でき、解析の行を RLS の下で挿入できる（WITH CHECK を通る）
+      expect(await startBrowserAnalysis(tx, userA, 1, engine)).toMatchObject({
+        status: 'run',
+        revision: 0,
+        startMoveNumber: 0,
+        usiMoves: ['7g7f'],
+      });
+      expect(await submitAnalysisChunk(tx, { ownerId: userA, no: 1 }, chunk)).toEqual({
+        status: 'applied',
+        completed: false,
+      });
+    });
+    const { rows } = await systemPool.query<{ kifu_id: string; owner_id: string }>(
+      `select kifu_id, owner_id from kifu_analyses where kifu_id = any($1)`,
+      [[kifuA, kifuB]],
+    );
+    expect(rows.map((r) => [Number(r.kifu_id), r.owner_id])).toEqual([[kifuA, userA]]);
+    const [b] = (await systemPool.query(`select analysis_error, analysis_revision from kifus where id = $1`, [kifuB])).rows;
+    expect(b).toEqual({ analysis_error: null, analysis_revision: 0 });
   });
 
   it('system ロール（BYPASSRLS）は app.user_id なしで全員ぶんが見える', async () => {

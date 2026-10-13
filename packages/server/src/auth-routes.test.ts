@@ -144,6 +144,38 @@ describe('web 向けのエンドポイント', () => {
     expect((await app.request('/api/kifus')).status).toBe(401);
   }, 20_000);
 
+  // ブラウザ解析の受け口と担当の切り替え（prd/14 §5.8）。Origin と本文の大きさはセッションより前に見る
+  const GUARDED = [
+    ['POST', '/api/kifus/1/analysis/start'],
+    ['POST', '/api/kifus/1/analysis/chunks'],
+    ['POST', '/api/kifus/1/analysis/error'],
+    ['PUT', '/api/users/me/analysis-assignee'],
+  ] as const;
+
+  it.each(GUARDED)('🔒 %s %s は Origin が無い・信頼しないオリジンなら 403', async (method, path) => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    const request = (origin?: string) =>
+      app.request(path, {
+        method,
+        headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
+        body: '{}',
+      });
+    expect((await request()).status).toBe(403);
+    expect((await request('https://evil.example.test')).status).toBe(403);
+    // 信頼するオリジンなら Origin の検査は通り、未ログインの 401 まで進む
+    expect((await request(ORIGIN)).status).toBe(401);
+  }, 20_000);
+
+  it.each(GUARDED)('🔒 %s %s は本文が上限を超えたら 413', async (method, path) => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    const res = await app.request(path, {
+      method,
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: JSON.stringify({ padding: 'x'.repeat(64 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+  }, 20_000);
+
   it('旧ログインのエンドポイントは無い（prd/07 §8）', async () => {
     const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
     const paths = app.routes.map((r) => r.path);

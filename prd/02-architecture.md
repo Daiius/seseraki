@@ -61,6 +61,7 @@
 - **`shared` は将棋ドメインの純ロジックと zod 検証スキーマを持つ**（React/node 非依存の純 TS）。責務を凝集させ、
   何でも置く junk drawer にはしない。中身:
   1. **盤面追跡・USI 変換・USI→日本語表記・悪手判定**（[05](./05-analysis.md)）。
+     **エンジンとの USI のやり取りと解析のループ**（`usi/`。下の「実装状況」）もここ。
   2. **kifu-export プロンプト生成**（[06](./06-llm-commentary.md)。純関数）。
   3. **zod 検証スキーマ**（runtime バリデーション。[03](./03-data-model.md)）。
 - **なぜ持つか**（旧「shared を作らない」の改定）: 元の判断は「Hono RPC の型共有を使わず zod 定義を
@@ -75,6 +76,17 @@
   `lib/thresholds.ts` に残す（環境依存なので `shared` に入れない）。
   まだ `packages/web` にあるのは `lib/usi.ts`（盤面を使わない `usiToJapanese`・`toSenteEval`・
   `formatScore` 等）と、2・3（[08](./08-roadmap.md) の gap）。
+- **`usi/`（USI の解釈・セッション・解析のループ）は worker から移設済み**（2026-10-14。[14](./14-multi-user.md) §5.11）。
+  手元 worker（子プロセスのやねうら王）とブラウザ（WASM のエンジン）が同じループを使う。
+  - **エンジンとの行の入出力だけを `UsiTransport`（送る・受ける・死を知る）に切り出し**、USI の手順
+    （`usi` / `isready` / `setoption` / `position` + `go`・時間切れ・`info string Error!`）は
+    `createUsiSession` が持つ。worker の `UsiEngine` はプロセスの起動と transport だけを持つ。
+  - **`analyzeKifu`（1 局の解析とチャンク分け）は、時間でも局面数でも区切れる**（`chunkMaxPositions`。
+    ブラウザの報告は 1 チャンクの局面数に上限がある。手元 worker は今までどおり時間だけ）。
+  - ブラウザの報告の形への変換（読み筋を上限で切る・検証を通る形に切りそろえる）と、開始の口の応答から
+    解析を回す `analyzeKifuForBrowser` も置く（純関数。fetch・Worker には触れない）。
+  - ⚠ **タイマーとログは注入で受ける**（`shared` は `setTimeout` も `console` も型を持たない）。
+    `Date.now()` は使える。
 - ⚠ **環境非依存を tsconfig で強制する**（`lib: ["esnext"]` / `types: []`）。web（ブラウザ）と
   server / worker（node）の両方が消費するため、**どちらの前提も置かない**。
   `structuredClone` のように型が `lib.dom` / `@types/node` にしか無い API も使えない

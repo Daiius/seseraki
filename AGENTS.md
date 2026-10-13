@@ -69,10 +69,14 @@
 > ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
 > 詰み筋の分類（`mate-line.ts` の `classifyMateLine`。[prd/05](./prd/05-analysis.md) §2.2）と
 > **悪手判定（`cpl.ts` の `computeMoveLosses` / `labelOf`）** も `shared` にある。
+> **USI の解釈・セッション・解析のループ（`usi/`。`createUsiSession` / `analyzeKifu`）も `shared` にある**
+> ——手元 worker とブラウザ（WASM のエンジン）が共用する（[prd/02](./prd/02-architecture.md) §3.2）。
+> worker の `UsiEngine` はプロセスの起動と行の入出力（`UsiTransport`）だけを持つ。
 > `lib/usi.ts`（盤面を使わない USI 変換・評価値整形）・kifu-export・
 > zod 検証スキーマはまだ `packages/web` にあり gap。server のプロンプト生成エンドポイント化も未着手。
 > ⚠ **`shared` に環境依存を持ち込まない。** web（ブラウザ）と server / worker（node）の両方が使うため、
 > `structuredClone` のような DOM / node の lib にしか型が無い API も避ける。
+> **`console` と `setTimeout` も型が無い**——ログとタイマーは使う側から注入する（`usi/session.ts` の `UsiLog` / `UsiTimers`）。
 
 ## 開発コマンド
 

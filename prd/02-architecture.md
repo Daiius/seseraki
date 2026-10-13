@@ -34,7 +34,8 @@
 
 - **DB は Postgres 18**（[15](./15-postgres.md)。MySQL 8.4 から移した。型・CHECK 制約・トリガーで DB の側でも整合を守る）。
   named volume で永続。ドライバは node-postgres（`drizzle-orm/node-postgres`）。
-  **ロールを 2 つに分ける**: 管理ロール（DDL。マイグレーション）と server ロール（DML のみ。常駐の server と一括処理）。
+  **ロールを 3 つに分ける**（[15](./15-postgres.md) §2）: 管理ロール（DDL。マイグレーション）・server ロール（DML のみ・RLS が効く。常駐の server のログインの経路）・
+  system ロール（DML のみ・BYPASSRLS。worker の報告・一括処理など全員ぶんを扱う経路）。
   データ移行と本番の切り替えは済み（2026-10-06。[15](./15-postgres.md) §6・§7）。dev の旧 MySQL（`db-mysql`）も外した。
 - **Drizzle ORM 1.0.0-rc.3**: 1.0 正式リリースが近く、早めにキャッチアップする目的で beta を採用。
 - スタイルは Tailwind v4 + daisyUI。棋譜詳細はモバイルファーストで組む（[05](./05-analysis.md)）。
@@ -132,7 +133,7 @@
 
 | サービス | ポート | ホスト公開 | 備考 |
 |---|---|---|---|
-| db | 5432 | なし（`scripts/db-forward.sh` が都度 127.0.0.1:55432 へ forward。`DB_FORWARD_PORT` で変更可） | Postgres 18（`pg-data`）。初回に `scripts/postgres-init/` が server ロールを作る |
+| db | 5432 | なし（`scripts/db-forward.sh` が都度 127.0.0.1:55432 へ forward。`DB_FORWARD_PORT` で変更可） | Postgres 18（`pg-data`）。初回に `scripts/postgres-init/` が server ロールと system ロールを作る |
 | server | 4000 | なし（web の `/api` proxy・compose 網内で到達） | `.env.database` + `.env.server` |
 | web | 5173 | あり（唯一の外向き口。remote は `127.0.0.1:<port>`） | Vite dev server, `.env.web` |
 | worker | - | なし | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
@@ -159,7 +160,7 @@
   そのまま使う。本番はイメージ同梱の `migrate.js` で流す（AGENTS.md）。dev DB には `.env.database` を読む `db:migrate:dev` を使う。
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:migrate:dev && pnpm db:seed`。dev のスキーマ変更も `pnpm db:migrate:dev`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（Postgres の管理ロール・server ロールと接続先）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
+  - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。

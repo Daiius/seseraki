@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）と Postgres への移行まで本番反映済み・所有者スコープ以降は未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。所有者ゲートの撤去と新規登録の開放・ブラウザ解析以降は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 

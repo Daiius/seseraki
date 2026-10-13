@@ -3,7 +3,7 @@
 本章は、DB を MySQL 8.4 から **Postgres 18** へ移す設計を定める。
 [14](./14-multi-user.md) §9 の「当面 MySQL のまま」を改め、**所有者スコープ（[14](./14-multi-user.md) §4）の前に**移る。
 
-> **本番切り替え済み**（2026-10-06）。リポジトリ側の後片付けも済み（移行エントリは [16](./16-analysis-storage.md) の実装で、`mysql2` と dev の `db-mysql` はその後に外した。§9 の 5）。残りは所有者スコープ（§11）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
+> **本番切り替え済み**（2026-10-06）。リポジトリ側の後片付けも済み（移行エントリは [16](./16-analysis-storage.md) の実装で、`mysql2` と dev の `db-mysql` はその後に外した。§9 の 5）。所有者スコープ（§11）も PR 1〜3 まで本番反映済み（2026-10-12）で、残りは所有者ゲートの撤去（§11 の 4）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
 > 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres を Postgres 18 に当てた）で確かめた事実を §3・§5 に書く。
 
 ---
@@ -297,5 +297,5 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
    - ⚠ 表の所有者（管理ロール）には RLS が効かない（`FORCE ROW LEVEL SECURITY` を付けない限り）。server ロールは表の所有者でないので効く。
      🔒 **`FORCE` は付けない**——付けると管理ロールのマイグレーションの埋め戻し（`UPDATE … FROM kifus`）が `app.user_id` 未設定で
      **黙って 0 行**になる。アプリは表の所有者で繋がないので、FORCE が無くてもアプリの経路はすべて RLS の下にある
-3. swars を閉じる
-4. **所有者ゲートを外し、同時に新規登録を既定で開く**（[07](./07-auth-and-privacy.md) §5.2）
+3. swars を閉じる（✅ 2026-10-12。[14](./14-multi-user.md) §4.3）
+4. **所有者ゲートを外し、同時に新規登録を既定で開く**（[07](./07-auth-and-privacy.md) §5.2。**未実装**——[14](./14-multi-user.md) §10 の段階 3・4 の後に行う）

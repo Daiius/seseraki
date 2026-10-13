@@ -12,9 +12,14 @@
  * （`display-no.db.test.ts` が全エンドポイントの応答を検査する）。出題は棋譜の番号・手数・種類の組で指す。
  * worker の経路（API_KEY。`worker-routes.ts`）は内部経路なので内部 ID のまま。
  *
+ * 🔒 **ブラウザ解析の受け口と担当の切り替え（prd/14 §5.7・§5.8）は、Origin の検査と本文の大きさの上限を付ける**
+ * （`trustedOrigin` / `smallBody`）。ブラウザから届く解析結果は信用できない入力なので、検証と上限は
+ * `shared` の `analysis-limits.ts` の zod で掛ける。書き込みは他の口と同じく RLS の下の tx で行う。
+ *
  * 全員ぶんを扱う経路（worker の報告・動画解析の取り込み。API_KEY）は `worker-routes.ts`。
  */
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { zValidator as zv } from '@hono/zod-validator';
@@ -26,7 +31,17 @@ import { kifuListQuerySchema } from './kifu-list-query.js';
 import { statsTacticsQuerySchema } from './stats-tactics-query.js';
 import { auth, sessionRequired, sessionUser, settings as authSettings } from './auth.js';
 import { devLoginRoutes } from './dev-login.js';
-import { getProgressFor, clearProgress } from './analysis-progress.js';
+import { getProgressFor, clearProgress, clearProgressForOwner } from './analysis-progress.js';
+import {
+  analysisAssigneeOf,
+  canChooseWorker,
+  pendingBrowserKifuNos,
+  recordAnalysisFailure,
+  startBrowserAnalysis,
+  submitAnalysisChunk,
+  switchAnalysisAssignee,
+} from './analysis-report.js';
+import { originRequired } from './middlewares.js';
 import {
   EvaluationQueueFullError,
   getEvaluationResult,
@@ -35,6 +50,10 @@ import {
 import { lookupKifuEvaluation } from './position-kifu-reuse.js';
 import {
   applyMove,
+  BROWSER_ANALYSIS_LIMITS,
+  browserAnalysisChunkSchema,
+  browserAnalysisErrorSchema,
+  browserAnalysisStartSchema,
   buildPositions,
   parseSfen,
   positionSfen,
@@ -165,6 +184,19 @@ if (authSettings.isDev) {
   app.route('/dev', devLoginRoutes(auth));
 }
 
+/**
+ * 書き込み口の Origin の検査（prd/14 §5.8）。🔒 一覧は Better Auth の `trustedOrigins` と同じもの
+ * （`BETTER_AUTH_URL` のオリジンと `CORS_ORIGINS`。二重管理にしない）。
+ * ⚠ 掛けているのはブラウザ解析の受け口と担当の切り替えだけ（既存の書き込み口へ広げるのは別の変更）
+ */
+const trustedOrigin = originRequired(authSettings.trustedOrigins);
+
+/** 本文の大きさの上限（prd/14 §6.2）。超えたら 413（zod の検証より前に、読み切る前に断る） */
+const smallBody = bodyLimit({
+  maxSize: BROWSER_ANALYSIS_LIMITS.bodyMaxBytes,
+  onError: (c) => c.json({ error: 'body too large' } as const, 413),
+});
+
 /** 出題局面（`moveNumber` 手を指す直前の局面）。指し手列が足りなければ null */
 function drillPosition(usiMoves: string[] | null, moveNumber: number): BoardState | null {
   if (!usiMoves || moveNumber > usiMoves.length) return null;
@@ -204,8 +236,15 @@ const route = app
   // --- 認証 ---
   // ログイン中の自分（prd/07 §5.3）。未ログインは 401・所有者以外は 403（所有者ゲート。§5.1）。
   // web のルートガードがこれを叩く。⚠ /auth/* の外に置く（/auth/* は Better Auth が丸ごと受ける）。
-  // 表に触れないのでトランザクションを開かない（`sessionUser`）
-  .get('/me', sessionUser, (c) => c.json({ userId: c.get('userId') }))
+  // 解析の担当（prd/14 §5.7）も返す——web は「解析が終わったか」の判定と、ブラウザ解析を回すかをこれで決める。
+  // `canChooseWorker` は担当に `worker` を選べるか（所有者だけ）
+  .get('/me', sessionRequired, async (c) => {
+    const userId = c.get('userId');
+    const analysisAssignee = await analysisAssigneeOf(c.get('tx'), userId);
+    // セッションはあるのにユーザーの行が無い（消された直後）。未ログインと同じに扱う
+    if (analysisAssignee === null) return c.body(null, 401);
+    return c.json({ userId, analysisAssignee, canChooseWorker: canChooseWorker(userId) });
+  })
   // --- Web 向け（セッション認証 + ユーザーとして開いたトランザクション） ---
   .get('/kifus', sessionRequired, zv('query', kifuListQuerySchema), async (c) =>
     c.json(await listKifus(c.get('tx'), c.get('userId'), c.req.valid('query'))),
@@ -283,6 +322,28 @@ const route = app
         .set({ displayName })
         .where(eq(users.id, c.get('userId')));
       return c.json({ ok: true } as const);
+    },
+  )
+  // 解析の担当の切り替え（prd/14 §5.7）。🔒 `worker` を選べるのは所有者だけ（他は 403）。
+  // 同じ tx で、そのユーザーの未完了の棋譜の世代を進める（途中の解析は消す。`switchAnalysisAssignee`）。
+  // 同じ値を送っても何も起きない（`changed: false`）
+  .put(
+    '/users/me/analysis-assignee',
+    trustedOrigin,
+    smallBody,
+    sessionRequired,
+    zv('json', z.object({ assignee: z.enum(['worker', 'browser']) })),
+    async (c) => {
+      const userId = c.get('userId');
+      const result = await switchAnalysisAssignee(c.get('tx'), userId, c.req.valid('json').assignee);
+      if (result.status === 'forbidden') {
+        return c.json({ error: 'この担当は選べません' } as const, 403);
+      }
+      if (result.status === 'not-found') return c.json({ error: 'not found' } as const, 404);
+      const changed = result.status === 'switched';
+      // 切り替え前の解析の進捗を落とす（**コミットの後**。以降に届く旧世代の報告は世代と担当の照合で弾かれる）
+      if (changed) c.get('afterCommit')(() => clearProgressForOwner(userId));
+      return c.json({ ok: true, analysisAssignee: result.assignee, changed } as const);
     },
   )
   .post(
@@ -465,6 +526,15 @@ const route = app
       // 手数の有無や書き方の揺れで同じ局面が別扱いになるのを防ぐ（prd/12 §2.4）
       const normalized = positionSfen(state);
       const userId = c.get('userId');
+
+      // 🔒 **解析の担当が `worker` のユーザーだけ**（prd/14 §5.7・prd/12 §2.4）。この口は手元 worker に
+      // ジョブを積むので、絞らないとログインした誰もが所有者の worker を使える。
+      // ⚠ 棋譜解析からの再利用（下）より前に断る——担当 `browser` の検討盤はブラウザで評価する設計で、
+      // 一部の局面だけ答えが返る口にしない。出題の解答の評価（`drill-engine.ts`）は絞らない
+      // （出題を持つのは手元 worker で解析した棋譜の持ち主だけ。prd/14 §5.7）
+      if ((await analysisAssigneeOf(c.get('tx'), userId)) !== 'worker') {
+        return c.json({ error: 'この機能は使えません' } as const, 403);
+      }
 
       // 🔴 **エンジンにジョブを積む前に、既存の棋譜解析から引く**（prd/12 §2.6）。
       // 検討の起点は閲覧中の棋譜の局面なので、数手動かすまでは解析済みの局面を
@@ -739,6 +809,111 @@ const route = app
       c.get('afterCommit')(() => clearProgress(id));
       return c.json({ ok: true }, 201);
     },
+  )
+  // --- ブラウザ解析の受け口（prd/14 §5.8）---
+  // 担当が `browser` のユーザーのブラウザが、自分の棋譜を解析して報告する。手元 worker の
+  // 取得・チャンクの報告・失敗の報告（`worker-routes.ts`）に対応する 3 つで、書き込みの本体は共用
+  // （`analysis-report.ts`）。🔒 RLS の下の tx で書き、棋譜は番号で指す（他人の番号は 404）。
+  //
+  // 開始: 世代・再開位置・指し手列・解析の設定を返す。途中の解析が別のエンジン（ビルド・評価関数）の
+  // ものなら、ここで行を消して世代を進める（prd/14 §5.9）。担当が `browser` でなければ 409
+  .post(
+    '/kifus/:no/analysis/start',
+    trustedOrigin,
+    smallBody,
+    sessionRequired,
+    zv('param', kifuNoParam),
+    zv('json', browserAnalysisStartSchema),
+    async (c) => {
+      const { no } = c.req.valid('param');
+      const started = await startBrowserAnalysis(c.get('tx'), c.get('userId'), no, c.req.valid('json'));
+      if (started === null) return c.json({ error: 'not found' } as const, 404);
+      if (started.status === 'wrong-assignee') {
+        return c.json({ error: '解析の担当がブラウザではありません' } as const, 409);
+      }
+      return c.json(started);
+    },
+  )
+  // チャンクの報告。段階（quick）・実行環境（wasm）・MultiPV（1）・定跡（なし）は **server が固定する**
+  // （prd/14 §5.7。ブラウザの 1 段は quick として保存し、full の席には入れない）。
+  // 破棄（古い世代・担当違い・完了済み・別のエンジン）は 201 `applied: false`——ブラウザは開始からやり直す
+  .post(
+    '/kifus/:no/analysis/chunks',
+    trustedOrigin,
+    smallBody,
+    sessionRequired,
+    zv('param', kifuNoParam),
+    zv('json', browserAnalysisChunkSchema),
+    async (c) => {
+      const { no } = c.req.valid('param');
+      const { revision, analyses, engineName, movetimeMs, engineBuild, evalHash, fvScale, threads, hashMb } =
+        c.req.valid('json');
+      const outcome = await submitAnalysisChunk(c.get('tx'), { ownerId: c.get('userId'), no }, {
+        revision,
+        assignee: 'browser',
+        run: {
+          profile: 'quick',
+          engineName: engineName ?? null,
+          movetimeMs,
+          targetDepth: null,
+          multiPv: 1,
+          runtime: 'wasm',
+          engineBuild,
+          evalHash,
+          fvScale,
+          threads,
+          hashMb,
+          book: false,
+        },
+        // 開始の口を通さずに別のエンジンの結果を重ねさせない（prd/14 §5.9）
+        sameEngine: { engineBuild, evalHash },
+        analyses,
+      });
+      switch (outcome.status) {
+        case 'not-found':
+          return c.json({ error: 'not found' } as const, 404);
+        case 'out-of-range':
+          return c.json({ error: 'moveNumber out of range' } as const, 400);
+        case 'not-contiguous':
+          return c.json({ error: 'moveNumber not contiguous' } as const, 400);
+        case 'ignored':
+          return c.json({ ok: true, applied: false, completed: false } as const, 201);
+        case 'applied':
+          return c.json({ ok: true, applied: true, completed: outcome.completed } as const, 201);
+      }
+    },
+  )
+  // 失敗の報告（`analysisError`。prd/05 §1.1a）。記録するのは同じ世代で、quick が未完了のときだけ
+  .post(
+    '/kifus/:no/analysis/error',
+    trustedOrigin,
+    smallBody,
+    sessionRequired,
+    zv('param', kifuNoParam),
+    zv('json', browserAnalysisErrorSchema),
+    async (c) => {
+      const { no } = c.req.valid('param');
+      const { revision, error } = c.req.valid('json');
+      const result = await recordAnalysisFailure(c.get('tx'), { ownerId: c.get('userId'), no }, {
+        revision,
+        error,
+        assignee: 'browser',
+        stage: 'quick',
+      });
+      if (result === null) return c.json({ error: 'not found' } as const, 404);
+      return c.json({ ok: true, applied: result.applied } as const, 201);
+    },
+  )
+  // バックグラウンド解析（prd/14 §5.10「使用中は常に」）が次に解析する棋譜の番号。新しい順。
+  // 担当が `browser` でなければ空
+  .get(
+    '/analysis/pending',
+    sessionRequired,
+    zv('query', z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) })),
+    async (c) =>
+      c.json({
+        kifuNos: await pendingBrowserKifuNos(c.get('tx'), c.get('userId'), c.req.valid('query').limit),
+      }),
   )
   .delete(
     '/kifus/:no',

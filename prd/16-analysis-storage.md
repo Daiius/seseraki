@@ -126,6 +126,9 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 ### 4.3 作り直し
 
 - `reanalyze` と動画解析の差し替えは**行を消す**（今の `moveAnalyses` の DELETE と同じ位置）。前世代の全消去が 1 箇所で済むのは今と同じ
+- **ブラウザ解析の開始の口が途中の解析をやり直すとき**（決定・2026-10-14・**未実装**。§8・[14](./14-multi-user.md) §5.9）も、
+  同じく**行を消して `analysisRevision` を進める**（行ロックの下で）。§4.1 のチャンクは既存の `detail` に重ねるので、
+  消さずに先頭から送り直す形にはしない。完了済みの行はこの経路では消さない
 
 ## 5. 読み出し
 

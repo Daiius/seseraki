@@ -10,3 +10,4 @@ export * from './position-edit';
 export * from './mate-line';
 export * from './cpl';
 export * from './engine-manifest';
+export * from './analysis-limits';

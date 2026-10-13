@@ -28,7 +28,7 @@
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
 | [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）と Postgres への移行まで本番反映済み・所有者スコープ以降は未実装） |
-| [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・MySQL 側の後片付けは未） |
+| [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
 > 仕様策定の経緯（grill ログ）: [`prd/_grilling/decisions.md`](./prd/_grilling/decisions.md)
@@ -37,7 +37,7 @@
 ## 技術スタック / 構成
 
 - フルスタック TypeScript の **pnpm monorepo**。
-- **DB**: Postgres 18（[prd/15](./prd/15-postgres.md)。2026-10-06 に MySQL 8.4 から切り替え済み。MySQL 側の後片付けは未）/ **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
+- **DB**: Postgres 18（[prd/15](./prd/15-postgres.md)。2026-10-06 に MySQL 8.4 から切り替え済み）/ **API**: Hono(RPC) / **ORM**: Drizzle ORM 1.0（beta 追従）
 - **Front**: React 19 + Vite + TanStack Router + TailwindCSS v4 + daisyUI
   - **メモ化は React Compiler に委ねる**。`useMemo` / `useCallback` / `React.memo` は原則書かない
     （`packages/web/vite.config.ts` で `reactCompilerPreset` を有効化済み）。
@@ -76,7 +76,7 @@
 ## 開発コマンド
 
 ```bash
-pnpm dev          # docker compose up --build --watch で全サービス起動（db, db-mysql, server, web, worker）
+pnpm dev          # docker compose up --build --watch で全サービス起動（db, server, web, worker）
 pnpm typecheck    # 全パッケージ tsc --noEmit
 pnpm build        # 全パッケージのビルド
 pnpm db:generate  # schema 差分から drizzle/ にバージョン管理マイグレーションを生成（DB には繋がない）
@@ -205,7 +205,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > （`import.meta.url`）で解くので、dev では `packages/server/drizzle`、イメージ内では `/app/drizzle`
 > を指す。**`migrate.ts` をパッケージルート直下から動かすとこの対応が壊れる。**
 
-> **MySQL からのデータ移行エントリ（`migrate-from-mysql.js`）は外した**（2026-10-08・[prd/16](./prd/16-analysis-storage.md) の実装で、移行先の解析の表が変わったため）。移行のやり直しが要るときは、本番で固定中の切り替え時のイメージ（エントリを含む）で移し、その後に新しいイメージの `migrate.js` で詰め替える（[prd/15](./prd/15-postgres.md) §6）。
+> **MySQL からのデータ移行エントリ（`migrate-from-mysql.js`）は外した**（2026-10-08・[prd/16](./prd/16-analysis-storage.md) の実装で、移行先の解析の表が変わったため）。MySQL のドライバ（`mysql2`）と dev の `db-mysql` も後片付けで外したので、**今のコードに移行をやり直す経路は無い**。移行の設計と切り替えの手順は記録として [prd/15](./prd/15-postgres.md) §6・§7 に残してある。
 
 > **戦型ラベルの一括再判定**（`prd/01` §6.4「判定ロジックを更新したら一括再判定する」）:
 > 判定を更新したら流す。**既定は dry-run**（変更の要約のみ）、`REDETECT_APPLY=1` で実書込。

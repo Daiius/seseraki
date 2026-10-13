@@ -3,7 +3,7 @@
 本章は、DB を MySQL 8.4 から **Postgres 18** へ移す設計を定める。
 [14](./14-multi-user.md) §9 の「当面 MySQL のまま」を改め、**所有者スコープ（[14](./14-multi-user.md) §4）の前に**移る。
 
-> **本番切り替え済み**（2026-10-06）。残りは MySQL 側の後片付け（移行エントリは [16](./16-analysis-storage.md) の実装で外した。`mysql2` と dev の `db-mysql` が残る）と、所有者スコープ（§11）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
+> **本番切り替え済み**（2026-10-06）。リポジトリ側の後片付けも済み（移行エントリは [16](./16-analysis-storage.md) の実装で、`mysql2` と dev の `db-mysql` はその後に外した。§9 の 5）。残りは所有者スコープ（§11）。決定の経緯は [決定ログ](./_grilling/decisions.md)「Postgres への移行」。
 > 試作（drizzle 1.0.0-rc.3・better-auth 1.6・node-postgres を Postgres 18 に当てた）で確かめた事実を §3・§5 に書く。
 
 ---
@@ -173,14 +173,17 @@ MySQL では JS 側で `crypto.randomUUID()` を振っていた。[07](./07-auth
 
 ## 6. データ移行
 
+> ⚠ **移行は済み、エントリと MySQL のドライバはリポジトリから外した**（エントリと本体は [16](./16-analysis-storage.md) の実装で、`mysql2` は後片付けで。§9 の 5）。
+> 本節は移行時の設計の記録で、挙げているファイルは git の履歴にある。
+
 ### 6.1 方式
 
 🔒 **自前の TS スクリプト**を**本番イメージに同梱するエントリ**（`/app/migrate-from-mysql.js`）にする。
-VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイメージだけ MySQL のドライバを一時的に持つ（§9 の後片付けで外す）。
+VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイメージだけ MySQL のドライバを一時的に持つ（§9 の後片付けで外した）。
 
 - 汎用の移行ツール（pgloader）は使わない。**日時の解釈（MySQL の壁時計 ＝ UTC）を自分のコードで握る**ためと、
   件数の照合・制約の検査を同じ工程に入れるため
-- 実装: エントリ `packages/server/migrate-from-mysql.ts`、本体 `packages/server/src/mysql-migration/`
+- 実装（当時）: エントリ `packages/server/migrate-from-mysql.ts`、本体 `packages/server/src/mysql-migration/`
   （`mysql-source.ts` = MySQL の読み取り / `write.ts` = Postgres への書き込み・違反の列挙・件数の照合 / `convert.ts` = 変換の純粋な関数 /
   `plan.ts` = 移す表と順序）。**読み取りと書き込みを分けてある**ので、書き込み側は MySQL 無しに行を注入して実 DB テスト（§8.2）で確かめる
 - 接続: Postgres は **管理ロール**（`DB_ADMIN_*`）。identity の採番を `ALTER TABLE … RESTART WITH` で合わせるには表の所有者が要り、
@@ -250,7 +253,7 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 ### 8.1 dev
 
-- compose の `db` を Postgres 18 にする。データ移行の練習の間は MySQL を `db-mysql`（旧 volume のまま・server は使わない）として並べて置き、**後片付けの PR（§9 の 5）で外す**
+- compose の `db` を Postgres 18 にする。データ移行の練習の間は MySQL を `db-mysql`（旧 volume のまま・server は使わない）として並べて置いた（**後片付けの PR（§9 の 5）で外した**）
 - dev のデータは**本番と同じ移行スクリプト**で dev の MySQL から移す（本番の練習を兼ねる）
 - `db:push` はやめ、`db:migrate` に一本化する（§3.4）
 
@@ -266,9 +269,9 @@ VPS の compose 網の中で MySQL から読み、Postgres へ書く。そのイ
 
 1. **PRD**（本章と関連する章・AGENTS.md）
 2. **移行本体**: schema・クエリ・dev compose・実 DB テストの土台・制約・トリガー・一度きりのスクリプトの削除・Better Auth のアダプタ
-3. **データ移行エントリ**（§6）。dev で練習する（**エントリは実装済み**。dev の手順は AGENTS.md「MySQL からのデータ移行」）
+3. **データ移行エントリ**（§6）。dev で練習する（エントリは切り替えの後に外した。§6 の冒頭）
 4. 本番の切り替え（§7。PR ではなく作業）
-5. **後片付け**（切り替えの 1 週間後）: 移行エントリと MySQL のドライバ・dev compose の `db-mysql` を外す
+5. **後片付け**（切り替えの 1 週間後）: 移行エントリと MySQL のドライバ・dev compose の `db-mysql` を外す（**済み**。⚠ 本番の MySQL 側の DB を消すのは §7「戻し方」の作業で、PR の外）
 
 ## 10. 運用
 

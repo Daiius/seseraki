@@ -64,6 +64,7 @@
 |---|---|
 | `packages/commentator` | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
 | `packages/mcp` | REST をツール定義に翻訳する薄い stdio MCP サーバ（[prd/12](./prd/12-position-lab.md) §4） |
+| `packages/engine-wasm` | ブラウザ解析のエンジン（やねうら王の WASM ビルド。GPL-3.0 の部分を分ける・成果物はコミットしない。[prd/14](./prd/14-multi-user.md) §5.5） |
 
 > ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
 > 詰み筋の分類（`mate-line.ts` の `classifyMateLine`。[prd/05](./prd/05-analysis.md) §2.2）と

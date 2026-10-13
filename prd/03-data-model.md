@@ -294,6 +294,7 @@ kifuAnalyses
   やねうら王は再ビルドで `id name` の版文字列が変わるため、識別子で「別エンジン＝やり直し」と判定すると
   **全棋譜の意図しない全再解析**が起きる。構成変更時の作り直しは `reanalyze` の運用で受ける
   （[05](./05-analysis.md) §1.2 / §1.1d）。
+  ⚠ ブラウザ解析では `runs` に項目を足し、途中の解析に限って例外を置く（決定・2026-10-14・未実装。[16](./16-analysis-storage.md) §3.1・§8）。
 - 🔒 **検索・集計に使う値は列に出し、表示にしか使わない値は `detail` に詰める**（[16](./16-analysis-storage.md) §1）。
   棋譜をまたいで 1 手ごとの値を SQL で引く箇所は「詰み見逃し」の述語だけで、`minMate*` の比較になる
   （`minMateSente <= limit`。[09](./09-analytics.md) §3.1）。🔴 **`detail` を書き換えたら `minMate*` を同じトランザクションで計算し直す。**
@@ -313,7 +314,7 @@ kifuAnalyses
 | quick が末尾を越えて飛ばないこと | **quick のチャンクは先頭が `detail` の長さ以下**。`fullCount` は変えない |
 | 段階の後退防止 | quick のチャンクのうち **`moveNumber < fullCount` の局面は捨てる**（既存が full の局面を quick で上書きしない） |
 | 再送が同じ結果になること | 重なった局面は上書き（以前の `UNIQUE(kifuId, moveNumber)` による upsert と同じ性質） |
-| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:no/reanalyze`。submit 側は消さない） |
+| 前世代の全消去 | **`reanalyze`（と動画棋譜の差し替え）の DELETE が唯一の経路**（`POST /api/kifus/:no/reanalyze`。submit 側は消さない）。⚠ ブラウザ解析で経路が 2 つ増える（決定・2026-10-14・**未実装**）: 開始の口による**途中の解析**のやり直しと、解析の担当の切り替え。どちらも途中の解析だけを消し（担当の切り替えは、quick 完了・full が途中の棋譜も含む）、世代を進める（[16](./16-analysis-storage.md) §4.3）。submit 側が消さないことは変えない |
 | 完了の確定 | **段階ごとの**局面数が `usiMoves.length + 1` に達したときの確定（submit と同一トランザクション内で server が判定）。quick = `detail` の長さ / full = `fullCount` |
 
 - 範囲と連続性を保証すれば `detail` に隙間は生じないので、**長さ = `usiMoves.length + 1` ⇒ 全局面が揃っている**が成り立つ。

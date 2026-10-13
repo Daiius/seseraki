@@ -122,6 +122,10 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
+- **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14・**未実装**。[14](./14-multi-user.md) §5.5）:
+  - エンジン（WASM）は `packages/engine-wasm` でビルドする。**成果物はコミットせず**、ビルドして配信先へ置く。
+  - **評価関数は `assets/` の世代管理の外の別ディレクトリに、内容ハッシュ入りの名前で置く。`deploy:web` の削除の対象にしない**。
+    端末の側は HTTP キャッシュに任せる。
 - 人の認証は Google ログイン（Better Auth・server 側のセッション。[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
 - **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する

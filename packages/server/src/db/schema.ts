@@ -91,6 +91,8 @@ function textEnum<const T extends readonly [string, ...string[]]>(values: T) {
 }
 
 const ANALYSIS_PROFILE = textEnum(['quick', 'full']);
+/** 解析の担当（`users.analysisAssignee`。prd/14 §5.7） */
+const ANALYSIS_ASSIGNEE = textEnum(['worker', 'browser']);
 const KIFU_SOURCE = textEnum(['manual', 'swars', 'video']);
 const SIDE = textEnum(['sente', 'gote']);
 const TACTIC_SIDE = textEnum(['sente', 'gote', 'both']);
@@ -215,6 +217,18 @@ export const users = table('users', {
    * ⚠ `max(displayNo) + 1` で振らないのは、末尾を消すと番号が再利用されるため
    */
   lastKifuNo: integer().notNull().default(0),
+  /**
+   * **解析の担当**（prd/14 §5.7）。このユーザーの棋譜を誰が解析するか:
+   * `worker` = 手元 worker / `browser` = そのユーザーのブラウザ（WASM エンジン）。
+   *
+   * - **既定は `browser`**。既存の所有者の行だけマイグレーションが `worker` に埋め戻す
+   * - 🔒 **`worker` を選べるのは所有者だけ**（手元 worker は所有者専用。下の CHECK が DB でも守る）
+   * - 🔴 **書き換えるのは `analysis-report.ts` の `switchAnalysisAssignee` だけ。** 切り替えは同じ tx で
+   *   そのユーザーの未完了の棋譜の世代を進める（途中の解析は消す）。列だけを UPDATE すると、切り替え前に
+   *   始めた側の報告が切り替え後の解析に混ざる
+   * - 手元 worker の取得・報告、ブラウザ解析の受け口、検討盤の評価の要求がこの列を読む
+   */
+  analysisAssignee: ANALYSIS_ASSIGNEE.column().notNull().default('browser'),
   createdAt: timestamptz().notNull().defaultNow(),
   /** 更新は DB のトリガー（`set_updated_at`）が書く（prd/15 §3.4）。以下の表も同じ */
   updatedAt: timestamptz().notNull().defaultNow(),
@@ -222,6 +236,12 @@ export const users = table('users', {
   // `initialDisplayName` は空なら `(未設定)` を入れる
   check('users_display_name_not_empty', sql`${table.displayName} <> ''`),
   check('users_last_kifu_no_nonneg', sql`${table.lastKifuNo} >= 0`),
+  ANALYSIS_ASSIGNEE.check('users_analysis_assignee_check', table.analysisAssignee),
+  // 手元 worker は所有者専用（prd/14 §5.7）。所有者の ID は `users.ts` の `OWNER_USER_ID`（"1"）
+  check(
+    'users_analysis_assignee_worker_owner_only',
+    sql`${table.analysisAssignee} <> 'worker' or ${table.id} = '1'`,
+  ),
 ]);
 
 /**

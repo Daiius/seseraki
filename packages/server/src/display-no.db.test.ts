@@ -489,7 +489,11 @@ describe('🔒 web 向けの API に内部 ID を出さない（prd/14 §4.4）'
   });
 
   it('番号で返していることを個別にも確かめる', async () => {
-    const list = (await (await app.request('/api/kifus')).json()) as { kifus: { no: number; title: string }[] };
+    // ⚠ 題で絞って引く。DATABASE はファイル間で共有なので、所有者の棋譜が 1 ページ（50 件）を超えると
+    // 絞らない一覧の 1 ページ目にこの棋譜が載らない（ファイルの順は実行ごとに変わりうる）
+    const list = (await (await app.request('/api/kifus?q=display-no')).json()) as {
+      kifus: { no: number; title: string }[];
+    };
     expect(list.kifus.find((k) => k.title === 'display-no')?.no).toBe(analyzed.displayNo);
     const detail = (await (await app.request(`/api/kifus/${analyzed.displayNo}`)).json()) as { no: number };
     expect(detail.no).toBe(analyzed.displayNo);

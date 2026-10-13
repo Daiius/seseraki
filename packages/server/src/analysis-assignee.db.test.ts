@@ -15,7 +15,7 @@
  *   所有者ゲート（prd/07 §5.1）があるので、API は所有者として叩く。所有者以外（担当 `browser`）は関数で確かめる。
  */
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
 import { client, db, type Tx } from './db/index.js';
@@ -133,8 +133,20 @@ async function insertUser(): Promise<string> {
 }
 
 /** 指し手列のある未解析の棋譜を 1 局（番号は採番を通す） */
-const newKifu = (ownerId: string, values: Partial<NewKifu> = {}) =>
-  db.transaction((tx) => insertKifu(tx, { title: 't', kifText: '', ownerId, usiMoves: MOVES, ...values }));
+const newKifu = async (ownerId: string, values: Partial<NewKifu> = {}) => {
+  const row = await db.transaction((tx) =>
+    insertKifu(tx, { title: 't', kifText: '', ownerId, usiMoves: MOVES, ...values }),
+  );
+  if (ownerId === OWNER) ownerKifuIds.push(row.id);
+  return row;
+};
+
+/**
+ * このファイルが所有者（"1"）に作った棋譜。**最後に消す**——DATABASE はファイル間で共有で、所有者の一覧は
+ * 1 ページ 50 件。ここで増やしたまま残すと、所有者の一覧の 1 ページ目を見る他のファイルのテストが
+ * 自分の棋譜を見つけられなくなる（ファイルの順は実行ごとに変わりうる）
+ */
+const ownerKifuIds: number[] = [];
 
 async function stateOf(id: number) {
   const [row] = await db
@@ -182,8 +194,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // 🔒 他のファイルのために、所有者の担当を worker に戻す
+  // 🔒 他のファイルのために、所有者の担当を worker に戻し、所有者に作った棋譜を消す
   await switchOwner('worker');
+  if (ownerKifuIds.length > 0) await db.delete(kifus).where(inArray(kifus.id, ownerKifuIds));
   process.env.API_KEY = savedApiKey;
   resetProgress();
   resetEvaluations();

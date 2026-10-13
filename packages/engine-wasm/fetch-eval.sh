@@ -159,16 +159,12 @@ fi
 
 verify_eval "$SOURCE"
 
+# 順序: 一時の名前で置いて確かめる → 名前を付け替える → manifest を切り替える → 以前のものを消す。
+# 以前の評価関数は manifest を切り替え終わるまで消さない（write_manifest の最後で消す）。
+# 途中で失敗しても、残っている manifest が指すファイルは残る。
 mkdir -p "$(dirname "$TARGET")"
-# 配信物の形を「今の評価関数だけ」に保つ。以前の評価関数は消す。
-for old in "$DIST_DIR"/eval/nn-*.bin; do
-  [ -f "$old" ] || continue
-  if [ "$old" != "$TARGET" ]; then
-    rm -f -- "$old"
-    log "以前の評価関数を消しました: $(basename "$old")"
-  fi
-done
 install -m 644 "$SOURCE" "$TARGET.tmp"
+verify_eval "$TARGET.tmp"
 mv -f "$TARGET.tmp" "$TARGET"
 # 展開した中間ファイルは残さない（アーカイブは次回のために残す）。
 if [ -z "$FROM" ]; then rm -f -- "$SOURCE"; fi

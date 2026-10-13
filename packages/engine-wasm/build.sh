@@ -127,31 +127,34 @@ grep -q -- "$UP_EXPORT_NAME" "$OUT_DIR/$ENGINE_JS" ||
 ENGINE_DIR=$(engine_content_hash "$OUT_DIR")
 [[ "$ENGINE_DIR" =~ ^[0-9a-f]{16}$ ]] || die "内容ハッシュを計算できませんでした。"
 
-mkdir -p "$DIST_DIR"
-# 配信物の形を「今のビルドだけ」に保つ。以前のビルドのディレクトリ（16 桁の 16 進）は消す。
-for old in "$DIST_DIR"/*/; do
-  [ -d "$old" ] || continue
-  name=$(basename "$old")
-  if [[ "$name" =~ ^[0-9a-f]{16}$ ]] && [ "$name" != "$ENGINE_DIR" ]; then
-    rm -rf -- "${DIST_DIR:?}/$name"
-    log "以前のビルドを消しました: $name"
-  fi
-done
+# 順序: 新しいものを一時の場所に揃えて確かめる → 置く → 記録 → manifest を切り替える → 以前のものを消す。
+# 以前のビルドは manifest を切り替え終わるまで消さない（write_manifest の最後で消す）。
+# 途中で失敗しても、残っている manifest が指すファイルは残る。
+mkdir -p "$DIST_DIR" "$CACHE_DIR"
+if engine_files_present "$DIST_DIR/$ENGINE_DIR" &&
+  [ "$(engine_content_hash "$DIST_DIR/$ENGINE_DIR")" = "$ENGINE_DIR" ]; then
+  # 同じ内容がもう置いてある（--force で同じ物ができた）。置き直さない。
+  log "同じ内容のエンジンが置いてあるので、置き直しません: $ENGINE_DIR"
+else
+  STAGE_DIR=$DIST_DIR/$ENGINE_DIR.tmp
+  rm -rf -- "${STAGE_DIR:?}"
+  mkdir -p "$STAGE_DIR"
+  for f in "$ENGINE_JS" "$ENGINE_WORKER" "$ENGINE_WASM"; do
+    install -m 644 "$OUT_DIR/$f" "$STAGE_DIR/$f"
+  done
+  [ "$(engine_content_hash "$STAGE_DIR")" = "$ENGINE_DIR" ] ||
+    die "集めたファイルの内容がビルドの成果物と一致しません（$STAGE_DIR）。"
+  # ここに来るのは、同じ名前の場所が無いか、中身が壊れているときだけ。
+  rm -rf -- "${DIST_DIR:?}/$ENGINE_DIR"
+  mv "$STAGE_DIR" "$DIST_DIR/$ENGINE_DIR"
+fi
 
-rm -rf -- "${DIST_DIR:?}/$ENGINE_DIR.tmp"
-mkdir -p "$DIST_DIR/$ENGINE_DIR.tmp"
-for f in "$ENGINE_JS" "$ENGINE_WORKER" "$ENGINE_WASM"; do
-  install -m 644 "$OUT_DIR/$f" "$DIST_DIR/$ENGINE_DIR.tmp/$f"
-done
-rm -rf -- "${DIST_DIR:?}/$ENGINE_DIR"
-mv "$DIST_DIR/$ENGINE_DIR.tmp" "$DIST_DIR/$ENGINE_DIR"
-
-mkdir -p "$CACHE_DIR"
 printf '%s\n' \
   "YANEURAOU_SHA=$UP_YANEURAOU_SHA" \
   "EMSDK_IMAGE=$UP_EMSDK_IMAGE" \
   "BUILD_TARGET=$UP_BUILD_TARGET" \
-  "ENGINE_DIR=$ENGINE_DIR" >"$STAMP_FILE"
+  "ENGINE_DIR=$ENGINE_DIR" >"$STAMP_FILE.tmp"
+mv -f "$STAMP_FILE.tmp" "$STAMP_FILE"
 
 log "エンジンを置きました: $DIST_DIR/$ENGINE_DIR"
 write_manifest

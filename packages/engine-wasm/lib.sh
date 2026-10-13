@@ -117,8 +117,29 @@ docker_is_rootless() {
   docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless
 }
 
-# エンジンと評価関数が両方揃っていれば dist/engine/manifest.json を書く。
-# 片方でも欠けていれば、古い manifest を残さない（欠けた配信物を指す manifest を置かない）。
+# manifest が指さなくなった配信物（以前のビルド・以前の評価関数・置きかけの残り）を消す。
+# manifest を切り替えた後にだけ呼ぶ。先に消すと、途中で失敗したときに古い manifest が無いファイルを指す。
+prune_dist() {
+  local keep_dir=$1 keep_eval=$DIST_DIR/$EVAL_FILE old name
+  for old in "$DIST_DIR"/*/; do
+    [ -d "$old" ] || continue
+    name=$(basename "$old")
+    if [[ "$name" =~ ^[0-9a-f]{16}(\.tmp)?$ ]] && [ "$name" != "$keep_dir" ]; then
+      rm -rf -- "${DIST_DIR:?}/$name"
+      log "以前のビルドを消しました: $name"
+    fi
+  done
+  for old in "$DIST_DIR"/eval/nn-*.bin "$DIST_DIR"/eval/nn-*.bin.tmp; do
+    [ -f "$old" ] || continue
+    if [ "$old" != "$keep_eval" ]; then
+      rm -f -- "$old"
+      log "以前の評価関数を消しました: $(basename "$old")"
+    fi
+  done
+}
+
+# エンジンと評価関数が両方揃っていれば dist/engine/manifest.json を書き、その後で以前の配信物を消す。
+# 片方でも UPSTREAM の今の値と合っていなければ manifest を置かない（ファイルは消さない）。
 write_manifest() {
   local manifest=$DIST_DIR/manifest.json
   if ! engine_up_to_date; then
@@ -142,7 +163,8 @@ write_manifest() {
   build_id=${UP_YANEURAOU_SHA:0:8}-${wasm_sha:0:12}
 
   # 値は load_kv が文字種を絞ったものと 16 進だけなので、エスケープは要らない。
-  cat >"$manifest.tmp" <<EOF
+  # 失敗は明示的に止める（呼び出し側が if の中で呼んでも、書けなかった manifest のまま先へ進んで消さない）。
+  cat >"$manifest.tmp" <<EOF || die "manifest を書けません: $manifest.tmp"
 {
   "engine": {
     "buildId": "$build_id",
@@ -171,6 +193,7 @@ write_manifest() {
   "fvScale": $UP_FV_SCALE
 }
 EOF
-  mv -f "$manifest.tmp" "$manifest"
+  mv -f "$manifest.tmp" "$manifest" || die "manifest を切り替えられません: $manifest"
   log "manifest: $manifest を書きました（buildId $build_id）。"
+  prune_dist "$ST_ENGINE_DIR"
 }

@@ -4,11 +4,11 @@ import {
   ChunkSubmitError,
   isPermanentSubmitStatus,
   leadingContiguousCandidates,
-  type AnalysisEngine,
-  type CandidateMove,
-  type MoveAnalysis,
-} from "./kifu-analysis.js";
-import type { UsiInfo, UsiSearchResult } from "./usi/types.js";
+  type UsiAnalysisEngine,
+  type UsiCandidate,
+  type UsiMoveAnalysis,
+} from "./kifu-analysis";
+import type { UsiInfo, UsiSearchResult } from "./types";
 
 /** 相掛かり序盤のサンプル（10 手 = 11 局面） */
 const MOVES = [
@@ -30,7 +30,7 @@ const MOVES = [
  */
 function createStubEngine(msPerPosition: number) {
   const positions: string[] = [];
-  const engine: AnalysisEngine = {
+  const engine: UsiAnalysisEngine = {
     setOption: () => {},
     analyze: async (position: string): Promise<UsiSearchResult> => {
       positions.push(position);
@@ -53,8 +53,8 @@ function createStubEngine(msPerPosition: number) {
 
 /** チャンクを受け取って溜める。`failAt` 回目の呼び出しでは submit 失敗を模す */
 function createChunkSink(failAt?: number) {
-  const chunks: MoveAnalysis[][] = [];
-  const onChunk = async (analyses: MoveAnalysis[]) => {
+  const chunks: UsiMoveAnalysis[][] = [];
+  const onChunk = async (analyses: UsiMoveAnalysis[]) => {
     chunks.push(analyses);
     if (chunks.length === failAt) {
       throw new ChunkSubmitError(new Error("Failed to submit analysis: 500"));
@@ -63,18 +63,16 @@ function createChunkSink(failAt?: number) {
   return { chunks, onChunk };
 }
 
-const moveNumbers = (chunks: MoveAnalysis[][]) =>
+const moveNumbers = (chunks: UsiMoveAnalysis[][]) =>
   chunks.map((chunk) => chunk.map((a) => a.moveNumber));
 
 describe("analyzeKifu のチャンク submit", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("経過時間でチャンクを区切り、全局面を欠番なく渡す", async () => {
@@ -215,21 +213,123 @@ describe("analyzeKifu のチャンク submit", () => {
     ]);
     expect(positions).toHaveLength(6);
   });
+
+  it("chunkMaxPositions を指定すると、時間に達していなくても局面数で区切る", async () => {
+    const { engine } = createStubEngine(100);
+    const { chunks, onChunk } = createChunkSink();
+
+    await analyzeKifu(engine, MOVES, {
+      chunkIntervalMs: 30_000,
+      chunkMaxPositions: 4,
+      onChunk,
+    });
+
+    expect(moveNumbers(chunks)).toEqual([
+      [0, 1, 2, 3],
+      [4, 5, 6, 7],
+      [8, 9, 10],
+    ]);
+  });
+
+  it("時間と局面数は早いほうで区切る（1 チャンクは局面数の上限を超えない）", async () => {
+    const { engine } = createStubEngine(1000);
+    const { chunks, onChunk } = createChunkSink();
+
+    // 時間なら 3 局面ごと・局面数なら 2 局面ごと。局面数が先に来る
+    await analyzeKifu(engine, MOVES, {
+      chunkIntervalMs: 3000,
+      chunkMaxPositions: 2,
+      onChunk,
+    });
+
+    expect(moveNumbers(chunks)).toEqual([[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10]]);
+
+    // 逆に局面数の上限が緩ければ、時間で切れる（既定＝指定なしと同じ並び）
+    const second = createChunkSink();
+    await analyzeKifu(createStubEngine(1000).engine, MOVES, {
+      chunkIntervalMs: 3000,
+      chunkMaxPositions: 100,
+      onChunk: second.onChunk,
+    });
+    expect(moveNumbers(second.chunks)).toEqual([
+      [0, 1, 2],
+      [3, 4, 5],
+      [6, 7, 8],
+      [9, 10],
+    ]);
+  });
+
+  it("局面数ちょうどで終わったら、空の最終チャンクで完了を確定させる", async () => {
+    const { engine } = createStubEngine(100);
+    const { chunks, onChunk } = createChunkSink();
+
+    // 4 局面（3 手）を 2 局面ずつ
+    await analyzeKifu(engine, MOVES.slice(0, 3), {
+      chunkMaxPositions: 2,
+      onChunk,
+    });
+
+    expect(moveNumbers(chunks)).toEqual([[0, 1], [2, 3], []]);
+  });
 });
 
-describe("go コマンド", () => {
+describe("ログの注入", () => {
   beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
+  it("ログは注入した出力先へ出す（局面ごとの 1 行・再開・エンジンの失敗）", async () => {
+    const info: string[] = [];
+    const error: string[] = [];
+    const log = {
+      info: (message: string) => info.push(message),
+      error: (message: string) => error.push(message),
+    };
+    const { engine } = createStubEngine(0);
+
+    await analyzeKifu(engine, MOVES, {
+      startMoveNumber: 9,
+      onChunk: async () => {},
+      log,
+    });
+
+    expect(info[0]).toBe("[Analysis] Resuming from 9/10");
+    expect(info.slice(1)).toEqual([
+      expect.stringMatching(/^\[Analysis\] 9\/10 \d+ms d5 1candidates$/),
+      expect.stringMatching(/^\[Analysis\] 10\/10 \d+ms d5 1candidates$/),
+    ]);
+    expect(error).toEqual([]);
+
+    const failing: UsiAnalysisEngine = {
+      setOption: () => {},
+      analyze: async () => {
+        throw new Error("info string Error! : Illegal Input Move : 9z9z");
+      },
+    };
+    await expect(analyzeKifu(failing, ["7g7f"], { log })).rejects.toThrow(
+      "Illegal Input Move",
+    );
+    expect(error).toEqual([
+      "[Analysis] 0/1 Engine error at position: position startpos",
+    ]);
+  });
+
+  it("ログを渡さなくても動く", async () => {
+    const { engine } = createStubEngine(0);
+    const result = await analyzeKifu(engine, ["7g7f"]);
+    expect(result).toMatchObject({ analyzed: 2, interrupted: false });
+  });
+});
+
+describe("go コマンド", () => {
   /** 送られた go コマンドを記録するエンジン */
   function createCommandRecorder() {
     const commands: string[] = [];
-    const engine: AnalysisEngine = {
+    const engine: UsiAnalysisEngine = {
       setOption: () => {},
       analyze: async (_position, goCommand): Promise<UsiSearchResult> => {
         commands.push(goCommand);
@@ -263,7 +363,7 @@ describe("go コマンド", () => {
 });
 
 /** 与えた info 行をそのまま返すエンジン（候補手の抽出だけを見るためのスタブ） */
-function createInfoEngine(infoLines: UsiInfo[]): AnalysisEngine {
+function createInfoEngine(infoLines: UsiInfo[]): UsiAnalysisEngine {
   return {
     setOption: () => {},
     analyze: async (): Promise<UsiSearchResult> => ({
@@ -276,7 +376,7 @@ function createInfoEngine(infoLines: UsiInfo[]): AnalysisEngine {
 
 /** 初期局面 1 つだけを解析させ、その候補手を取り出す */
 async function candidatesOf(infoLines: UsiInfo[]) {
-  const chunks: MoveAnalysis[][] = [];
+  const chunks: UsiMoveAnalysis[][] = [];
   await analyzeKifu(createInfoEngine(infoLines), [], {
     onChunk: async (analyses) => {
       chunks.push(analyses);
@@ -286,14 +386,6 @@ async function candidatesOf(infoLines: UsiInfo[]) {
 }
 
 describe("候補手の抽出", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("🔴 MultiPV の番号が欠けたら欠番以降を捨てて送る（server は rank 1..n の連番しか受けない。prd/16 §4.1）", async () => {
     const line = (multipv: number, move: string): UsiInfo => ({
       multipv,
@@ -383,16 +475,8 @@ describe("候補手の抽出", () => {
 });
 
 describe("hashfull（置換表の使用率）", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   /** 局面ごとに指定の hashfull を返すエンジン（統計だけの info 行として返す） */
-  function createHashfullEngine(hashfulls: (number | undefined)[]): AnalysisEngine {
+  function createHashfullEngine(hashfulls: (number | undefined)[]): UsiAnalysisEngine {
     let n = 0;
     return {
       setOption: () => {},
@@ -435,16 +519,8 @@ describe("hashfull（置換表の使用率）", () => {
 });
 
 describe("局面境界の割り込み（prd/12 §2.1）", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   /** 解析した局面と、割り込みが呼ばれた位置を混ぜて記録するエンジン */
-  function createTracingEngine(trace: string[]): AnalysisEngine {
+  function createTracingEngine(trace: string[]): UsiAnalysisEngine {
     return {
       setOption: () => {},
       analyze: async (position: string): Promise<UsiSearchResult> => {
@@ -499,7 +575,7 @@ describe("局面境界の割り込み（prd/12 §2.1）", () => {
 
   it("割り込みが投げたら解析を中断する（エンジンの再起動は呼び出し側の責務）", async () => {
     const engine = createTracingEngine([]);
-    const chunks: MoveAnalysis[][] = [];
+    const chunks: UsiMoveAnalysis[][] = [];
 
     await expect(
       analyzeKifu(engine, ["7g7f", "3c3d"], {
@@ -516,14 +592,14 @@ describe("局面境界の割り込み（prd/12 §2.1）", () => {
 });
 
 describe("leadingContiguousCandidates", () => {
-  const c = (rank: number): CandidateMove => ({
+  const c = (rank: number): UsiCandidate => ({
     rank,
     move: `m${rank}`,
     score: { type: "cp", value: 0 },
     pv: [],
     depth: 1,
   });
-  const ranks = (cs: CandidateMove[]) => cs.map((x) => x.rank);
+  const ranks = (cs: UsiCandidate[]) => cs.map((x) => x.rank);
 
   it("連番ならそのまま（rank 順に並べる）", () => {
     expect(ranks(leadingContiguousCandidates([c(2), c(1), c(3)]))).toEqual([1, 2, 3]);

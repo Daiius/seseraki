@@ -10,8 +10,8 @@
  *   SERVER_URL=http://localhost:4000 API_KEY=test-key \
  *     DOCKER_IMAGE=yaneuraou-material pnpm --filter worker test:e2e
  */
-import { UsiEngine } from "./usi/engine.js";
-import { analyzeKifu } from "./kifu-analysis.js";
+import { analyzeKifu } from "shared";
+import { consoleLog, UsiEngine } from "./usi/engine.js";
 import { createClient } from "./polling/client.js";
 
 const SERVER_URL = process.env.SERVER_URL ?? "http://localhost:4000";
@@ -67,6 +67,7 @@ async function main() {
   const result = await analyzeKifu(engine, usiMoves, {
     depth: 5,
     multiPv: 3,
+    log: consoleLog,
     startMoveNumber: kifu.analyzedCount,
     // 短時間で終わるサンプルでもチャンクが複数回に分かれるよう短めにする
     chunkIntervalMs: 1000,

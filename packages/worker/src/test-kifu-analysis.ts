@@ -8,8 +8,8 @@
  *   # または
  *   ENGINE_PATH=../../engines/out/yaneuraou pnpm --filter worker test:analysis
  */
-import { UsiEngine } from "./usi/engine.js";
-import { analyzeKifu, type MoveAnalysis } from "./kifu-analysis.js";
+import { analyzeKifu, type UsiMoveAnalysis } from "shared";
+import { consoleLog, UsiEngine } from "./usi/engine.js";
 
 // サンプル指し手列（相掛かり序盤）
 const SAMPLE_USI_MOVES = [
@@ -29,7 +29,7 @@ function createEngine(): UsiEngine {
   return new UsiEngine("docker", ["run", "-i", "--rm", image]);
 }
 
-function formatAnalysis(a: MoveAnalysis, usiMoves: string[]): string {
+function formatAnalysis(a: UsiMoveAnalysis, usiMoves: string[]): string {
   const lines: string[] = [];
   const played = usiMoves[a.moveNumber];
   const header = played
@@ -60,10 +60,11 @@ async function main() {
 
   // depth 5, MultiPV 3 で解析（MATERIAL版なのでスコアは簡易的）。
   // 結果はチャンクで渡ってくるので、表示用に手元で集める
-  const analyses: MoveAnalysis[] = [];
+  const analyses: UsiMoveAnalysis[] = [];
   const result = await analyzeKifu(engine, SAMPLE_USI_MOVES, {
     depth: 5,
     multiPv: 3,
+    log: consoleLog,
     onChunk: async (chunk) => {
       analyses.push(...chunk);
     },

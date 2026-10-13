@@ -71,7 +71,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 - **チャンクは経過時間で区切る**（前回 submit から T 秒）。抑えたいのは「失敗時に失われる計算時間」なので、
   時間で切れば**失う量がエンジン速度によらず T の目安に収まり**、開発 MATERIAL でも本番 NNUE depth20 でも
   同じ感覚で決められる（固定局面数だと同じ N で失う量が桁違いになる。§1.2・§1.4）。T の具体値は実装判断
-  （現行は `packages/worker/src/kifu-analysis.ts` の `CHUNK_INTERVAL_MS`）。
+  （現行は `packages/shared/src/usi/kifu-analysis.ts` の `CHUNK_INTERVAL_MS`）。
   - ⚠ **厳密な上限は「T + 実行中だった 1 局面分」**。境界の判定は 1 局面を解析し終えた後にしか来ないため、
     1 局面が T を超える設定（depth 20+ で数分。§1.4）では上振れする。局面の途中で送る仕組みは持たない
     （エンジンの探索を中断して部分結果を採る話になり、解析の意味が変わる）。T を選ぶときは

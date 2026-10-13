@@ -4,14 +4,23 @@
  * USI 指し手列を受け取り、一手ごとに MultiPV で解析して
  * 各局面の候補手・評価値・読み筋を記録する
  */
-import type { UsiEngine } from "./usi/engine.js";
-import type { UsiInfo, UsiScore } from "./usi/types.js";
+import type { UsiLog } from "./session";
+import type { UsiInfo, UsiScore, UsiSearchResult } from "./types";
 
-/** `analyzeKifu` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る） */
-export type AnalysisEngine = Pick<UsiEngine, "setOption" | "analyze">;
+/**
+ * `analyzeKifu` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る）。
+ * `createUsiSession` の返すセッションも、worker の `UsiEngine` もこの形を満たす。
+ */
+export interface UsiAnalysisEngine {
+  setOption(name: string, value: string): void;
+  analyze(position: string, goCommand: string): Promise<UsiSearchResult>;
+}
 
-/** 一局面での候補手 */
-export interface CandidateMove {
+/**
+ * 一局面での候補手（エンジンの出力そのままの形）。
+ * ⚠ server の `CandidateMove`（保存・応答の形）とは別物なので、名前を分けている。
+ */
+export interface UsiCandidate {
   rank: number;
   move: string;
   score: UsiScore;
@@ -20,11 +29,11 @@ export interface CandidateMove {
 }
 
 /** 一手分の解析結果 */
-export interface MoveAnalysis {
+export interface UsiMoveAnalysis {
   /** 手数 (1 = 初手の前の局面を解析) */
   moveNumber: number;
   /** エンジンの候補手リスト (MultiPV) */
-  candidates: CandidateMove[];
+  candidates: UsiCandidate[];
 }
 
 /** 棋譜 1 局の解析を終えたときのサマリ（局面ごとの結果はチャンクとして `onChunk` に渡す） */
@@ -98,9 +107,9 @@ export function isPermanentSubmitStatus(status: number): boolean {
  * prd/16 §4.1）。エンジンの info 行は MultiPV の番号が欠けることがありうるので（例: 1 と 3 だけ
  * 最終深さに届いた）、**欠番以降は捨てて送る**。正常系では何も変わらない。
  */
-export function leadingContiguousCandidates(candidates: CandidateMove[]): CandidateMove[] {
+export function leadingContiguousCandidates(candidates: UsiCandidate[]): UsiCandidate[] {
   const sorted = [...candidates].sort((a, b) => a.rank - b.rank);
-  const result: CandidateMove[] = [];
+  const result: UsiCandidate[] = [];
   for (const c of sorted) {
     if (c.rank !== result.length + 1) break;
     result.push(c);
@@ -151,7 +160,7 @@ export function buildGoCommand(options: {
  *
  * なお bound が付かないまま pv が途中で切れる経路（打ち切り時に最善手が入れ替わり、
  * 新しい手の pv がまだ埋まっていない）はここでは判別できない。そちらは
- * `ConsiderationMode` で pv を置換表から延長させて対処する（index.ts の configureEngine）。
+ * `ConsiderationMode` で pv を置換表から延長させて対処する（worker の configureEngine）。
  */
 function shouldReplace(next: UsiInfo, prev: UsiInfo): boolean {
   if (!next.pv?.length) return false;
@@ -163,9 +172,9 @@ function shouldReplace(next: UsiInfo, prev: UsiInfo): boolean {
  * MultiPV の info 行群から各 PV の最終結果を抽出する
  * (同じ multipv 番号の最後の info を採用。ただし暫定値への後退は採らない)
  *
- * 検討局面の評価（`position-eval.ts`）も同じ抽出を使う。
+ * 検討局面の評価（worker の `position-eval.ts`）も同じ抽出を使う。
  */
-export function extractMultiPvResults(infoLines: UsiInfo[]): CandidateMove[] {
+export function extractMultiPvResults(infoLines: UsiInfo[]): UsiCandidate[] {
   const best = new Map<number, UsiInfo>();
 
   for (const info of infoLines) {
@@ -214,6 +223,9 @@ function extractHashfull(infoLines: UsiInfo[]): number | undefined {
  * @param options.movetime - 1 局面あたりの思考時間(ms)。設定時は depth より優先
  * @param options.startMoveNumber - 解析を始める局面番号（既に server に入っている件数。default: 0）
  * @param options.chunkIntervalMs - チャンクを区切る経過時間 (default: {@link CHUNK_INTERVAL_MS})
+ * @param options.chunkMaxPositions - チャンクを区切る局面数。**時間の区切りに加えて**、未送信がこの数に
+ *   達したら送る（受け側に 1 チャンクの局面数の上限があるとき用。prd/14 §5.8）。省略時は局面数では切らない
+ * @param options.log - ログの出力先（`shared` は出力の手段を持たないので注入する。省略時は出さない）
  * @param options.onProgress - 1 局面解析するたびに呼ばれる (解析済み局面数, 全局面数)
  * @param options.onChunk - チャンクの送信。**完了を待ち**、投げれば解析を中断する
  *   （進捗報告と違い、握りつぶすと `moveNumber` に穴が空いて再開位置が決まらなくなる）
@@ -224,7 +236,7 @@ function extractHashfull(infoLines: UsiInfo[]): number | undefined {
  *   呼び出し側で失敗経路と取り違えようがない形にしておく
  */
 export async function analyzeKifu(
-  engine: AnalysisEngine,
+  engine: UsiAnalysisEngine,
   usiMoves: string[],
   options: {
     depth?: number;
@@ -232,8 +244,10 @@ export async function analyzeKifu(
     movetime?: number;
     startMoveNumber?: number;
     chunkIntervalMs?: number;
+    chunkMaxPositions?: number;
+    log?: UsiLog;
     onProgress?: (analyzed: number, total: number) => void;
-    onChunk?: (analyses: MoveAnalysis[]) => Promise<void>;
+    onChunk?: (analyses: UsiMoveAnalysis[]) => Promise<void>;
     onPositionBoundary?: () => Promise<boolean | void>;
   } = {},
 ): Promise<KifuAnalysisSummary> {
@@ -243,6 +257,8 @@ export async function analyzeKifu(
     movetime,
     startMoveNumber = 0,
     chunkIntervalMs = CHUNK_INTERVAL_MS,
+    chunkMaxPositions,
+    log,
     onProgress,
     onChunk,
     onPositionBoundary,
@@ -253,11 +269,11 @@ export async function analyzeKifu(
   // 既に入っている局面は飛ばす（チャンク submit 中断からの再開）。範囲外の値でも走り抜けないよう挟む
   const start = Math.min(Math.max(startMoveNumber, 0), total);
   if (start > 0) {
-    console.log(`[Analysis] Resuming from ${start}/${usiMoves.length}`);
+    log?.info(`[Analysis] Resuming from ${start}/${usiMoves.length}`);
   }
 
   // 未送信のチャンク
-  let pending: MoveAnalysis[] = [];
+  let pending: UsiMoveAnalysis[] = [];
   let lastChunkAt = Date.now();
   let analyzed = 0;
   // 置換表は局面をまたいで残る（usinewgame も Clear Hash も送らない）ため、hashfull は
@@ -281,7 +297,7 @@ export async function analyzeKifu(
       }
       // 割り込み先（局面評価）は自分で MultiPV を設定するが、通常終了と同じ後始末をしておく
       engine.setOption("MultiPV", "1");
-      console.log(
+      log?.info(
         `[Analysis] Interrupted at ${i}/${usiMoves.length} (quick pending)`,
       );
       return { totalMoves: usiMoves.length, analyzed, maxHashfull, interrupted: true };
@@ -298,7 +314,7 @@ export async function analyzeKifu(
     try {
       result = await engine.analyze(position, goCommand);
     } catch (err) {
-      console.error(
+      log?.error(
         `[Analysis] ${i}/${usiMoves.length} Engine error at position: ${position}`,
       );
       throw err;
@@ -312,7 +328,7 @@ export async function analyzeKifu(
       maxHashfull = hashfull;
     }
 
-    console.log(
+    log?.info(
       `[Analysis] ${i}/${usiMoves.length} ${elapsed}ms ${isBook ? "BOOK" : `d${candidates[0]?.depth ?? 0}`} ${candidates.length}candidates${hashfull !== undefined ? ` hashfull ${hashfull}‰` : ""}`,
     );
 
@@ -326,7 +342,10 @@ export async function analyzeKifu(
     // （MATERIAL/NNUE・depth/byoyomi で桁が変わる）に依存し、固定値の根拠が置けない
     onProgress?.(i + 1, total);
 
-    if (Date.now() - lastChunkAt >= chunkIntervalMs) {
+    // 時間でも局面数でも切る（局面数は受け側の上限に合わせるためで、指定が無ければ時間だけ）
+    const chunkFull =
+      chunkMaxPositions !== undefined && pending.length >= chunkMaxPositions;
+    if (chunkFull || Date.now() - lastChunkAt >= chunkIntervalMs) {
       await onChunk?.(pending);
       pending = [];
       lastChunkAt = Date.now();

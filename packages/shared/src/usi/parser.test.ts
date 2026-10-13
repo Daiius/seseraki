@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseInfoLine } from "./parser.js";
+import { parseInfoLine } from "./parser";
 
 describe("parseInfoLine", () => {
   it("確定した読み筋の行を読む", () => {

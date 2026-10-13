@@ -45,6 +45,8 @@ users                            -- Better Auth の user 表を兼ねる（[07](
 ├── id: varchar(36) PK           -- 既存の所有者は "1"。新規は UUID
 ├── displayName: varchar(100)    -- 画面に出す名前。対局者名とも Google の name とも別（独自列）
 ├── name / email / emailVerified / image   -- Better Auth が Google から書く（[07](./07-auth-and-privacy.md) §3）
+├── lastKifuNo: integer          -- 最後に振った棋譜の番号（[14](./14-multi-user.md) §4.4）
+├── analysisAssignee: text       -- 解析の担当 'worker' | 'browser'（既定 'browser'。'worker' は所有者だけ。[14](./14-multi-user.md) §5.7）
 ├── createdAt / updatedAt
 
 userAliases

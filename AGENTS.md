@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。所有者ゲートの撤去と新規登録の開放・ブラウザ解析以降は未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は server 側の受け口まで実装（web は未実装）。所有者ゲートの撤去と新規登録の開放は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
@@ -134,6 +134,17 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 > `displayNo` で URL・web 向けの API に出し、**内部の主キーは出さない**（ルートを足したら `display-no.db.test.ts` にも足す）。
 > `insert(kifus)` を他所に書くと `kifu-number.test.ts` が落とす。
 >
+> 🔴 **解析の担当（`users.analysisAssignee`。`worker` / `browser`。prd/14 §5.7）で、誰がその棋譜を解析するかが決まる。**
+> - **手元 worker にジョブ・棋譜を渡す口を足したら、担当 `worker` のユーザーに絞る**（取得・quick 待ちの判定・検討盤の評価の要求は絞ってある。
+>   絞らないと、ログインした誰もが所有者の worker を使える）。出題の解答の評価だけは絞らない（理由は prd/14 §5.7）
+> - **解析の報告を受ける口は、棋譜の行ロックの下で今の担当を確かめる**（`analysis-report.ts` の `submitAnalysisChunk` /
+>   `recordAnalysisFailure` を通す。手元 worker とブラウザ解析の受け口で共用）。担当違い・古い世代は 201 `applied: false`——
+>   ⚠ **4xx にしない**（手元 worker は 4xx を恒久的な失敗として棋譜に記録する）
+> - **列を直接 UPDATE しない。** 切り替えは `switchAnalysisAssignee` だけ（同じ tx で未完了の棋譜の世代を進め、途中の解析を消す）。
+>   `worker` を選べるのは所有者だけ（CHECK でも守る）
+> - ブラウザから届く解析結果は**信用できない入力**。検証と上限は `shared` の `analysis-limits.ts`（prd/14 §5.8）。
+>   ブラウザから叩く書き込み口を足したら、Origin の検査（`route.ts` の `trustedOrigin`）と本文の上限（`smallBody`）も付ける
+>
 > 🔴 **Better Auth の表の ID は DB の既定値（`gen_random_uuid()`）で振る。** pg 方言の Better Auth は
 > `generateId: 'uuid'` の ID を JS 側で振らず DB に任せるので、既定値が無いと user の作成が NOT NULL で落ちる。
 >
@@ -184,7 +195,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 - 🔒 **一括処理のエントリは RLS を迂回する system ロールで繋ぐ**（`DB_SYSTEM_USER` / `DB_SYSTEM_PASSWORD` が要る。無ければ止まる）。
 - 🔴 **`migrate.js` は server の入れ替えより先に流す。** ⚠ ただし RLS のマイグレーション（`owner_scope_rls`）だけは、流した瞬間から
   古い server が何も読み書きできなくなる——system ロールを先に作り、migrate の後**すぐ**入れ替える（[prd/15](./prd/15-postgres.md) §2.1）。 新しい server は列やテーブルが無いと動かない
-  （`analysisProfile` が無いと poll が落ちる／`drills` が無いと解析報告・reanalyze・名前候補の編集が落ちる）。
+  （`analysisProfile`・`users.analysisAssignee` が無いと poll が落ちる／`drills` が無いと解析報告・reanalyze・名前候補の編集が落ちる）。
   **管理ロール（`DB_ADMIN_USER`）で流す**——常駐 server のロールには DDL の権限が無い。本番は管理用のサービスで流す
   （`<管理用サービス>`。常駐の server の env に管理ロールは無い）。一括処理のエントリは system ロールが要るので `<server サービス>` のまま。
 - 🔴 **新しいテーブルを作るマイグレーションの後は、対応する一括生成を一度流す**（`generate-drills.js` /

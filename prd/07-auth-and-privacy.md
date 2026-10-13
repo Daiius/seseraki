@@ -283,7 +283,7 @@ docker compose run --rm --no-deps -e LINK_OWNER_APPLY=1 <server サービス> /a
   `callbackURL`: 元の URL）→ 返った URL へ遷移 → Google → `/api/auth/callback/google` → `callbackURL` へ戻る
   （`callbackURL` は `trustedOrigins` で検査される）
 - `__root.tsx` の `beforeLoad` のガードは、移行前の `/api/auth/me` をやめて **`GET /api/me`**（`/api/auth/*` の外。
-  401 / 403 / `{ userId }`）を叩く。401 は `/login?redirect=<元の URL>`、403 は「このアカウントでは利用できません」と
+  401 / 403 / `{ userId, analysisAssignee, canChooseWorker }`。後ろの 2 つは解析の担当。[14](./14-multi-user.md) §5.7）を叩く。401 は `/login?redirect=<元の URL>`、403 は「このアカウントでは利用できません」と
   ログアウトを出す（実装では 403 も `/login` へ送り、ログイン画面がその表示に切り替わる）
 - Google ログインの失敗は `/login?error=<code>` に戻る（`errorCallbackURL`）。`signup_disabled`（登録を閉じている）などを文にして出す
   - `/api/auth/*` は Better Auth のハンドラが丸ごと受けるので、**アプリの API をその下に置かない**

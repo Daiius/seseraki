@@ -134,11 +134,16 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
-- **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドは実装済み・配信先への配置は未実装**。[14](./14-multi-user.md) §5.5）:
+- **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドと web への同梱は実装済み・本番の配信の設定は未**。[14](./14-multi-user.md) §5.5）:
   - エンジン（WASM）は `packages/engine-wasm` でビルドする（`pnpm engine:build`。`packages/engine-wasm/dist/engine/` に
     配信物の形で揃う）。**成果物はコミットせず**、ビルドして配信先へ置く。
-  - **評価関数は `assets/` の世代管理の外の別ディレクトリに、内容ハッシュ入りの名前で置く。`deploy:web` の削除の対象にしない**。
-    端末の側は HTTP キャッシュに任せる。
+  - **web のビルドが `dist/engine/` へコピーする**（`packages/web/engine-plugin`）。成果物が無ければ警告して飛ばし、
+    `ENGINE_REQUIRED=1` のときは落とす。**`pnpm deploy:web` はこれを立てる**ので、先に `pnpm engine:build` を流しておく
+    （エンジンを入れ忘れたデプロイを止める）。
+  - **評価関数は `assets/` の世代管理の外の別ディレクトリ（`engine/`）に、内容ハッシュ入りの名前で置く。`deploy:web` の削除の対象にしない**
+    （トップレベルの転送は削除をしない。古いビルド・古い評価関数は溜まるので手で消す）。端末の側は HTTP キャッシュに任せる。
+  - エンジンのホスト（Worker のスクリプト）だけは `assets/` に内容ハッシュ入りの名前で出る（世代管理に載る）。
+  - ⚠ **配信の側で要ること**（全応答の COOP / COEP・wasm の MIME・圧縮・`manifest.json` をキャッシュさせない）は [14](./14-multi-user.md) §5.5。
 - 人の認証は Google ログイン（Better Auth・server 側のセッション。[07](./07-auth-and-privacy.md)）。worker は API_KEY で別系統。
 - **本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ・シークレット）は公開リポに含めない。**
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する
@@ -156,6 +161,16 @@
 | worker | - | なし | MATERIAL エンジン（開発用・軽量）, cpus: 1, `.env.worker` |
 
 - ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
+- **ブラウザ解析のエンジン**（[14](./14-multi-user.md) §5.5）: web のコンテナは `packages/engine-wasm/dist/engine` を
+  読み取り専用で bind mount し（`ENGINE_DIST_DIR`）、Vite のプラグインが `/engine/*` として配る。
+  評価関数（64MB）をイメージにも watch の sync にも乗せないため。
+  - **使うときは `pnpm engine:build` を流してから `pnpm dev`**（起動した後に流しても、作り直さずに見える）。
+    流していなくても dev は起動する（ブラウザ解析が「エンジンが配置されていない」の案内になるだけ）。
+  - dev の Vite は**全応答に COOP / COEP を付ける**（SharedArrayBuffer に要る）。
+  - ⚠ **SharedArrayBuffer は secure context でしか使えない。** `localhost` は通るが、LAN の IP + http（`WEB_BIND=5173` での実機確認）では
+    ブラウザ解析は動かない（案内が出る）。実機は https の remote dev で確かめる。
+  - コンソールに `[browser-analysis]` の接頭辞で経過が出る（エンジンの読み込み・`readyok`・開始・チャンクの報告・失敗の理由）。
+    `localStorage['seseraki:browserAnalysis:debug'] = '1'` で USI のやり取りも出す。
 - **主要コマンド**:
 
 | コマンド | 内容 |

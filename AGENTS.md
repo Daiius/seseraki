@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は server 側の受け口まで実装（web は未実装）。所有者ゲートの撤去と新規登録の開放は未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は全局面解析まで実装（本番は未反映。詳細検討・検討盤のブラウザ評価は未実装）。所有者ゲートの撤去と新規登録の開放は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
@@ -52,12 +52,12 @@
 
 | パッケージ | 役割 |
 |---|---|
-| [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind） |
+| [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind）。ブラウザ解析の実行（`src/lib/browserAnalysis`）と、エンジンの配信物を配る Vite のプラグイン（`engine-plugin`）もここ |
 | [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 | [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
-| [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド）と評価関数を配信物の形に揃える。**このパッケージだけ GPL-3.0**・上流の SHA は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web からの読み込みは未実装） |
+| [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド）と評価関数を配信物の形に揃える。**このパッケージだけ GPL-3.0**・上流の SHA は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web は `packages/web/engine-plugin` が `/engine/*` として配り、Worker から読み込む） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
 
@@ -98,7 +98,7 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
 pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
 pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
-pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）
+pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）。⚠ エンジンの成果物が無いとビルドで落ちる（ENGINE_REQUIRED=1。先に pnpm engine:build）
 pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビルドし、評価関数を取得して packages/engine-wasm/dist/engine に揃える（Docker が要る・冪等。`pnpm build` からは走らない。個別・`--check` は packages/engine-wasm/README.md）
 ```
 
@@ -270,6 +270,19 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > ```
 > 🔒 **作り直しは upsert なので解答履歴は消えない**（条件から外れた問題だけが履歴ごと消える）。
 
+> **dev でブラウザ解析を使う**（[prd/14](./prd/14-multi-user.md) §5.5・§5.10）: `pnpm engine:build` → `pnpm dev` → 設定ページで
+> 「ブラウザで解析」に切り替える → 棋譜の詳細を開く（初回はダウンロードの同意を求められる）。
+> - web のコンテナは `packages/engine-wasm/dist/engine` を読み取り専用で bind mount し、Vite のプラグイン
+>   （`packages/web/engine-plugin`）が `/engine/*` として配る。**成果物が無くても dev は起動する**（解析できない旨の案内が出るだけ）。
+> - 🔒 **エンジン本体とエンジンのホスト（`engine-plugin/engine-host.js`。classic の Worker）は Vite のバンドルに通さない。**
+>   ホストに import / export を書かない（プラグインが変換せずそのまま配る）。
+> - 🔴 **COOP / COEP は全応答に要る**（Worker のスクリプト・`/engine/*`・`/api` を含む）。dev / preview はプラグインが付ける。
+>   本番は静的配信の側で付ける——付いていないと、ブラウザ解析は「この配信の設定では使えません」の案内になる。
+> - ⚠ **`localhost` 以外の http（LAN の IP）では動かない**（SharedArrayBuffer は secure context だけ）。実機は https の remote dev で。
+> - ⚠ **完了の判定は担当で変わる**（`lib/analysisPending.ts`）。「解析が終わったか」を `analysisProfile !== 'full'` と直に書かない
+>   ——ブラウザで解析するユーザーは quick が最終段で、full を待ち続ける画面になる。
+> - 経過はコンソールに `[browser-analysis]` の接頭辞で出る。
+>
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。
 

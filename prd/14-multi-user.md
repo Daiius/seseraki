@@ -236,9 +236,14 @@ CSA 直接貼り付けの再利用に備えて残す。
 
 ### 5.5 ブラウザのエンジン
 
-- **上流のやねうら王から自前で WASM をビルドする**（emsdk の Docker・約 2 分。上流の CI も WASM をビルドしている）
-- 🔴 **`FV_SCALE` を本番と同じ 16 にする。** 上流の `wasm_build.js` は水匠5 向けに 24 を焼き込み、`setoption` が効かない。
-  そのままだと評価値が 2/3 に縮み、悪手判定の閾値が合わない
+> **ビルドと配信物の形は実装済み**（`packages/engine-wasm`・2026-10-14。手順と落とし穴は [README](../packages/engine-wasm/README.md)）。
+> **web からの読み込み（Worker・COOP/COEP）と配信先への配置は未実装。**
+
+- **上流のやねうら王から自前で WASM をビルドする**（emsdk の Docker・約 2 分。上流の CI も WASM をビルドしている）。
+  **上流のコミットを固定し、上流のビルド対象 `halfkp.noeval` をパッチなしでそのまま使う**（固定値は `packages/engine-wasm/UPSTREAM`）
+- 🔴 **`FV_SCALE` を本番と同じ 16 にする。** 評価関数を埋め込む `halfkp` 対象は、上流の `wasm_build.js` が水匠5 向けに 24 を焼き込み、
+  `setoption` が効かない（そのままだと評価値が 2/3 に縮み、悪手判定の閾値が合わない）。
+  **埋め込まない `halfkp.noeval` は既定が 16 で `setoption` も効く**（実測・2026-10-14）ので、こちらを使えば焼き込みを外す改変は要らない
 - **評価関数は wasm に埋め込まず別ファイルにする**（brotli で ≒ 25MB）。エンジン更新のたびに評価関数を再ダウンロードさせない
 - **スレッド数の上限は 8**（16 スレッドで `memory access out of bounds`。PC 実測）。**論理コア数と 8 の小さいほうから始める**。
   置換表は 64MB から始める
@@ -250,6 +255,11 @@ CSA 直接貼り付けの再利用に備えて残す。
   評価関数の置き場所と `deploy:web` との関係は [02](./02-architecture.md) §5
 - 🔒 **エンジンの置き場はモノレポ内の `packages/engine-wasm`**（2026-10-14 決定）。**成果物はコミットせず**、
   ビルドして配信先へ置く
+  - **配信物の形**（実装済み）: `engine/<エンジンの内容ハッシュ>/` にグルー・pthread の worker・wasm の 3 ファイル
+    （グルーが worker と wasm の名前を固定で持つので、ファイル名ではなくディレクトリ名にハッシュを入れる）、
+    `engine/eval/nn-<sha256 の先頭>.bin` に評価関数、`engine/manifest.json` に一覧
+  - **manifest が来歴の値の出どころ**: エンジンのビルド識別（上流のコミットと wasm のハッシュから作る）・評価関数のハッシュ・`FV_SCALE`（§5.9）。
+    型と検証は `shared`（`engine-manifest.ts`）に置き、web / server は GPL のパッケージから import しない
 - **ライセンス**:
   - エンジン（GPLv3）の WASM をブラウザへ配るのは頒布にあたる。**GPL 部分は独立したパッケージ**（`packages/engine-wasm`）に置き、
     GPL-3.0 の LICENSE と、上流のコミットを固定したビルドスクリプト（改変があればそのパッチ）を同梱する。

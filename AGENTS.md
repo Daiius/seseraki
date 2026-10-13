@@ -57,6 +57,7 @@
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 | [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
+| [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド）と評価関数を配信物の形に揃える。**このパッケージだけ GPL-3.0**・上流の SHA は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web からの読み込みは未実装） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
 
@@ -64,7 +65,6 @@
 |---|---|
 | `packages/commentator` | LLM 解説の自動生成（薄い監視スクリプト・独立 container。[prd/06](./prd/06-llm-commentary.md)） |
 | `packages/mcp` | REST をツール定義に翻訳する薄い stdio MCP サーバ（[prd/12](./prd/12-position-lab.md) §4） |
-| `packages/engine-wasm` | ブラウザ解析のエンジン（やねうら王の WASM ビルド。GPL-3.0 の部分を分ける・成果物はコミットしない。[prd/14](./prd/14-multi-user.md) §5.5） |
 
 > ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
 > 詰み筋の分類（`mate-line.ts` の `classifyMateLine`。[prd/05](./prd/05-analysis.md) §2.2）と
@@ -89,11 +89,13 @@ pnpm --filter server test:db  # server の実 DB テスト（TEST_DATABASE_URL �
 pnpm --filter worker test   # worker のユニットテスト（vitest）
 pnpm --filter web test      # web のユニットテスト（vitest・純ロジックのみ）
 pnpm --filter shared test   # shared のユニットテスト（vitest・将棋ドメインの純ロジック）
+pnpm --filter engine-wasm test  # engine-wasm の統合テスト（成果物を node で動かす。成果物が無ければ skip）
 pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run / REDETECT_APPLY=1 で実書込）
 pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
 pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
 pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
 pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）
+pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビルドし、評価関数を取得して packages/engine-wasm/dist/engine に揃える（Docker が要る・冪等。`pnpm build` からは走らない。個別・`--check` は packages/engine-wasm/README.md）
 ```
 
 > **DB は Postgres 18**（[prd/15](./prd/15-postgres.md)）。日時は `timestamptz` で、接続の時刻帯に依存しない。

@@ -340,10 +340,8 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
             },
           });
           if (summary.interrupted) return { kind: 'aborted' };
-          if (completed) {
-            log.info(`kifu #${kifuNo}: complete`);
-            return { kind: 'complete' };
-          }
+          // 完了のログは呼び出し側（一区切りの通知）が出す。ここでも出すと 2 行になる
+          if (completed) return { kind: 'complete' };
           // 最後まで送ったのに完了の応答が無い。開始からやり直して server に状態を聞く
           continue;
         } catch (error) {

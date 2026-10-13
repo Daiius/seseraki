@@ -54,7 +54,8 @@ function SettingsPage() {
       <h2 className="text-2xl font-bold mb-4">設定</h2>
       {me && <SelfSettings me={me} onChanged={() => router.invalidate()} />}
       {account && <AnalysisSettings me={account} />}
-      <section className="flex flex-col gap-3">
+      {/* 上の節（自分・解析）と同じ間隔を空ける。先頭の節ではなくなったので、ここにも要る */}
+      <section className="flex flex-col gap-3 mt-6">
         <h3 className="text-lg font-semibold">表示サイズ</h3>
         <DisplaySizeSettings displaySize={displaySize} onChange={setDisplaySize} />
       </section>

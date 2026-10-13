@@ -11,9 +11,29 @@ describe('meStatusOf（GET /api/me。prd/07 §5.3）', () => {
   });
 
   it('200 は所有者', () => {
-    expect(meStatusOf(200, { userId: '1' })).toEqual({
+    expect(
+      meStatusOf(200, {
+        userId: '1',
+        analysisAssignee: 'worker',
+        canChooseWorker: true,
+      }),
+    ).toEqual({
       kind: 'owner',
       userId: '1',
+      analysisAssignee: 'worker',
+      canChooseWorker: true,
+    });
+  });
+
+  it('解析の担当と、担当を選べるかを運ぶ（prd/14 §5.7）', () => {
+    const me = meStatusOf(200, {
+      userId: 'u2',
+      analysisAssignee: 'browser',
+      canChooseWorker: false,
+    });
+    expect(me).toMatchObject({
+      analysisAssignee: 'browser',
+      canChooseWorker: false,
     });
   });
 

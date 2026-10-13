@@ -7,7 +7,8 @@ import {
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router';
-import { fetchMe, logout } from '../lib/auth';
+import { fetchMe, logout, type Me } from '../lib/auth';
+import { BrowserAnalysisHost } from '../components/BrowserAnalysis';
 import { Logo } from '../components/Logo';
 import {
   AcademicCapIcon,
@@ -27,11 +28,15 @@ import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 // 同じ基準を使うため。寸法を決めた理由・44px を落とさない理由はそちらに書いてある）。
 
 export const Route = createRootRoute({
-  beforeLoad: async ({ location }) => {
-    if (location.pathname === '/login') return;
+  // ログイン中の自分を `account` としてルートの context に載せる（`lib/useMe.ts` が読む）。
+  // 解析の担当（prd/14 §5.7）で、完了の判定とブラウザ解析を回すかが決まる。ログインを通さないページでは null
+  beforeLoad: async ({ location }): Promise<{ account: Me | null }> => {
+    if (location.pathname === '/login') return { account: null };
     // DEV 専用の UI ギャラリーは認証を通さず開けるようにする（props で状態を固定して
     // スクショ確認するための置き場。本番ではルート自体が中身を出さない）
-    if (import.meta.env.DEV && location.pathname === '/dev-gallery') return;
+    if (import.meta.env.DEV && location.pathname === '/dev-gallery') {
+      return { account: null };
+    }
     // `GET /api/me`: 401 は未ログイン、403 は所有者以外（prd/07 §5.3）。
     // どちらもログイン画面へ送り、403 はそこで「このアカウントでは利用できません」とログアウトを出す。
     // サーバーに届かないときもログイン画面で知らせる
@@ -39,6 +44,13 @@ export const Route = createRootRoute({
     if (me?.kind !== 'owner') {
       throw redirect({ to: '/login', search: { redirect: location.href, error: undefined } });
     }
+    return {
+      account: {
+        userId: me.userId,
+        analysisAssignee: me.analysisAssignee,
+        canChooseWorker: me.canChooseWorker,
+      },
+    };
   },
   component: RootComponent,
 });
@@ -47,6 +59,7 @@ function RootComponent() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isLogin = pathname === '/login';
+  const { account } = Route.useRouteContext();
 
   // メニューは `<details>` 版の dropdown。`:focus-within` 版と違って開閉が DOM の状態
   // （open 属性）に出るので、開いている見た目（トリガーの押下表示・chevron の回転）を
@@ -85,6 +98,9 @@ function RootComponent() {
 
   return (
     <div className="min-h-screen">
+      {/* ブラウザ解析の常駐（prd/14 §5.10）。どのページでも生きるよう、ここに置く。
+          🔒 担当がブラウザのユーザーでだけ動く（それ以外ではエンジンを読み込まない） */}
+      <BrowserAnalysisHost enabled={account?.analysisAssignee === 'browser'} />
       {!isLogin && (
         // ヘッダーのメニューはページ側のメニュー（kifus/$id のケバブ・z-20）より必ず上に出す。
         // nav 自身に z-index を与えて stacking context を作り、中身をまとめて持ち上げる

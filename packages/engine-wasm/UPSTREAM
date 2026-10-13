@@ -1,0 +1,27 @@
+# 上流と評価関数の固定値。build.sh / fetch-eval.sh はここから値を読む（値をほかに書かない）。
+# 書式: KEY=VALUE（1 行 1 項目・引用符なし・値に空白を入れない）。# で始まる行は注釈。
+# 値を変えたら pnpm engine:build を流し直す（成果物の置き場と manifest の buildId が変わる）。
+
+# --- エンジン（やねうら王・GPL-3.0） ---
+# 対応ソースはこのリポジトリのこのコミット。パッチは当てない。
+YANEURAOU_REPO=https://github.com/yaneurao/YaneuraOu
+YANEURAOU_SHA=c1b80eaa09fe13d5f12b1599d1ae4d53c224de30
+# Emscripten の Docker イメージ（タグが版）。
+EMSDK_IMAGE=emscripten/emsdk:3.1.43
+# 上流の script/wasm_build.js のビルド対象。評価関数を埋め込まない版。
+BUILD_TARGET=halfkp.noeval
+# グルーが公開する関数名（上流の wasm_build.js が対象ごとに決める）。build.sh が成果物と照合する。
+EXPORT_NAME=YaneuraOu_HalfKP_noeval
+# エンジンに渡す FV_SCALE（halfkp.noeval の既定値と同じ。手元 worker と揃える）。
+FV_SCALE=16
+
+# --- 評価関数（水匠5） ---
+EVAL_NAME=Suisho5
+EVAL_URL=https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suisho5.7z
+# アーカイブの中から取り出すファイル名。
+EVAL_ENTRY=nn.bin
+# 取り出した nn.bin の大きさと sha256。fetch-eval.sh が照合し、合わなければ止まる。
+EVAL_BYTES=64217066
+EVAL_SHA256=768068f0d534a0603a5d38bcd143de6bbca820d5f1c95a14d40863e5b7892d76
+# ホストに 7z が無いときに、展開に使う使い捨てコンテナのイメージ（中で p7zip-full を入れる）。
+EVAL_EXTRACT_IMAGE=debian:bookworm-slim

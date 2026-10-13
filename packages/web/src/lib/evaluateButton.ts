@@ -20,12 +20,20 @@ export interface EvaluateButtonInput {
   grading: boolean;
   /** 評価要求が実行中か */
   evaluating: boolean;
+  /**
+   * 評価を使えないか（省略時は使える）。
+   *
+   * 「ブラウザで解析」のユーザーは、検討盤の評価がまだ使えない（評価の口は手元 worker にジョブを積むので
+   * 403 になる。ブラウザでの評価が入るまで。prd/14 §5.7・§5.11）。🔒 これは「評価中」以外で唯一ボタンを
+   * 押せなくする条件——押せば必ず断られる操作を、押せるまま置かない。
+   */
+  unavailable?: boolean;
 }
 
 export interface EvaluateButtonViewState {
-  /** ボタンを押せなくするか（評価中のときだけ true） */
+  /** ボタンを押せなくするか（評価中と、評価を使えないときだけ true） */
   disabled: boolean;
-  /** アイコンをスピナーに差し替えるか（`disabled` と常に同じ値。意味の違う名前で呼べるようにする） */
+  /** アイコンをスピナーに差し替えるか（評価中のときだけ true） */
   busy: boolean;
   /** 状況に応じた文面（`aria-label` は固定文言なのでここでは扱わない） */
   title: string;
@@ -34,6 +42,7 @@ export interface EvaluateButtonViewState {
 const TITLE_KIFU = 'この局面をエンジンに評価させる';
 const TITLE_GRADING = 'この局面を評価し、直前の手が最善とどれだけ離れていたかも出す';
 const TITLE_EVALUATING = '評価しています';
+const TITLE_UNAVAILABLE = 'ブラウザで解析する設定では、局面の評価はまだ使えません';
 
 /**
  * ボタンの見た目を決める（prd/12 §3.2・決定 2026-09-01）。
@@ -49,7 +58,11 @@ export function evaluateButtonViewState({
   studying,
   grading,
   evaluating,
+  unavailable = false,
 }: EvaluateButtonInput): EvaluateButtonViewState {
+  if (unavailable) {
+    return { disabled: true, busy: false, title: TITLE_UNAVAILABLE };
+  }
   if (evaluating) {
     return { disabled: true, busy: true, title: TITLE_EVALUATING };
   }

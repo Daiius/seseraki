@@ -301,6 +301,35 @@ describe('コマンドの組み立て', () => {
     ]);
   });
 
+  // ブラウザ解析のエンジン（dist/engine/。prd/02 §5）は assets/ の外にあり、パスに内容ハッシュを持つ。
+  // トップレベルの転送で送られ、「今回と 1 つ前だけ残す」削除の対象にはならない
+  it('engine/ はトップレベルの転送で送り、削除の対象にしない', () => {
+    const argv = uploadTopLevelStep(cfg).argv;
+    // 除くのは assets/ だけ（engine/ を除いていない）で、送り先から消すオプションも無い
+    expect(argv.filter((a) => a.startsWith('--exclude'))).toEqual([
+      '--exclude=/assets/',
+    ]);
+    expect(argv.some((a) => a.startsWith('--delete'))).toBe(false);
+    // 削除は assets/ の直下の名前しか受け付けない（engine/ の下を指すパスは名前として不正）
+    for (const name of [
+      'engine/manifest.json',
+      '../engine/manifest.json',
+      '../engine/eval/nn-768068f0d534a060.bin',
+    ]) {
+      expect(isValidAssetName(name)).toBe(false);
+      expect(() =>
+        deleteAssetsStep(cfg, {
+          current: ['a.js'],
+          previous: [],
+          recoveredPending: false,
+          pending: [],
+          toDelete: [name],
+          ignoredRemote: [],
+        }),
+      ).toThrow();
+    }
+  });
+
   it('一覧の更新は prev → current の順に書き、最後に pending を消す', () => {
     const cmd = writeStateStep(cfg, {
       current: ['a.js', 'b.js'],

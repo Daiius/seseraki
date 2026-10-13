@@ -1,0 +1,299 @@
+/**
+ * ブラウザ解析の常駐（prd/14 §5.10）。実物の依存（Worker・fetch・Web Locks・document）を
+ * runner と scheduler に配線する。画面からは `__root.tsx` の `BrowserAnalysisHost` が起動・停止する。
+ *
+ * 判断はここに書かない（`runner.ts` / `scheduler.ts` / `support.ts` の、テストのある側に置く）。
+ *
+ * コンソールに `[browser-analysis]` の接頭辞で経過を出す（実機での確認用）。
+ * `localStorage['seseraki:browserAnalysis:debug'] = '1'` で、USI のやり取りと局面ごとの結果も出す。
+ */
+import { engineHostUrl } from 'virtual:engine-host';
+import {
+  createUsiSession,
+  type BrowserAnalysisSettings as ServerAnalysisSettings,
+  type EngineManifest,
+} from 'shared';
+import { fetchPendingKifuNos, runnerApi } from './api';
+import {
+  connectEngineHost,
+  engineOptions,
+  initRequest,
+  type HostWorkerLike,
+} from './engineHost';
+import { engineUrls, fetchEngineManifest, type EngineUrls } from './enginePaths';
+import {
+  createKifuRunner,
+  type AnalysisEngine,
+  type RunnerDeps,
+  type RunnerLog,
+} from './runner';
+import { createScheduler } from './scheduler';
+import type { AnalysisMode } from './settings';
+import {
+  getAnalysisFocus,
+  onAnalysisFocusChange,
+  onBrowserAnalysisPoke,
+  patchBrowserAnalysisState,
+  resetBrowserAnalysisState,
+} from './store';
+import { detectSupport, readBrowserEnv } from './support';
+
+const LOG_PREFIX = '[browser-analysis]';
+/** 同じブラウザの中の解析を 1 本に絞るロックの名前 */
+const LOCK_NAME = 'seseraki:browser-analysis';
+
+const log: RunnerLog = {
+  info: (message) => console.info(LOG_PREFIX, message),
+  warn: (message) => console.warn(LOG_PREFIX, message),
+};
+
+function debugEnabled(): boolean {
+  try {
+    return localStorage.getItem('seseraki:browserAnalysis:debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+const sleep = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+
+/** ページの可視（スマホはバックグラウンドで凍結する。その間の失敗を数えないために見る） */
+function createVisibility(signal: AbortSignal): RunnerDeps['visibility'] {
+  let lastChangedAt: number | null =
+    document.visibilityState === 'hidden' ? Date.now() : null;
+  const onChange = () => {
+    lastChangedAt = Date.now();
+  };
+  document.addEventListener('visibilitychange', onChange);
+  signal.addEventListener('abort', () =>
+    document.removeEventListener('visibilitychange', onChange),
+  );
+  return {
+    isHidden: () => document.visibilityState === 'hidden',
+    lastChangedAt: () => lastChangedAt,
+    waitVisible: (waitSignal) =>
+      new Promise<void>((resolve) => {
+        if (document.visibilityState !== 'hidden' || waitSignal.aborted) {
+          return resolve();
+        }
+        const done = () => {
+          if (document.visibilityState === 'hidden' && !waitSignal.aborted) return;
+          document.removeEventListener('visibilitychange', done);
+          waitSignal.removeEventListener('abort', done);
+          resolve();
+        };
+        document.addEventListener('visibilitychange', done);
+        waitSignal.addEventListener('abort', done);
+      }),
+  };
+}
+
+/** エンジンのホスト（Worker）を起動し、評価関数を渡して `readyok` まで進める */
+async function createEngine(
+  manifest: EngineManifest,
+  urls: EngineUrls,
+  settings: ServerAnalysisSettings,
+  signal: AbortSignal,
+  patch: typeof patchBrowserAnalysisState,
+): Promise<AnalysisEngine> {
+  log.info(
+    `loading engine build=${manifest.engine.buildId} eval=${manifest.eval.sha256.slice(0, 16)} host=${engineHostUrl}`,
+  );
+  patch({
+    phase: 'loading',
+    download: { loaded: 0, total: manifest.eval.bytes },
+  });
+  // 🔒 classic の Worker（`type: 'module'` を付けない）。ホストは importScripts でエンジンのグルーを読む
+  const worker = new Worker(engineHostUrl, { name: 'seseraki-engine' });
+  const connection = connectEngineHost(
+    worker as unknown as HostWorkerLike,
+    initRequest(manifest, urls),
+    {
+      onDownload: (loaded, total) => patch({ download: { loaded, total } }),
+    },
+  );
+  const onAbort = () => connection.dispose();
+  signal.addEventListener('abort', onAbort);
+  try {
+    await connection.ready;
+    log.info('engine instantiated and eval loaded');
+    const debug = debugEnabled();
+    const session = createUsiSession(connection.transport, {
+      timers: {
+        setTimeout: (callback, ms) => setTimeout(callback, ms),
+        clearTimeout: (handle) =>
+          clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+      log: debug
+        ? {
+            info: (message) => console.debug(LOG_PREFIX, message),
+            error: (message) => console.warn(LOG_PREFIX, message),
+          }
+        : undefined,
+    });
+    await session.start();
+    const options = engineOptions(manifest, settings, navigator.hardwareConcurrency);
+    for (const [name, value] of options.options) session.setOption(name, value);
+    await session.ready();
+    const name = session.getName() ?? null;
+    log.info(
+      `readyok name="${name ?? ''}" threads=${options.threads} hash=${options.hashMb}MB fvScale=${manifest.fvScale}`,
+    );
+    return {
+      session,
+      name,
+      threads: options.threads,
+      hashMb: options.hashMb,
+      dispose: () => {
+        log.info('engine disposed');
+        connection.dispose();
+      },
+    };
+  } catch (error) {
+    connection.dispose();
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    patch({ phase: 'idle', download: null });
+  }
+}
+
+export interface BrowserAnalysisOptions {
+  mode: AnalysisMode;
+  /** ダウンロードに同意した評価関数のハッシュ（端末の設定） */
+  consentEvalSha256: string | null;
+  /** 棋譜の解析が一区切りした。画面のデータを取り直す */
+  onSettled(): void;
+  /** 担当が変わった・ログインが切れた。`GET /api/me` を取り直す */
+  onAccountChanged(): void;
+}
+
+async function main(
+  options: BrowserAnalysisOptions,
+  signal: AbortSignal,
+): Promise<void> {
+  // 止めた後に遅れて届く更新（ダウンロードの進捗など）で、止めた後の状態を書き換えない
+  const patch: typeof patchBrowserAnalysisState = (next) => {
+    if (!signal.aborted) patchBrowserAnalysisState(next);
+  };
+
+  const support = detectSupport(readBrowserEnv());
+  if (!support.supported) {
+    log.warn(`unsupported: ${support.reasons.join(', ')}`);
+    patch({ phase: 'unsupported', unsupported: support.reasons });
+    return;
+  }
+
+  const origin = window.location.origin;
+  const manifest = await fetchEngineManifest(origin, (url, init) => fetch(url, init));
+  if (signal.aborted) return;
+  if (manifest === null) {
+    log.warn('engine manifest not found (the engine is not deployed)');
+    patch({ phase: 'no-engine', manifest: null });
+    return;
+  }
+  patch({ manifest });
+  // 🔒 同意の前に評価関数を落とし始めない（prd/14 §5.10）。エンジンの Worker もここより先でしか作らない
+  if (options.consentEvalSha256 !== manifest.eval.sha256) {
+    log.info(`waiting for consent (eval ${manifest.eval.bytes} bytes)`);
+    patch({ phase: 'needs-consent' });
+    return;
+  }
+
+  log.info(
+    `started mode=${options.mode} build=${manifest.engine.buildId} isolated=${String(globalThis.crossOriginIsolated)}`,
+  );
+  patch({ phase: 'idle' });
+
+  const urls = engineUrls(origin, manifest);
+  const runner = createKifuRunner({
+    api: runnerApi,
+    engineInfo: {
+      engineBuild: manifest.engine.buildId,
+      evalHash: manifest.eval.sha256,
+      fvScale: manifest.fvScale,
+    },
+    // エンジンの読み込みは、棋譜の中断ではなく常駐の停止（`signal`）で止める
+    createEngine: (settings) =>
+      createEngine(manifest, urls, settings, signal, patch),
+    sleep,
+    now: () => Date.now(),
+    visibility: createVisibility(signal),
+    onProgress: (progress) => {
+      patch(
+        progress
+          ? { phase: 'analyzing', progress }
+          : { phase: 'idle', progress: null },
+      );
+    },
+    log,
+  });
+  const scheduler = createScheduler({
+    mode: options.mode,
+    analyze: (kifuNo, kifuSignal) => runner.analyze(kifuNo, kifuSignal),
+    pending: fetchPendingKifuNos,
+    // ロックを取れたら `fn` を実行し、終わるまで持つ。待っている間に中断されたら AbortError で拒否される
+    withLock: <T,>(lockSignal: AbortSignal, fn: () => Promise<T>) =>
+      navigator.locks.request(LOCK_NAME, { signal: lockSignal }, fn) as Promise<T>,
+    sleep,
+    now: () => Date.now(),
+    log,
+    onSettled: (kifuNo, outcome) => {
+      log.info(`kifu #${kifuNo}: ${outcome.kind}`);
+      options.onSettled();
+    },
+    onHalt: (outcome) => {
+      if (outcome.reason === 'wrong-assignee' || outcome.reason === 'unauthorized') {
+        options.onAccountChanged();
+        return;
+      }
+      patch({
+        phase: 'error',
+        error:
+          outcome.reason === 'engine-load'
+            ? `解析エンジンを読み込めませんでした（${outcome.detail}）`
+            : outcome.detail,
+      });
+    },
+  });
+
+  const offFocus = onAnalysisFocusChange(scheduler.setFocus);
+  const offPoke = onBrowserAnalysisPoke(scheduler.poke);
+  scheduler.setFocus(getAnalysisFocus());
+  try {
+    await scheduler.run(signal);
+  } finally {
+    offFocus();
+    offPoke();
+    runner.dispose();
+    log.info('stopped');
+  }
+}
+
+/**
+ * 常駐の解析を起動する。返り値の関数で止める（エンジンも止まる）。
+ * 設定（範囲・同意）が変わったら、止めて起動し直す。
+ */
+export function startBrowserAnalysis(options: BrowserAnalysisOptions): () => void {
+  const controller = new AbortController();
+  main(options, controller.signal).catch((error: unknown) => {
+    if (controller.signal.aborted) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    log.warn(`stopped by error: ${detail}`);
+    patchBrowserAnalysisState({ phase: 'error', error: detail, progress: null });
+  });
+  return () => {
+    controller.abort();
+    resetBrowserAnalysisState();
+  };
+}

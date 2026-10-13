@@ -126,7 +126,15 @@ services:
       # リモート公開時のみ設定（vite.config.ts が allowedHosts / HMR wss:443 を条件付与）。
       # ローカルは localhost（＝リモート差分なし）。
       DEV_ALLOWED_HOST: '${DEV_ALLOWED_HOST:-localhost}'
+      # ブラウザ解析のエンジンの配信物（下の bind mount）。Vite のプラグインが /engine/* として配る（prd/14 §5.5）
+      ENGINE_DIST_DIR: /engine-dist
     command: pnpm --filter web dev --host
+    # エンジンの成果物（`pnpm engine:build` で作る。コミットしない）を読み取り専用で見せる。
+    # 評価関数（64MB）をイメージにも watch の sync にも乗せないための bind mount。
+    # 成果物が無くても起動する（空のディレクトリが見えるだけで、ブラウザ解析が「エンジンなし」の案内になる）。
+    # 後から `pnpm engine:build` を流せば、作り直さずにそのまま見える
+    volumes:
+      - ./packages/engine-wasm/dist/engine:/engine-dist:ro
     # ローカルは 127.0.0.1:5173 だけで待ち受ける（LAN から dev ログインで所有者になれないように）。
     # 実機確認などで LAN に開くときだけ WEB_BIND=5173 を明示する。リモートは .env.remote の WEB_BIND=127.0.0.1:<port> で
     # cloudflared 向けに 127.0.0.1 の1ポートだけ公開する。

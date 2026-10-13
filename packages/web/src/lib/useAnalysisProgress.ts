@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from '@tanstack/react-router';
 import useSWR from 'swr';
 import { client } from './honoClient';
+import type { AnalysisAssignee } from './auth';
+import { useBrowserAnalysisState } from './browserAnalysis/store';
 import {
   estimateAnalyzed,
   initialPaceState,
@@ -47,12 +49,23 @@ const progressFetcher = async (): Promise<AnalysisProgress | null> => {
  * `estimated` は標本の間を埋めた解析済み局面数（小数）。**リング / バーの値にだけ使い、
  * 文字で出す N/M は実データのまま**にする。
  */
-export function useAnalysisProgress(
-  { pending = false }: { pending?: boolean } = {},
-): {
+export function useAnalysisProgress({
+  pending = false,
+  assignee = 'worker',
+}: {
+  pending?: boolean;
+  /**
+   * 解析する側（prd/14 §5.7）。`browser` では **server に進捗を聞かず**（進捗を server に持たせない。§5.8）、
+   * このタブの解析の進捗（`browserAnalysis/store`）を返す。定期的なローダーの作り直しはどちらでも回す
+   * ——別のタブ・別の端末が解析していても、入った局面が画面に育つ
+   */
+  assignee?: AnalysisAssignee;
+} = {}): {
   progress: AnalysisProgress | null;
   estimated: number;
 } {
+  const remote = assignee === 'worker';
+  const local = useBrowserAnalysisState().progress;
   // 「最後に進捗を観測した時刻、まだ観測していなければ待ち始めた時刻」。
   // **1 度でも観測すればここが進み、バックオフのタイマーもリセットされる**
   const [waitingSince, setWaitingSince] = useState<number | null>(null);
@@ -66,17 +79,35 @@ export function useAnalysisProgress(
   const plan = pollingPlan({ pending, waitingSince, now: planNow });
 
   const { data } = useSWR<AnalysisProgress | null>(
-    'analysis-progress',
+    // ブラウザで解析するユーザーでは叩かない（key が null の間、SWR は取得しない）
+    remote ? 'analysis-progress' : null,
     progressFetcher,
     {
       refreshInterval: plan.pollIntervalMs,
       revalidateOnFocus: false,
     },
   );
-  const progress = data ?? null;
+  // ブラウザの解析は 1 段だけ（quick として保存する）。それが最終段なので、表示は薄くしない
+  // ——`profile` は円環の濃さにしか使わないので、濃いほう（`full`）として渡す
+  const localProgress: AnalysisProgress | null = local
+    ? {
+        kifuNo: local.kifuNo,
+        revision: local.revision,
+        profile: 'full',
+        analyzed: local.analyzed,
+        total: local.total,
+        updatedAt: '',
+      }
+    : null;
+  const progress = remote ? (data ?? null) : localProgress;
+  // 進捗の中身を表す値（同じ間は同じ文字列）。ローカルの進捗は毎レンダーで作り直すので、
+  // 「進捗を観測した」の effect はオブジェクトではなくこれを見る
+  const progressKey = progress
+    ? `${progress.kifuNo}:${progress.revision}:${progress.profile}:${progress.analyzed}`
+    : null;
 
   useEffect(() => {
-    if (progress) {
+    if (progressKey !== null) {
       // 観測できた＝ worker は動いている。バックオフの起点を引き直す
       setWaitingSince(Date.now());
       return;
@@ -88,7 +119,7 @@ export function useAnalysisProgress(
     // 待ち始め。既に待っているなら起点は動かさない（表示中の棋譜が変わって pending が
     // 偽→真になったときは、上の `!pending` で null に戻っているので起点が引き直される）
     setWaitingSince((previous) => previous ?? Date.now());
-  }, [progress, pending]);
+  }, [progressKey, pending]);
 
   useEffect(() => {
     if (!pending || waitingSince === null) return;
@@ -101,27 +132,29 @@ export function useAnalysisProgress(
   // 標本の受信時刻と実測ペース。SWR は内容が同じなら同じ参照を返すので、この effect は
   // **進捗が実際に動いたときだけ**走る（＝ `receivedAt` は「最後に進捗が動いた時刻」になる）
   const [pace, setPace] = useState<PaceState>(initialPaceState);
+  // ⚠ 推定で埋めるのは server の進捗（数秒おきの標本）だけ。ローカルの進捗は局面ごとに届くので、そのまま出す
+  const sampled = remote ? (data ?? null) : null;
   useEffect(() => {
-    if (!progress) {
+    if (!sampled) {
       setPace(initialPaceState);
       return;
     }
     const receivedAt = Date.now();
-    setPace((prev) => nextPaceState(prev, { ...progress, receivedAt }));
-  }, [progress]);
+    setPace((prev) => nextPaceState(prev, { ...sampled, receivedAt }));
+  }, [sampled]);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!progress) return;
+    if (!sampled) return;
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [progress]);
+  }, [sampled]);
 
   // 基準点がいま表示している解析のものでないうち（別の棋譜 / 段階へ移った直後の 1 レンダー）は
   // 推定を使わず実データを出す。古い解析のペースで新しい解析のリングを進めない
   const estimated =
-    progress && pace.latest && isSameAnalysisRun(pace.latest, progress)
+    sampled && pace.latest && isSameAnalysisRun(pace.latest, sampled)
       ? estimateAnalyzed(pace, now)
       : (progress?.analyzed ?? 0);
 
@@ -132,14 +165,14 @@ export function useAnalysisProgress(
   // 消えた後に古い「未」のまま残る。⚠ `kifuNo` だけを見ていると **quick 完了 → 同じ棋譜の
   // full 開始**（kifuNo 据え置き・profile だけ変化）を取りこぼすので、段階も鍵に含める
   const previousKey = useRef<string | null>(null);
+  const runKey = progress ? `${progress.kifuNo}:${progress.profile}` : null;
   useEffect(() => {
     const previous = previousKey.current;
-    const current = progress ? `${progress.kifuNo}:${progress.profile}` : null;
-    previousKey.current = current;
-    if (previous !== null && previous !== current) {
+    previousKey.current = runKey;
+    if (previous !== null && previous !== runKey) {
       void router.invalidate();
     }
-  }, [progress, router]);
+  }, [runKey, router]);
 
   // 🔴 エッジ検出の取りこぼしを塞ぐ本体。**未完了である限り**定期的にローダーを作り直す。
   // 完了の瞬間を観測できなくても次の周期で表示が入れ替わり、解析中はチャンク submit で

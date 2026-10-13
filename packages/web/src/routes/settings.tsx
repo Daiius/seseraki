@@ -11,6 +11,8 @@ import { MAX_MARGIN, MIN_MARGIN, applyMarginInput, useDrillScoring } from '../li
 import { ThresholdSettings } from '../components/ThresholdSettings';
 import { DisplaySizeSettings } from '../components/DisplaySizeSettings';
 import { SelfSettings } from '../components/SelfSettings';
+import { AnalysisSettings } from '../components/AnalysisSettings';
+import { useMe } from '../lib/useMe';
 import { client } from '../lib/honoClient';
 
 export const Route = createFileRoute('/settings')({
@@ -44,12 +46,16 @@ function SettingsPage() {
   const { mateMax, setMateMax } = useMateMax();
   const { displaySize, setDisplaySize } = useDisplaySize();
   const { scoring, setScoring } = useDrillScoring();
+  // ログイン中の自分（解析の設定に使う。prd/14 §5.7）。ローダーの `me`（名前候補）とは別物
+  const account = useMe();
 
   return (
     <div>
       <h2 className="text-2xl font-bold mb-4">設定</h2>
       {me && <SelfSettings me={me} onChanged={() => router.invalidate()} />}
-      <section className="flex flex-col gap-3">
+      {account && <AnalysisSettings me={account} />}
+      {/* 上の節（自分・解析）と同じ間隔を空ける。先頭の節ではなくなったので、ここにも要る */}
+      <section className="flex flex-col gap-3 mt-6">
         <h3 className="text-lg font-semibold">表示サイズ</h3>
         <DisplaySizeSettings displaySize={displaySize} onChange={setDisplaySize} />
       </section>

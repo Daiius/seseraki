@@ -7,22 +7,36 @@
  */
 import { baseUrl, client } from './honoClient';
 
+/** 解析の担当（prd/14 §5.7）。画面では「サーバーで解析」/「ブラウザで解析」と呼ぶ */
+export type AnalysisAssignee = 'worker' | 'browser';
+
+/** ログイン中の自分（`GET /api/me` の本文） */
+export interface Me {
+  userId: string;
+  /** 棋譜を解析する側。完了の判定と、ブラウザ解析を回すかをこれで決める */
+  analysisAssignee: AnalysisAssignee;
+  /** 「サーバーで解析」を選べるか（所有者だけ。切り替えの画面を出すかに使う） */
+  canChooseWorker: boolean;
+}
+
 export type MeStatus =
-  | { kind: 'owner'; userId: string }
+  | ({ kind: 'owner' } & Me)
   /** 未ログイン → ログイン画面へ */
   | { kind: 'unauthenticated' }
   /** ログインしているが、このアカウントでは利用できない（所有者ゲート。prd/07 §5.1） */
   | { kind: 'forbidden' };
 
 /** `GET /api/me` の HTTP ステータスを状態にする。**401 / 403 以外の失敗は投げる**（未ログイン扱いにしない） */
-export function meStatusOf(
-  status: number,
-  body?: { userId: string },
-): MeStatus {
+export function meStatusOf(status: number, body?: Me): MeStatus {
   if (status === 401) return { kind: 'unauthenticated' };
   if (status === 403) return { kind: 'forbidden' };
   if (status >= 200 && status < 300 && body)
-    return { kind: 'owner', userId: body.userId };
+    return {
+      kind: 'owner',
+      userId: body.userId,
+      analysisAssignee: body.analysisAssignee,
+      canChooseWorker: body.canChooseWorker,
+    };
   throw new Error(`GET /api/me が ${status} を返した`);
 }
 
@@ -43,7 +57,11 @@ export function fetchMe(): Promise<MeStatus> {
   return mePromise;
 }
 
-function forgetMe(): void {
+/**
+ * 覚えているログイン状態を捨てる（次の `fetchMe` で取り直す）。
+ * 解析の担当を切り替えた後・担当が変わっていたと分かったとき（prd/14 §5.7）にも呼ぶ
+ */
+export function forgetMe(): void {
   mePromise = null;
 }
 

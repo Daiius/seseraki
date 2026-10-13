@@ -3,6 +3,7 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import babel from '@rolldown/plugin-babel';
 import tailwindcss from '@tailwindcss/vite';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
+import { enginePlugin } from './engine-plugin/index.ts';
 
 // 同一オリジン配信。ブラウザは常に同一オリジンの /api を叩き、dev では Vite が
 // server へ素通しで転送する（server は basePath('/api') なのでパスは書き換えない）。
@@ -27,6 +28,9 @@ export default defineConfig({
     react(),
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
+    // ブラウザ解析のエンジン（prd/14 §5.5）: dev / preview で `/engine/*` を配り、build で `dist/engine/` へ
+    // コピーする。**全応答に COOP / COEP を付ける**のもここ（SharedArrayBuffer に要る。本番は静的配信の側で付ける）
+    enginePlugin(),
   ],
   server: {
     // 単体起動（pnpm dev:web）では loopback。compose は command の --host で 0.0.0.0 に、

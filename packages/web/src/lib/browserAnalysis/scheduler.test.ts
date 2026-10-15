@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { KifuOutcome } from './runner';
+import type { AnalyzeHooks, KifuOutcome } from './runner';
 import {
   COOLDOWN_MS,
   createScheduler,
@@ -26,6 +26,7 @@ const flush = async () => {
 interface Running {
   kifuNo: number;
   signal: AbortSignal;
+  hooks: AnalyzeHooks;
   finish(outcome: KifuOutcome): void;
 }
 
@@ -48,10 +49,10 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
   };
   const deps: SchedulerDeps = {
     mode,
-    analyze: (kifuNo, signal) => {
+    analyze: (kifuNo, signal, hooks) => {
       state.started.push(kifuNo);
       const d = deferred<KifuOutcome>();
-      state.running = { kifuNo, signal, finish: d.resolve };
+      state.running = { kifuNo, signal, hooks, finish: d.resolve };
       // 本物の runner と同じく、中断されたら aborted で戻る
       signal.addEventListener('abort', () => d.resolve({ kind: 'aborted' }));
       return d.promise.finally(() => {
@@ -318,5 +319,79 @@ describe('createScheduler — 共通', () => {
     stop();
     await done;
     expect(running.signal.aborted).toBe(true);
+  });
+});
+
+describe('createScheduler — 2 段の順序（prd/14 §5.10）', () => {
+  it('使用中は常に: full の途中に、一覧の先頭が別の棋譜になったら譲る（quick 待ちの棋譜を先にする）', async () => {
+    // server の並び: quick 未完了が先・それぞれ新しい順。今は 9 の full だけが残っている
+    const { state, stop, done } = setup('always', [9]);
+    await flush();
+    expect(state.started).toEqual([9]);
+    const running = state.running!;
+    expect(await running.hooks.shouldYield!()).toBe(false);
+
+    // 新しく取り込んだ 12 が quick 待ちとして先頭に来た
+    state.pending = [12, 9];
+    expect(await running.hooks.shouldYield!()).toBe(true);
+    running.finish({ kind: 'yielded' });
+    await flush();
+    // 譲った棋譜は空け時間なしで、一覧の並びのとおり 12 を先に解析する
+    expect(state.started).toEqual([9, 12]);
+    expect(state.settled).toEqual([]);
+
+    // 12 が終わったら（quick → full まで）、また一覧の並びで 9 に戻る
+    state.pending = [9];
+    state.running!.finish({ kind: 'complete' });
+    await flush();
+    expect(state.started).toEqual([9, 12, 9]);
+    stop();
+    await done;
+  });
+
+  it('空け時間の中の棋譜は、先頭にあっても譲る理由にしない', async () => {
+    const { state, stop, done } = setup('always', [12, 9]);
+    await flush();
+    expect(state.started).toEqual([12]);
+    // 12 は後回しになった（通信の失敗が続いた）
+    state.running!.finish({ kind: 'deferred', detail: 'network' });
+    await flush();
+    expect(state.started).toEqual([12, 9]);
+    expect(await state.running!.hooks.shouldYield!()).toBe(false);
+    stop();
+    await done;
+  });
+
+  it('開いている詳細の棋譜は譲らない（quick → full を最後まで）', async () => {
+    const { state, scheduler, stop, done } = setup('always', []);
+    scheduler.setFocus(5);
+    await flush();
+    expect(state.started).toEqual([5]);
+    state.pending = [12, 5];
+    const callsBefore = state.pendingCalls;
+    expect(await state.running!.hooks.shouldYield!()).toBe(false);
+    // 一覧も取りに行かない
+    expect(state.pendingCalls).toBe(callsBefore);
+    stop();
+    await done;
+  });
+
+  it('詳細ページだけでは譲らない', async () => {
+    const { state, scheduler, stop, done } = setup('detail', [12]);
+    scheduler.setFocus(5);
+    await flush();
+    expect(await state.running!.hooks.shouldYield!()).toBe(false);
+    expect(state.pendingCalls).toBe(0);
+    stop();
+    await done;
+  });
+
+  it('一覧を取れない（ログイン切れ・通信の失敗）ときは譲らない', async () => {
+    const { state, stop, done } = setup('always', [9]);
+    await flush();
+    state.pendingUnauthorized = true;
+    expect(await state.running!.hooks.shouldYield!()).toBe(false);
+    stop();
+    await done;
   });
 });

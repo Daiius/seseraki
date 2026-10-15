@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createUsiSession, type EngineManifest } from 'shared';
 import {
   connectEngineHost,
+  analysisThreads,
   engineOptions,
   initRequest,
   type HostRequest,
@@ -103,23 +104,44 @@ describe('fetchEngineManifest', () => {
   });
 });
 
-describe('engineOptions', () => {
-  const settings = { maxThreads: 8, hashMb: 64 };
+describe('analysisThreads（負荷の設定。prd/14 §5.10）', () => {
+  it('全力: 論理コア数と上限の小さいほう', () => {
+    expect(analysisThreads(4, 8, 'max')).toBe(4);
+    expect(analysisThreads(16, 8, 'max')).toBe(8);
+    expect(analysisThreads(8, 8, 'max')).toBe(8);
+  });
 
-  it('スレッド数は論理コア数と上限の小さいほう', () => {
-    expect(engineOptions(MANIFEST, settings, 4).threads).toBe(4);
-    expect(engineOptions(MANIFEST, settings, 16).threads).toBe(8);
-    expect(engineOptions(MANIFEST, settings, 8).threads).toBe(8);
+  it('控えめ: 全力の半分（切り捨て・最低 1）', () => {
+    expect(analysisThreads(16, 8, 'gentle')).toBe(4);
+    expect(analysisThreads(6, 8, 'gentle')).toBe(3);
+    expect(analysisThreads(3, 8, 'gentle')).toBe(1);
+    expect(analysisThreads(2, 8, 'gentle')).toBe(1);
+    expect(analysisThreads(1, 8, 'gentle')).toBe(1);
   });
 
   it('論理コア数が分からなければ 1 スレッド', () => {
-    expect(engineOptions(MANIFEST, settings, undefined).threads).toBe(1);
-    expect(engineOptions(MANIFEST, settings, 0).threads).toBe(1);
-    expect(engineOptions(MANIFEST, settings, Number.NaN).threads).toBe(1);
+    expect(analysisThreads(undefined, 8, 'max')).toBe(1);
+    expect(analysisThreads(0, 8, 'max')).toBe(1);
+    expect(analysisThreads(Number.NaN, 8, 'max')).toBe(1);
+    expect(analysisThreads(undefined, 8, 'gentle')).toBe(1);
+  });
+});
+
+describe('engineOptions', () => {
+  const settings = { maxThreads: 8, hashMb: 64 };
+
+  it('スレッド数は負荷の設定で決まる', () => {
+    expect(engineOptions(MANIFEST, settings, 4, 'max').threads).toBe(4);
+    expect(engineOptions(MANIFEST, settings, 16, 'max').threads).toBe(8);
+    expect(engineOptions(MANIFEST, settings, 16, 'gentle').threads).toBe(4);
+  });
+
+  it('論理コア数が分からなければ 1 スレッド', () => {
+    expect(engineOptions(MANIFEST, settings, undefined, 'max').threads).toBe(1);
   });
 
   it('評価関数の場所・FV_SCALE・定跡なし・ConsiderationMode を渡す', () => {
-    expect(engineOptions(MANIFEST, settings, 6).options).toEqual([
+    expect(engineOptions(MANIFEST, settings, 6, 'max').options).toEqual([
       ['EvalDir', '.'],
       ['EvalFile', 'nn.bin'],
       ['FV_SCALE', '16'],
@@ -255,7 +277,7 @@ describe('connectEngineHost', () => {
 });
 
 describe('parseBrowserAnalysisSettings', () => {
-  it('無い・壊れている値は既定（詳細ページだけ・未同意）', () => {
+  it('無い・壊れている値は既定（詳細ページだけ・全力・未同意）', () => {
     expect(parseBrowserAnalysisSettings(null)).toEqual(DEFAULT_BROWSER_ANALYSIS_SETTINGS);
     expect(parseBrowserAnalysisSettings('')).toEqual(DEFAULT_BROWSER_ANALYSIS_SETTINGS);
     expect(parseBrowserAnalysisSettings('{')).toEqual(DEFAULT_BROWSER_ANALYSIS_SETTINGS);
@@ -263,6 +285,7 @@ describe('parseBrowserAnalysisSettings', () => {
     expect(parseBrowserAnalysisSettings('"always"')).toEqual(DEFAULT_BROWSER_ANALYSIS_SETTINGS);
     expect(DEFAULT_BROWSER_ANALYSIS_SETTINGS).toEqual({
       mode: 'detail',
+      load: 'max',
       consentEvalSha256: null,
     });
   });
@@ -270,8 +293,23 @@ describe('parseBrowserAnalysisSettings', () => {
   it('保存した値を読む', () => {
     const sha = 'ab'.repeat(32);
     expect(
+      parseBrowserAnalysisSettings(
+        JSON.stringify({ mode: 'always', load: 'gentle', consentEvalSha256: sha }),
+      ),
+    ).toEqual({ mode: 'always', load: 'gentle', consentEvalSha256: sha });
+  });
+
+  it('負荷の設定が無い値（この設定を足す前に保存したもの）は全力として読む', () => {
+    const sha = 'ab'.repeat(32);
+    expect(
       parseBrowserAnalysisSettings(JSON.stringify({ mode: 'always', consentEvalSha256: sha })),
-    ).toEqual({ mode: 'always', consentEvalSha256: sha });
+    ).toEqual({ mode: 'always', load: 'max', consentEvalSha256: sha });
+  });
+
+  it('知らない負荷の値は全力に戻す', () => {
+    expect(
+      parseBrowserAnalysisSettings(JSON.stringify({ mode: 'detail', load: 'turbo' })).load,
+    ).toBe('max');
   });
 
   it('値ごとに既定へ戻す（知らない範囲・ハッシュの形でない同意）', () => {
@@ -279,13 +317,13 @@ describe('parseBrowserAnalysisSettings', () => {
       parseBrowserAnalysisSettings(
         JSON.stringify({ mode: 'background', consentEvalSha256: 'ab'.repeat(32) }),
       ),
-    ).toEqual({ mode: 'detail', consentEvalSha256: 'ab'.repeat(32) });
+    ).toEqual({ mode: 'detail', load: 'max', consentEvalSha256: 'ab'.repeat(32) });
     expect(
       parseBrowserAnalysisSettings(JSON.stringify({ mode: 'always', consentEvalSha256: true })),
-    ).toEqual({ mode: 'always', consentEvalSha256: null });
+    ).toEqual({ mode: 'always', load: 'max', consentEvalSha256: null });
     expect(
       parseBrowserAnalysisSettings(JSON.stringify({ mode: 'always', consentEvalSha256: 'yes' })),
-    ).toEqual({ mode: 'always', consentEvalSha256: null });
+    ).toEqual({ mode: 'always', load: 'max', consentEvalSha256: null });
   });
 });
 

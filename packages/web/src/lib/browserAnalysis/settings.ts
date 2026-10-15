@@ -13,8 +13,19 @@ export type AnalysisMode =
   /** どのページを開いていても、未解析の棋譜を消化する */
   | 'always';
 
+/**
+ * どれだけ端末の力を使うか（prd/14 §5.10 負荷の設定）。スレッド数の決め方は `engineHost.ts` の `analysisThreads`
+ */
+export type AnalysisLoad =
+  /** 全力（既定）: 論理コア数と server の上限の小さいほう */
+  | 'max'
+  /** 控えめ: 全力の半分（最低 1） */
+  | 'gentle';
+
 export interface BrowserAnalysisSettings {
   mode: AnalysisMode;
+  /** 負荷。この設定が無かった頃の値（`load` が無い）は全力として読む */
+  load: AnalysisLoad;
   /**
    * ダウンロードに同意した評価関数のハッシュ（manifest の `eval.sha256`）。未同意は null。
    * 🔒 **評価関数ごとに同意を取る**——評価関数が替わると、また数十 MB を落とすことになる
@@ -24,6 +35,7 @@ export interface BrowserAnalysisSettings {
 
 export const DEFAULT_BROWSER_ANALYSIS_SETTINGS: BrowserAnalysisSettings = {
   mode: 'detail',
+  load: 'max',
   consentEvalSha256: null,
 };
 
@@ -49,6 +61,7 @@ export function parseBrowserAnalysisSettings(
   const v = parsed as Partial<Record<keyof BrowserAnalysisSettings, unknown>>;
   return {
     mode: v.mode === 'always' || v.mode === 'detail' ? v.mode : 'detail',
+    load: v.load === 'gentle' || v.load === 'max' ? v.load : 'max',
     consentEvalSha256:
       typeof v.consentEvalSha256 === 'string' &&
       /^[0-9a-f]{64}$/.test(v.consentEvalSha256)
@@ -107,6 +120,13 @@ export function setBrowserAnalysisSettings(
     // 保存できなくてもセッション中の変更は効かせる
   }
   for (const listener of [...listeners]) listener();
+}
+
+/**
+ * 今の設定（React の外から読む。常駐の解析が、エンジンを作るたびに負荷の設定を読み直すのに使う）
+ */
+export function getBrowserAnalysisSettings(): BrowserAnalysisSettings {
+  return getSnapshot();
 }
 
 export function useBrowserAnalysisSettings(): BrowserAnalysisSettings {

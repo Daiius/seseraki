@@ -54,6 +54,7 @@ export const runnerApi: RunnerApi = {
     if (body.status === 'run') {
       return {
         kind: 'run',
+        profile: body.profile,
         run: {
           revision: body.revision,
           startMoveNumber: body.startMoveNumber,
@@ -75,7 +76,12 @@ export const runnerApi: RunnerApi = {
     if (!('applied' in body)) {
       return { kind: 'retry', detail: 'unexpected response' };
     }
-    return { kind: 'ok', applied: body.applied, completed: body.completed };
+    return {
+      kind: 'ok',
+      applied: body.applied,
+      completed: body.completed,
+      stageCompleted: body.stageCompleted,
+    };
   },
 
   async reportError(kifuNo, body): Promise<ErrorReportResult> {
@@ -90,7 +96,8 @@ export const runnerApi: RunnerApi = {
 };
 
 /**
- * 未解析の棋譜の番号（新しい順。prd/14 §5.10「使用中は常に」）。
+ * 未解析（full が未完了）の棋譜の番号（prd/14 §5.10「使用中は常に」）。**quick が未完了のものが先**、
+ * それぞれ新しい順（並びは server が決める。web は段を推測しない）。
  * 401 はログイン切れとして返す（解析を止めて `GET /api/me` を取り直す）。それ以外の失敗は投げる
  */
 export async function fetchPendingKifuNos(): Promise<PendingResult> {

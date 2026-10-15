@@ -195,13 +195,10 @@ function KifuListPage() {
   // 表示中のページに未完了（詳細解析まで終わっていない・失敗もしていない）の棋譜が 1 件でも
   // あれば待つ。待っている間は短間隔ポーリング + 定期 invalidate が回るので、解析全体が
   // ポーリングの合間に収まっても、次の周期でバッジが「解析済み」に入れ替わる
-  // 完了の線は解析する側で変わる（`isAnalysisPending`。prd/14 §5.7）
+  // 完了は解析する側によらず詳細解析まで（`isAnalysisPending`。prd/14 §5.7）
   const assignee = useAnalysisAssignee();
   const pendingAnalysis = kifus.some((kifu) =>
-    isAnalysisPending(
-      { analysisProfile: kifu.analysisProfile, failed: kifu.failed },
-      assignee,
-    ),
+    isAnalysisPending({ analysisProfile: kifu.analysisProfile, failed: kifu.failed }),
   );
   const { progress, estimated } = useAnalysisProgress({
     pending: pendingAnalysis,

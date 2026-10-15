@@ -111,20 +111,17 @@ function KifuDetailPage() {
       : null;
 
   // 🔴 **この画面が解析の完了を待っているか**をローダーのデータから導く（決定・2026-09-07）。
-  // 完了の線は解析する側で変わる（`isAnalysisPending`。prd/14 §5.7）: サーバーで解析するなら詳細解析まで、
-  // ブラウザで解析するなら 1 段（quick として保存）が終われば完了。
+  // 完了は解析する側によらず詳細解析（full）まで（`isAnalysisPending`。prd/14 §5.7）。
   // 失敗記録済みの棋譜は poll から外れて進まないので待たない（prd/05 §1.1a）。
   // 待っている間は短間隔ポーリング + 定期 invalidate が回り、簡易解析が 20 秒で終わっても
   // 手で再読み込みせずに結果へ切り替わる（ポーリングの合間に解析全体が収まっても取りこぼさない）
   const assignee = useAnalysisAssignee();
-  const pendingAnalysis = isAnalysisPending(
-    {
-      analysisProfile: kifu.analysisProfile,
-      failed: !!kifu.analysisError,
-    },
-    assignee,
-  );
+  const pendingAnalysis = isAnalysisPending({
+    analysisProfile: kifu.analysisProfile,
+    failed: !!kifu.analysisError,
+  });
   // ブラウザで解析するユーザーでは、開いている間この棋譜を（最優先で）解析させる（prd/14 §5.10）。
+  // 🔒 full まで待つので、quick が終わっても外さない（quick → full を続けて回す）。
   // 指し手列の無い棋譜は解析の対象にならないので知らせない
   const browserPending =
     assignee === 'browser' && pendingAnalysis && kifu.usiMoves !== null;

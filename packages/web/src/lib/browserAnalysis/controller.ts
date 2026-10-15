@@ -28,7 +28,11 @@ import {
   type RunnerLog,
 } from './runner';
 import { createScheduler } from './scheduler';
-import type { AnalysisMode } from './settings';
+import {
+  getBrowserAnalysisSettings,
+  type AnalysisLoad,
+  type AnalysisMode,
+} from './settings';
 import {
   getAnalysisFocus,
   onAnalysisFocusChange,
@@ -103,11 +107,12 @@ async function createEngine(
   manifest: EngineManifest,
   urls: EngineUrls,
   settings: ServerAnalysisSettings,
+  load: AnalysisLoad,
   signal: AbortSignal,
   patch: typeof patchBrowserAnalysisState,
 ): Promise<AnalysisEngine> {
   log.info(
-    `loading engine build=${manifest.engine.buildId} eval=${manifest.eval.sha256.slice(0, 16)} host=${engineHostUrl}`,
+    `loading engine build=${manifest.engine.buildId} eval=${manifest.eval.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
   );
   patch({
     phase: 'loading',
@@ -142,7 +147,7 @@ async function createEngine(
         : undefined,
     });
     await session.start();
-    const options = engineOptions(manifest, settings, navigator.hardwareConcurrency);
+    const options = engineOptions(manifest, settings, navigator.hardwareConcurrency, load);
     for (const [name, value] of options.options) session.setOption(name, value);
     await session.ready();
     const name = session.getName() ?? null;
@@ -172,7 +177,7 @@ export interface BrowserAnalysisOptions {
   mode: AnalysisMode;
   /** ダウンロードに同意した評価関数のハッシュ（端末の設定） */
   consentEvalSha256: string | null;
-  /** 棋譜の解析が一区切りした。画面のデータを取り直す */
+  /** 棋譜の解析が一区切りした（段が 1 つ揃ったときも）。画面のデータを取り直す */
   onSettled(): void;
   /** 担当が変わった・ログインが切れた。`GET /api/me` を取り直す */
   onAccountChanged(): void;
@@ -224,8 +229,10 @@ async function main(
       fvScale: manifest.fvScale,
     },
     // エンジンの読み込みは、棋譜の中断ではなく常駐の停止（`signal`）で止める
-    createEngine: (settings) =>
-      createEngine(manifest, urls, settings, signal, patch),
+    createEngine: (settings, load) =>
+      createEngine(manifest, urls, settings, load, signal, patch),
+    // 負荷の設定は常駐を作り直さずに読む（変えたら次の解析の開始で、エンジンを作り直して効かせる）
+    currentLoad: () => getBrowserAnalysisSettings().load,
     sleep,
     now: () => Date.now(),
     visibility: createVisibility(signal),
@@ -236,11 +243,13 @@ async function main(
           : { phase: 'idle', progress: null },
       );
     },
+    // quick が揃ったら、full の完了を待たずに画面のデータを取り直す（quick の結果を出す）
+    onStageCompleted: () => options.onSettled(),
     log,
   });
   const scheduler = createScheduler({
     mode: options.mode,
-    analyze: (kifuNo, kifuSignal) => runner.analyze(kifuNo, kifuSignal),
+    analyze: (kifuNo, kifuSignal, hooks) => runner.analyze(kifuNo, kifuSignal, hooks),
     pending: fetchPendingKifuNos,
     // ロックを取れたら `fn` を実行し、終わるまで持つ。待っている間に中断されたら AbortError で拒否される
     withLock: <T,>(lockSignal: AbortSignal, fn: () => Promise<T>) =>

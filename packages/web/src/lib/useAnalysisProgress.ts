@@ -87,13 +87,13 @@ export function useAnalysisProgress({
       revalidateOnFocus: false,
     },
   );
-  // ブラウザの解析は 1 段だけ（quick として保存する）。それが最終段なので、表示は薄くしない
-  // ——`profile` は円環の濃さにしか使わないので、濃いほう（`full`）として渡す
+  // ブラウザの解析も 2 段（quick → full）。手元 worker の進捗と同じく、quick は薄く・full は濃く出す
+  // （段が替わると円環は 0 から濃く出直す。`profile` は円環の濃さと推定の区切りにしか使わない）
   const localProgress: AnalysisProgress | null = local
     ? {
         kifuNo: local.kifuNo,
         revision: local.revision,
-        profile: 'full',
+        profile: local.profile,
         analyzed: local.analyzed,
         total: local.total,
         updatedAt: '',

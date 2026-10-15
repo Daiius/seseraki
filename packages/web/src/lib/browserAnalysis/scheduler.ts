@@ -2,14 +2,19 @@
  * どの棋譜をいつ解析するか（prd/14 §5.10）。常駐して、棋譜を 1 つずつ {@link KifuRunner} に渡す。
  *
  * - **詳細ページだけ**（`detail`）: 開いている詳細ページの棋譜だけを解析する。ページを離れたら中断する
- * - **使用中は常に**（`always`）: 開いている詳細の棋譜を最優先し、ほかは server が返す未解析の一覧の順（新しい順）。
+ * - **使用中は常に**（`always`）: 開いている詳細の棋譜を最優先し、ほかは server が返す未解析の一覧の順。
  *   ほかの棋譜を解析している最中に詳細ページを開いたら、局面の境目で中断してそちらへ移る
+ * - 🔒 **2 段の順序**（prd/14 §5.10）: 1 つの棋譜は quick → full を続けて回す（runner）。開いている詳細の棋譜は
+ *   full まで譲らない。使用中は常に: 未解析の全棋譜の quick を先に、その後 full を新しい順。
+ *   **full の途中に、一覧の先頭（空け時間の中のものを除く）が今の棋譜でなくなったら、局面の境目で譲る**。
+ *   一覧は server が「quick 未完了が先・それぞれ新しい順」に並べて返すので、web は段を推測せず、
+ *   「今選び直したら別の棋譜を選ぶか」だけを見る（quick 待ちの棋譜が現れたとき、それが先頭に来る）
  * - 🔒 **同じブラウザの中の解析は 1 本**（Web Locks）。棋譜 1 つごとにロックを取り、ほかのタブと順番に進める。
  *   エンジンを読み込むのはロックを取ったタブだけ（読み込みは runner が最初の解析のときに行う）
  *
  * 依存は注入する（unit テスト用）。DOM には触れない。
  */
-import type { KifuOutcome, RunnerLog } from './runner';
+import type { AnalyzeHooks, KifuOutcome, RunnerLog } from './runner';
 import type { AnalysisMode } from './settings';
 
 export type PendingResult =
@@ -28,8 +33,15 @@ export function pendingStatusKind(
 export interface SchedulerDeps {
   mode: AnalysisMode;
   /** 1 つの棋譜を解析する（{@link KifuRunner.analyze}） */
-  analyze(kifuNo: number, signal: AbortSignal): Promise<KifuOutcome>;
-  /** 未解析の棋譜の番号（新しい順）。ログイン切れ（401）はそう返す。ほかの失敗は投げる */
+  analyze(
+    kifuNo: number,
+    signal: AbortSignal,
+    hooks: AnalyzeHooks,
+  ): Promise<KifuOutcome>;
+  /**
+   * 未解析の棋譜の番号（server の並び: quick 未完了が先・それぞれ新しい順）。
+   * ログイン切れ（401）はそう返す。ほかの失敗は投げる
+   */
   pending(): Promise<PendingResult>;
   /**
    * 同じブラウザの中で 1 つだけが `fn` を実行するようにする（Web Locks）。
@@ -84,6 +96,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   const eligible = (kifuNo: number) =>
     (cooldownUntil.get(kifuNo) ?? 0) <= deps.now();
+
+  /**
+   * full を回している棋譜を、ほかの棋譜に譲るか（{@link AnalyzeHooks.shouldYield}）。
+   * - 開いている詳細の棋譜・詳細ページだけ（`detail`）では譲らない
+   * - 使用中は常に: 未解析の一覧で、選べる先頭が今の棋譜でなければ譲る（一覧が取れなければ譲らない）
+   */
+  const shouldYield = async (kifuNo: number): Promise<boolean> => {
+    if (mode !== 'always' || focus === kifuNo) return false;
+    let result: PendingResult;
+    try {
+      result = await deps.pending();
+    } catch {
+      return false;
+    }
+    // ログイン切れは次の選び直しで受ける（ここでは解析を続ける）
+    if (result.kind !== 'ok') return false;
+    const head = result.kifuNos.find(eligible);
+    if (head === undefined || head === kifuNo) return false;
+    log.info(`kifu #${kifuNo}: kifu #${head} comes first in the pending list`);
+    return true;
+  };
 
   const pick = async (): Promise<number | null | 'unauthorized'> => {
     if (focus !== null && eligible(focus)) return focus;
@@ -159,7 +192,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       let outcome: KifuOutcome;
       try {
         outcome = await deps.withLock(controller.signal, () =>
-          deps.analyze(kifuNo, controller.signal),
+          deps.analyze(kifuNo, controller.signal, {
+            shouldYield: () => shouldYield(kifuNo),
+          }),
         );
       } catch (error) {
         // ロックを待っている間の中断は拒否で返る。それ以外は想定外なので、後回しにして続ける
@@ -177,6 +212,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       switch (outcome.kind) {
         case 'aborted':
+          break;
+        case 'yielded':
+          // 空け時間を置かない。一覧の先頭を解析し終えたら、また一覧の並びで選ばれる
           break;
         case 'complete':
           cooldownUntil.set(kifuNo, deps.now() + COOLDOWN_MS.complete);

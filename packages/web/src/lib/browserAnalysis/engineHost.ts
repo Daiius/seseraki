@@ -9,6 +9,7 @@
 import type { EngineManifest, UsiTransport } from 'shared';
 import type { BrowserAnalysisSettings as ServerAnalysisSettings } from 'shared';
 import type { EngineUrls } from './enginePaths';
+import type { AnalysisLoad } from './settings';
 
 /** ホストへ送るメッセージ */
 export type HostRequest =
@@ -176,11 +177,30 @@ export interface EngineOptions {
 }
 
 /**
+ * スレッド数（prd/14 §5.10 負荷の設定）。
+ * - 全力（`max`）: **論理コア数と server の上限の小さいほう**
+ * - 控えめ（`gentle`）: 全力の半分（切り捨て・最低 1）
+ * 論理コア数が分からなければ 1。
+ */
+export function analysisThreads(
+  hardwareConcurrency: number | undefined,
+  maxThreads: number,
+  load: AnalysisLoad,
+): number {
+  const cores =
+    typeof hardwareConcurrency === 'number' && hardwareConcurrency >= 1
+      ? Math.floor(hardwareConcurrency)
+      : 1;
+  const full = Math.max(1, Math.min(cores, Math.floor(maxThreads)));
+  return load === 'gentle' ? Math.max(1, Math.floor(full / 2)) : full;
+}
+
+/**
  * エンジンのオプション（prd/14 §5.5）。
  *
  * - 評価関数は仮想 FS のルートに `nn.bin` で置いてある（ホスト）ので、`EvalDir .` / `EvalFile nn.bin`
  * - `FV_SCALE` は manifest の値（手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない）
- * - スレッド数は**論理コア数と server の上限の小さいほう**
+ * - スレッド数は負荷の設定で決まる（{@link analysisThreads}）
  * - 定跡は使わない（`BookFile no_book`）
  * - `ConsiderationMode true` は手元 worker と同じ（探索を打ち切ったときの読み筋を置換表から延ばす）
  */
@@ -188,12 +208,9 @@ export function engineOptions(
   manifest: Pick<EngineManifest, 'fvScale'>,
   settings: Pick<ServerAnalysisSettings, 'maxThreads' | 'hashMb'>,
   hardwareConcurrency: number | undefined,
+  load: AnalysisLoad,
 ): EngineOptions {
-  const cores =
-    typeof hardwareConcurrency === 'number' && hardwareConcurrency >= 1
-      ? Math.floor(hardwareConcurrency)
-      : 1;
-  const threads = Math.max(1, Math.min(cores, Math.floor(settings.maxThreads)));
+  const threads = analysisThreads(hardwareConcurrency, settings.maxThreads, load);
   const hashMb = Math.max(1, Math.floor(settings.hashMb));
   return {
     threads,

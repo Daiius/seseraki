@@ -2,6 +2,13 @@
  * 1 つの棋譜をブラウザで解析する（prd/14 §5.2・§5.8）。
  * 開始の口 → 解析のループ（shared の `analyzeKifuForBrowser`）→ チャンクの報告 → 完了。
  *
+ * **2 段**（prd/14 §5.2・§5.8）: 開始の口が段（`profile`。quick / full）と、その段の再開位置・思考時間を返す。
+ * 🔒 **段はブラウザが決めない**——返った段と思考時間で回し、チャンクの本文にその段を載せる（server が照合する）。
+ * quick が揃った（`stageCompleted`）ら、同じ棋譜を続けて full へ（開始の口を叩き直して full を受け取る）。
+ * 棋譜の完了は `completed`（full まで揃った）。
+ * full を回している間は、呼び出し側が「ほかの棋譜に譲るか」（{@link AnalyzeHooks.shouldYield}）を
+ * 局面の境目で聞く（quick 待ちの棋譜を先にするため。prd/14 §5.10）。
+ *
  * 🔒 **依存はすべて注入する**（API・エンジン・時計・待ち・画面の可視）。DOM にも fetch にも触れないので、
  * 偽のエンジンと偽の API で unit テストできる。
  *
@@ -22,10 +29,14 @@ import {
   type BrowserAnalysisSettings as ServerAnalysisSettings,
   type UsiAnalysisEngine,
 } from 'shared';
+import type { AnalysisLoad } from './settings';
 
 /** 開始の口の応答を、次にすることで分けたもの */
+/** 解析の段（prd/14 §5.7。server が決める） */
+export type AnalysisStage = 'quick' | 'full';
+
 export type StartResult =
-  | { kind: 'run'; run: BrowserAnalysisRun }
+  | { kind: 'run'; run: BrowserAnalysisRun; profile: AnalysisStage }
   /** 解析しない（解析済み・失敗の記録あり・指し手列が無い・棋譜が無い） */
   | { kind: 'skip'; reason: SkipReason }
   /** 担当がブラウザでない（409） */
@@ -40,7 +51,14 @@ export type StartResult =
 export type SkipReason = 'complete' | 'failed' | 'unanalyzable' | 'not-found';
 
 export type ChunkResult =
-  | { kind: 'ok'; applied: boolean; completed: boolean }
+  | {
+      kind: 'ok';
+      applied: boolean;
+      /** full まで揃った（解析全体の完了） */
+      completed: boolean;
+      /** 届いたチャンクの段が揃った */
+      stageCompleted: boolean;
+    }
   /** 入力の誤りとして拒否された（4xx）。送り直しても変わらない */
   | { kind: 'rejected'; status: number }
   | { kind: 'unauthorized' }
@@ -109,6 +127,8 @@ export interface RunnerLog {
 export interface LocalProgress {
   kifuNo: number;
   revision: number;
+  /** いま回している段（円環の濃さに使う。quick は薄く出す——手元 worker の進捗と同じ見え方） */
+  profile: AnalysisStage;
   /** 解析済みの局面数 */
   analyzed: number;
   /** 全局面数（指し手数 + 1） */
@@ -124,7 +144,15 @@ export interface RunnerDeps {
    * ⚠ 棋譜の中断では止めない（詳細ページを離れただけで、数十 MB のダウンロードを捨てない）。
    * 止めるのは常駐そのものを止めるときで、それは呼び出し側（`createEngine` の実装）が受け持つ
    */
-  createEngine(settings: ServerAnalysisSettings): Promise<AnalysisEngine>;
+  createEngine(
+    settings: ServerAnalysisSettings,
+    load: AnalysisLoad,
+  ): Promise<AnalysisEngine>;
+  /**
+   * 今の負荷の設定（端末の設定。prd/14 §5.10）。開始の口を叩くたびに読み、前と違えばエンジンを作り直す
+   * ——スレッド数の変更は、次の解析（次の段・次の棋譜）の開始から効く
+   */
+  currentLoad(): AnalysisLoad;
   /** `ms` 待つ。中断されたら待たずに解決する */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   now(): number;
@@ -136,7 +164,22 @@ export interface RunnerDeps {
     waitVisible(signal: AbortSignal): Promise<void>;
   };
   onProgress(progress: LocalProgress | null): void;
+  /**
+   * 棋譜の段が 1 つ揃った（quick の完了。full の完了は解析の結果 `complete` で返る）。
+   * 画面のデータを取り直す合図——quick の結果を、full の完了を待たずに画面に出す
+   */
+  onStageCompleted(kifuNo: number, profile: AnalysisStage): void;
   log: RunnerLog;
+}
+
+/** 1 回の解析ごとに呼び出し側が渡すもの */
+export interface AnalyzeHooks {
+  /**
+   * full を回している間、ほかの棋譜に譲るか（true なら局面の境目で未送信のチャンクを送って止め、`yielded` を返す）。
+   * full の開始の前と、full の途中の局面の境目で（{@link YIELD_CHECK_INTERVAL_MS} ごとに）呼ぶ。
+   * quick の間は呼ばない（quick 同士は譲らない）
+   */
+  shouldYield?(): Promise<boolean>;
 }
 
 export type KifuOutcome =
@@ -146,6 +189,8 @@ export type KifuOutcome =
   | { kind: 'failed'; error: string }
   /** 中断された（未送信のチャンクは送ってある） */
   | { kind: 'aborted' }
+  /** full の途中で、ほかの棋譜に譲った（未送信のチャンクは送ってある。{@link AnalyzeHooks.shouldYield}） */
+  | { kind: 'yielded' }
   /** 今は進められない（通信の失敗が続いた・世代が進み続けた）。失敗とは記録していない。後で試す */
   | { kind: 'deferred'; detail: string }
   /** これ以上どの棋譜も解析しない */
@@ -163,6 +208,8 @@ export const MAX_STALE_RESTARTS = 3;
 export const MAX_ENGINE_LOAD_ATTEMPTS = 2;
 /** 1 つの棋譜で開始の口を呼ぶ回数の上限（どの経路でも回り続けないための歯止め） */
 export const MAX_ROUNDS = 12;
+/** full の途中で「ほかの棋譜に譲るか」を聞く間隔（局面の境目ごとに叩くと、未解析の一覧を叩きすぎる） */
+export const YIELD_CHECK_INTERVAL_MS = 15_000;
 
 class StaleReportError extends Error {}
 class DeferError extends Error {}
@@ -185,8 +232,14 @@ const messageOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
 export interface KifuRunner {
-  /** 1 つの棋譜を解析する。`signal` で中断すると、局面の境目で未送信のチャンクを送ってから戻る */
-  analyze(kifuNo: number, signal: AbortSignal): Promise<KifuOutcome>;
+  /**
+   * 1 つの棋譜を解析する（quick → full を続けて）。`signal` で中断すると、局面の境目で未送信のチャンクを送ってから戻る
+   */
+  analyze(
+    kifuNo: number,
+    signal: AbortSignal,
+    hooks?: AnalyzeHooks,
+  ): Promise<KifuOutcome>;
   /** エンジンを止める */
   dispose(): void;
 }
@@ -206,11 +259,14 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
   const ensureEngine = async (
     settings: ServerAnalysisSettings,
   ): Promise<AnalysisEngine> => {
-    // スレッド数・置換表の指定が変わったら作り直す（server の定数なので普段は変わらない）
-    const key = `${settings.maxThreads}:${settings.hashMb}`;
+    // スレッド数・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
+    // ⚠ スレッド数は動いているエンジンに setoption で変えず、作り直す（WASM のスレッドの確保を実機で確かめていないため）
+    const load = deps.currentLoad();
+    const key = `${settings.maxThreads}:${settings.hashMb}:${load}`;
     if (engine && engineSettingsKey === key) return engine;
+    if (engine) log.info(`recreating the engine (${engineSettingsKey} -> ${key})`);
     disposeEngine();
-    const created = await deps.createEngine(settings);
+    const created = await deps.createEngine(settings, load);
     if (disposed) {
       // 読み込んでいる間に止められた。使わずに捨てる
       created.dispose();
@@ -250,7 +306,17 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
   const analyze = async (
     kifuNo: number,
     signal: AbortSignal,
+    hooks: AnalyzeHooks = {},
   ): Promise<KifuOutcome> => {
+    /** 譲るかを聞く（聞けなければ譲らない） */
+    const askYield = async (): Promise<boolean> => {
+      if (!hooks.shouldYield) return false;
+      try {
+        return await hooks.shouldYield();
+      } catch {
+        return false;
+      }
+    };
     let staleRestarts = 0;
     let engineLoadFailures = 0;
     /** 直前にエンジンが失敗した局面（世代と局面番号）。作り直した後に同じ所で失敗したら報告する */
@@ -280,11 +346,17 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
           case 'fatal':
             return { kind: 'halt', reason: 'fatal', detail: started.detail };
         }
-        const { run } = started;
+        const { run, profile } = started;
         const total = run.usiMoves.length + 1;
         log.info(
-          `kifu #${kifuNo}: start revision=${run.revision} from=${run.startMoveNumber}/${total} movetime=${run.settings.movetimeMs}ms`,
+          `kifu #${kifuNo}: start ${profile} revision=${run.revision} from=${run.startMoveNumber}/${total} movetime=${run.settings.movetimeMs}ms`,
         );
+        // full を始める前に、先にすべき棋譜（quick 待ち）が無いか聞く。エンジンを読み込む前に聞いて、無駄に読み込まない
+        if (profile === 'full' && (await askYield())) {
+          log.info(`kifu #${kifuNo}: yielding before full`);
+          return { kind: 'yielded' };
+        }
+        if (signal.aborted) return { kind: 'aborted' };
 
         let current: AnalysisEngine;
         try {
@@ -312,18 +384,35 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
         let cursor = run.startMoveNumber;
         let positionStartedAt = deps.now();
         let completed = false;
-        deps.onProgress({ kifuNo, revision: run.revision, analyzed: cursor, total });
+        let stageCompleted = false;
+        let yielded = false;
+        let lastYieldCheck = deps.now();
+        deps.onProgress({ kifuNo, revision: run.revision, profile, analyzed: cursor, total });
 
         try {
           const summary = await analyzeKifuForBrowser(current.session, run, {
             onPositionBoundary: async () => {
-              positionStartedAt = deps.now();
               // 中断は局面の境目で受ける（未送信のチャンクは解析のループが送ってから戻る）
+              if (signal.aborted) return true;
+              // full の途中: しばらくごとに、ほかの棋譜（quick 待ち）に譲るかを聞く
+              if (
+                profile === 'full' &&
+                hooks.shouldYield &&
+                deps.now() - lastYieldCheck >= YIELD_CHECK_INTERVAL_MS
+              ) {
+                lastYieldCheck = deps.now();
+                if (await askYield()) {
+                  yielded = true;
+                  return true;
+                }
+              }
+              // 聞いている間の時間は、局面の解析の時間に数えない（隠れていた間の失敗の判定に使う）
+              positionStartedAt = deps.now();
               return signal.aborted;
             },
             onProgress: (analyzed) => {
               cursor = analyzed;
-              deps.onProgress({ kifuNo, revision: run.revision, analyzed, total });
+              deps.onProgress({ kifuNo, revision: run.revision, profile, analyzed, total });
             },
             onChunk: async (analyses) => {
               const first = analyses[0].moveNumber;
@@ -338,6 +427,8 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
                   threads: current.threads,
                   hashMb: current.hashMb,
                   movetimeMs: run.settings.movetimeMs,
+                  // 開始の口が返した段をそのまま申告する（server が棋譜の状態と照合する）
+                  profile,
                   analyses,
                 }),
               );
@@ -350,16 +441,29 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
                   throw new RejectedReportError(result.status);
                 case 'ok':
                   log.info(
-                    `kifu #${kifuNo}: chunk ${first}..${last} applied=${result.applied} completed=${result.completed}`,
+                    `kifu #${kifuNo}: ${profile} chunk ${first}..${last} applied=${result.applied} stageCompleted=${result.stageCompleted} completed=${result.completed}`,
                   );
                   if (!result.applied) throw new StaleReportError();
+                  if (result.stageCompleted) stageCompleted = true;
                   if (result.completed) completed = true;
               }
             },
           });
-          if (summary.interrupted) return { kind: 'aborted' };
-          // 完了のログは呼び出し側（一区切りの通知）が出す。ここでも出すと 2 行になる
           if (completed) return { kind: 'complete' };
+          if (summary.interrupted) {
+            if (yielded && !signal.aborted) {
+              log.info(`kifu #${kifuNo}: yielding at position ${cursor} of full`);
+              return { kind: 'yielded' };
+            }
+            return { kind: 'aborted' };
+          }
+          // 完了のログは呼び出し側（一区切りの通知）が出す。ここでも出すと 2 行になる
+          if (stageCompleted && profile === 'quick') {
+            // quick が揃った。画面に quick の結果を出させ、開始の口を叩き直して full を受け取る
+            log.info(`kifu #${kifuNo}: quick complete. continuing to full`);
+            deps.onStageCompleted(kifuNo, profile);
+            continue;
+          }
           // 最後まで送ったのに完了の応答が無い。開始からやり直して server に状態を聞く
           continue;
         } catch (error) {

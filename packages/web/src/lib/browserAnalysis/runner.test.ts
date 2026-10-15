@@ -10,13 +10,17 @@ import {
   errorReportResultOf,
   MAX_STALE_RESTARTS,
   RETRY_DELAYS_MS,
+  YIELD_CHECK_INTERVAL_MS,
   type AnalysisEngine,
+  type AnalysisStage,
+  type AnalyzeHooks,
   type ChunkResult,
   type ErrorReportResult,
   type LocalProgress,
   type RunnerDeps,
   type StartResult,
 } from './runner';
+import type { AnalysisLoad } from './settings';
 
 // 4 手の棋譜（局面は 0..4 の 5 つ）。チャンクは 2 局面ごとに切る
 const USI_MOVES = ['7g7f', '3c3d', '2g2f', '8c8d'];
@@ -36,8 +40,12 @@ const ENGINE_INFO = {
   fvScale: 16,
 };
 
-const runOf = (overrides: Partial<BrowserAnalysisRun> = {}): StartResult => ({
+const runOf = (
+  overrides: Partial<BrowserAnalysisRun> = {},
+  profile: AnalysisStage = 'full',
+): StartResult => ({
   kind: 'run',
+  profile,
   run: {
     revision: 7,
     startMoveNumber: 0,
@@ -73,7 +81,21 @@ interface Harness {
   progress: (LocalProgress | null)[];
   waitedVisible: number;
   hidden: boolean;
+  /** 負荷の設定（`currentLoad` が返す） */
+  load: AnalysisLoad;
+  /** エンジンを作ったときの負荷 */
+  engineLoads: AnalysisLoad[];
+  stageCompleted: { kifuNo: number; profile: AnalysisStage }[];
+  /** 時計（`now` が返す） */
+  time: number;
 }
+
+/** チャンクの応答（既定は、段が揃ったら全体も揃う＝ full の段の応答） */
+const okChunk = (
+  applied: boolean,
+  completed: boolean,
+  stageCompleted = completed,
+): ChunkResult => ({ kind: 'ok', applied, completed, stageCompleted });
 
 function harness(script: {
   start?: (call: number) => StartResult;
@@ -92,6 +114,10 @@ function harness(script: {
     progress: [],
     waitedVisible: 0,
     hidden: false,
+    load: 'max',
+    engineLoads: [],
+    stageCompleted: [],
+    time: 1_000,
     deps: undefined as unknown as RunnerDeps,
   };
   h.deps = {
@@ -103,15 +129,16 @@ function harness(script: {
         const last = chunk.analyses.at(-1)!.moveNumber;
         return script.chunk
           ? script.chunk(chunk, h.chunks.length - 1)
-          : { kind: 'ok', applied: true, completed: last === USI_MOVES.length };
+          : okChunk(true, last === USI_MOVES.length);
       },
       reportError: async (_no, body) => {
         h.errors.push(body);
         return script.reportError ? script.reportError() : 'recorded';
       },
     },
-    createEngine: async () => {
+    createEngine: async (_settings, load) => {
       const engineNo = h.engines.length;
+      h.engineLoads.push(load);
       script.createEngine?.(engineNo);
       const engine: AnalysisEngine & { disposed: boolean } = {
         disposed: false,
@@ -135,7 +162,9 @@ function harness(script: {
     sleep: async (ms) => {
       h.sleeps.push(ms);
     },
-    now: () => 1_000,
+    now: () => h.time,
+    currentLoad: () => h.load,
+    onStageCompleted: (kifuNo, profile) => h.stageCompleted.push({ kifuNo, profile }),
     visibility: {
       isHidden: () => h.hidden,
       lastChangedAt: () => null,
@@ -199,6 +228,8 @@ describe('createKifuRunner', () => {
       threads: 4,
       hashMb: 64,
       movetimeMs: 300,
+      // 開始の口が返した段をそのまま申告する
+      profile: 'full',
     });
     expect(h.chunks[0].analyses[0].candidates).toEqual([
       { rank: 1, move: '7g7f', scoreType: 'cp', scoreValue: 42, depth: 12, pv: ['7g7f', '3c3d'] },
@@ -243,12 +274,8 @@ describe('createKifuRunner', () => {
       start: (call) => (call === 0 ? runOf() : runOf({ revision: 8 })),
       chunk: (chunk, call) =>
         call === 0
-          ? { kind: 'ok', applied: false, completed: false }
-          : {
-              kind: 'ok',
-              applied: true,
-              completed: chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length,
-            },
+          ? okChunk(false, false)
+          : okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length),
     });
     const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
 
@@ -268,7 +295,7 @@ describe('createKifuRunner', () => {
 
   it('破棄が続いたら、失敗にはせず後回しにする', async () => {
     const h = harness({
-      chunk: () => ({ kind: 'ok', applied: false, completed: false }),
+      chunk: () => (okChunk(false, false)),
     });
     const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
@@ -285,11 +312,7 @@ describe('createKifuRunner', () => {
           if (failures === 1) throw new Error('network down');
           return { kind: 'retry', detail: 'status 503' };
         }
-        return {
-          kind: 'ok',
-          applied: true,
-          completed: chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length,
-        };
+        return okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length);
       },
     });
     const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
@@ -426,11 +449,7 @@ describe('createKifuRunner', () => {
       chunk: (chunk) =>
         chunk.revision === 7
           ? { kind: 'rejected', status: 400 }
-          : {
-              kind: 'ok',
-              applied: true,
-              completed: chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length,
-            },
+          : okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length),
       reportError: () => 'discarded',
     });
     const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
@@ -531,5 +550,173 @@ describe('createKifuRunner', () => {
       detail: '送れません (403)',
     });
     expect(unauthorized.errors).toEqual([]);
+  });
+});
+
+describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
+  const QUICK = { ...SETTINGS, movetimeMs: 100 };
+  const FULL = { ...SETTINGS, movetimeMs: 600 };
+  /** server の役: 1 回目の開始は quick、quick が揃った後は full を返す。full が揃ったら完了 */
+  function twoStage(
+    extra: {
+      analyze?: (engineNo: number, position: number, h: Harness) => void;
+      fullFrom?: number;
+    } = {},
+  ) {
+    let quickDone = false;
+    let fullDone = false;
+    return harness({
+      start: () =>
+        fullDone
+          ? { kind: 'skip', reason: 'complete' }
+          : quickDone
+            ? runOf({ settings: FULL, startMoveNumber: extra.fullFrom ?? 0 }, 'full')
+            : runOf({ settings: QUICK }, 'quick'),
+      chunk: (chunk) => {
+        const last = chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length;
+        if (chunk.profile === 'quick') {
+          if (last) quickDone = true;
+          // quick が揃っても、解析全体（full まで）はまだ
+          return okChunk(true, false, last);
+        }
+        if (last) fullDone = true;
+        return okChunk(true, last, last);
+      },
+      analyze: extra.analyze,
+    });
+  }
+
+  it('quick が揃ったら、同じ棋譜を続けて full へ（開始の口を叩き直す）', async () => {
+    const h = twoStage();
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(h.starts).toBe(2);
+    // 段ごとに、開始の口が返した段と思考時間で回して申告する
+    expect(h.chunks.map((c) => [c.profile, c.movetimeMs, c.analyses[0].moveNumber])).toEqual([
+      ['quick', 100, 0],
+      ['quick', 100, 2],
+      ['quick', 100, 4],
+      ['full', 600, 0],
+      ['full', 600, 2],
+      ['full', 600, 4],
+    ]);
+    // quick が揃ったことを知らせる（画面に quick の結果を出す）。full の完了は結果で返す
+    expect(h.stageCompleted).toEqual([{ kifuNo: 3, profile: 'quick' }]);
+    // エンジンは段をまたいで使い回す
+    expect(h.engines).toHaveLength(1);
+  });
+
+  it('進捗は段ごとに 0 から数え直し、段を載せる（quick → full）', async () => {
+    const h = twoStage();
+    await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const shown = h.progress.filter((p) => p !== null);
+    expect(shown.map((p) => `${p.profile}:${p.analyzed}`)).toEqual([
+      'quick:0', 'quick:1', 'quick:2', 'quick:3', 'quick:4', 'quick:5',
+      'full:0', 'full:1', 'full:2', 'full:3', 'full:4', 'full:5',
+    ]);
+    expect(h.progress.at(-1)).toBeNull();
+  });
+
+  it('full の途中から再開する（開始の口が返す再開位置）', async () => {
+    const h = twoStage({ fullFrom: 3 });
+    await createKifuRunner(h.deps).analyze(3, neverAborted);
+    expect(
+      h.chunks.filter((c) => c.profile === 'full').flatMap((c) => c.analyses.map((a) => a.moveNumber)),
+    ).toEqual([3, 4]);
+  });
+
+  it('quick の間は譲るかを聞かない', async () => {
+    /** 聞かれたときに、送り済みだった quick のチャンクの数 */
+    const askedAfterQuickChunks: number[] = [];
+    const h = twoStage({
+      analyze: (_engineNo, _position, state) => {
+        state.time += YIELD_CHECK_INTERVAL_MS;
+      },
+    });
+    const hooks: AnalyzeHooks = {
+      shouldYield: async () => {
+        askedAfterQuickChunks.push(h.chunks.filter((c) => c.profile === 'quick').length);
+        return false;
+      },
+    };
+    expect(await createKifuRunner(h.deps).analyze(3, neverAborted, hooks)).toEqual({
+      kind: 'complete',
+    });
+    // 聞くのは full の開始の前と、full の途中（時計を間隔ぶん進めているので局面の境目ごと）だけ。
+    // quick の 3 チャンクを送り終えるまでは 1 度も聞かない
+    expect(askedAfterQuickChunks.length).toBeGreaterThan(1);
+    expect(askedAfterQuickChunks.every((n) => n === 3)).toBe(true);
+  });
+
+  it('full を始める前に譲れと言われたら、エンジンを読み込まずに譲る', async () => {
+    const h = harness({ start: () => runOf({}, 'full') });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldYield: async () => true,
+    });
+    expect(outcome).toEqual({ kind: 'yielded' });
+    expect(h.engines).toHaveLength(0);
+    expect(h.chunks).toEqual([]);
+  });
+
+  it('full の途中で譲れと言われたら、局面の境目で未送信のチャンクを送って譲る', async () => {
+    let yieldNow = false;
+    const h = harness({
+      start: () => runOf({}, 'full'),
+      analyze: (_engineNo, position, state) => {
+        state.time += YIELD_CHECK_INTERVAL_MS;
+        // 局面 2 を解析している間に、quick 待ちの棋譜が現れる
+        if (position === 2) yieldNow = true;
+      },
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldYield: async () => yieldNow,
+    });
+    expect(outcome).toEqual({ kind: 'yielded' });
+    expect(h.chunks.map((c) => c.analyses.map((a) => a.moveNumber))).toEqual([[0, 1], [2]]);
+    expect(h.errors).toEqual([]);
+    // エンジンは捨てない
+    expect(h.engines[0].disposed).toBe(false);
+  });
+
+  it('譲るかは間隔を空けて聞く（局面ごとに未解析の一覧を叩かない）', async () => {
+    let asked = 0;
+    const h = harness({ start: () => runOf({}, 'full') });
+    await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldYield: async () => {
+        asked++;
+        return false;
+      },
+    });
+    // 時計が進まないので、full の開始の前の 1 回だけ
+    expect(asked).toBe(1);
+  });
+
+  it('譲るかを聞けなかった（投げた）ら、譲らずに続ける', async () => {
+    const h = harness({
+      start: () => runOf({}, 'full'),
+      analyze: (_engineNo, _position, state) => {
+        state.time += YIELD_CHECK_INTERVAL_MS;
+      },
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldYield: async () => {
+        throw new Error('network down');
+      },
+    });
+    expect(outcome).toEqual({ kind: 'complete' });
+  });
+
+  it('負荷の設定が変わったら、次の解析の開始でエンジンを作り直す', async () => {
+    const h = harness({});
+    const runner = createKifuRunner(h.deps);
+    await runner.analyze(1, neverAborted);
+    expect(h.engineLoads).toEqual(['max']);
+
+    // 設定ページで「控えめ」に変えた。解析中のエンジンはそのまま、次の開始で作り直す
+    h.load = 'gentle';
+    await runner.analyze(2, neverAborted);
+    expect(h.engineLoads).toEqual(['max', 'gentle']);
+    expect(h.engines[0].disposed).toBe(true);
   });
 });

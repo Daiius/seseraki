@@ -5,6 +5,7 @@ import { client } from '../lib/honoClient';
 import {
   setBrowserAnalysisSettings,
   useBrowserAnalysisSettings,
+  type AnalysisLoad,
   type AnalysisMode,
 } from '../lib/browserAnalysis/settings';
 import { useBrowserAnalysisState } from '../lib/browserAnalysis/store';
@@ -32,7 +33,20 @@ const MODE_OPTIONS: { value: AnalysisMode; label: string; hint: string }[] = [
   {
     value: 'always',
     label: 'このアプリを開いている間は常に',
-    hint: 'どのページを開いていても、未解析の棋譜を新しい順に解析します。開いている棋譜が最優先です。',
+    hint: 'どのページを開いていても、未解析の棋譜を解析します。まず未解析の棋譜をすべて手早く解析し、そのあと新しい順に詳しく解析します。開いている棋譜が最優先です。',
+  },
+];
+
+const LOAD_OPTIONS: { value: AnalysisLoad; label: string; hint: string }[] = [
+  {
+    value: 'max',
+    label: '全力',
+    hint: 'この端末の CPU をできるだけ使って、早く解析します。',
+  },
+  {
+    value: 'gentle',
+    label: '控えめ',
+    hint: '使う CPU をおよそ半分に抑えます。解析は遅くなりますが、ほかの操作や電池への影響が小さくなります。',
   },
 ];
 
@@ -43,14 +57,15 @@ const UPSTREAM_REPO = 'https://github.com/yaneurao/YaneuraOu';
  * 解析の設定（prd/14 §5.7・§5.10）。
  *
  * - **解析する場所**（サーバー / ブラウザ）: アカウントの設定。選べるユーザー（`canChooseWorker`）にだけ出す
- * - **解析するタイミング**: 端末ごとの設定（localStorage）。ブラウザで解析するときだけ出す
+ * - **解析するタイミング**・**解析の負荷**: 端末ごとの設定（localStorage）。ブラウザで解析するときだけ出す。
+ *   負荷の変更は、次に解析を始めるときから効く（エンジンを作り直すため。解析中の棋譜は区切りまで今の負荷のまま）
  * - **エンジンと評価関数のライセンス・対応ソースの所在**: ブラウザへ配っているので表示する（§5.5）
  *
  * 文言に内部の用語（担当・段階・世代）は出さない。
  */
 export function AnalysisSettings({ me }: { me: Me }) {
   const router = useRouter();
-  const { mode } = useBrowserAnalysisSettings();
+  const { mode, load } = useBrowserAnalysisSettings();
   const { manifest } = useBrowserAnalysisState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +157,30 @@ export function AnalysisSettings({ me }: { me: Me }) {
                 </span>
               </label>
             ))}
+          </fieldset>
+
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-sm font-semibold mb-1">
+              解析の負荷（この端末の設定）
+            </legend>
+            {LOAD_OPTIONS.map((option) => (
+              <label key={option.value} className="flex items-start gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="analysis-load"
+                  className="radio radio-sm mt-0.5"
+                  checked={load === option.value}
+                  onChange={() => setBrowserAnalysisSettings({ load: option.value })}
+                />
+                <span>
+                  {option.label}
+                  <span className="block text-base-content/70">{option.hint}</span>
+                </span>
+              </label>
+            ))}
+            <p className="text-xs text-base-content/70">
+              変更は、次に解析を始めるときから効きます。
+            </p>
           </fieldset>
 
           <BrowserAnalysisNotice />

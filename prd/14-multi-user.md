@@ -478,8 +478,11 @@ CSA 直接貼り付けの再利用に備えて残す。
       `{ movetimeMs: 100（quick）| 600（full）, multiPv: 1, hashMb: 64, maxThreads: 8, chunkIntervalMs: 5000, chunkMaxPositions: 32, pvMaxPlies: 128 }`。
       web に焼き込まないのは、値を調整するときに web の再デプロイを要さないため
   - **チャンクの報告**: 本文は `{ revision, profile?, engineBuild, evalHash, engineName?, fvScale, threads, hashMb, movetimeMs, analyses }`。
-    🔒 **段（quick / full）は server が棋譜の状態から決める**（開始の口と同じ規則・棋譜の行ロックの下で）。`profile` は任意の申告で、
-    載っていて状態の段と違えば破棄する。**実行環境（`wasm`）・MultiPV（1）・定跡（なし）は server が固定する**（本文で受けない）。
+    🔒 **段（quick / full）は server が棋譜の状態から決める**（開始の口と同じ規則・棋譜の行ロックの下で）。届いたチャンクの段の申告と
+    照合し、状態の段と違えば破棄する。🔴 **申告は再送しても変わらない値から読む**（レビュー OCL-35F059B0・実装時に決定）:
+    本文の `profile`、無ければ `movetimeMs`（開始の口が返した値をそのまま載せる）が full の時間なら full・それ以外は quick
+    （`browserClaimedProfile`）。状態だけで決めると、quick の最後のチャンクの保存後に応答だけが失われたとき、その再送が full として
+    扱われる（複数チャンクなら 400 で棋譜の失敗に、1 チャンクなら 100ms の結果が full として保存される）。**実行環境（`wasm`）・MultiPV（1）・定跡（なし）は server が固定する**（本文で受けない）。
     応答は 201 `{ ok, applied, completed, stageCompleted, profile }`: `completed` は **full まで揃ったか**（解析全体の完了）、
     `stageCompleted` は届いた段が揃ったか、`profile` は受けた段（破棄なら null）。
     破棄（古い世代・担当違い・段違い・その段が完了済み・失敗の記録あり・同じ段の行と別のエンジン）は `applied: false`。

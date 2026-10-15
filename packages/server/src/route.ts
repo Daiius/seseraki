@@ -34,6 +34,7 @@ import { devLoginRoutes } from './dev-login.js';
 import { getProgressFor, clearProgress, clearProgressForOwner } from './analysis-progress.js';
 import {
   analysisAssigneeOf,
+  browserClaimedProfile,
   canChooseWorker,
   pendingBrowserKifuNos,
   recordAnalysisFailure,
@@ -870,7 +871,8 @@ const route = app
           hashMb,
           book: false,
         },
-        claimedProfile: profile,
+        // 段の申告は再送しても変わらない値から（本文の `profile`、無ければ `movetimeMs`）。状態と違えば破棄
+        claimedProfile: browserClaimedProfile({ profile, movetimeMs }),
         // 開始の口を通さずに別のエンジンの結果を重ねさせない（同じ段の行とだけ照合する。prd/14 §5.9）
         sameEngine: { engineBuild, evalHash },
         analyses,

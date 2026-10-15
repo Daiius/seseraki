@@ -90,6 +90,27 @@ export function browserStageOf(kifu: {
 }
 
 /**
+ * ブラウザのチャンクが「どの段のつもりで送られたか」（状態と照合する申告。prd/14 §5.8）。
+ *
+ * 🔴 **再送しても変わらない値から読む。** 段を状態だけで決めると、quick の最後のチャンクを保存した後に
+ * 応答だけが失われたとき、同じ本文の再送が（状態はもう quick 完了なので）full として扱われる
+ * ——複数チャンクの棋譜では full の連続性で 400（web が棋譜の失敗として記録する）、1 チャンクの棋譜では
+ * 100ms の結果が full として保存され出題まで作られる（レビュー OCL-35F059B0）。
+ *
+ * - 本文に `profile` があればそれ
+ * - 無ければ（段を送らない 1 段のままの web）**`movetimeMs` から読む**。web は開始の口が返した
+ *   `settings.movetimeMs` をそのまま載せるので、再送でも開始のときの段を指す。full の時間なら full、
+ *   それ以外（quick の時間・2 段化の前の 300ms など）は quick——**知らない時間を full と読まない**
+ */
+export function browserClaimedProfile(body: {
+  profile?: AnalysisProfile;
+  movetimeMs: number;
+}): AnalysisProfile {
+  if (body.profile !== undefined) return body.profile;
+  return body.movetimeMs === BROWSER_ANALYSIS_MOVETIME_MS.full ? 'full' : 'quick';
+}
+
+/**
  * 棋譜の指し方。worker の経路は内部の主キー、ログインの経路は所有者と番号（prd/14 §4.4）。
  * 🔒 ログインの経路は必ず後者で指す（所有者の条件が入る。他人の番号は「無い」）
  */

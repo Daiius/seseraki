@@ -956,6 +956,53 @@ describe('ログインの経路の API（所有者として。prd/14 §5.7・§5
     expect((await app.request('/api/positions/evaluate', ownerJson('POST', { sfen }))).status).not.toBe(403);
   });
 
+  it('🔴 quick の最後のチャンクの応答が失われて再送されても、full として受けない（段の無い本文。OCL-35F059B0）', async () => {
+    await switchOwner('browser');
+    try {
+      const quickBody = (revision: number, from: number, count: number) => ({ ...chunkBody(revision, from, count), movetimeMs: 100 });
+      const post = async (no: number, body: unknown) => {
+        const res = await app.request(`/api/kifus/${no}/analysis/chunks`, ownerJson('POST', body));
+        return [res.status, await res.json()];
+      };
+      const startOf = async (no: number) =>
+        (await (await app.request(`/api/kifus/${no}/analysis/start`, ownerJson('POST', START))).json()) as {
+          revision: number;
+          profile: string;
+          settings: { movetimeMs: number };
+        };
+
+      // 複数チャンクの棋譜: 最後のチャンク（2..3）を保存した後に応答が失われ、同じ本文を再送した
+      const multi = await newKifu(OWNER);
+      const m = await startOf(multi.displayNo);
+      expect(m).toMatchObject({ profile: 'quick', settings: { movetimeMs: 100 } });
+      await post(multi.displayNo, quickBody(m.revision, 0, 2));
+      expect(await post(multi.displayNo, quickBody(m.revision, 2, 2))).toEqual([
+        201,
+        { ok: true, applied: true, completed: false, stageCompleted: true, profile: 'quick' },
+      ]);
+      // 再送は 400 ではなく破棄（web は開始からやり直し、そこで full を受け取る）
+      expect(await post(multi.displayNo, quickBody(m.revision, 2, 2))).toEqual([
+        201,
+        { ok: true, applied: false, completed: false, stageCompleted: false, profile: null },
+      ]);
+      expect(await stateOf(multi.id)).toMatchObject({ profile: 'quick', fullCount: 0, error: null });
+      expect(await startOf(multi.displayNo)).toMatchObject({ profile: 'full', settings: { movetimeMs: 600 } });
+
+      // 1 チャンクの棋譜: 再送の 100ms の結果を full として保存しない（出題も作らない）
+      const single = await newKifu(OWNER);
+      const s1 = await startOf(single.displayNo);
+      await post(single.displayNo, quickBody(s1.revision, 0, POSITIONS));
+      expect(await post(single.displayNo, quickBody(s1.revision, 0, POSITIONS))).toEqual([
+        201,
+        { ok: true, applied: false, completed: false, stageCompleted: false, profile: null },
+      ]);
+      expect(await stateOf(single.id)).toMatchObject({ profile: 'quick', fullCount: 0 });
+      expect((await loadAnalysis(db, single.id)).runs.every((r) => r.profile === 'quick')).toBe(true);
+    } finally {
+      await switchOwner('worker');
+    }
+  });
+
   it('検証: 候補手 2 本・長すぎる読み筋・多すぎる局面・形の違う手は 400（何も書かない）', async () => {
     const kifu = await newKifu(OWNER);
     const url = `/api/kifus/${kifu.displayNo}/analysis/chunks`;

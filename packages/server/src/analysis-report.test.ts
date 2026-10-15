@@ -6,6 +6,7 @@ import {
   BROWSER_ANALYSIS_MOVETIME_MS,
   BROWSER_ANALYSIS_SETTINGS,
   browserAnalysisSettingsFor,
+  browserClaimedProfile,
   browserStageOf,
   canChooseWorker,
   classifyForSwitch,
@@ -93,6 +94,25 @@ describe('browserStageOf（ブラウザがいま回す段。prd/14 §5.8）', ()
     expect(browserStageOf({ completedAt: DONE, analysisProfile: 'quick' })).toBe('full');
     // 段階の記録が無い完了済み（移行前の取りこぼし）は quick 完了と読む
     expect(browserStageOf({ completedAt: DONE, analysisProfile: null })).toBe('full');
+  });
+});
+
+describe('browserClaimedProfile（チャンクの段の申告。再送で変わらない値から読む。OCL-35F059B0）', () => {
+  it('本文に段があればそれ', () => {
+    expect(browserClaimedProfile({ profile: 'full', movetimeMs: 100 })).toBe('full');
+    expect(browserClaimedProfile({ profile: 'quick', movetimeMs: 600 })).toBe('quick');
+  });
+
+  it('🔴 段の無い本文（1 段のままの web）は movetimeMs から読む: full の時間なら full、それ以外は quick', () => {
+    expect(browserClaimedProfile({ movetimeMs: BROWSER_ANALYSIS_MOVETIME_MS.quick })).toBe('quick');
+    expect(browserClaimedProfile({ movetimeMs: BROWSER_ANALYSIS_MOVETIME_MS.full })).toBe('full');
+    // 2 段化の前の 300ms・知らない時間を full と読まない（quick の再送が full として保存されない）
+    expect(browserClaimedProfile({ movetimeMs: 300 })).toBe('quick');
+    expect(browserClaimedProfile({ movetimeMs: 1000 })).toBe('quick');
+  });
+
+  it('🔒 段の時間は quick と full で違う値であること（同じだと段の申告を読めない）', () => {
+    expect(BROWSER_ANALYSIS_MOVETIME_MS.quick).not.toBe(BROWSER_ANALYSIS_MOVETIME_MS.full);
   });
 });
 

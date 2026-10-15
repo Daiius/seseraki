@@ -241,6 +241,11 @@ export const MAX_ENGINE_LOAD_ATTEMPTS = 2;
 export const MAX_ROUNDS = 12;
 /** full の途中で「ほかの棋譜に譲るか」を聞く間隔（局面の境目ごとに叩くと、未解析の一覧を叩きすぎる） */
 export const YIELD_CHECK_INTERVAL_MS = 15_000;
+/**
+ * ページが見えるのを待つ間に「採点の読みが待っているか」を聞く間隔。
+ * 🔒 見えるのを待つ間もロックを持っているので、聞かないとほかのタブの採点の読みがそのタブを表示するまで待たされる（レビュー OCL-62435AC8）
+ */
+export const PAUSE_CHECK_WHILE_HIDDEN_MS = 1_000;
 
 class StaleReportError extends Error {}
 class DeferError extends Error {}
@@ -355,6 +360,33 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
       }
     };
     let paused = false;
+    /**
+     * ページが見えるまで待つ。待つ間もロックを持っているので、ほかのタブの採点の読みが待っていたら待つのをやめる
+     * （true を返す。呼び出し側は `paused` で止めてロックを手放す。レビュー OCL-62435AC8）
+     */
+    const waitVisibleOrPause = async (): Promise<boolean> => {
+      if (!hooks.shouldPause) {
+        await deps.visibility.waitVisible(signal);
+        return false;
+      }
+      while (!signal.aborted && deps.visibility.isHidden()) {
+        if (await askPause()) return true;
+        const round = new AbortController();
+        const onAbort = () => round.abort();
+        signal.addEventListener('abort', onAbort);
+        try {
+          await Promise.race([
+            deps.visibility.waitVisible(round.signal),
+            deps.sleep(PAUSE_CHECK_WHILE_HIDDEN_MS, round.signal),
+          ]);
+        } finally {
+          // 負けた側の待ちを片付ける（聞き手を溜めない）
+          round.abort();
+          signal.removeEventListener('abort', onAbort);
+        }
+      }
+      return false;
+    };
     /** 譲るかを聞く（聞けなければ譲らない） */
     const askYield = async (): Promise<boolean> => {
       if (!hooks.shouldYield) return false;
@@ -414,7 +446,10 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
           if (deps.visibility.isHidden()) {
             // 隠れている間の読み込みの失敗（凍結・通信の切断）は数えない
             log.warn(`engine load failed while hidden: ${messageOf(error)}`);
-            await deps.visibility.waitVisible(signal);
+            if (await waitVisibleOrPause()) {
+              log.info(`kifu #${kifuNo}: pausing while hidden for a drill answer`);
+              return { kind: 'paused' };
+            }
             continue;
           }
           engineLoadFailures++;
@@ -557,7 +592,10 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
             (changedAt !== null && changedAt >= positionStartedAt);
           if (hiddenDuring) {
             log.warn(`engine failed while the page was hidden (not counted): ${detail}`);
-            await deps.visibility.waitVisible(signal);
+            if (await waitVisibleOrPause()) {
+              log.info(`kifu #${kifuNo}: pausing while hidden for a drill answer`);
+              return { kind: 'paused' };
+            }
             continue;
           }
           if (

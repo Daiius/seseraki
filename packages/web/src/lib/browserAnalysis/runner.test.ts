@@ -9,6 +9,7 @@ import {
   createKifuRunner,
   errorReportResultOf,
   MAX_STALE_RESTARTS,
+  PAUSE_CHECK_WHILE_HIDDEN_MS,
   RETRY_DELAYS_MS,
   YIELD_CHECK_INTERVAL_MS,
   type AnalysisEngine,
@@ -852,5 +853,68 @@ describe('createKifuRunner — ほかのタブの採点の読みに譲る（prd/
     // 解析した 3 局面は送ってある（続きは次の開始の口から）
     expect(h.chunks.flatMap((c) => c.analyses.map((a) => a.moveNumber))).toEqual([0, 1, 2]);
     expect(h.errors).toEqual([]);
+  });
+});
+
+describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲る（レビュー OCL-62435AC8）', () => {
+  /** 隠れたまま見えるようにならないページ（待ちは中断でだけ終わる） */
+  function stuckHidden(h: Harness) {
+    h.deps.visibility.waitVisible = (signal) =>
+      new Promise<void>((resolve) => {
+        h.waitedVisible++;
+        signal.addEventListener('abort', () => resolve());
+      });
+  }
+
+  it('隠れている間のエンジンの失敗で見えるのを待っていても、採点の読みが待てば paused でロックを手放す', async () => {
+    const h = harness({
+      analyze: (_engineNo, position, harnessState) => {
+        if (position === 2) {
+          harnessState.hidden = true;
+          throw new Error('[USI] Analysis timed out');
+        }
+      },
+    });
+    stuckHidden(h);
+    let asked = 0;
+    // 局面の境目（0..2 の 3 回）の後、見えるのを待つ間の 2 回目で採点の読みが現れる
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => ++asked > 4,
+    });
+    expect(outcome).toEqual({ kind: 'paused' });
+    expect(h.sleeps).toContain(PAUSE_CHECK_WHILE_HIDDEN_MS);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('隠れている間のエンジンの読み込みの失敗で待っていても譲る', async () => {
+    const h = harness({
+      createEngine: () => {
+        h.hidden = true;
+        throw new Error('fetch failed');
+      },
+    });
+    stuckHidden(h);
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => true,
+    });
+    expect(outcome).toEqual({ kind: 'paused' });
+  });
+
+  it('採点の読みが待っていなければ、見えるようになるまで待ってから続ける（今までどおり）', async () => {
+    let failures = 0;
+    const h = harness({
+      analyze: (_engineNo, position, harnessState) => {
+        if (position === 2 && failures < 1) {
+          failures++;
+          harnessState.hidden = true;
+          throw new Error('[USI] Analysis timed out');
+        }
+      },
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => false,
+    });
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(h.waitedVisible).toBe(1);
   });
 });

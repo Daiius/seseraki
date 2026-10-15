@@ -298,7 +298,7 @@ describe('RLS（prd/14 §4「RLS の形」）', () => {
       // 所有者の条件を付けずに内部 ID で指しても、RLS が B の棋譜を隠す（アプリ層の書き忘れを DB が止める）
       expect(await submitAnalysisChunk(tx, { id: kifuB }, chunk)).toEqual({ status: 'not-found' });
       expect(
-        await recordAnalysisFailure(tx, { id: kifuB }, { revision: 0, error: 'e', assignee: 'browser', stage: 'quick' }),
+        await recordAnalysisFailure(tx, { id: kifuB }, { revision: 0, error: 'e', assignee: 'browser', stage: 'full' }),
       ).toBeNull();
       // 自分の棋譜（A の 1 番）は開始でき、解析の行を RLS の下で挿入できる（WITH CHECK を通る）
       expect(await startBrowserAnalysis(tx, userA, 1, engine)).toMatchObject({
@@ -307,7 +307,7 @@ describe('RLS（prd/14 §4「RLS の形」）', () => {
         startMoveNumber: 0,
         usiMoves: ['7g7f'],
       });
-      expect(await submitAnalysisChunk(tx, { ownerId: userA, no: 1 }, chunk)).toEqual({
+      expect(await submitAnalysisChunk(tx, { ownerId: userA, no: 1 }, chunk)).toMatchObject({
         status: 'applied',
         completed: false,
       });

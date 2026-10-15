@@ -98,6 +98,12 @@ describe('browserAnalysisChunkSchema（チャンクの報告）', () => {
     expect(ok(browserAnalysisChunkSchema, chunk({ engineName: undefined }))).toBe(true);
   });
 
+  it('段（profile）は任意の申告（無い＝段を載せない今の web も通る）。quick / full 以外は 400', () => {
+    expect(ok(browserAnalysisChunkSchema, chunk({ profile: 'quick' }))).toBe(true);
+    expect(ok(browserAnalysisChunkSchema, chunk({ profile: 'full' }))).toBe(true);
+    expect(ok(browserAnalysisChunkSchema, chunk({ profile: 'deep' }))).toBe(false);
+  });
+
   it('1 チャンクの局面数は 1 以上・上限まで', () => {
     expect(ok(browserAnalysisChunkSchema, chunk({ analyses: positions(BROWSER_ANALYSIS_LIMITS.chunkMaxPositions) }))).toBe(true);
     expect(ok(browserAnalysisChunkSchema, chunk({ analyses: positions(BROWSER_ANALYSIS_LIMITS.chunkMaxPositions + 1) }))).toBe(false);

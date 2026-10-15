@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は全局面解析まで 1 段で本番反映済み（2026-10-15）。2 段化は server・web とも実装済み（本番は未反映。出題の採点は未実装）。詳細検討・検討盤のブラウザ評価は未実装。所有者ゲートの撤去と新規登録の開放は未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は全局面解析まで 1 段で本番反映済み（2026-10-15）。2 段化と出題の採点は server・web とも実装済み（本番は未反映）。詳細検討・検討盤のブラウザ評価は未実装。所有者ゲートの撤去と新規登録の開放は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
@@ -139,9 +139,9 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 > `insert(kifus)` を他所に書くと `kifu-number.test.ts` が落とす。
 >
 > 🔴 **解析の担当（`users.analysisAssignee`。`worker` / `browser`。prd/14 §5.7）で、誰がその棋譜を解析するかが決まる。**
-> - **手元 worker にジョブ・棋譜を渡す口を足したら、担当 `worker` のユーザーに絞る**（取得・quick 待ちの判定・検討盤の評価の要求は絞ってある。
->   絞らないと、ログインした誰もが所有者の worker を使える）。⚠ 出題の解答の評価は**今のコードでは絞っていない**——
->   2 段化（prd/14 §5.11 の 2 番目）でブラウザの利用者にも出題が生まれる（生成は server で実装済み）ので、採点の変更で担当 `worker` に絞る（prd/14 §5.7・未実装）
+> - **手元 worker にジョブ・棋譜を渡す口を足したら、担当 `worker` のユーザーに絞る**（取得・quick 待ちの判定・検討盤の評価の要求・
+>   出題の解答の評価は絞ってある。絞らないと、ログインした誰もが所有者の worker を使える）。出題の解答で担当 `browser` の利用者には、
+>   ジョブを積まず「この局面のこの手を名指しで読んで」（`evaluate`）を返し、ブラウザが読んだ結果を付けて送り直す（`drill-engine.ts`。prd/13 §5.3）
 > - **解析の報告を受ける口は、棋譜の行ロックの下で今の担当を確かめる**（`analysis-report.ts` の `submitAnalysisChunk` /
 >   `recordAnalysisFailure` を通す。手元 worker とブラウザ解析の受け口で共用）。担当違い・古い世代は 201 `applied: false`——
 >   ⚠ **4xx にしない**（手元 worker は 4xx を恒久的な失敗として棋譜に記録する）
@@ -150,7 +150,7 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 > - 🔒 **ブラウザ解析の段（quick / full）は server が棋譜の状態から決める**（`browserStageOf`。prd/14 §5.8）。報告の本体には
 >   `run.profile: 'by-state'` で渡す（本文の `profile` は申告で、違えば破棄）。来歴の照合は**進行中の段の行**とだけ（`runsOfStage`。§5.9）。
 >   思考時間は段ごと（`BROWSER_ANALYSIS_MOVETIME_MS`。quick 100ms・full 600ms）
-> - ブラウザから届く解析結果は**信用できない入力**。検証と上限は `shared` の `analysis-limits.ts`（prd/14 §5.8）。
+> - ブラウザから届く解析結果（出題の採点の名指し評価も）は**信用できない入力**。検証と上限は `shared` の `analysis-limits.ts`（prd/14 §5.8）。
 >   ブラウザから叩く書き込み口を足したら、Origin の検査（`route.ts` の `trustedOrigin`）と本文の上限（`smallBody`）も付ける
 >
 > 🔴 **Better Auth の表の ID は DB の既定値（`gen_random_uuid()`）で振る。** pg 方言の Better Auth は

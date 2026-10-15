@@ -28,6 +28,7 @@ import {
   type RunnerLog,
 } from './runner';
 import { createScheduler } from './scheduler';
+import { setBrowserGrader } from './grading';
 import {
   getBrowserAnalysisSettings,
   type AnalysisLoad,
@@ -45,6 +46,19 @@ import { detectSupport, readBrowserEnv } from './support';
 const LOG_PREFIX = '[browser-analysis]';
 /** 同じブラウザの中の解析を 1 本に絞るロックの名前 */
 const LOCK_NAME = 'seseraki:browser-analysis';
+/**
+ * 採点の読みが待っている印のロック（prd/14 §5.10）。採点の読みはこれを取ってから {@link LOCK_NAME} を待つ。
+ * ほかのタブの解析は、局面の境目でこれが取られている（待たれている）のを見て譲る
+ */
+const PRIORITY_LOCK_NAME = 'seseraki:browser-analysis:drill';
+
+/** ほかのタブで採点の読みが待っているか（Web Locks の照会） */
+async function priorityWaiting(): Promise<boolean> {
+  const snapshot = await navigator.locks.query();
+  return [...(snapshot.held ?? []), ...(snapshot.pending ?? [])].some(
+    (lock) => lock.name === PRIORITY_LOCK_NAME,
+  );
+}
 
 const log: RunnerLog = {
   info: (message) => console.info(LOG_PREFIX, message),
@@ -254,6 +268,12 @@ async function main(
     // ロックを取れたら `fn` を実行し、終わるまで持つ。待っている間に中断されたら AbortError で拒否される
     withLock: <T,>(lockSignal: AbortSignal, fn: () => Promise<T>) =>
       navigator.locks.request(LOCK_NAME, { signal: lockSignal }, fn) as Promise<T>,
+    // 採点の読み: 印のロックを取ってから解析のロックを待つ（ほかのタブは印を見て、局面の境目で譲る）
+    withPriorityLock: <T,>(lockSignal: AbortSignal, fn: () => Promise<T>) =>
+      navigator.locks.request(PRIORITY_LOCK_NAME, { signal: lockSignal }, () =>
+        navigator.locks.request(LOCK_NAME, { signal: lockSignal }, fn),
+      ) as Promise<T>,
+    priorityWaiting,
     sleep,
     now: () => Date.now(),
     log,
@@ -276,12 +296,38 @@ async function main(
     },
   });
 
+  // 出題の採点の読み（prd/13 §5.3）。全局面解析より先に、同じエンジンで読む
+  const offGrader = setBrowserGrader((request) =>
+    scheduler.runPriority(async () => {
+      log.info(`drill: reading ${request.move} for ${request.settings.movetimeMs}ms`);
+      const outcome = await runner.evaluateNamed(request);
+      switch (outcome.kind) {
+        case 'ok': {
+          const { candidate } = outcome.evaluation;
+          log.info(
+            candidate
+              ? `drill: ${request.move} score ${candidate.scoreType} ${candidate.scoreValue} depth ${candidate.depth}`
+              : `drill: ${request.move} no candidate`,
+          );
+          break;
+        }
+        case 'mismatch':
+          log.warn(`drill: the engine did not read ${request.move} (returned ${outcome.returned})`);
+          break;
+        case 'failed':
+          log.warn(`drill: failed: ${outcome.detail}`);
+          break;
+      }
+      return outcome;
+    }),
+  );
   const offFocus = onAnalysisFocusChange(scheduler.setFocus);
   const offPoke = onBrowserAnalysisPoke(scheduler.poke);
   scheduler.setFocus(getAnalysisFocus());
   try {
     await scheduler.run(signal);
   } finally {
+    offGrader();
     offFocus();
     offPoke();
     runner.dispose();

@@ -168,14 +168,65 @@ describe("evaluateJob（名指し評価）", () => {
     ]);
   });
 
-  it("MultiPV は触らない（返すのはその手 1 本だけ）", async () => {
+  it("MultiPV は触らない（返すのはその手 1 本だけ）・GenerateAllLegalMoves は読みの間だけ有効にする", async () => {
     const { engine, optionCalls } = createStubEngine([
       searchResult([info(1, ["9g9f", "3c3d"], -20)]),
     ]);
 
     await evaluateJob(engine, job, GO, 3);
 
-    expect(optionCalls).toEqual(["(go)"]);
+    expect(optionCalls).toEqual([
+      "GenerateAllLegalMoves=true",
+      "(go)",
+      "GenerateAllLegalMoves=false",
+    ]);
+  });
+
+  it("🔴 不成の手も名指しで読む（GenerateAllLegalMoves を有効にしてから searchmoves）", async () => {
+    const { engine, calls, optionCalls } = createStubEngine([
+      searchResult([info(1, ["9d9c", "9b9c"], -300)]),
+    ]);
+
+    const result = await evaluateJob(engine, { ...job, move: "9d9c" }, GO);
+
+    expect(calls[0].go).toBe(`${GO} searchmoves 9d9c`);
+    expect(optionCalls[0]).toBe("GenerateAllLegalMoves=true");
+    expect(result.fallback).toBe(false);
+    expect(result.candidates[0]).toMatchObject({ move: "9d9c", pv: ["9d9c", "9b9c"] });
+  });
+
+  it("フォールバックの間も有効のまま、終わったら戻す", async () => {
+    const { engine, optionCalls } = createStubEngine([
+      searchResult([info(1, ["7g7f", "3c3d"], 50)]),
+      searchResult([info(1, ["3c3d", "2g2f"], 60)]),
+    ]);
+
+    await evaluateJob(engine, job, GO);
+
+    expect(optionCalls).toEqual([
+      "GenerateAllLegalMoves=true",
+      "(go)",
+      "(go)",
+      "GenerateAllLegalMoves=false",
+    ]);
+  });
+
+  it("探索が失敗しても GenerateAllLegalMoves を戻す", async () => {
+    const { engine, optionCalls } = createStubEngine([]);
+
+    await expect(evaluateJob(engine, job, GO)).rejects.toThrow();
+
+    expect(optionCalls.at(-1)).toBe("GenerateAllLegalMoves=false");
+  });
+
+  it("局面評価（名指しなし）では GenerateAllLegalMoves に触れない", async () => {
+    const { engine, optionCalls } = createStubEngine([
+      searchResult([info(1, ["7g7f", "3c3d"], 50)]),
+    ]);
+
+    await evaluateJob(engine, { ...job, move: null }, GO, 1);
+
+    expect(optionCalls.some((c) => c.startsWith("GenerateAllLegalMoves"))).toBe(false);
   });
 
   it("searchmoves が無視されたら、手を適用した局面を評価して符号を反転する", async () => {

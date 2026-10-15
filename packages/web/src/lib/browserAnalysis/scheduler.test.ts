@@ -46,6 +46,10 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
     wakeSleep: null as (() => void) | null,
     lockHeld: false,
     maxConcurrent: 0,
+    /** ほかのタブで採点の読みが待っている */
+    othersWaiting: false,
+    /** 採点の読みの印のロックを取った回数 */
+    priorityLocks: 0,
   };
   const deps: SchedulerDeps = {
     mode,
@@ -74,6 +78,11 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
         state.lockHeld = false;
       }
     },
+    withPriorityLock: async (signal, fn) => {
+      state.priorityLocks++;
+      return deps.withLock(signal, fn);
+    },
+    priorityWaiting: async () => state.othersWaiting,
     sleep: (_ms, signal) =>
       new Promise<void>((resolve) => {
         const done = () => {
@@ -393,5 +402,66 @@ describe('createScheduler — 2 段の順序（prd/14 §5.10）', () => {
     expect(await state.running!.hooks.shouldYield!()).toBe(false);
     stop();
     await done;
+  });
+});
+
+describe('createScheduler — 採点の読み（prd/14 §5.10）', () => {
+  it('解析中の棋譜を局面の境目で止めて先に読み、終わったら同じ棋譜を空け時間なしで再開する', async () => {
+    const { state, scheduler, stop, done } = setup('always', [7]);
+    await flush();
+    const first = state.running!;
+    expect(first.kifuNo).toBe(7);
+
+    const order: string[] = [];
+    const graded = scheduler.runPriority(async () => {
+      // 🔒 全局面解析は止まっていて、同じロックの下で読む
+      expect(state.running).toBeNull();
+      expect(state.lockHeld).toBe(true);
+      order.push('grade');
+      return 'read';
+    });
+    await flush();
+    expect(first.signal.aborted).toBe(true);
+    await expect(graded).resolves.toBe('read');
+    expect(order).toEqual(['grade']);
+    expect(state.priorityLocks).toBe(1);
+    // 止めた棋譜は失敗にも完了にもせず、続きから選び直される
+    expect(state.settled).toEqual([]);
+    expect(state.started).toEqual([7, 7]);
+    stop();
+    await done;
+  });
+
+  it('待機中（詳細ページだけ・何も開いていない）でもすぐ読む', async () => {
+    const { state, scheduler, stop, done } = setup('detail');
+    await flush();
+    await expect(scheduler.runPriority(async () => 1)).resolves.toBe(1);
+    expect(state.started).toEqual([]);
+    stop();
+    await done;
+  });
+
+  it('ほかのタブの採点の読みが待っているかを、解析に聞かせる（局面の境目で譲る）', async () => {
+    const { state, stop, done } = setup('always', [7]);
+    await flush();
+    const hooks = state.running!.hooks;
+    expect(await hooks.shouldPause?.()).toBe(false);
+    state.othersWaiting = true;
+    expect(await hooks.shouldPause?.()).toBe(true);
+    // 譲った棋譜は空け時間なしで選び直される
+    state.running!.finish({ kind: 'paused' });
+    await flush();
+    expect(state.started).toEqual([7, 7]);
+    expect(state.settled).toEqual([]);
+    stop();
+    await done;
+  });
+
+  it('常駐が止まったら、待っている採点の読みは拒否する（止まった後に頼んでも拒否する）', async () => {
+    const { scheduler, stop, done } = setup('detail');
+    await flush();
+    stop();
+    await done;
+    await expect(scheduler.runPriority(async () => 1)).rejects.toThrow();
   });
 });

@@ -9,6 +9,7 @@ import {
   createKifuRunner,
   errorReportResultOf,
   MAX_STALE_RESTARTS,
+  PAUSE_CHECK_WHILE_HIDDEN_MS,
   RETRY_DELAYS_MS,
   YIELD_CHECK_INTERVAL_MS,
   type AnalysisEngine,
@@ -718,5 +719,202 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
     await runner.analyze(2, neverAborted);
     expect(h.engineLoads).toEqual(['max', 'gentle']);
     expect(h.engines[0].disposed).toBe(true);
+  });
+});
+
+describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/13 §5.3）', () => {
+  const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
+  const request = { sfen: SFEN, move: '2g2f', settings: { ...SETTINGS, movetimeMs: 600 } };
+
+  /** 送られた USI を記録し、`reply` で応答するエンジン（作るたびに通し番号） */
+  function namedHarness(reply: (engineNo: number, go: string) => UsiSearchResult) {
+    const h = harness({});
+    const sent: { position: string; go: string }[] = [];
+    h.deps.createEngine = async (_settings, load) => {
+      const engineNo = h.engines.length;
+      h.engineLoads.push(load);
+      const engine: AnalysisEngine & { disposed: boolean } = {
+        disposed: false,
+        name: 'FakeEngine',
+        threads: 4,
+        hashMb: 64,
+        session: {
+          setOption: () => {},
+          analyze: async (position, go) => {
+            sent.push({ position, go });
+            return reply(engineNo, go);
+          },
+        },
+        dispose() {
+          engine.disposed = true;
+        },
+      };
+      h.engines.push(engine);
+      return engine;
+    };
+    return { h, sent };
+  }
+
+  const named = (move: string, score: { type: 'cp' | 'mate'; value: number }, pv: string[]): UsiSearchResult => {
+    const info = { depth: 14, multipv: 1, score, pv };
+    return { bestmove: { move }, infoLines: [info], lastInfo: info };
+  };
+
+  it('局面と手を名指しで読み、解答に付ける形（来歴つき）にする', async () => {
+    const { h, sent } = namedHarness(() => named('2g2f', { type: 'cp', value: -120 }, ['2g2f', '8c8d']));
+    const outcome = await createKifuRunner(h.deps).evaluateNamed(request);
+    expect(sent).toEqual([
+      { position: `position sfen ${SFEN}`, go: 'go movetime 600 searchmoves 2g2f' },
+    ]);
+    expect(outcome).toEqual({
+      kind: 'ok',
+      evaluation: {
+        move: '2g2f',
+        candidate: { scoreType: 'cp', scoreValue: -120, depth: 14, pv: ['2g2f', '8c8d'] },
+        engineBuild: ENGINE_INFO.engineBuild,
+        evalHash: ENGINE_INFO.evalHash,
+        engineName: 'FakeEngine',
+        fvScale: 16,
+        threads: 4,
+        hashMb: 64,
+        movetimeMs: 600,
+      },
+    });
+  });
+
+  it('🔴 不成の手も読めるよう、読みの間だけ GenerateAllLegalMoves を有効にする', async () => {
+    const { h } = namedHarness(() => named('9d9c', { type: 'cp', value: -300 }, ['9d9c', '9b9c']));
+    const options: string[] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load) => {
+      const engine = await created(settings, load);
+      const analyze = engine.session.analyze.bind(engine.session);
+      engine.session = {
+        setOption: (name, value) => options.push(`${name}=${value}`),
+        analyze: async (position, go) => {
+          options.push('(go)');
+          return analyze(position, go);
+        },
+      };
+      return engine;
+    };
+    const outcome = await createKifuRunner(h.deps).evaluateNamed({ ...request, move: '9d9c' });
+    expect(outcome).toMatchObject({ kind: 'ok', evaluation: { move: '9d9c' } });
+    expect(options).toEqual(['GenerateAllLegalMoves=true', '(go)', 'GenerateAllLegalMoves=false']);
+  });
+
+  it('負荷の設定が効く（全局面解析と同じく、エンジンを作るときに読む）', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    h.load = 'gentle';
+    await createKifuRunner(h.deps).evaluateNamed(request);
+    expect(h.engineLoads).toEqual(['gentle']);
+  });
+
+  it('全局面解析のエンジンを使い回す（読み込み直さない）', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    const runner = createKifuRunner(h.deps);
+    await runner.evaluateNamed(request);
+    await runner.evaluateNamed(request);
+    expect(h.engines).toHaveLength(1);
+  });
+
+  it('🔒 名指しが効かずに別の手が返ったら mismatch（数字を作らない）', async () => {
+    const { h } = namedHarness(() => named('7g7f', { type: 'cp', value: 50 }, ['7g7f']));
+    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'mismatch', returned: '7g7f' });
+  });
+
+  it('エンジンが失敗したら作り直して 1 度だけ読み直す', async () => {
+    const { h } = namedHarness((engineNo) => {
+      if (engineNo === 0) throw new Error('dead');
+      return named('2g2f', { type: 'mate', value: 3 }, ['2g2f', '8c8d', '2f2e']);
+    });
+    const outcome = await createKifuRunner(h.deps).evaluateNamed(request);
+    expect(outcome).toMatchObject({ kind: 'ok', evaluation: { candidate: { scoreType: 'mate', scoreValue: 3 } } });
+    expect(h.engines.map((e) => e.disposed)).toEqual([true, false]);
+  });
+
+  it('2 度続けて失敗したら failed', async () => {
+    const { h } = namedHarness(() => {
+      throw new Error('dead');
+    });
+    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'failed', detail: 'dead' });
+  });
+});
+
+describe('createKifuRunner — ほかのタブの採点の読みに譲る（prd/14 §5.10）', () => {
+  it('局面の境目で聞き、待っていれば未送信のチャンクを送って paused で止める', async () => {
+    const h = harness({});
+    let boundaries = 0;
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      // 3 局面を解析した後の境目で、ほかのタブの採点の読みが現れる
+      shouldPause: async () => ++boundaries > 3,
+    });
+    expect(outcome).toEqual({ kind: 'paused' });
+    // 解析した 3 局面は送ってある（続きは次の開始の口から）
+    expect(h.chunks.flatMap((c) => c.analyses.map((a) => a.moveNumber))).toEqual([0, 1, 2]);
+    expect(h.errors).toEqual([]);
+  });
+});
+
+describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲る（レビュー OCL-62435AC8）', () => {
+  /** 隠れたまま見えるようにならないページ（待ちは中断でだけ終わる） */
+  function stuckHidden(h: Harness) {
+    h.deps.visibility.waitVisible = (signal) =>
+      new Promise<void>((resolve) => {
+        h.waitedVisible++;
+        signal.addEventListener('abort', () => resolve());
+      });
+  }
+
+  it('隠れている間のエンジンの失敗で見えるのを待っていても、採点の読みが待てば paused でロックを手放す', async () => {
+    const h = harness({
+      analyze: (_engineNo, position, harnessState) => {
+        if (position === 2) {
+          harnessState.hidden = true;
+          throw new Error('[USI] Analysis timed out');
+        }
+      },
+    });
+    stuckHidden(h);
+    let asked = 0;
+    // 局面の境目（0..2 の 3 回）の後、見えるのを待つ間の 2 回目で採点の読みが現れる
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => ++asked > 4,
+    });
+    expect(outcome).toEqual({ kind: 'paused' });
+    expect(h.sleeps).toContain(PAUSE_CHECK_WHILE_HIDDEN_MS);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('隠れている間のエンジンの読み込みの失敗で待っていても譲る', async () => {
+    const h = harness({
+      createEngine: () => {
+        h.hidden = true;
+        throw new Error('fetch failed');
+      },
+    });
+    stuckHidden(h);
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => true,
+    });
+    expect(outcome).toEqual({ kind: 'paused' });
+  });
+
+  it('採点の読みが待っていなければ、見えるようになるまで待ってから続ける（今までどおり）', async () => {
+    let failures = 0;
+    const h = harness({
+      analyze: (_engineNo, position, harnessState) => {
+        if (position === 2 && failures < 1) {
+          failures++;
+          harnessState.hidden = true;
+          throw new Error('[USI] Analysis timed out');
+        }
+      },
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+      shouldPause: async () => false,
+    });
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(h.waitedVisible).toBe(1);
   });
 });

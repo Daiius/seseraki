@@ -27,6 +27,7 @@ import {
   namedEvaluationOf,
   namedGoCommand,
   sfenPositionCommand,
+  withAllLegalMoves,
   type BrowserAnalysisChunk,
   type DrillNamedEvaluation,
   type BrowserAnalysisRun,
@@ -637,9 +638,12 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
         continue;
       }
       try {
-        const result = await current.session.analyze(
-          sfenPositionCommand(sfen),
-          namedGoCommand(settings.movetimeMs, move),
+        // 🔴 不成の手も読めるよう、読みの間だけ GenerateAllLegalMoves を有効にする（終わったら戻す）
+        const result = await withAllLegalMoves(current.session, () =>
+          current.session.analyze(
+            sfenPositionCommand(sfen),
+            namedGoCommand(settings.movetimeMs, move),
+          ),
         );
         const named = namedEvaluationOf(result, move, settings.pvMaxPlies);
         if (named.kind === 'mismatch') return named;

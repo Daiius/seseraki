@@ -4,6 +4,7 @@ import {
   namedEvaluationOf,
   namedGoCommand,
   sfenPositionCommand,
+  withAllLegalMoves,
 } from './named-evaluation';
 import { parseInfoLine } from './parser';
 import type { UsiSearchResult } from './types';
@@ -123,5 +124,46 @@ describe('drillNamedEvaluationSchema（解答に付ける名指し評価）', ()
       body({ movetimeMs: 0 }),
     ];
     for (const value of bad) expect(drillNamedEvaluationSchema.safeParse(value).success).toBe(false);
+  });
+});
+
+describe('withAllLegalMoves（不成の手を読むため。prd/12 §2.2）', () => {
+  const recorder = () => {
+    const sent: string[] = [];
+    return { sent, engine: { setOption: (name: string, value: string) => sent.push(`${name}=${value}`) } };
+  };
+
+  it('読みの間だけ有効にし、終わったら戻す', async () => {
+    const { sent, engine } = recorder();
+    const value = await withAllLegalMoves(engine, async () => {
+      sent.push('(go)');
+      return 1;
+    });
+    expect(value).toBe(1);
+    expect(sent).toEqual(['GenerateAllLegalMoves=true', '(go)', 'GenerateAllLegalMoves=false']);
+  });
+
+  it('読みが投げても戻す（元のエラーを伝える）', async () => {
+    const { sent, engine } = recorder();
+    await expect(
+      withAllLegalMoves(engine, async () => {
+        throw new Error('dead');
+      }),
+    ).rejects.toThrow('dead');
+    expect(sent.at(-1)).toBe('GenerateAllLegalMoves=false');
+  });
+
+  it('戻す送信が投げても（エンジンが死んでいる）読みのエラーのほうを伝える', async () => {
+    let calls = 0;
+    const engine = {
+      setOption: () => {
+        if (++calls > 1) throw new Error('not running');
+      },
+    };
+    await expect(
+      withAllLegalMoves(engine, async () => {
+        throw new Error('dead');
+      }),
+    ).rejects.toThrow('dead');
   });
 });

@@ -28,6 +28,35 @@ export function namedGoCommand(movetimeMs: number, move: string): string {
   return `go movetime ${movetimeMs} searchmoves ${move}`;
 }
 
+/** 名指しの読みの間だけ有効にするエンジンのオプション（{@link withAllLegalMoves}） */
+export const GENERATE_ALL_LEGAL_MOVES = 'GenerateAllLegalMoves';
+
+/**
+ * 名指しの読み（`searchmoves`）の間だけ `GenerateAllLegalMoves` を true にして `run` を実行し、終わったら false に戻す。
+ *
+ * 🔴 **やねうら王は既定（false）で歩・角・飛の不成などを合法手に含めない。** そのまま `searchmoves` に渡すと
+ * root の候補から外れ、名指ししていない通常の探索に落ちる（実際に踏んだ: 9三歩不成 `9d9c` を名指しして `8i8c+` が返った）。
+ * 不成の手は悪手であることが多く、採点（不正解・咎め筋）が返ることに意味がある。
+ *
+ * - 全局面解析の探索には効かせない（読みの後に必ず戻す。投げても戻す）
+ * - `isready` は要らない（やねうら王はオプションの変更をその場でフラグに写し、探索の開始時に読む）
+ */
+export async function withAllLegalMoves<T>(
+  engine: { setOption(name: string, value: string): void },
+  run: () => Promise<T>,
+): Promise<T> {
+  engine.setOption(GENERATE_ALL_LEGAL_MOVES, 'true');
+  try {
+    return await run();
+  } finally {
+    try {
+      engine.setOption(GENERATE_ALL_LEGAL_MOVES, 'false');
+    } catch {
+      // エンジンが死んでいる（送信が投げる）。読みの失敗のほうを伝える——死んだエンジンは呼び出し側が作り直す
+    }
+  }
+}
+
 /** 名指し評価の結果のうち、解答に付ける評価（`drillNamedEvaluationSchema` の `candidate`） */
 export interface NamedCandidate {
   scoreType: 'cp' | 'mate';

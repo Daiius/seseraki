@@ -17,6 +17,7 @@
  */
 import {
   extractMultiPvResults,
+  withAllLegalMoves,
   type UsiCandidate,
   type UsiScore,
 } from "shared";
@@ -164,6 +165,21 @@ export async function evaluateJob(
     return { candidates: extractMultiPvResults(result.infoLines), fallback: false };
   }
 
+  // 🔴 名指しの間だけ GenerateAllLegalMoves を有効にする（やねうら王は既定で歩・角・飛の不成を合法手に含めず、
+  // `searchmoves` に渡しても通常の探索に落ちる。shared の `withAllLegalMoves`。prd/12 §2.2）。棋譜解析の探索には効かせない
+  const move = job.move;
+  return withAllLegalMoves(engine, () => evaluateNamedMove(engine, job.sfen, move, goCommand));
+}
+
+/** 名指し評価（`searchmoves`、効かなければ符号反転のフォールバック） */
+async function evaluateNamedMove(
+  engine: EvalEngine,
+  sfen: string,
+  move: string,
+  goCommand: string,
+): Promise<PositionEvalResult> {
+  const job = { sfen, move };
+  const position = positionCommand(sfen);
   if (searchmovesSupported !== false) {
     const result = await engine.analyze(
       position,

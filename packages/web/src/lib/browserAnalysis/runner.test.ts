@@ -781,6 +781,27 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     });
   });
 
+  it('🔴 不成の手も読めるよう、読みの間だけ GenerateAllLegalMoves を有効にする', async () => {
+    const { h } = namedHarness(() => named('9d9c', { type: 'cp', value: -300 }, ['9d9c', '9b9c']));
+    const options: string[] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load) => {
+      const engine = await created(settings, load);
+      const analyze = engine.session.analyze.bind(engine.session);
+      engine.session = {
+        setOption: (name, value) => options.push(`${name}=${value}`),
+        analyze: async (position, go) => {
+          options.push('(go)');
+          return analyze(position, go);
+        },
+      };
+      return engine;
+    };
+    const outcome = await createKifuRunner(h.deps).evaluateNamed({ ...request, move: '9d9c' });
+    expect(outcome).toMatchObject({ kind: 'ok', evaluation: { move: '9d9c' } });
+    expect(options).toEqual(['GenerateAllLegalMoves=true', '(go)', 'GenerateAllLegalMoves=false']);
+  });
+
   it('負荷の設定が効く（全局面解析と同じく、エンジンを作るときに読む）', async () => {
     const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
     h.load = 'gentle';

@@ -19,10 +19,10 @@ import { eq, inArray } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
 import { client, db, type Tx } from './db/index.js';
-import { kifuAnalyses, kifus, users } from './db/schema.js';
+import { drills, kifuAnalyses, kifus, users } from './db/schema.js';
 import {
   analysisAssigneeOf,
-  BROWSER_ANALYSIS_SETTINGS,
+  browserAnalysisSettingsFor,
   pendingBrowserKifuNos,
   recordAnalysisFailure,
   startBrowserAnalysis,
@@ -72,10 +72,11 @@ const nativeRun = (profile: 'quick' | 'full'): Omit<AnalysisRun, 'at'> => ({
   multiPv: 3,
 });
 
-const wasmRun = (engine = ENGINE): Omit<AnalysisRun, 'at'> => ({
-  profile: 'quick',
+/** ブラウザの受け口と同じく、段は棋譜の状態から決めさせる（`'by-state'`。prd/14 §5.8） */
+const wasmRun = (engine = ENGINE, movetimeMs = 100): ChunkSubmission['run'] => ({
+  profile: 'by-state',
   engineName: 'YaneuraOu',
-  movetimeMs: 300,
+  movetimeMs,
   targetDepth: null,
   multiPv: 1,
   runtime: 'wasm',
@@ -335,7 +336,7 @@ describe('担当の切り替え（prd/14 §5.7 規則 1）', () => {
     const kifu = await newKifu(OWNER);
     const started = await asUser(OWNER, (tx) => startBrowserAnalysis(tx, OWNER, kifu.displayNo, ENGINE));
     if (started?.status !== 'run') throw new Error('開始できるはず');
-    expect(await browserChunk(OWNER, kifu.displayNo, started.revision, 0, POSITIONS)).toEqual({
+    expect(await browserChunk(OWNER, kifu.displayNo, started.revision, 0, POSITIONS)).toMatchObject({
       status: 'applied',
       completed: true,
     });
@@ -345,7 +346,7 @@ describe('担当の切り替え（prd/14 §5.7 規則 1）', () => {
     const after = await stateOf(kifu.id);
     expect(after).toMatchObject({ revision: started.revision + 1, profile: 'quick', completed: true, positions: POSITIONS });
     // 手元 worker の full は新しい世代で受理され、quick を上書きしていく（prd/05 §1.1d）
-    expect(await workerChunk(kifu.id, after.revision, 'full', 0, POSITIONS)).toEqual({
+    expect(await workerChunk(kifu.id, after.revision, 'full', 0, POSITIONS)).toMatchObject({
       status: 'applied',
       completed: true,
     });
@@ -389,7 +390,7 @@ describe('担当の切り替え（prd/14 §5.7 規則 1）', () => {
 describe('切り替えの前後の報告（prd/14 §5.7 規則 1・規則 2）', () => {
   it('手元 worker: 切り替え前に取得した世代の報告・失敗は破棄され、新しい世代でも担当違いで受けない', async () => {
     const kifu = await newKifu(OWNER);
-    expect(await workerChunk(kifu.id, 0, 'quick', 0, 1)).toEqual({ status: 'applied', completed: false });
+    expect(await workerChunk(kifu.id, 0, 'quick', 0, 1)).toMatchObject({ status: 'applied', completed: false });
 
     await switchOwner('browser');
 
@@ -464,7 +465,7 @@ describe('切り替えの前後の報告（prd/14 §5.7 規則 1・規則 2）',
     const kifu = await newKifu(OWNER);
     const started = await asUser(OWNER, (tx) => startBrowserAnalysis(tx, OWNER, kifu.displayNo, ENGINE));
     if (started?.status !== 'run') throw new Error('開始できるはず');
-    expect(await browserChunk(OWNER, kifu.displayNo, started.revision, 0, 2)).toEqual({ status: 'applied', completed: false });
+    expect(await browserChunk(OWNER, kifu.displayNo, started.revision, 0, 2)).toMatchObject({ status: 'applied', completed: false });
 
     await switchOwner('worker');
 
@@ -479,7 +480,7 @@ describe('切り替えの前後の報告（prd/14 §5.7 規則 1・規則 2）',
           revision: started.revision + 1,
           error: 'e',
           assignee: 'browser',
-          stage: 'quick',
+          stage: 'full',
         }),
       ),
     ).toEqual({ applied: false });
@@ -496,37 +497,173 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
     user = await insertUser();
   });
 
-  it('開始 → チャンク → 完了。quick として保存し、来歴に実行環境とエンジンを残す', async () => {
+  it('開始 → quick → full → 完了（2 段）。段ごとの設定を返し、来歴に段・実行環境・エンジンを残す', async () => {
     const kifu = await newKifu(user);
     const started = await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE));
     expect(started).toEqual({
       status: 'run',
       revision: 0,
+      profile: 'quick',
       startMoveNumber: 0,
       usiMoves: MOVES,
-      settings: BROWSER_ANALYSIS_SETTINGS,
+      settings: browserAnalysisSettingsFor('quick'),
     });
+    expect(started?.status === 'run' && started.settings.movetimeMs).toBe(100);
 
-    expect(await browserChunk(user, kifu.displayNo, 0, 0, 2)).toEqual({ status: 'applied', completed: false });
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 2)).toMatchObject({
+      status: 'applied',
+      completed: false,
+      profile: 'quick',
+      fullCompleted: false,
+    });
     // タブを閉じて開き直した: 続き（入っている局面数）から
     expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toMatchObject({
       status: 'run',
       revision: 0,
+      profile: 'quick',
       startMoveNumber: 2,
     });
-    expect(await browserChunk(user, kifu.displayNo, 0, 2, POSITIONS - 2)).toEqual({ status: 'applied', completed: true });
-
+    expect(await browserChunk(user, kifu.displayNo, 0, 2, POSITIONS - 2)).toMatchObject({
+      status: 'applied',
+      completed: true,
+      profile: 'quick',
+      fullCompleted: false,
+    });
     expect(await stateOf(kifu.id)).toMatchObject({ profile: 'quick', completed: true, positions: POSITIONS, fullCount: 0 });
-    const stored = await loadAnalysis(db, kifu.id);
-    expect(stored.runs.every((r) => r.profile === 'quick' && r.runtime === 'wasm' && r.book === false)).toBe(true);
-    expect(stored.runs[0]).toMatchObject({ ...ENGINE, fvScale: 16, threads: 4, hashMb: 64, multiPv: 1 });
 
-    // 🔒 完了済みは不変: 開始は complete、遅れて届いたチャンクは破棄
+    // quick が完了したら、開始は full を 0 から（同じ世代・full の設定）
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toEqual({
+      status: 'run',
+      revision: 0,
+      profile: 'full',
+      startMoveNumber: 0,
+      usiMoves: MOVES,
+      settings: browserAnalysisSettingsFor('full'),
+    });
+    // 段は状態から決まる（本文に段が無い＝今の web でも full として受ける）
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 2, ENGINE, { run: wasmRun(ENGINE, 600) })).toMatchObject({
+      status: 'applied',
+      completed: false,
+      profile: 'full',
+    });
+    expect(await stateOf(kifu.id)).toMatchObject({ profile: 'quick', fullCount: 2 });
+    // full の再開位置は fullCount
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toMatchObject({
+      profile: 'full',
+      startMoveNumber: 2,
+    });
+    expect(
+      await browserChunk(user, kifu.displayNo, 0, 2, POSITIONS - 2, ENGINE, { run: wasmRun(ENGINE, 600), claimedProfile: 'full' }),
+    ).toMatchObject({ status: 'applied', completed: true, profile: 'full', fullCompleted: true });
+
+    expect(await stateOf(kifu.id)).toMatchObject({ profile: 'full', completed: true, positions: POSITIONS, fullCount: POSITIONS });
+    const stored = await loadAnalysis(db, kifu.id);
+    expect(stored.runs.every((r) => r.profile === 'full' && r.runtime === 'wasm' && r.book === false)).toBe(true);
+    expect(stored.runs[0]).toMatchObject({ ...ENGINE, fvScale: 16, threads: 4, hashMb: 64, multiPv: 1, movetimeMs: 600 });
+
+    // 🔒 完了済みは不変: 開始は complete、遅れて届いたチャンク（どちらの段でも）は破棄
     expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, OTHER_ENGINE))).toEqual({
       status: 'complete',
     });
     expect(await browserChunk(user, kifu.displayNo, 0, 0, 1)).toEqual({ status: 'ignored' });
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 1, ENGINE, { claimedProfile: 'quick' })).toEqual({ status: 'ignored' });
     expect((await loadAnalysis(db, kifu.id)).runs).toEqual(stored.runs);
+  });
+
+  it('🔒 段が合わない報告は破棄する（quick の途中の full・full の途中の quick）', async () => {
+    const kifu = await newKifu(user);
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 1, ENGINE, { claimedProfile: 'full' })).toEqual({ status: 'ignored' });
+    expect(await stateOf(kifu.id)).toMatchObject({ positions: 0, fullCount: 0 });
+    await browserChunk(user, kifu.displayNo, 0, 0, POSITIONS, ENGINE, { claimedProfile: 'quick' });
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 1, ENGINE, { claimedProfile: 'quick' })).toEqual({ status: 'ignored' });
+    expect(await stateOf(kifu.id)).toMatchObject({ profile: 'quick', fullCount: 0 });
+  });
+
+  it('🔒 来歴の照合は進行中の段の行だけ: 完了した quick は別のエンジンでも引き継ぎ、full の途中で違えば quick から作り直す', async () => {
+    const kifu = await newKifu(user);
+    // quick を別のエンジンで完了させる（配信物の更新の前の quick）
+    await browserChunk(user, kifu.displayNo, 0, 0, POSITIONS, OTHER_ENGINE);
+    // full の開始（full 0 局面）は照合しない。行も世代もそのまま
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toMatchObject({
+      status: 'run',
+      revision: 0,
+      profile: 'full',
+      startMoveNumber: 0,
+    });
+    expect(await stateOf(kifu.id)).toMatchObject({ revision: 0, positions: POSITIONS, profile: 'quick' });
+    // full のチャンクは quick の行の来歴（別のエンジン）では破棄しない
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, 2, ENGINE)).toMatchObject({ status: 'applied', profile: 'full' });
+    // 同じ段（full）の行と違うエンジンのチャンクは破棄する
+    expect(await browserChunk(user, kifu.displayNo, 0, 2, 1, OTHER_ENGINE)).toEqual({ status: 'ignored' });
+    // 同じエンジンでの開始し直しは続きから
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toMatchObject({
+      revision: 0,
+      profile: 'full',
+      startMoveNumber: 2,
+    });
+    // full の途中で別のエンジン → 全消去して quick から（世代を進め、完了の印も戻す）
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, OTHER_ENGINE))).toMatchObject({
+      status: 'run',
+      revision: 1,
+      profile: 'quick',
+      startMoveNumber: 0,
+      settings: browserAnalysisSettingsFor('quick'),
+    });
+    expect(await stateOf(kifu.id)).toEqual({
+      revision: 1,
+      profile: null,
+      completed: false,
+      error: null,
+      positions: 0,
+      fullCount: 0,
+      exists: false,
+    });
+  });
+
+  it('手元 worker の quick の上にブラウザの full を始められる（worker → browser。来歴の項目なしでもやり直さない）', async () => {
+    const kifu = await newKifu(OWNER);
+    await workerChunk(kifu.id, 0, 'quick', 0, POSITIONS);
+    await switchOwner('browser');
+    try {
+      const started = await asUser(OWNER, (tx) => startBrowserAnalysis(tx, OWNER, kifu.displayNo, ENGINE));
+      expect(started).toMatchObject({ status: 'run', revision: 1, profile: 'full', startMoveNumber: 0 });
+      expect(await stateOf(kifu.id)).toMatchObject({ revision: 1, profile: 'quick', positions: POSITIONS });
+      expect(await browserChunk(OWNER, kifu.displayNo, 1, 0, POSITIONS, ENGINE, { run: wasmRun(ENGINE, 600) })).toMatchObject({
+        status: 'applied',
+        completed: true,
+        profile: 'full',
+        fullCompleted: true,
+      });
+      const stored = await loadAnalysis(db, kifu.id);
+      expect(stored.runs).toHaveLength(1);
+      expect(stored.runs[0]).toMatchObject({ profile: 'full', runtime: 'wasm', movetimeMs: 600 });
+    } finally {
+      await switchOwner('worker');
+    }
+  });
+
+  it('ブラウザの full の完了で出題が生成される（手元 worker と同じ経路。prd/13 §8）', async () => {
+    const kifu = await newKifu(user, { subjectSide: 'sente' });
+    // 0 手目（先手番）の最善は 2g2f で、実手 7g7f の後は後手が +1000（先手の悪手）
+    const blunder = [
+      { moveNumber: 0, candidates: [cand('2g2f')] },
+      { moveNumber: 1, candidates: [{ ...cand('8c8d'), scoreValue: 1000 }] },
+      { moveNumber: 2, candidates: [{ ...cand('2g2f'), scoreValue: -1000 }] },
+      { moveNumber: 3, candidates: [{ ...cand('8c8d'), scoreValue: 1000 }] },
+    ];
+    await browserChunk(user, kifu.displayNo, 0, 0, POSITIONS, ENGINE, { analyses: blunder });
+    // quick の完了では作らない
+    expect(await db.select().from(drills).where(eq(drills.kifuId, kifu.id))).toEqual([]);
+    expect(await browserChunk(user, kifu.displayNo, 0, 0, POSITIONS, ENGINE, { analyses: blunder })).toMatchObject({
+      status: 'applied',
+      profile: 'full',
+      fullCompleted: true,
+    });
+    const rows = await db
+      .select({ ownerId: drills.ownerId, moveNumber: drills.moveNumber, kind: drills.kind })
+      .from(drills)
+      .where(eq(drills.kifuId, kifu.id));
+    expect(rows).toEqual([{ ownerId: user, moveNumber: 0, kind: 'best' }]);
   });
 
   it('🔒 途中の解析が別のエンジンのものなら、開始で行を消して世代を進める（続きに重ねない）', async () => {
@@ -545,7 +682,7 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
     // 前の世代を掴んだ側の報告は破棄される
     expect(await browserChunk(user, kifu.displayNo, 0, 3, 1, OTHER_ENGINE)).toEqual({ status: 'ignored' });
     // 新しい世代は 0 から。同じエンジンでの開始し直しはやり直さない
-    expect(await browserChunk(user, kifu.displayNo, 1, 0, 2, ENGINE)).toEqual({ status: 'applied', completed: false });
+    expect(await browserChunk(user, kifu.displayNo, 1, 0, 2, ENGINE)).toMatchObject({ status: 'applied', completed: false });
     expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toMatchObject({
       status: 'run',
       revision: 1,
@@ -560,12 +697,12 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
     expect(await stateOf(kifu.id)).toMatchObject({ positions: 0, exists: false });
   });
 
-  it('失敗の記録: 同じ世代・quick が未完了のときだけ。記録した後は開始が failed・チャンクは破棄', async () => {
+  it('失敗の記録: 同じ世代・full が未完了のときだけ（進行中の段の失敗）。記録した後は開始が failed・チャンクは破棄', async () => {
     const kifu = await newKifu(user);
     const target = { ownerId: user, no: kifu.displayNo };
     const fail = (revision: number) =>
       asUser(user, (tx) =>
-        recordAnalysisFailure(tx, target, { revision, error: 'engine died', assignee: 'browser', stage: 'quick' }),
+        recordAnalysisFailure(tx, target, { revision, error: 'engine died', assignee: 'browser', stage: 'full' }),
       );
     expect(await fail(5)).toEqual({ applied: false });
     expect(await fail(0)).toEqual({ applied: true });
@@ -573,16 +710,34 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
     expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, kifu.displayNo, ENGINE))).toEqual({ status: 'failed' });
     expect(await browserChunk(user, kifu.displayNo, 0, 0, 1)).toEqual({ status: 'ignored' });
 
-    // 完了済みの棋譜に遅れて届いた失敗は記録しない
+    // quick の完了後（full の途中）の失敗は記録する
+    const quickDone = await newKifu(user);
+    await browserChunk(user, quickDone.displayNo, 0, 0, POSITIONS);
+    expect(
+      await asUser(user, (tx) =>
+        recordAnalysisFailure(tx, { ownerId: user, no: quickDone.displayNo }, {
+          revision: 0,
+          error: 'full died',
+          assignee: 'browser',
+          stage: 'full',
+        }),
+      ),
+    ).toEqual({ applied: true });
+    expect(await stateOf(quickDone.id)).toMatchObject({ profile: 'quick', completed: true, error: 'full died' });
+    expect(await asUser(user, (tx) => startBrowserAnalysis(tx, user, quickDone.displayNo, ENGINE))).toEqual({ status: 'failed' });
+
+    // full まで完了した棋譜に遅れて届いた失敗は記録しない
     const done = await newKifu(user);
     await browserChunk(user, done.displayNo, 0, 0, POSITIONS);
+    await browserChunk(user, done.displayNo, 0, 0, POSITIONS);
+    expect(await stateOf(done.id)).toMatchObject({ profile: 'full' });
     expect(
       await asUser(user, (tx) =>
         recordAnalysisFailure(tx, { ownerId: user, no: done.displayNo }, {
           revision: 0,
           error: 'late',
           assignee: 'browser',
-          stage: 'quick',
+          stage: 'full',
         }),
       ),
     ).toEqual({ applied: false });
@@ -596,13 +751,21 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
     });
   });
 
-  it('未解析の棋譜の番号: 未完了・失敗なし・指し手列ありだけを新しい順に', async () => {
+  it('未解析の棋譜の番号: full 未完了・失敗なし・指し手列あり。quick 未完了が先、その中はそれぞれ新しい順', async () => {
     const fresh = await insertUser();
     const old = await newKifu(fresh, { playedAt: new Date('2020-01-01T00:00:00Z') });
     const recent = await newKifu(fresh, { playedAt: new Date('2026-01-01T00:00:00Z') });
     const partial = await newKifu(fresh, { playedAt: new Date('2023-01-01T00:00:00Z') });
     await browserChunk(fresh, partial.displayNo, 0, 0, 1);
+    // quick だけ完了（full 待ち）。新しい方が先。full の途中も同じ扱い
+    const quickOld = await newKifu(fresh, { playedAt: new Date('2021-01-01T00:00:00Z') });
+    await browserChunk(fresh, quickOld.displayNo, 0, 0, POSITIONS);
+    const quickNew = await newKifu(fresh, { playedAt: new Date('2027-01-01T00:00:00Z') });
+    await browserChunk(fresh, quickNew.displayNo, 0, 0, POSITIONS);
+    await browserChunk(fresh, quickNew.displayNo, 0, 0, 1);
+    // full まで完了
     const done = await newKifu(fresh);
+    await browserChunk(fresh, done.displayNo, 0, 0, POSITIONS);
     await browserChunk(fresh, done.displayNo, 0, 0, POSITIONS);
     const failed = await newKifu(fresh);
     await asUser(fresh, (tx) =>
@@ -610,7 +773,7 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
         revision: 0,
         error: 'e',
         assignee: 'browser',
-        stage: 'quick',
+        stage: 'full',
       }),
     );
     await newKifu(fresh, { usiMoves: null });
@@ -619,6 +782,8 @@ describe('ブラウザ解析の受け口の本体（prd/14 §5.8・§5.9）', ()
       recent.displayNo,
       partial.displayNo,
       old.displayNo,
+      quickNew.displayNo,
+      quickOld.displayNo,
     ]);
     expect(await asUser(fresh, (tx) => pendingBrowserKifuNos(tx, fresh, 1))).toEqual([recent.displayNo]);
     // 担当が worker のユーザー（所有者）には空
@@ -644,14 +809,14 @@ describe('所有者スコープ: 他人の番号は「無い」（prd/14 §4）'
           revision: 0,
           error: 'e',
           assignee: 'browser',
-          stage: 'quick',
+          stage: 'full',
         }),
       ),
     ).toBeNull();
     expect(await stateOf(target.id)).toMatchObject({ revision: 0, positions: 0, error: null });
 
     // 同じ番号でも自分の棋譜を指す（A の 1 番ではない）
-    expect(await browserChunk(b, 1, 0, 0, 1)).toEqual({ status: 'applied', completed: false });
+    expect(await browserChunk(b, 1, 0, 0, 1)).toMatchObject({ status: 'applied', completed: false });
     const [row] = await db
       .select({ kifuId: kifuAnalyses.kifuId, ownerId: kifuAnalyses.ownerId })
       .from(kifuAnalyses)
@@ -716,7 +881,10 @@ describe('ログインの経路の API（所有者として。prd/14 §5.7・§5
     const base = `/api/kifus/${kifu.displayNo}/analysis`;
     expect((await app.request(`${base}/start`, ownerJson('POST', START))).status).toBe(409);
     const chunk = await app.request(`${base}/chunks`, ownerJson('POST', chunkBody(0, 0, 1)));
-    expect([chunk.status, await chunk.json()]).toEqual([201, { ok: true, applied: false, completed: false }]);
+    expect([chunk.status, await chunk.json()]).toEqual([
+      201,
+      { ok: true, applied: false, completed: false, stageCompleted: false, profile: null },
+    ]);
     const error = await app.request(`${base}/error`, ownerJson('POST', { revision: 0, error: 'e' }));
     expect([error.status, await error.json()]).toEqual([201, { ok: true, applied: false }]);
     expect(await (await app.request('/api/analysis/pending')).json()).toEqual({ kifuNos: [] });
@@ -740,11 +908,34 @@ describe('ログインの経路の API（所有者として。prd/14 §5.7・§5
     expect(start.status).toBe(200);
     const started = (await start.json()) as { status: string; revision: number; startMoveNumber: number; usiMoves: string[] };
     // 切り替えで世代が 1 つ進んでいる
-    expect(started).toMatchObject({ status: 'run', revision: 1, startMoveNumber: 0, usiMoves: MOVES, settings: BROWSER_ANALYSIS_SETTINGS });
+    expect(started).toMatchObject({
+      status: 'run',
+      revision: 1,
+      profile: 'quick',
+      startMoveNumber: 0,
+      usiMoves: MOVES,
+      settings: browserAnalysisSettingsFor('quick'),
+    });
 
+    // 🔒 今の web（本文に段を載せない）との互換: quick の完了では `completed: false` を返し、
+    // 開始し直すと full の設定（その段の思考時間）が返る
     const chunk = await app.request(`${base}/chunks`, ownerJson('POST', chunkBody(started.revision, 0, POSITIONS)));
-    expect([chunk.status, await chunk.json()]).toEqual([201, { ok: true, applied: true, completed: true }]);
+    expect([chunk.status, await chunk.json()]).toEqual([
+      201,
+      { ok: true, applied: true, completed: false, stageCompleted: true, profile: 'quick' },
+    ]);
     expect(await stateOf(kifu.id)).toMatchObject({ profile: 'quick', completed: true, positions: POSITIONS });
+    const fullStart = await (await app.request(`${base}/start`, ownerJson('POST', START))).json();
+    expect(fullStart).toMatchObject({ status: 'run', revision: 1, profile: 'full', startMoveNumber: 0, settings: { movetimeMs: 600 } });
+    const fullChunk = await app.request(
+      `${base}/chunks`,
+      ownerJson('POST', { ...chunkBody(started.revision, 0, POSITIONS), movetimeMs: 600, profile: 'full' }),
+    );
+    expect([fullChunk.status, await fullChunk.json()]).toEqual([
+      201,
+      { ok: true, applied: true, completed: true, stageCompleted: true, profile: 'full' },
+    ]);
+    expect(await stateOf(kifu.id)).toMatchObject({ profile: 'full', fullCount: POSITIONS });
     expect((await (await app.request(`${base}/start`, ownerJson('POST', START))).json())).toEqual({ status: 'complete' });
 
     // 番号の無い棋譜は 404

@@ -77,11 +77,15 @@ export type BrowserAnalysisStart = z.infer<typeof browserAnalysisStartSchema>;
 
 /**
  * チャンクの報告の本文（prd/14 §5.8）。
- * 段階（`quick`）・実行環境（`wasm`）・MultiPV（1）・定跡（なし）は **server が固定する**ので送らない。
+ * 実行環境（`wasm`）・MultiPV（1）・定跡（なし）は **server が固定する**ので送らない。
+ * 🔒 **段（quick / full）は server が棋譜の状態から決める。** `profile` は任意の申告で、載っていて
+ * 状態と合わなければ破棄される（201 `applied: false`）。載っていなければ状態の段で受ける
  */
 export const browserAnalysisChunkSchema = z.object({
   /** 開始の口が返した世代。違えば破棄される（201 `applied: false`） */
   revision,
+  /** 開始の口が返した段（任意。状態と照合するだけで、段を決めるのは server） */
+  profile: z.enum(['quick', 'full']).optional(),
   // --- 来歴（prd/14 §5.9）---
   engineBuild,
   evalHash,

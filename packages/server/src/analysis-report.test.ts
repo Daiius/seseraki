@@ -3,10 +3,15 @@
 import { BROWSER_ANALYSIS_LIMITS } from 'shared';
 import { describe, expect, it } from 'vitest';
 import {
+  BROWSER_ANALYSIS_MOVETIME_MS,
   BROWSER_ANALYSIS_SETTINGS,
+  browserAnalysisSettingsFor,
+  browserStageOf,
   canChooseWorker,
   classifyForSwitch,
   needsRestart,
+  planBrowserStart,
+  runsOfStage,
 } from './analysis-report.js';
 import { clearProgressForOwner, getClearToken, getProgress, resetProgress, setProgress } from './analysis-progress.js';
 import { mergeChunk, runExtras, EMPTY_ANALYSIS, type AnalysisRun } from './kifu-analysis-detail.js';
@@ -70,6 +75,90 @@ describe('BROWSER_ANALYSIS_SETTINGS（開始の口が返す設定）', () => {
     expect(BROWSER_ANALYSIS_SETTINGS.chunkMaxPositions).toBe(BROWSER_ANALYSIS_LIMITS.chunkMaxPositions);
     expect(BROWSER_ANALYSIS_SETTINGS.pvMaxPlies).toBe(BROWSER_ANALYSIS_LIMITS.pvMaxPlies);
     expect(BROWSER_ANALYSIS_SETTINGS.multiPv).toBe(BROWSER_ANALYSIS_LIMITS.maxCandidates);
+  });
+
+  it('思考時間は段ごと（quick 100ms・full 600ms。prd/14 §5.2 で確定）', () => {
+    expect(BROWSER_ANALYSIS_MOVETIME_MS).toEqual({ quick: 100, full: 600 });
+  });
+
+  it('🔒 開始の口の settings.movetimeMs は「その段の思考時間」（1 段のままの web がそれで回す）。ほかの値は段で共通', () => {
+    expect(browserAnalysisSettingsFor('quick')).toEqual({ ...BROWSER_ANALYSIS_SETTINGS, movetimeMs: 100 });
+    expect(browserAnalysisSettingsFor('full')).toEqual({ ...BROWSER_ANALYSIS_SETTINGS, movetimeMs: 600 });
+  });
+});
+
+describe('browserStageOf（ブラウザがいま回す段。prd/14 §5.8）', () => {
+  it('quick が未完了なら quick、完了していれば full', () => {
+    expect(browserStageOf({ completedAt: null, analysisProfile: null })).toBe('quick');
+    expect(browserStageOf({ completedAt: DONE, analysisProfile: 'quick' })).toBe('full');
+    // 段階の記録が無い完了済み（移行前の取りこぼし）は quick 完了と読む
+    expect(browserStageOf({ completedAt: DONE, analysisProfile: null })).toBe('full');
+  });
+});
+
+describe('runsOfStage / planBrowserStart（来歴の照合を進行中の段に絞る。prd/14 §5.9）', () => {
+  const engine = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'a'.repeat(64) };
+  const other = { engineBuild: 'deadbeef-0123456789ab', evalHash: 'a'.repeat(64) };
+  const quickDone = { completedAt: DONE, analysisProfile: 'quick' as const };
+  const fresh = { completedAt: null, analysisProfile: null };
+  const detail = (n: number) => Array.from({ length: n }, () => null);
+
+  it('runsOfStage はその段の来歴だけを返す', () => {
+    const runs = [
+      { profile: 'quick' as const, ...other },
+      { profile: 'full' as const, ...engine },
+    ];
+    expect(runsOfStage(runs, 'full')).toEqual([runs[1]]);
+    expect(runsOfStage(runs, 'quick')).toEqual([runs[0]]);
+  });
+
+  it('quick の途中: 入っている来歴がすべて同じエンジンなら続きから、違えばやり直す（今と同じ）', () => {
+    expect(planBrowserStart(fresh, { detail: [], runs: [], fullCount: 0 }, engine)).toEqual({
+      action: 'continue',
+      profile: 'quick',
+      startMoveNumber: 0,
+    });
+    expect(
+      planBrowserStart(fresh, { detail: detail(3), runs: [{ profile: 'quick', ...engine }], fullCount: 0 }, engine),
+    ).toEqual({ action: 'continue', profile: 'quick', startMoveNumber: 3 });
+    expect(
+      planBrowserStart(fresh, { detail: detail(3), runs: [{ profile: 'quick', ...other }], fullCount: 0 }, engine),
+    ).toEqual({ action: 'restart' });
+  });
+
+  it('🔒 full の開始（full 0 局面）は照合しない: 完了した quick は別のエンジン・項目なし（手元 worker）でも引き継ぐ', () => {
+    expect(
+      planBrowserStart(quickDone, { detail: detail(4), runs: [{ profile: 'quick', ...other }], fullCount: 0 }, engine),
+    ).toEqual({ action: 'continue', profile: 'full', startMoveNumber: 0 });
+    expect(planBrowserStart(quickDone, { detail: detail(4), runs: [{ profile: 'quick' }], fullCount: 0 }, engine)).toEqual({
+      action: 'continue',
+      profile: 'full',
+      startMoveNumber: 0,
+    });
+  });
+
+  it('full の途中: full の行の来歴だけと照合する（quick の行が別のエンジンでも続きから）', () => {
+    const runs = [
+      { profile: 'full' as const, ...engine },
+      { profile: 'quick' as const, ...other },
+    ];
+    expect(planBrowserStart(quickDone, { detail: detail(4), runs, fullCount: 2 }, engine)).toEqual({
+      action: 'continue',
+      profile: 'full',
+      startMoveNumber: 2,
+    });
+  });
+
+  it('🔒 full の途中で full の行の来歴が違えば、全消去して quick から作り直す', () => {
+    const runs = [
+      { profile: 'full' as const, ...other },
+      { profile: 'quick' as const, ...engine },
+    ];
+    expect(planBrowserStart(quickDone, { detail: detail(4), runs, fullCount: 2 }, engine)).toEqual({ action: 'restart' });
+    // 手元 worker の full の途中（項目なし）も違うに数える
+    expect(
+      planBrowserStart(quickDone, { detail: detail(4), runs: [{ profile: 'full' }, { profile: 'quick' }], fullCount: 2 }, engine),
+    ).toEqual({ action: 'restart' });
   });
 });
 

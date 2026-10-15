@@ -27,7 +27,7 @@
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
-| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は全局面解析まで実装（本番は未反映。詳細検討・検討盤のブラウザ評価は未実装）。所有者ゲートの撤去と新規登録の開放は未実装） |
+| [prd/14-multi-user.md](./prd/14-multi-user.md) | 複数ユーザーへの開放（SNS 認証 / 所有者スコープ / ブラウザ解析 / 保存と容量。段階 1（認証）・Postgres への移行・所有者スコープ（RLS）・所有者ごとの番号（displayNo）まで本番反映済み。ブラウザ解析は全局面解析まで 1 段で実装（本番は未反映）。2 段化と出題の採点（2026-10-15 決定）・詳細検討・検討盤のブラウザ評価は未実装。所有者ゲートの撤去と新規登録の開放は未実装） |
 | [prd/15-postgres.md](./prd/15-postgres.md) | Postgres への移行（型・制約・トリガー / データ移行 / 切り替え / 実 DB テスト。本番切り替え済み（2026-10-06）・リポジトリ側の後片付けも済み） |
 | [prd/16-analysis-storage.md](./prd/16-analysis-storage.md) | 解析結果の保存形式（1 棋譜の 1 回の解析を 1 行に詰める・検索に使う値だけ列に出す。本番反映済み） |
 
@@ -140,7 +140,8 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 >
 > 🔴 **解析の担当（`users.analysisAssignee`。`worker` / `browser`。prd/14 §5.7）で、誰がその棋譜を解析するかが決まる。**
 > - **手元 worker にジョブ・棋譜を渡す口を足したら、担当 `worker` のユーザーに絞る**（取得・quick 待ちの判定・検討盤の評価の要求は絞ってある。
->   絞らないと、ログインした誰もが所有者の worker を使える）。出題の解答の評価だけは絞らない（理由は prd/14 §5.7）
+>   絞らないと、ログインした誰もが所有者の worker を使える）。⚠ 出題の解答の評価は**今のコードでは絞っていない**——
+>   2 段化（prd/14 §5.11 の 2 番目・未実装）でブラウザの利用者にも出題が生まれるので、そこで担当 `worker` に絞る（prd/14 §5.7）
 > - **解析の報告を受ける口は、棋譜の行ロックの下で今の担当を確かめる**（`analysis-report.ts` の `submitAnalysisChunk` /
 >   `recordAnalysisFailure` を通す。手元 worker とブラウザ解析の受け口で共用）。担当違い・古い世代は 201 `applied: false`——
 >   ⚠ **4xx にしない**（手元 worker は 4xx を恒久的な失敗として棋譜に記録する）
@@ -279,8 +280,9 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > - 🔴 **COOP / COEP は全応答に要る**（Worker のスクリプト・`/engine/*`・`/api` を含む）。dev / preview はプラグインが付ける。
 >   本番は静的配信の側で付ける——付いていないと、ブラウザ解析は「この配信の設定では使えません」の案内になる。
 > - ⚠ **`localhost` 以外の http（LAN の IP）では動かない**（SharedArrayBuffer は secure context だけ）。実機は https の remote dev で。
-> - ⚠ **完了の判定は担当で変わる**（`lib/analysisPending.ts`）。「解析が終わったか」を `analysisProfile !== 'full'` と直に書かない
->   ——ブラウザで解析するユーザーは quick が最終段で、full を待ち続ける画面になる。
+> - ⚠ **今のコードでは完了の判定が担当で変わる**（`lib/analysisPending.ts`）。「解析が終わったか」を `analysisProfile !== 'full'` と直に書かない
+>   ——今のブラウザ解析は 1 段（quick が最終段）で、full を待ち続ける画面になる。2 段化（prd/14 §5.7・未実装）で全員 full で完了に戻し、
+>   この分岐は外す（判定は `isAnalysisPending` の 1 か所にあるので、そこを直す）。
 > - 経過はコンソールに `[browser-analysis]` の接頭辞で出る。
 >
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の

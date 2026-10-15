@@ -83,13 +83,14 @@ export function requestBrowserAnalysisRestart(): void {
   patchBrowserAnalysisState({ restartNonce: state.restartNonce + 1 });
 }
 
-function subscribe(listener: () => void): () => void {
+/** 状態の変化を聞く（React の外から。返り値で外す） */
+export function subscribeBrowserAnalysisState(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
 export function useBrowserAnalysisState(): BrowserAnalysisState {
-  return useSyncExternalStore(subscribe, getBrowserAnalysisState);
+  return useSyncExternalStore(subscribeBrowserAnalysisState, getBrowserAnalysisState);
 }
 
 // --- 開いている詳細ページの棋譜（解析の最優先。prd/14 §5.10）---

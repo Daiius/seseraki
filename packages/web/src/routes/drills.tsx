@@ -26,6 +26,13 @@ import {
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillHistory, DrillList } from '../components/DrillTables';
+import { BrowserAnalysisNotice } from '../components/BrowserAnalysis';
+import { answerBodyWithEvaluation, answerStepOf, type AnswerBody } from '../lib/drillAnswer';
+import { gradingFailureMessage, requestBrowserGrading } from '../lib/browserAnalysis/grading';
+import {
+  getBrowserAnalysisState,
+  subscribeBrowserAnalysisState,
+} from '../lib/browserAnalysis/store';
 import {
   drillRefOf,
   nextDrillSearch,
@@ -45,6 +52,8 @@ import {
  * ここには**出題局面と問いしか届かない**（正解手も候補手も server が持っている。prd/13 §5.3）。
  *
  * 🔒 **採点は server**。ここがやるのは盤の操作と、返ってきた判定の表示だけ。
+ * 候補手の外の答えで server が「この局面のこの手を名指しで読んで」と返したら（ブラウザで解析する利用者。prd/13 §5.3）、
+ * このブラウザのエンジンで読んだ結果を付けて同じ解答を送り直す。読めない端末では「採点できない」旨を出す（推測で判定しない）。
  */
 export const Route = createFileRoute('/drills')({
   validateSearch: validateDrillsSearch,
@@ -416,6 +425,8 @@ function DrillRunner({
   const [session, setSession] = useState<StudySession | null>(() => sessionOf(initial.drill, []));
   const [reveal, setReveal] = useState<Reveal | null>(null);
   const [judging, setJudging] = useState(false);
+  /** この端末のエンジンで採点できなかった（同意の前・解析できない環境など）。案内（同意のボタンなど）も並べて出す */
+  const [ungradable, setUngradable] = useState(false);
 
   const base = drill ? parseSfen(drill.sfen) : null;
   const state = session ? currentState(session) : base;
@@ -465,8 +476,9 @@ function DrillRunner({
     if (!drill) return;
     setJudging(true);
     setError(null);
-    const body = { line: [...line, move], ...scoring };
-    const deadline = Date.now() + POLL_BUDGET_MS;
+    setUngradable(false);
+    let body: AnswerBody = { line: [...line, move], ...scoring };
+    let deadline = Date.now() + POLL_BUDGET_MS;
     try {
       while (Date.now() < deadline) {
         const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
@@ -475,31 +487,53 @@ function DrillRunner({
         });
         // ⚠ **本文のパースはステータス判定より後**（前段が返す HTML で落ちると、
         // 通信断でもないのに「接続できません」と出る。prd/12 §2.4）
-        if (res.status === 202) {
-          const { jobId } = (await res.json()) as { jobId: string };
-          await waitForEvaluation(jobId, deadline);
-          continue;
+        const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
+        switch (step.kind) {
+          case 'wait-job':
+            await waitForEvaluation(step.jobId, deadline);
+            continue;
+          case 'evaluate': {
+            // 🔒 読んだ結果を付けて送り直したのに、また読んでと返る ＝ 噛み合っていない。回り続けない
+            if (body.evaluation) {
+              setError('判定できませんでした。もう一度お試しください');
+              setJudging(false);
+              return;
+            }
+            // このブラウザのエンジンで名指しで読む（全局面解析より先に。prd/14 §5.10）
+            const graded = await requestBrowserGrading(step.request, {
+              getPhase: () => getBrowserAnalysisState().phase,
+              subscribe: subscribeBrowserAnalysisState,
+              setTimeout: (callback, ms) => setTimeout(callback, ms),
+              clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+            });
+            if (graded.kind !== 'ok') {
+              setError(gradingFailureMessage(graded));
+              setUngradable(graded.kind === 'unavailable');
+              setJudging(false);
+              return;
+            }
+            body = answerBodyWithEvaluation(body, graded.evaluation);
+            // エンジンの準備（初回のダウンロード）に掛かった時間は、送り直しの待ちに数えない
+            deadline = Date.now() + POLL_BUDGET_MS;
+            continue;
+          }
+          case 'error':
+            setError(step.text);
+            setJudging(false);
+            return;
+          case 'continue': {
+            // 詰みの指し継ぎ。受方の応手まで進めて次の手を待つ（prd/13 §5.2）
+            const advanced = [...line, move, step.reply];
+            setLine(advanced);
+            setSession(sessionOf(drill, advanced));
+            setJudging(false);
+            return;
+          }
+          case 'done':
+            setReveal(step.result);
+            setJudging(false);
+            return;
         }
-        if (!res.ok) {
-          const detail = await res.json().catch(() => null);
-          setError(errorTextOf(detail, res.status));
-          setJudging(false);
-          return;
-        }
-        const result = (await res.json()) as
-          | { status: 'continue'; reply: string }
-          | ({ status: 'done' } & Reveal);
-        if (result.status === 'continue') {
-          // 詰みの指し継ぎ。受方の応手まで進めて次の手を待つ（prd/13 §5.2）
-          const advanced = [...line, move, result.reply];
-          setLine(advanced);
-          setSession(sessionOf(drill, advanced));
-          setJudging(false);
-          return;
-        }
-        setReveal(result);
-        setJudging(false);
-        return;
       }
       setError('判定が終わりませんでした。もう一度お試しください');
       setJudging(false);
@@ -564,6 +598,11 @@ function DrillRunner({
       />
 
       {error && <p className="text-error text-sm">{error}</p>}
+      {/*
+        このブラウザで読むときの案内（初回のダウンロードの進捗・同意のボタン・止まったときのやり直し）。
+        サーバーで解析する利用者では何も出ない
+      */}
+      {(judging || ungradable) && <BrowserAnalysisNotice />}
 
       {judging && (
         <p className="text-sm text-base-content/70">
@@ -727,9 +766,4 @@ async function waitForEvaluation(jobId: string, deadline: number): Promise<void>
   }
 }
 
-function errorTextOf(detail: unknown, status: number): string {
-  if (detail && typeof detail === 'object' && 'error' in detail) {
-    return String((detail as { error: unknown }).error);
-  }
-  return `サーバーエラー (${status})`;
-}
+

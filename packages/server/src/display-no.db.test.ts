@@ -197,7 +197,7 @@ const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-/** Origin の検査がある書き込み口（ブラウザ解析の受け口・担当の切り替え。prd/14 §5.8）用 */
+/** Origin の検査がある書き込み口（ブラウザ解析の受け口・担当の切り替え・出題の解答。prd/14 §5.8）用 */
 const jsonFromBrowser = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
@@ -254,7 +254,7 @@ const CALLS: Call[] = [
   },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/answer',
-    request: () => ({ url: `${drillPath()}/answer`, init: json('POST', { line: ['7g7f'] }) }),
+    request: () => ({ url: `${drillPath()}/answer`, init: jsonFromBrowser('POST', { line: ['7g7f'] }) }),
     status: 200,
   },
   {

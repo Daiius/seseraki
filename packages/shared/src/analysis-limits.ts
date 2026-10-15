@@ -115,6 +115,47 @@ export const browserAnalysisErrorSchema = z.object({
 });
 export type BrowserAnalysisError = z.infer<typeof browserAnalysisErrorSchema>;
 
+// --- 出題の採点の名指し評価（prd/13 §5.3・prd/14 §5.8）---
+
+/**
+ * 出題の解答に付けて送り直す、ブラウザの名指し評価（`go … searchmoves <手>`）の結果。
+ *
+ * ブラウザから届く値は**信用できない入力**（影響は本人の成績に閉じる。prd/14 §5.1）。全局面解析の報告と同じ考え方で
+ * 形と上限を検証する。🔒 **判定は server が行う**（正解 / 惜しい / 不正解・別解・詰み上がり。prd/13 §5.3）——ここは値の形だけ。
+ *
+ * - `move`: 名指しした手（USI の指し手。server は解答の最後の手と一致するかも確かめる——別の手の評価で採点させない）
+ * - `candidate`: その手の評価（手番側から見た値・読み筋の先頭はその手）。**`null` は「候補なし」**
+ *   （エンジンが評価を出さなかった。server は手元 worker のフォールバックの「候補なし」と同じ扱いで、
+ *   その手で詰み上がったかを盤面から見る。prd/13 §5.2）
+ * - 来歴（ビルド識別・評価関数・`FV_SCALE`・スレッド・置換表・思考時間）: 全局面解析のチャンクと同じ形。
+ *   解答の記録には残さない（受けて形を確かめるだけ。実装時に決定）
+ */
+export const drillNamedEvaluationSchema = z
+  .object({
+    move: z.string().regex(USI_MOVE, '指し手の形が違う'),
+    candidate: z
+      .object({
+        scoreType: z.enum(['cp', 'mate']),
+        scoreValue,
+        depth: z.number().int().min(0).max(BROWSER_ANALYSIS_LIMITS.maxDepth),
+        pv: z.array(pvToken).min(1).max(BROWSER_ANALYSIS_LIMITS.pvMaxPlies),
+      })
+      .nullable(),
+    engineBuild,
+    evalHash,
+    engineName: z.string().max(255).nullish(),
+    fvScale: z.number().int().min(1).max(1024),
+    threads: z.number().int().min(1).max(64),
+    hashMb: z.number().int().min(1).max(65_536),
+    movetimeMs: z.number().int().min(1).max(60_000),
+  })
+  // 読み筋の先頭は名指しした手（`searchmoves` の結果の形）。違えば別の手の評価
+  .refine((v) => v.candidate === null || v.candidate.pv[0] === v.move, {
+    message: '読み筋の先頭が名指しした手と違う',
+    path: ['candidate', 'pv'],
+  });
+export type DrillNamedEvaluation = z.infer<typeof drillNamedEvaluationSchema>;
+
 /** 読み筋を上限の長さに切る（web が送る前に通す。拒否を恒久失敗にしないため） */
 export function clampPv(pv: readonly string[]): string[] {
   return pv.slice(0, BROWSER_ANALYSIS_LIMITS.pvMaxPlies);

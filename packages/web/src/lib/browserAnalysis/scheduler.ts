@@ -11,6 +11,10 @@
  *   「今選び直したら別の棋譜を選ぶか」だけを見る（quick 待ちの棋譜が現れたとき、それが先頭に来る）
  * - 🔒 **同じブラウザの中の解析は 1 本**（Web Locks）。棋譜 1 つごとにロックを取り、ほかのタブと順番に進める。
  *   エンジンを読み込むのはロックを取ったタブだけ（読み込みは runner が最初の解析のときに行う）
+ * - 🔒 **採点の読み（出題の名指し評価）は全局面解析より優先**（prd/14 §5.10）。{@link Scheduler.runPriority} で頼まれたら、
+ *   このタブの解析を局面の境目で止め（既存の中断。未送信のチャンクは送ってから止まる）、採点の読みを先に済ませてから
+ *   選び直す（止めた棋譜は空け時間なしでまた選ばれる＝続きから再開）。ほかのタブの解析は、局面の境目で
+ *   {@link SchedulerDeps.priorityWaiting} を見て譲る（`paused`）
  *
  * 依存は注入する（unit テスト用）。DOM には触れない。
  */
@@ -48,6 +52,13 @@ export interface SchedulerDeps {
    * 待っている間に `signal` が中断されたら、`fn` を呼ばずに拒否する
    */
   withLock<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T>;
+  /**
+   * 採点の読みを、ほかのタブより先に {@link SchedulerDeps.withLock} と同じロックの下で実行する。
+   * ほかのタブに「採点の読みが待っている」と分かる印（{@link SchedulerDeps.priorityWaiting}）を立ててからロックを待つ
+   */
+  withPriorityLock<T>(signal: AbortSignal, fn: () => Promise<T>): Promise<T>;
+  /** ほかのタブで採点の読みが待っているか（局面の境目ごとに聞く。聞けなければ false） */
+  priorityWaiting(): Promise<boolean>;
   /** `ms` 待つ。中断されたら待たずに解決する */
   sleep(ms: number, signal: AbortSignal): Promise<void>;
   now(): number;
@@ -65,6 +76,18 @@ export interface Scheduler {
   setFocus(kifuNo: number | null): void;
   /** 待機を切り上げて、次の棋譜を選び直す（ページの移動など、状況が変わったかもしれないとき） */
   poke(): void;
+  /**
+   * 採点の読み（`fn`）を全局面解析より先に実行する。このタブで解析中の棋譜は局面の境目で止め、`fn` の後に選び直す。
+   * 常駐が止まったら（止まっていたら）拒否する
+   */
+  runPriority<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/** 常駐が止まっていて、採点の読みを実行できない */
+export class SchedulerStoppedError extends Error {
+  constructor() {
+    super('解析の常駐が止まっています');
+  }
 }
 
 /** 解析が一区切りした棋譜を、次に試すまで空ける時間 */
@@ -93,6 +116,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   };
   /** 棋譜の番号 → 次に試してよい時刻 */
   const cooldownUntil = new Map<number, number>();
+  /** 頼まれた採点の読み（頼まれた順） */
+  const priority: { run(): Promise<void>; cancel(): void }[] = [];
+  let running = false;
 
   const eligible = (kifuNo: number) =>
     (cooldownUntil.get(kifuNo) ?? 0) <= deps.now();
@@ -166,11 +192,38 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   };
 
+  /** 頼まれた採点の読みを、頼まれた順にすべて済ませる */
+  const drainPriority = async (signal: AbortSignal): Promise<void> => {
+    while (priority.length > 0 && !signal.aborted) {
+      const task = priority.shift()!;
+      try {
+        await deps.withPriorityLock(signal, () => task.run());
+      } catch {
+        // ロックを待つ間の中断（常駐の停止）。頼んだ側には止まったと返す
+        task.cancel();
+      }
+    }
+  };
+
   const run = async (signal: AbortSignal): Promise<void> => {
+    running = true;
+    try {
+      await loop(signal);
+    } finally {
+      running = false;
+      for (const task of priority.splice(0)) task.cancel();
+    }
+  };
+
+  const loop = async (signal: AbortSignal): Promise<void> => {
     while (!signal.aborted) {
+      await drainPriority(signal);
+      if (signal.aborted) return;
       const seen = changes;
       const kifuNo = await pick();
       if (signal.aborted) return;
+      // 選んでいる間に採点の読みを頼まれたら、そちらを先にする
+      if (priority.length > 0) continue;
       if (kifuNo === 'unauthorized') {
         log.warn('halt (unauthorized): pending list returned 401');
         deps.onHalt({
@@ -194,6 +247,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         outcome = await deps.withLock(controller.signal, () =>
           deps.analyze(kifuNo, controller.signal, {
             shouldYield: () => shouldYield(kifuNo),
+            shouldPause: () => deps.priorityWaiting().catch(() => false),
           }),
         );
       } catch (error) {
@@ -212,6 +266,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       switch (outcome.kind) {
         case 'aborted':
+        case 'paused':
+          // 空け時間を置かない。採点の読みの後・選び直しで、続きから再開する
           break;
         case 'yielded':
           // 空け時間を置かない。一覧の先頭を解析し終えたら、また一覧の並びで選ばれる
@@ -252,5 +308,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     notify();
   };
 
-  return { run, setFocus, poke: notify };
+  const runPriority = <T,>(fn: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      if (!running) {
+        reject(new SchedulerStoppedError());
+        return;
+      }
+      priority.push({
+        run: () => fn().then(resolve, reject),
+        cancel: () => reject(new SchedulerStoppedError()),
+      });
+      if (current) {
+        // 局面の境目で止める（未送信のチャンクは送ってから止まる）。止めた棋譜は空け時間なしで選び直される
+        log.info(`interrupting kifu #${current.kifuNo} for a drill answer`);
+        current.controller.abort();
+      }
+      notify();
+    });
+
+  return { run, setFocus, poke: notify, runPriority };
 }

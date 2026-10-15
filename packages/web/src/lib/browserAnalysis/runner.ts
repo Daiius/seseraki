@@ -24,7 +24,11 @@ import {
   analyzeKifuForBrowser,
   BROWSER_ANALYSIS_LIMITS,
   isPermanentSubmitStatus,
+  namedEvaluationOf,
+  namedGoCommand,
+  sfenPositionCommand,
   type BrowserAnalysisChunk,
+  type DrillNamedEvaluation,
   type BrowserAnalysisRun,
   type BrowserAnalysisSettings as ServerAnalysisSettings,
   type UsiAnalysisEngine,
@@ -180,7 +184,31 @@ export interface AnalyzeHooks {
    * quick の間は呼ばない（quick 同士は譲らない）
    */
   shouldYield?(): Promise<boolean>;
+  /**
+   * 採点の読み（出題の名指し評価。prd/14 §5.10）がほかのタブで待っているか。**局面の境目ごと**に聞き、true なら
+   * 未送信のチャンクを送って止め、`paused` を返す（採点の読みは全局面解析より優先。同じタブの採点は呼び出し側が中断で止める）。
+   * quick / full のどちらでも聞く
+   */
+  shouldPause?(): Promise<boolean>;
 }
+
+/** 採点の読み（出題の名指し評価。prd/13 §5.3）で頼まれること。server の応答（`status: 'evaluate'`）の中身 */
+export interface NamedEvalRequest {
+  /** 読む局面（利用者がいま見ている局面） */
+  sfen: string;
+  /** 名指しする手（利用者の手） */
+  move: string;
+  /** 読む設定（全局面解析の深い段と同じ。思考時間・置換表・スレッドの上限・読み筋の長さ） */
+  settings: ServerAnalysisSettings;
+}
+
+export type NamedEvalOutcome =
+  /** 解答に付けて送り直す評価（server の `drillNamedEvaluationSchema` を通る形） */
+  | { kind: 'ok'; evaluation: DrillNamedEvaluation }
+  /** エンジンが名指しした手を読まなかった（その局面で指せない手など）。🔒 数字を作らず、採点を頼まない */
+  | { kind: 'mismatch'; returned: string }
+  /** エンジンを読み込めない・読みが失敗した（作り直して 1 度やり直した後） */
+  | { kind: 'failed'; detail: string };
 
 export type KifuOutcome =
   | { kind: 'complete' }
@@ -189,6 +217,8 @@ export type KifuOutcome =
   | { kind: 'failed'; error: string }
   /** 中断された（未送信のチャンクは送ってある） */
   | { kind: 'aborted' }
+  /** ほかのタブの採点の読みに譲った（未送信のチャンクは送ってある。{@link AnalyzeHooks.shouldPause}） */
+  | { kind: 'paused' }
   /** full の途中で、ほかの棋譜に譲った（未送信のチャンクは送ってある。{@link AnalyzeHooks.shouldYield}） */
   | { kind: 'yielded' }
   /** 今は進められない（通信の失敗が続いた・世代が進み続けた）。失敗とは記録していない。後で試す */
@@ -240,6 +270,12 @@ export interface KifuRunner {
     signal: AbortSignal,
     hooks?: AnalyzeHooks,
   ): Promise<KifuOutcome>;
+  /**
+   * 採点の読み（出題の名指し評価）を 1 つ読む（prd/13 §5.3）。`position sfen …` → `go movetime <ms> searchmoves <手>`。
+   * エンジンは全局面解析と共用する（棋譜をまたいで使い回すものと同じ。負荷の設定も同じく効く）。
+   * ⚠ 全局面解析と同時に呼ばない（呼び出し側が全局面解析を止めてから呼ぶ。エンジンは 1 本）
+   */
+  evaluateNamed(request: NamedEvalRequest): Promise<NamedEvalOutcome>;
   /** エンジンを止める */
   dispose(): void;
 }
@@ -308,6 +344,16 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     signal: AbortSignal,
     hooks: AnalyzeHooks = {},
   ): Promise<KifuOutcome> => {
+    /** ほかのタブの採点の読みに譲るかを聞く（聞けなければ譲らない） */
+    const askPause = async (): Promise<boolean> => {
+      if (!hooks.shouldPause) return false;
+      try {
+        return await hooks.shouldPause();
+      } catch {
+        return false;
+      }
+    };
+    let paused = false;
     /** 譲るかを聞く（聞けなければ譲らない） */
     const askYield = async (): Promise<boolean> => {
       if (!hooks.shouldYield) return false;
@@ -394,6 +440,11 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
             onPositionBoundary: async () => {
               // 中断は局面の境目で受ける（未送信のチャンクは解析のループが送ってから戻る）
               if (signal.aborted) return true;
+              // 採点の読みが待っていれば、局面の境目で先に譲る（prd/14 §5.10）
+              if (await askPause()) {
+                paused = true;
+                return true;
+              }
               // full の途中: しばらくごとに、ほかの棋譜（quick 待ち）に譲るかを聞く
               if (
                 profile === 'full' &&
@@ -451,6 +502,10 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
           });
           if (completed) return { kind: 'complete' };
           if (summary.interrupted) {
+            if (paused && !signal.aborted) {
+              log.info(`kifu #${kifuNo}: pausing at position ${cursor} for a drill answer`);
+              return { kind: 'paused' };
+            }
             if (yielded && !signal.aborted) {
               log.info(`kifu #${kifuNo}: yielding at position ${cursor} of full`);
               return { kind: 'yielded' };
@@ -567,8 +622,54 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     return { kind: 'deferred', detail: '失敗を記録できませんでした' };
   };
 
+  const evaluateNamed = async (request: NamedEvalRequest): Promise<NamedEvalOutcome> => {
+    const { sfen, move, settings } = request;
+    let detail = '';
+    // エンジンが失敗したら 1 度だけ作り直して読み直す（全局面解析と同じく、端末の不調 1 回で諦めない）
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let current: AnalysisEngine;
+      try {
+        current = await ensureEngine(settings);
+      } catch (error) {
+        disposeEngine();
+        detail = `解析エンジンを読み込めませんでした（${messageOf(error)}）`;
+        log.warn(`drill: engine load failed (${attempt + 1}): ${messageOf(error)}`);
+        continue;
+      }
+      try {
+        const result = await current.session.analyze(
+          sfenPositionCommand(sfen),
+          namedGoCommand(settings.movetimeMs, move),
+        );
+        const named = namedEvaluationOf(result, move, settings.pvMaxPlies);
+        if (named.kind === 'mismatch') return named;
+        return {
+          kind: 'ok',
+          evaluation: {
+            move,
+            candidate: named.candidate,
+            engineBuild: engineInfo.engineBuild,
+            evalHash: engineInfo.evalHash,
+            engineName: current.name,
+            fvScale: engineInfo.fvScale,
+            threads: current.threads,
+            hashMb: current.hashMb,
+            movetimeMs: settings.movetimeMs,
+          },
+        };
+      } catch (error) {
+        // 死・時間切れ・`info string Error!`。エンジンは必ず作り直す
+        disposeEngine();
+        detail = messageOf(error);
+        log.warn(`drill: engine failed (${attempt + 1}): ${detail}`);
+      }
+    }
+    return { kind: 'failed', detail };
+  };
+
   return {
     analyze,
+    evaluateNamed,
     dispose: () => {
       disposed = true;
       disposeEngine();

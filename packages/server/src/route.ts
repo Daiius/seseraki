@@ -12,7 +12,7 @@
  * （`display-no.db.test.ts` が全エンドポイントの応答を検査する）。出題は棋譜の番号・手数・種類の組で指す。
  * worker の経路（API_KEY。`worker-routes.ts`）は内部経路なので内部 ID のまま。
  *
- * 🔒 **ブラウザ解析の受け口と担当の切り替え（prd/14 §5.7・§5.8）は、Origin の検査と本文の大きさの上限を付ける**
+ * 🔒 **ブラウザ解析の受け口・担当の切り替え・出題の解答（prd/14 §5.7・§5.8・prd/13 §5.3）は、Origin の検査と本文の大きさの上限を付ける**
  * （`trustedOrigin` / `smallBody`）。ブラウザから届く解析結果は信用できない入力なので、検証と上限は
  * `shared` の `analysis-limits.ts` の zod で掛ける。書き込みは他の口と同じく RLS の下の tx で行う。
  *
@@ -56,6 +56,7 @@ import {
   browserAnalysisErrorSchema,
   browserAnalysisStartSchema,
   buildPositions,
+  drillNamedEvaluationSchema,
   parseSfen,
   positionSfen,
   validateMoveOnPosition,
@@ -188,7 +189,8 @@ if (authSettings.isDev) {
 /**
  * 書き込み口の Origin の検査（prd/14 §5.8）。🔒 一覧は Better Auth の `trustedOrigins` と同じもの
  * （`BETTER_AUTH_URL` のオリジンと `CORS_ORIGINS`。二重管理にしない）。
- * ⚠ 掛けているのはブラウザ解析の受け口と担当の切り替えだけ（既存の書き込み口へ広げるのは別の変更）
+ * ⚠ 掛けているのはブラウザ解析の受け口・担当の切り替え・出題の解答（ブラウザの名指し評価を受ける）だけ
+ * （ほかの既存の書き込み口へ広げるのは別の変更）
  */
 const trustedOrigin = originRequired(authSettings.trustedOrigins);
 
@@ -217,7 +219,10 @@ function applyLine(base: BoardState, moves: string[]): BoardState | null {
   return state;
 }
 
-/** エンジンの採点結果を HTTP へ写す。**待ちは 202、キュー満杯は 503**（prd/12 §2.4 と同じ流儀） */
+/**
+ * エンジンの採点結果を HTTP へ写す。**待ちは 202、キュー満杯は 503**（prd/12 §2.4 と同じ流儀）。
+ * ブラウザに読ませる（`evaluate`。担当 `browser`）は 200——ブラウザが読んで同じ解答を送り直す
+ */
 async function answerWithEngine(input: ResolveInput, reveal: Record<string, unknown>) {
   const answer = await resolveWithEngine(input);
   switch (answer.status) {
@@ -227,6 +232,12 @@ async function answerWithEngine(input: ResolveInput, reveal: Record<string, unkn
       return { body: { error: '評価キューが一杯です' }, status: 503 as const };
     case 'failed':
       return { body: { error: answer.error }, status: 502 as const };
+    case 'evaluate':
+      // 🔒 **答えは載せない**（`reveal` を付けない）。局面・利用者の手・読む設定だけ
+      return {
+        body: { status: 'evaluate' as const, sfen: answer.sfen, move: answer.move, settings: answer.settings },
+        status: 200 as const,
+      };
     case 'continue':
       return { body: { status: 'continue' as const, reply: answer.reply }, status: 200 as const };
     case 'done':
@@ -531,8 +542,8 @@ const route = app
       // 🔒 **解析の担当が `worker` のユーザーだけ**（prd/14 §5.7・prd/12 §2.4）。この口は手元 worker に
       // ジョブを積むので、絞らないとログインした誰もが所有者の worker を使える。
       // ⚠ 棋譜解析からの再利用（下）より前に断る——担当 `browser` の検討盤はブラウザで評価する設計で、
-      // 一部の局面だけ答えが返る口にしない。出題の解答の評価（`drill-engine.ts`）は絞らない
-      // （出題を持つのは手元 worker で解析した棋譜の持ち主だけ。prd/14 §5.7）
+      // 一部の局面だけ答えが返る口にしない。出題の解答の評価（`drill-engine.ts`）も担当 `worker` だけが
+      // 手元 worker にジョブを積み、担当 `browser` はブラウザが名指しで読む（prd/14 §5.7・prd/13 §5.3）
       if ((await analysisAssigneeOf(c.get('tx'), userId)) !== 'worker') {
         return c.json({ error: 'この機能は使えません' } as const, 403);
       }
@@ -684,8 +695,16 @@ const route = app
   // 先に渡さないための置き場所でもある（上記 `/drills/next`）。
   // `line` は**出題局面からの全手順**（受方の応手を含み、最後がユーザーの手）。
   // `best` は 1 手、`mate` は詰み上がりまで積み上がる（prd/13 §5.2）。
+  //
+  // 候補手の外の手（詰将棋で正解手順を外れた手）は名指し評価で採点する。読む場所は解析の担当（prd/14 §5.7）:
+  // 担当 `worker` は手元 worker にジョブを積み（`pending`）、担当 `browser` は「この局面のこの手を名指しで読んで」
+  // （`evaluate`）を返す。ブラウザは読んだ結果を `evaluation` に付けて同じ解答を送り直し、判定は server が行う。
+  // 🔒 ブラウザから届く評価は信用できない入力なので、Origin の検査・本文の上限・形の検証（`shared` の
+  // `drillNamedEvaluationSchema`）を掛け、評価の手が解答の手と一致することも確かめる（prd/14 §5.8）
   .post(
     '/drills/:kifuNo/:moveNumber/:kind/answer',
+    trustedOrigin,
+    smallBody,
     sessionRequired,
     zv('param', drillRefParam),
     zv(
@@ -695,10 +714,12 @@ const route = app
         // 採点の線引きは**閲覧者の設定**（prd/13 §5.1）。届かなければ既定
         correctMargin: z.number().int().min(0).max(10000).optional(),
         closeMargin: z.number().int().min(0).max(10000).optional(),
+        // ブラウザの名指し評価（`evaluate` を受けたブラウザが付けて送り直す。prd/13 §5.3）
+        evaluation: drillNamedEvaluationSchema.optional(),
       }),
     ),
     async (c) => {
-      const { line, correctMargin, closeMargin } = c.req.valid('json');
+      const { line, correctMargin, closeMargin, evaluation } = c.req.valid('json');
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       // 出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない。prd/14 §4.4）
@@ -722,6 +743,10 @@ const route = app
       const base = drillPosition(drill.usiMoves, drill.moveNumber);
       if (!base) return c.json({ error: '出題局面を再現できません' } as const, 409);
       const move = line[line.length - 1];
+      // 🔒 **評価の手が解答の手と違えば受けない**（別の手の評価で採点させない。prd/14 §5.8）
+      if (evaluation && evaluation.move !== move) {
+        return c.json({ error: '評価の手が解答と噛み合いません' } as const, 400);
+      }
       const state = applyLine(base, prefix);
       if (!state) return c.json({ error: '手順を再現できません' } as const, 400);
 
@@ -740,6 +765,14 @@ const route = app
       if (!isReachableMove(state, move)) {
         return c.json({ error: 'その手は指せません' } as const, 400);
       }
+
+      // エンジンに回すときの共通の入力。担当（prd/14 §5.7）は回すときにだけ読む
+      const engineInput = async () => ({
+        tx: c.get('tx'),
+        userId: c.get('userId'),
+        assignee: await analysisAssigneeOf(c.get('tx'), c.get('userId')),
+        ...(evaluation ? { browserEvaluation: { candidate: evaluation.candidate } } : {}),
+      });
 
       // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）
       const reveal = {
@@ -777,7 +810,7 @@ const route = app
           });
         }
         // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）
-        const deviated = await answerWithEngine({ tx: c.get('tx'), userId: c.get('userId'), drill, state, move, line, scoring }, reveal);
+        const deviated = await answerWithEngine({ ...(await engineInput()), drill, state, move, line, scoring }, reveal);
         return c.json(deviated.body, deviated.status);
       }
 
@@ -787,7 +820,7 @@ const route = app
         await recordAttempt(c.get('tx'), { drillId: id, ownerId: drill.ownerId, move, line, ...scored });
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
-      const resolved = await answerWithEngine({ tx: c.get('tx'), userId: c.get('userId'), drill, state, move, line, scoring }, reveal);
+      const resolved = await answerWithEngine({ ...(await engineInput()), drill, state, move, line, scoring }, reveal);
       return c.json(resolved.body, resolved.status);
     },
   )

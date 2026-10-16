@@ -23,10 +23,13 @@
   `EMSDK_IMAGE` の中で上流の Makefile（`make clean tournament COMPILER=em++ TARGET_CPU=WASM YANEURAOU_EDITION=<EDITION> …`）で
   ビルドしたもの。パッチは無い。同じ値は配信物の `manifest.json`（各エントリの `engine.upstreamSha` / `engine.emsdk` / `engine.edition`）
   にも入るので、配った物からソースのコミットとビルド手順を辿れる。ビルドスクリプトはこのディレクトリの `build.sh`。
-- **評価関数（つようら王11mini / micro）は MIT License**。エンジンとは別の著作物で、作者（やねうらお）が 2026-10-14 に公開した
-  （出典: <https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/>）。
-  配布物に許諾文が入っていないので、著作権表示と MIT の許諾文を [`eval-licenses/tsuyo11.txt`](./eval-licenses/tsuyo11.txt) に置き、
-  配信物の評価関数の隣（`eval/license-<内容ハッシュ>.txt`）に同梱する。設定ページのライセンス表示にも出す。
+- **評価関数（つようら王11mini / micro の `nn.bin`・`progress.bin`）は MIT License**。エンジンとは別の著作物。
+  作者は配布物の `tag.json` の表記で「やねうら王プロジェクト」。配布元の告知（<https://yaneurao.fanbox.cc/posts/12761272>）の原文は
+  「※ nn.bin , progress.bin のライセンスはMIT Licenseとします。二次配布、商用利用などご自由にどうぞ。」
+  （公開の告知: <https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/>）。
+  告知に許諾文の本文が無いので、[`eval-licenses/tsuyo11.txt`](./eval-licenses/tsuyo11.txt) に対象・作者・告知の引用と、参考として
+  MIT License の標準の条文（著作権表示は作者の表記・年は書かない）を置き、配信物の評価関数の隣（`eval/license-<内容ハッシュ>.txt`）に
+  同梱する。設定ページのライセンス表示にも出す。
 
 ## ビルド
 

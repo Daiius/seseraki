@@ -1,16 +1,28 @@
-TuyouraOu 11mini / TuyouraOu 11micro evaluation functions
-(つようら王11mini / つようら王11micro の評価関数: nn.bin / progress.bin)
+対象 / Subject
+  つようら王11mini / つようら王11micro の評価関数（nn.bin・progress.bin）
+  TuyouraOu 11mini / 11micro evaluation function files (nn.bin, progress.bin)
 
-Author: yaneurao (やねうらお)
-Released under the MIT License by the author on 2026-10-14:
-https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/
+作者 / Author
+  やねうら王プロジェクト（配布物の tag.json の author の表記）
 
-The distributed archives do not contain a license file. The text below is
-the MIT License that the announcement above refers to.
+ライセンス / License
+  配布元が MIT License で頒布すると告知している。告知の原文:
+
+    「※ nn.bin , progress.bin のライセンスはMIT Licenseとします。二次配布、商用利用などご自由にどうぞ。」
+    https://yaneurao.fanbox.cc/posts/12761272
+
+  公開の告知: https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/
+
+  告知に許諾文の本文が無いため、参考として MIT License の標準の条文を以下に置く
+  （著作権表示の行は作者の表記を用いた）。
+  The announcement does not include the license text; the standard MIT License
+  text is reproduced below for reference, with the author as named in tag.json.
+
+----------------------------------------------------------------------------
 
 MIT License
 
-Copyright (c) 2026 yaneurao
+Copyright (c) やねうら王プロジェクト
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

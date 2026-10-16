@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# 評価関数（水匠5 の nn.bin）を取得して展開し、sha256 を UPSTREAM の値と照合してから
-# dist/engine/eval/nn-<sha256 の先頭 16 桁>.bin に置く。照合に通らないものは置かない。
+# 評価関数（UPSTREAM の EVAL_IDS。nn.bin と progress.bin）を取得して展開し、大きさと sha256 を UPSTREAM の値と
+# 照合してから dist/engine/eval/ に内容ハッシュ入りの名前で置く。照合に通らないものは置かない。
+# 許諾文（LICENSE_FILE）も隣に置く。アーカイブの中のほかのファイル（eval_options.txt など）は置かない
+# ——eval_options.txt は isready のたびに読まれ、FV_SCALE を上書きする。
 set -euo pipefail
 
 # shellcheck source=lib.sh
@@ -8,26 +10,28 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-使い方: fetch-eval.sh [--check] [--force] [--from <nn.bin のパス>]
+使い方: fetch-eval.sh [--check] [--force] [--from <id>=<ディレクトリ>]...
 
-  --check        何をするかと現状を表示して終わる（何も変えない）
-  --force        置いてあっても取り直す
-  --from <path>  ダウンロードせず、手元の nn.bin を使う（sha256 の照合は同じく行う）
+  --check                  何をするかと現状を表示して終わる（何も変えない）
+  --force                  置いてあっても取り直す
+  --from <id>=<ディレクトリ>  その評価関数はダウンロードせず、ディレクトリの nn.bin と progress.bin を使う
+                           （展開済みのアーカイブなど。大きさと sha256 の照合は同じく行う。繰り返し指定できる）
 
-取得元の URL・sha256 は UPSTREAM から読む。
+評価関数の一覧・取得元の URL・sha256 は UPSTREAM から読む。
 EOF
 }
 
 CHECK=0
 FORCE=0
-FROM=''
+FROM_SPECS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) CHECK=1 ;;
     --force) FORCE=1 ;;
     --from)
-      [ $# -ge 2 ] || die "--from にはパスが要ります。"
-      FROM=$2
+      [ $# -ge 2 ] || die "--from には <id>=<ディレクトリ> が要ります。"
+      [[ "$2" == ?*=?* ]] || die "--from は <id>=<ディレクトリ> の形にします: $2"
+      FROM_SPECS+=("$2")
       shift
       ;;
     -h | --help)
@@ -43,11 +47,29 @@ while [ $# -gt 0 ]; do
 done
 
 need_cmd sha256sum "評価関数の照合に使います。"
+need_cmd cmp "許諾文の照合に使います。"
 load_upstream
 
-TARGET=$DIST_DIR/$EVAL_FILE
+# --from の id が UPSTREAM にあるかを確かめる。
+from_dir_of() {
+  local spec
+  for spec in "${FROM_SPECS[@]}"; do
+    if [ "${spec%%=*}" = "$1" ]; then
+      printf '%s' "${spec#*=}"
+      return 0
+    fi
+  done
+  return 1
+}
+for spec in "${FROM_SPECS[@]}"; do
+  known=0
+  for id in "${EVAL_ID_LIST[@]}"; do
+    [ "$id" = "${spec%%=*}" ] && known=1
+  done
+  [ "$known" -eq 1 ] || die "--from の id が UPSTREAM の EVAL_IDS にありません: ${spec%%=*}"
+done
+
 WORK_DIR=$CACHE_DIR/eval
-ARCHIVE=$WORK_DIR/$(basename "$UP_EVAL_URL")
 
 # ホストに 7z があればそれを、無ければ使い捨てコンテナを使う。
 find_7z() {
@@ -61,30 +83,40 @@ find_7z() {
   return 1
 }
 
-UP_TO_DATE=0
-if eval_up_to_date; then UP_TO_DATE=1; fi
+archive_of() { printf '%s/%s' "$WORK_DIR" "$(basename "$(eval_get "$1" URL)")"; }
 
-log "評価関数:     $UP_EVAL_NAME（$UP_EVAL_ENTRY・$UP_EVAL_BYTES バイト）"
-log "sha256:       $UP_EVAL_SHA256"
-if [ -n "$FROM" ]; then
-  log "取得元:       $FROM（手元のファイル）"
-else
-  log "取得元:       $UP_EVAL_URL"
-fi
-log "置き場:       $TARGET"
-if [ "$UP_TO_DATE" -eq 1 ]; then
-  log "現状:         取得済み（sha256 一致）"
-else
-  log "現状:         未取得、または sha256 が合っていない"
-fi
+# 取り直す評価関数の一覧。
+TO_FETCH=()
+for id in "${EVAL_ID_LIST[@]}"; do
+  log "評価関数:     $id（$(eval_get "$id" NAME)・$(eval_get "$id" EDITION)）"
+  if dir=$(from_dir_of "$id"); then
+    log "  取得元:     $dir（手元のディレクトリ）"
+  else
+    log "  取得元:     $(eval_get "$id" URL)"
+  fi
+  log "  nn.bin:       $(eval_get "$id" NN_BYTES) バイト・sha256 $(eval_get "$id" NN_SHA256) → $(nn_file_of "$id")"
+  log "  progress.bin: $(eval_get "$id" PROGRESS_BYTES) バイト・sha256 $(eval_get "$id" PROGRESS_SHA256) → $(progress_file_of "$id")"
+  if eval_up_to_date "$id"; then
+    log "  現状:       取得済み（sha256 一致）"
+    [ "$FORCE" -eq 1 ] && TO_FETCH+=("$id")
+  else
+    log "  現状:       未取得、または sha256 が合っていない"
+    TO_FETCH+=("$id")
+  fi
+done
 
 if [ "$CHECK" -eq 1 ]; then
-  if [ -z "$FROM" ]; then
-    if [ -f "$ARCHIVE" ]; then
-      log "アーカイブ:   ダウンロード済み（$ARCHIVE）"
+  need_download=0
+  for id in "${TO_FETCH[@]}"; do
+    from_dir_of "$id" >/dev/null && continue
+    need_download=1
+    if [ -f "$(archive_of "$id")" ]; then
+      log "アーカイブ:   $id ダウンロード済み（$(archive_of "$id")）"
     else
-      log "アーカイブ:   未ダウンロード"
+      log "アーカイブ:   $id 未ダウンロード"
     fi
+  done
+  if [ "$need_download" -eq 1 ]; then
     if SEVENZIP=$(find_7z); then
       log "展開:         ホストの $SEVENZIP"
     elif docker_usable; then
@@ -97,77 +129,109 @@ if [ "$CHECK" -eq 1 ]; then
       log "展開:         できない（7z も docker も使えない）"
     fi
   fi
-  if [ "$UP_TO_DATE" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
+  if [ "${#TO_FETCH[@]}" -eq 0 ]; then
     log "実行したら:   何も取り直さない（manifest だけ書き直す）"
-  elif [ -n "$FROM" ]; then
-    log "実行したら:   手元のファイルを照合 → dist へ置く → manifest を書く"
   else
-    log "実行したら:   ダウンロード → 展開 → 照合 → dist へ置く → manifest を書く"
+    log "実行したら:   ${TO_FETCH[*]} を（ダウンロード → 展開 →）照合 → dist へ置く → manifest を書く"
   fi
   exit 0
 fi
 
-if [ "$UP_TO_DATE" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
+if [ "${#TO_FETCH[@]}" -eq 0 ]; then
   log "取得済みなので取り直しません（取り直すなら --force）。"
   write_manifest
   exit 0
 fi
 
-# 置く前に必ず通す。大きさと sha256 の両方が UPSTREAM と一致しなければ止まる。
-verify_eval() {
-  local file=$1 bytes sha
-  bytes=$(wc -c <"$file")
-  bytes=${bytes//[[:space:]]/}
-  [ "$bytes" = "$UP_EVAL_BYTES" ] ||
-    die "評価関数の大きさが一致しません（期待 $UP_EVAL_BYTES・実際 $bytes）: $file"
+# 置く前に必ず通す。大きさと sha256 の両方が期待と一致しなければ止まる。
+verify_file() {
+  local file=$1 what=$2 expected_bytes=$3 expected_sha=$4 bytes sha
+  bytes=$(bytes_of "$file")
+  [ "$bytes" = "$expected_bytes" ] ||
+    die "$what の大きさが一致しません（期待 $expected_bytes・実際 $bytes）: $file"
   sha=$(sha256_of "$file")
-  [ "$sha" = "$UP_EVAL_SHA256" ] ||
-    die "評価関数の sha256 が一致しません（期待 $UP_EVAL_SHA256・実際 $sha）: $file"
+  [ "$sha" = "$expected_sha" ] ||
+    die "$what の sha256 が一致しません（期待 $expected_sha・実際 $sha）: $file"
 }
 
-mkdir -p "$WORK_DIR"
-
-if [ -n "$FROM" ]; then
-  [ -f "$FROM" ] || die "--from のファイルがありません: $FROM"
-  SOURCE=$FROM
-else
-  if [ "$FORCE" -eq 1 ]; then rm -f -- "$ARCHIVE"; fi
-  if [ ! -s "$ARCHIVE" ]; then
-    need_cmd curl "評価関数のダウンロードに使います。"
-    log "ダウンロードします..."
-    curl -fL --retry 3 -o "$ARCHIVE.part" "$UP_EVAL_URL"
-    mv -f "$ARCHIVE.part" "$ARCHIVE"
-  fi
-
-  SOURCE=$WORK_DIR/$UP_EVAL_ENTRY
-  rm -f -- "$SOURCE"
-  log "展開します..."
-  # 展開先を持たせず標準出力へ出させる（アーカイブの中のパスに書き込ませない）。
+# アーカイブの中から 1 ファイルを標準出力へ取り出す（展開先を持たせず、アーカイブの中のパスに書き込ませない）。
+extract_entry() {
+  local archive=$1 entry=$2
   if SEVENZIP=$(find_7z); then
-    "$SEVENZIP" e -so -r "$ARCHIVE" "$UP_EVAL_ENTRY" >"$SOURCE"
+    "$SEVENZIP" e -so -r "$archive" "$entry"
   else
     require_docker
     require_image "$UP_EVAL_EXTRACT_IMAGE"
-    docker run --rm -v "$ARCHIVE:/in/archive.7z:ro" "$UP_EVAL_EXTRACT_IMAGE" sh -c '
+    docker run --rm -v "$archive:/in/archive.7z:ro" "$UP_EVAL_EXTRACT_IMAGE" sh -c '
       set -e
       apt-get update -qq >&2
       apt-get install -y -qq --no-install-recommends p7zip-full >&2
       exec 7z e -so -r /in/archive.7z "$1"
-    ' sh "$UP_EVAL_ENTRY" >"$SOURCE"
+    ' sh "$entry"
   fi
-fi
+}
 
-verify_eval "$SOURCE"
+# 一時の名前で置いて確かめ、名前を付け替える。同じ内容がもう置いてあれば置き直さない。
+place_file() {
+  local source=$1 rel=$2 what=$3 expected_bytes=$4 expected_sha=$5 target=$DIST_DIR/$2
+  if [ -f "$target" ] && [ "$(sha256_of "$target")" = "$expected_sha" ]; then
+    log "同じ内容が置いてあるので、置き直しません: $rel"
+    return 0
+  fi
+  install -m 644 "$source" "$target.tmp"
+  verify_file "$target.tmp" "$what" "$expected_bytes" "$expected_sha"
+  mv -f "$target.tmp" "$target"
+  log "$what を置きました: $rel"
+}
 
-# 順序: 一時の名前で置いて確かめる → 名前を付け替える → manifest を切り替える → 以前のものを消す。
-# 以前の評価関数は manifest を切り替え終わるまで消さない（write_manifest の最後で消す）。
-# 途中で失敗しても、残っている manifest が指すファイルは残る。
-mkdir -p "$(dirname "$TARGET")"
-install -m 644 "$SOURCE" "$TARGET.tmp"
-verify_eval "$TARGET.tmp"
-mv -f "$TARGET.tmp" "$TARGET"
-# 展開した中間ファイルは残さない（アーカイブは次回のために残す）。
-if [ -z "$FROM" ]; then rm -f -- "$SOURCE"; fi
+mkdir -p "$WORK_DIR" "$DIST_DIR/eval"
 
-log "評価関数を置きました: $TARGET"
+for id in "${TO_FETCH[@]}"; do
+  nn_bytes=$(eval_get "$id" NN_BYTES)
+  nn_sha=$(eval_get "$id" NN_SHA256)
+  progress_bytes=$(eval_get "$id" PROGRESS_BYTES)
+  progress_sha=$(eval_get "$id" PROGRESS_SHA256)
+
+  if dir=$(from_dir_of "$id"); then
+    [ -f "$dir/nn.bin" ] || die "--from のディレクトリに nn.bin がありません: $dir"
+    [ -f "$dir/progress.bin" ] || die "--from のディレクトリに progress.bin がありません: $dir"
+    NN_SOURCE=$dir/nn.bin
+    PROGRESS_SOURCE=$dir/progress.bin
+    cleanup=0
+  else
+    ARCHIVE=$(archive_of "$id")
+    if [ "$FORCE" -eq 1 ]; then rm -f -- "$ARCHIVE"; fi
+    if [ ! -s "$ARCHIVE" ]; then
+      need_cmd curl "評価関数のダウンロードに使います。"
+      log "ダウンロードします: $id..."
+      curl -fL --retry 3 -o "$ARCHIVE.part" "$(eval_get "$id" URL)"
+      mv -f "$ARCHIVE.part" "$ARCHIVE"
+    fi
+    # 展開する前に、アーカイブそのものを照合する（壊れた・差し替えられたものを開かない）。
+    verify_file "$ARCHIVE" "$id のアーカイブ" "$(eval_get "$id" ARCHIVE_BYTES)" "$(eval_get "$id" ARCHIVE_SHA256)"
+
+    NN_SOURCE=$WORK_DIR/$id.nn.bin
+    PROGRESS_SOURCE=$WORK_DIR/$id.progress.bin
+    rm -f -- "$NN_SOURCE" "$PROGRESS_SOURCE"
+    log "展開します: $id..."
+    extract_entry "$ARCHIVE" nn.bin >"$NN_SOURCE"
+    extract_entry "$ARCHIVE" progress.bin >"$PROGRESS_SOURCE"
+    cleanup=1
+  fi
+
+  verify_file "$NN_SOURCE" "$id の nn.bin" "$nn_bytes" "$nn_sha"
+  verify_file "$PROGRESS_SOURCE" "$id の progress.bin" "$progress_bytes" "$progress_sha"
+
+  # 順序: 一時の名前で置いて確かめる → 名前を付け替える → manifest を切り替える → 以前のものを消す。
+  # 以前の評価関数は manifest を切り替え終わるまで消さない（write_manifest の最後で消す）。
+  # 途中で失敗しても、残っている manifest が指すファイルは残る。
+  place_file "$NN_SOURCE" "$(nn_file_of "$id")" "$id の nn.bin" "$nn_bytes" "$nn_sha"
+  place_file "$PROGRESS_SOURCE" "$(progress_file_of "$id")" "$id の progress.bin" "$progress_bytes" "$progress_sha"
+  license_src=$PKG_DIR/$(eval_get "$id" LICENSE_FILE)
+  place_file "$license_src" "$(license_file_of "$id")" "$id の許諾文" "$(bytes_of "$license_src")" "$(sha256_of "$license_src")"
+
+  # 展開した中間ファイルは残さない（アーカイブは次回のために残す）。
+  if [ "$cleanup" -eq 1 ]; then rm -f -- "$NN_SOURCE" "$PROGRESS_SOURCE"; fi
+done
+
 write_manifest

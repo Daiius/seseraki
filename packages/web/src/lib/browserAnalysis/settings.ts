@@ -27,19 +27,48 @@ export interface BrowserAnalysisSettings {
   /** 負荷。この設定が無かった頃の値（`load` が無い）は全力として読む */
   load: AnalysisLoad;
   /**
-   * ダウンロードに同意した評価関数のハッシュ（manifest の `eval.sha256`）。未同意は null。
-   * 🔒 **評価関数ごとに同意を取る**——評価関数が替わると、また数十 MB を落とすことになる
+   * 選んだ評価関数（manifest のエントリの `id`。prd/14 §5.5）。未選択は null。
+   * 未選択・manifest に無い id は manifest の既定として読む（`shared` の `engineEntryOf`）
    */
-  consentEvalSha256: string | null;
+  evalId: string | null;
+  /**
+   * ダウンロードに同意した評価関数のハッシュ（manifest のエントリの `nn.sha256`）の集合。
+   * 🔒 **評価関数ごとに同意を取る**——大きさが評価関数ごとに違い、替わればまた落とすことになる。
+   * 一度同意した評価関数に戻すときは求めない
+   */
+  consentedEvalSha256s: readonly string[];
 }
 
 export const DEFAULT_BROWSER_ANALYSIS_SETTINGS: BrowserAnalysisSettings = {
   mode: 'detail',
   load: 'max',
-  consentEvalSha256: null,
+  evalId: null,
+  consentedEvalSha256s: [],
 };
 
 const STORAGE_KEY = 'seseraki:browserAnalysis';
+
+/** 覚えておく同意の数の上限（古いものから捨てる。評価関数の数より十分に大きい） */
+const MAX_CONSENTS = 16;
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const EVAL_ID_PATTERN = /^[a-z0-9]{1,32}$/;
+
+/** その評価関数（`nn.sha256`）のダウンロードに同意済みか */
+export function hasConsented(
+  settings: Pick<BrowserAnalysisSettings, 'consentedEvalSha256s'>,
+  sha256: string,
+): boolean {
+  return settings.consentedEvalSha256s.includes(sha256);
+}
+
+/** 同意を足した集合（重複させない・上限を超えたら古いものから捨てる） */
+export function withConsent(
+  consented: readonly string[],
+  sha256: string,
+): string[] {
+  return [...consented.filter((s) => s !== sha256), sha256].slice(-MAX_CONSENTS);
+}
 
 /**
  * localStorage の生の文字列を設定に変換する。
@@ -58,15 +87,31 @@ export function parseBrowserAnalysisSettings(
   if (typeof parsed !== 'object' || parsed === null) {
     return DEFAULT_BROWSER_ANALYSIS_SETTINGS;
   }
-  const v = parsed as Partial<Record<keyof BrowserAnalysisSettings, unknown>>;
+  const v = parsed as Partial<
+    Record<keyof BrowserAnalysisSettings | 'consentEvalSha256', unknown>
+  >;
+  let consented: string[] = [];
+  if (Array.isArray(v.consentedEvalSha256s)) {
+    for (const sha of v.consentedEvalSha256s) {
+      if (typeof sha === 'string' && SHA256_PATTERN.test(sha)) {
+        consented = withConsent(consented, sha);
+      }
+    }
+  }
+  // 前の形（同意 1 つ。水匠5 の頃）は集合の 1 つとして読む（配らなくなった評価関数なら使われないだけ）
+  if (
+    typeof v.consentEvalSha256 === 'string' &&
+    SHA256_PATTERN.test(v.consentEvalSha256) &&
+    !consented.includes(v.consentEvalSha256)
+  ) {
+    consented = [v.consentEvalSha256, ...consented].slice(-MAX_CONSENTS);
+  }
   return {
     mode: v.mode === 'always' || v.mode === 'detail' ? v.mode : 'detail',
     load: v.load === 'gentle' || v.load === 'max' ? v.load : 'max',
-    consentEvalSha256:
-      typeof v.consentEvalSha256 === 'string' &&
-      /^[0-9a-f]{64}$/.test(v.consentEvalSha256)
-        ? v.consentEvalSha256
-        : null,
+    evalId:
+      typeof v.evalId === 'string' && EVAL_ID_PATTERN.test(v.evalId) ? v.evalId : null,
+    consentedEvalSha256s: consented,
   };
 }
 

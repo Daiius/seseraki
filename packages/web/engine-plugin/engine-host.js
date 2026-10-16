@@ -9,16 +9,21 @@
 // メインスレッドには置けない。
 //
 // メインスレッドとのやり取り（`src/lib/browserAnalysis/engineHost.ts` と対）:
-//   受ける: { type: 'init', glueUrl, baseUrl, exportName, evalUrl, evalBytes, evalSha256 }
+//   受ける: { type: 'init', glueUrl, baseUrl, exportName, evalFiles: [{ url, bytes, sha256, path }] }
 //           { type: 'cmd', line }   USI の 1 行
 //           { type: 'quit' }
-//   送る:   { type: 'download', loaded, total }   評価関数の受信バイト数
+//   送る:   { type: 'download', loaded, total }   評価関数の受信バイト数（全ファイルの合計）
 //           { type: 'ready' }                     エンジンを起動し、評価関数を仮想 FS に置いた
 //           { type: 'line', line }                エンジンの出力 1 行
 //           { type: 'dead', message }             エンジンが死んだ・起動できなかった（以後は何も送らない）
+//
+// 評価関数のファイル（nn.bin・progress.bin）は仮想 FS の /eval/ に置く（`path`）。
+// ⚠ EvalDir は絶対パス /eval にする（engineHost.ts）。`.` だと上流は progress.bin を「実行ファイルのフォルダ + EvalDir」から
+// 探して見つけられず、isready で黙って終了する。ほかのファイル（eval_options.txt）は置かない（オプションが固定される）。
 'use strict';
 
 var LOG = '[browser-analysis] host:';
+var EVAL_DIR = '/eval';
 var engine = null;
 var dead = false;
 
@@ -48,65 +53,92 @@ function toHex(buffer) {
   return hex;
 }
 
-// 評価関数を受信する。大きさが分かっているので、その大きさのバッファへ直接詰める（二重に持たない）
-async function downloadEval(url, expectedBytes, expectedSha256) {
-  var response = await fetch(url, { credentials: 'same-origin' });
-  if (!response.ok) {
-    throw new Error('評価関数を取得できません (' + response.status + ')');
-  }
-  var bytes = new Uint8Array(expectedBytes);
-  var loaded = 0;
+// 評価関数のファイルをすべて受信する。進捗は全ファイルの合計で伝える。
+// 大きさが分かっているので、その大きさのバッファへ直接詰める（二重に持たない）
+async function downloadEvalFiles(files) {
+  var total = 0;
+  for (var i = 0; i < files.length; i++) total += files[i].bytes;
+  var loadedByFile = files.map(function () {
+    return 0;
+  });
   var lastReportedAt = 0;
   var report = function (force) {
     var now = Date.now();
     if (!force && now - lastReportedAt < 200) return;
     lastReportedAt = now;
-    self.postMessage({ type: 'download', loaded: loaded, total: expectedBytes });
+    var loaded = 0;
+    for (var j = 0; j < loadedByFile.length; j++) loaded += loadedByFile[j];
+    self.postMessage({ type: 'download', loaded: loaded, total: total });
   };
-  if (response.body && response.body.getReader) {
-    var reader = response.body.getReader();
-    for (;;) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
-      if (loaded + chunk.value.length > expectedBytes) {
-        throw new Error('評価関数の大きさが manifest と違います');
+
+  var downloadOne = async function (file, index) {
+    var name = file.path;
+    var response = await fetch(file.url, { credentials: 'same-origin' });
+    if (!response.ok) {
+      throw new Error('評価関数を取得できません (' + name + ' ' + response.status + ')');
+    }
+    var bytes = new Uint8Array(file.bytes);
+    var loaded = 0;
+    if (response.body && response.body.getReader) {
+      var reader = response.body.getReader();
+      for (;;) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        if (loaded + chunk.value.length > file.bytes) {
+          throw new Error('評価関数の大きさが manifest と違います (' + name + ')');
+        }
+        bytes.set(chunk.value, loaded);
+        loaded += chunk.value.length;
+        loadedByFile[index] = loaded;
+        report(false);
       }
-      bytes.set(chunk.value, loaded);
-      loaded += chunk.value.length;
-      report(false);
+    } else {
+      var whole = new Uint8Array(await response.arrayBuffer());
+      if (whole.length !== file.bytes) {
+        throw new Error('評価関数の大きさが manifest と違います (' + name + ')');
+      }
+      bytes = whole;
+      loaded = whole.length;
+      loadedByFile[index] = loaded;
     }
-  } else {
-    var whole = new Uint8Array(await response.arrayBuffer());
-    if (whole.length !== expectedBytes) {
-      throw new Error('評価関数の大きさが manifest と違います');
+    if (loaded !== file.bytes) {
+      throw new Error(
+        '評価関数の大きさが manifest と違います (' + name + ' ' + loaded + ' / ' + file.bytes + ')',
+      );
     }
-    bytes = whole;
-    loaded = whole.length;
-  }
-  if (loaded !== expectedBytes) {
-    throw new Error(
-      '評価関数の大きさが manifest と違います (' + loaded + ' / ' + expectedBytes + ')',
-    );
-  }
+    // 来歴に記録するハッシュと、実際に使う評価関数を一致させる
+    if (self.crypto && self.crypto.subtle) {
+      var digest = toHex(await self.crypto.subtle.digest('SHA-256', bytes));
+      if (digest !== file.sha256) {
+        throw new Error('評価関数のハッシュが manifest と違います (' + name + ')');
+      }
+    }
+    return bytes;
+  };
+
+  var results = await Promise.all(
+    files.map(function (file, index) {
+      return downloadOne(file, index);
+    }),
+  );
   report(true);
-  // 来歴に記録するハッシュと、実際に使う評価関数を一致させる
-  if (self.crypto && self.crypto.subtle) {
-    var digest = toHex(await self.crypto.subtle.digest('SHA-256', bytes));
-    if (digest !== expectedSha256) {
-      throw new Error('評価関数のハッシュが manifest と違います');
-    }
-  }
-  return bytes;
+  return results;
 }
 
 async function init(message) {
   console.info(LOG, 'loading engine', message.glueUrl);
+  var evalFiles = message.evalFiles;
+  if (!Array.isArray(evalFiles) || evalFiles.length === 0) {
+    throw new Error('評価関数のファイルが指定されていません');
+  }
+  for (var i = 0; i < evalFiles.length; i++) {
+    // 置き場は /eval/<名前> だけ（ほかの場所に書かせない）
+    if (!/^\/eval\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(String(evalFiles[i].path))) {
+      throw new Error('評価関数の置き場が不正です: ' + evalFiles[i].path);
+    }
+  }
   // 評価関数の受信は、エンジンの起動と並行に進める
-  var evalPromise = downloadEval(
-    message.evalUrl,
-    message.evalBytes,
-    message.evalSha256,
-  );
+  var evalPromise = downloadEvalFiles(evalFiles);
   // 先に失敗しても「捕まえていない拒否」にしない（下の await で受ける）
   evalPromise.catch(function () {});
 
@@ -134,11 +166,13 @@ async function init(message) {
     if (!dead) self.postMessage({ type: 'line', line: line });
   });
 
-  var bytes = await evalPromise;
-  // 評価関数は仮想 FS のルートに置き、EvalDir / EvalFile で指す。ほかのファイルは置かない
-  // （isready のたびに読まれる eval_options.txt があると、オプションが固定される）
-  instance.FS.writeFile('/nn.bin', bytes, { canOwn: true });
-  console.info(LOG, 'eval written', bytes.length);
+  var contents = await evalPromise;
+  // 評価関数は仮想 FS の /eval/ に置き、EvalDir（/eval）/ EvalFile で指す
+  instance.FS.mkdir(EVAL_DIR);
+  for (var k = 0; k < evalFiles.length; k++) {
+    instance.FS.writeFile(evalFiles[k].path, contents[k], { canOwn: true });
+    console.info(LOG, 'eval written', evalFiles[k].path, contents[k].length);
+  }
 
   engine = instance;
   if (!dead) self.postMessage({ type: 'ready' });

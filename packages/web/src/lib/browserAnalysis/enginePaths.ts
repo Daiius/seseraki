@@ -8,6 +8,7 @@ import {
   engineAssetPaths,
   parseEngineManifest,
   type EngineManifest,
+  type EngineManifestEntry,
 } from 'shared';
 
 /** 配信物を置くパス（`engine-plugin/serving.ts` の `ENGINE_URL_PREFIX` と同じ値） */
@@ -18,8 +19,10 @@ export interface EngineUrls {
   glue: string;
   /** グルーが `.worker.js` と `.wasm` を探すディレクトリ（末尾は `/`。`locateFile` で前に付ける） */
   base: string;
-  /** 評価関数 */
-  eval: string;
+  /** 評価関数の本体（`nn.bin`） */
+  nn: string;
+  /** 進行度（`progress.bin`） */
+  progress: string;
 }
 
 /** manifest の URL。`origin` は末尾に `/` を付けない（`https://example.com`） */
@@ -27,18 +30,23 @@ export function engineManifestUrl(origin: string): string {
   return `${origin}${ENGINE_BASE_PATH}manifest.json`;
 }
 
+/** manifest の置き場からの相対パス（許諾文など）を絶対 URL にする */
+export function engineAssetUrl(origin: string, relativePath: string): string {
+  return `${origin}${ENGINE_BASE_PATH}${relativePath}`;
+}
+
 /**
- * manifest から、エンジンのホスト（Worker）に渡す URL を組み立てる。
+ * 選んだ評価関数のエントリから、エンジンのホスト（Worker）に渡す URL を組み立てる。
  * ⚠ **絶対 URL にする**——Worker の中の `importScripts` と `fetch` は Worker のスクリプトの場所を基準に解くので、
  * 相対のままだと `assets/` の下を探しに行く。
  */
-export function engineUrls(origin: string, manifest: EngineManifest): EngineUrls {
-  const paths = engineAssetPaths(manifest);
-  const root = `${origin}${ENGINE_BASE_PATH}`;
+export function engineUrls(origin: string, entry: EngineManifestEntry): EngineUrls {
+  const paths = engineAssetPaths(entry);
   return {
-    glue: `${root}${paths.js}`,
-    base: `${root}${manifest.engine.dir}/`,
-    eval: `${root}${paths.eval}`,
+    glue: engineAssetUrl(origin, paths.js),
+    base: engineAssetUrl(origin, `${entry.engine.dir}/`),
+    nn: engineAssetUrl(origin, paths.nn),
+    progress: engineAssetUrl(origin, paths.progress),
   };
 }
 

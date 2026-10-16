@@ -10,8 +10,11 @@
 import { engineHostUrl } from 'virtual:engine-host';
 import {
   createUsiSession,
+  engineEntryDownloadBytes,
+  engineEntryOf,
   type BrowserAnalysisSettings as ServerAnalysisSettings,
   type EngineManifest,
+  type EngineManifestEntry,
 } from 'shared';
 import { fetchPendingKifuNos, runnerApi } from './api';
 import {
@@ -20,10 +23,11 @@ import {
   initRequest,
   type HostWorkerLike,
 } from './engineHost';
-import { engineUrls, fetchEngineManifest, type EngineUrls } from './enginePaths';
+import { engineUrls, fetchEngineManifest } from './enginePaths';
 import {
   createKifuRunner,
   type AnalysisEngine,
+  type EngineChoice,
   type RunnerDeps,
   type RunnerLog,
 } from './runner';
@@ -31,6 +35,7 @@ import { createScheduler } from './scheduler';
 import { setBrowserGrader } from './grading';
 import {
   getBrowserAnalysisSettings,
+  hasConsented,
   type AnalysisLoad,
   type AnalysisMode,
 } from './settings';
@@ -116,27 +121,45 @@ function createVisibility(signal: AbortSignal): RunnerDeps['visibility'] {
   };
 }
 
+/**
+ * いま選んでいる評価関数（端末の設定と manifest から。prd/14 §5.5）。
+ * 🔒 選んだ評価関数のダウンロードに同意していなければ null（前の評価関数でも解析しない）
+ */
+function currentChoice(manifest: EngineManifest): EngineChoice | null {
+  const settings = getBrowserAnalysisSettings();
+  const entry = engineEntryOf(manifest, settings.evalId);
+  if (!hasConsented(settings, entry.nn.sha256)) return null;
+  return {
+    id: entry.id,
+    info: {
+      engineBuild: entry.engine.buildId,
+      evalHash: entry.nn.sha256,
+      fvScale: entry.fvScale,
+    },
+  };
+}
+
 /** エンジンのホスト（Worker）を起動し、評価関数を渡して `readyok` まで進める */
 async function createEngine(
-  manifest: EngineManifest,
-  urls: EngineUrls,
+  origin: string,
+  entry: EngineManifestEntry,
   settings: ServerAnalysisSettings,
   load: AnalysisLoad,
   signal: AbortSignal,
   patch: typeof patchBrowserAnalysisState,
 ): Promise<AnalysisEngine> {
   log.info(
-    `loading engine build=${manifest.engine.buildId} eval=${manifest.eval.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
+    `loading engine eval=${entry.id} build=${entry.engine.buildId} nn=${entry.nn.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
   );
   patch({
     phase: 'loading',
-    download: { loaded: 0, total: manifest.eval.bytes },
+    download: { loaded: 0, total: engineEntryDownloadBytes(entry) },
   });
   // 🔒 classic の Worker（`type: 'module'` を付けない）。ホストは importScripts でエンジンのグルーを読む
   const worker = new Worker(engineHostUrl, { name: 'seseraki-engine' });
   const connection = connectEngineHost(
     worker as unknown as HostWorkerLike,
-    initRequest(manifest, urls),
+    initRequest(entry, engineUrls(origin, entry)),
     {
       onDownload: (loaded, total) => patch({ download: { loaded, total } }),
     },
@@ -161,12 +184,12 @@ async function createEngine(
         : undefined,
     });
     await session.start();
-    const options = engineOptions(manifest, settings, navigator.hardwareConcurrency, load);
+    const options = engineOptions(entry, settings, navigator.hardwareConcurrency, load);
     for (const [name, value] of options.options) session.setOption(name, value);
     await session.ready();
     const name = session.getName() ?? null;
     log.info(
-      `readyok name="${name ?? ''}" threads=${options.threads} hash=${options.hashMb}MB fvScale=${manifest.fvScale}`,
+      `readyok name="${name ?? ''}" eval=${entry.id} threads=${options.threads} hash=${options.hashMb}MB fvScale=${entry.fvScale}`,
     );
     return {
       session,
@@ -189,8 +212,6 @@ async function createEngine(
 
 export interface BrowserAnalysisOptions {
   mode: AnalysisMode;
-  /** ダウンロードに同意した評価関数のハッシュ（端末の設定） */
-  consentEvalSha256: string | null;
   /** 棋譜の解析が一区切りした（段が 1 つ揃ったときも）。画面のデータを取り直す */
   onSettled(): void;
   /** 担当が変わった・ログインが切れた。`GET /api/me` を取り直す */
@@ -222,29 +243,37 @@ async function main(
     return;
   }
   patch({ manifest });
-  // 🔒 同意の前に評価関数を落とし始めない（prd/14 §5.10）。エンジンの Worker もここより先でしか作らない
-  if (options.consentEvalSha256 !== manifest.eval.sha256) {
-    log.info(`waiting for consent (eval ${manifest.eval.bytes} bytes)`);
+  // 🔒 同意の前に評価関数を落とし始めない（prd/14 §5.10）。同意は評価関数ごと（選んだエントリの nn.bin の sha256）。
+  // エンジンの Worker もここより先でしか作らない
+  const selected = engineEntryOf(manifest, getBrowserAnalysisSettings().evalId);
+  if (currentChoice(manifest) === null) {
+    log.info(
+      `waiting for consent (eval ${selected.id} ${engineEntryDownloadBytes(selected)} bytes)`,
+    );
     patch({ phase: 'needs-consent' });
     return;
   }
 
   log.info(
-    `started mode=${options.mode} build=${manifest.engine.buildId} isolated=${String(globalThis.crossOriginIsolated)}`,
+    `started mode=${options.mode} eval=${selected.id} build=${selected.engine.buildId} isolated=${String(globalThis.crossOriginIsolated)}`,
   );
   patch({ phase: 'idle' });
 
-  const urls = engineUrls(origin, manifest);
   const runner = createKifuRunner({
     api: runnerApi,
-    engineInfo: {
-      engineBuild: manifest.engine.buildId,
-      evalHash: manifest.eval.sha256,
-      fvScale: manifest.fvScale,
-    },
+    // 評価関数の選択は常駐を作り直さずに読む（変えたら次の解析の開始で、エンジンを作り直して効かせる）。
+    // 同意していない評価関数に切り替えたら null（解析を止めて同意を求める）
+    currentEngine: () => currentChoice(manifest),
     // エンジンの読み込みは、棋譜の中断ではなく常駐の停止（`signal`）で止める
-    createEngine: (settings, load) =>
-      createEngine(manifest, urls, settings, load, signal, patch),
+    createEngine: (settings, load, choice) =>
+      createEngine(
+        origin,
+        engineEntryOf(manifest, choice.id),
+        settings,
+        load,
+        signal,
+        patch,
+      ),
     // 負荷の設定は常駐を作り直さずに読む（変えたら次の解析の開始で、エンジンを作り直して効かせる）
     currentLoad: () => getBrowserAnalysisSettings().load,
     sleep,
@@ -284,6 +313,11 @@ async function main(
     onHalt: (outcome) => {
       if (outcome.reason === 'wrong-assignee' || outcome.reason === 'unauthorized') {
         options.onAccountChanged();
+        return;
+      }
+      if (outcome.reason === 'needs-consent') {
+        // 同意していない評価関数に切り替えた。同意されたら常駐が起動し直す（`BrowserAnalysisHost`）
+        patch({ phase: 'needs-consent', progress: null });
         return;
       }
       patch({

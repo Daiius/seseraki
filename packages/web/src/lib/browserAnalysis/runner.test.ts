@@ -16,6 +16,7 @@ import {
   type AnalysisStage,
   type AnalyzeHooks,
   type ChunkResult,
+  type EngineChoice,
   type ErrorReportResult,
   type LocalProgress,
   type RunnerDeps,
@@ -86,6 +87,10 @@ interface Harness {
   load: AnalysisLoad;
   /** エンジンを作ったときの負荷 */
   engineLoads: AnalysisLoad[];
+  /** 選んでいる評価関数（`currentEngine` が返す。null は未同意） */
+  choice: EngineChoice | null;
+  /** エンジンを作ったときの評価関数の id */
+  engineChoices: string[];
   stageCompleted: { kifuNo: number; profile: AnalysisStage }[];
   /** 時計（`now` が返す） */
   time: number;
@@ -117,12 +122,14 @@ function harness(script: {
     hidden: false,
     load: 'max',
     engineLoads: [],
+    choice: { id: 'tsuyo11mini', info: ENGINE_INFO },
+    engineChoices: [],
     stageCompleted: [],
     time: 1_000,
     deps: undefined as unknown as RunnerDeps,
   };
   h.deps = {
-    engineInfo: ENGINE_INFO,
+    currentEngine: () => h.choice,
     api: {
       start: async () => (script.start ?? (() => runOf()))(h.starts++),
       submitChunk: async (_no, chunk) => {
@@ -137,9 +144,10 @@ function harness(script: {
         return script.reportError ? script.reportError() : 'recorded';
       },
     },
-    createEngine: async (_settings, load) => {
+    createEngine: async (_settings, load, choice) => {
       const engineNo = h.engines.length;
       h.engineLoads.push(load);
+      h.engineChoices.push(choice.id);
       script.createEngine?.(engineNo);
       const engine: AnalysisEngine & { disposed: boolean } = {
         disposed: false,
@@ -720,6 +728,58 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
     expect(h.engineLoads).toEqual(['max', 'gentle']);
     expect(h.engines[0].disposed).toBe(true);
   });
+
+  it('評価関数の選択が変わったら、次の段の開始でエンジンを作り直し、開始の口と来歴も新しい評価関数にする', async () => {
+    const MICRO_INFO = {
+      engineBuild: 'c1b80eaa-0123456789ab',
+      evalHash: 'b'.repeat(64),
+      fvScale: 16,
+    };
+    const starts: { engineBuild: string; evalHash: string }[] = [];
+    const h = harness({
+      // quick → full の 2 段。quick の途中で評価関数を切り替える
+      start: (call) => runOf({}, call === 0 ? 'quick' : 'full'),
+      chunk: (chunk) => {
+        const last = chunk.analyses.at(-1)!.moveNumber;
+        const done = last === USI_MOVES.length;
+        return okChunk(true, done && chunk.profile === 'full', done);
+      },
+      analyze: (_engineNo, position, harnessRef) => {
+        if (position === 1 && harnessRef.choice?.id === 'tsuyo11mini') {
+          harnessRef.choice = { id: 'tsuyo11micro', info: MICRO_INFO };
+        }
+      },
+    });
+    const start = h.deps.api.start;
+    h.deps.api.start = async (no, engine) => {
+      starts.push(engine);
+      return start(no, engine);
+    };
+
+    const outcome = await createKifuRunner(h.deps).analyze(1, neverAborted);
+    expect(outcome).toEqual({ kind: 'complete' });
+    // 解析中の段（quick）は区切りまで前の評価関数のまま、次の段（full）で作り直す
+    expect(h.engineChoices).toEqual(['tsuyo11mini', 'tsuyo11micro']);
+    expect(h.engines[0].disposed).toBe(true);
+    expect(starts).toEqual([
+      { engineBuild: ENGINE_INFO.engineBuild, evalHash: ENGINE_INFO.evalHash },
+      { engineBuild: MICRO_INFO.engineBuild, evalHash: MICRO_INFO.evalHash },
+    ]);
+    const quick = h.chunks.filter((c) => c.profile === 'quick');
+    const full = h.chunks.filter((c) => c.profile === 'full');
+    expect(quick.every((c) => c.evalHash === ENGINE_INFO.evalHash)).toBe(true);
+    expect(full.every((c) => c.evalHash === MICRO_INFO.evalHash)).toBe(true);
+    expect(full.every((c) => c.engineBuild === MICRO_INFO.engineBuild)).toBe(true);
+  });
+
+  it('🔒 選んだ評価関数に同意していなければ（null）、開始の口も叩かずに止める', async () => {
+    const h = harness({});
+    h.choice = null;
+    const outcome = await createKifuRunner(h.deps).analyze(1, neverAborted);
+    expect(outcome).toMatchObject({ kind: 'halt', reason: 'needs-consent' });
+    expect(h.starts).toBe(0);
+    expect(h.engines).toHaveLength(0);
+  });
 });
 
 describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/13 §5.3）', () => {
@@ -730,9 +790,10 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
   function namedHarness(reply: (engineNo: number, go: string) => UsiSearchResult) {
     const h = harness({});
     const sent: { position: string; go: string }[] = [];
-    h.deps.createEngine = async (_settings, load) => {
+    h.deps.createEngine = async (_settings, load, choice) => {
       const engineNo = h.engines.length;
       h.engineLoads.push(load);
+      h.engineChoices.push(choice.id);
       const engine: AnalysisEngine & { disposed: boolean } = {
         disposed: false,
         name: 'FakeEngine',
@@ -786,8 +847,8 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     const { h } = namedHarness(() => named('9d9c', { type: 'cp', value: -300 }, ['9d9c', '9b9c']));
     const options: string[] = [];
     const created = h.deps.createEngine;
-    h.deps.createEngine = async (settings, load) => {
-      const engine = await created(settings, load);
+    h.deps.createEngine = async (settings, load, choice) => {
+      const engine = await created(settings, load, choice);
       const analyze = engine.session.analyze.bind(engine.session);
       engine.session = {
         setOption: (name, value) => options.push(`${name}=${value}`),
@@ -808,6 +869,27 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     h.load = 'gentle';
     await createKifuRunner(h.deps).evaluateNamed(request);
     expect(h.engineLoads).toEqual(['gentle']);
+  });
+
+  it('選んでいる評価関数で読み、来歴もその評価関数にする（切り替えたらエンジンを作り直す）', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    const runner = createKifuRunner(h.deps);
+    await runner.evaluateNamed(request);
+    const microInfo = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'b'.repeat(64), fvScale: 16 };
+    h.choice = { id: 'tsuyo11micro', info: microInfo };
+    const outcome = await runner.evaluateNamed(request);
+    expect(h.engineChoices).toEqual(['tsuyo11mini', 'tsuyo11micro']);
+    expect(outcome).toMatchObject({
+      kind: 'ok',
+      evaluation: { engineBuild: microInfo.engineBuild, evalHash: microInfo.evalHash },
+    });
+  });
+
+  it('🔒 選んだ評価関数に同意していなければ読まない（failed）', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    h.choice = null;
+    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toMatchObject({ kind: 'failed' });
+    expect(h.engines).toHaveLength(0);
   });
 
   it('全局面解析のエンジンを使い回す（読み込み直さない）', async () => {

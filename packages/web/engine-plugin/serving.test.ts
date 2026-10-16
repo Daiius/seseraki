@@ -55,6 +55,9 @@ describe('engineContentType / engineCacheControl', () => {
     expect(engineContentType('x/y.worker.js')).toContain('text/javascript');
     expect(engineContentType('manifest.json')).toContain('application/json');
     expect(engineContentType('eval/nn-1.bin')).toBe('application/octet-stream');
+    expect(engineContentType('eval/progress-1.bin')).toBe('application/octet-stream');
+    // 評価関数の許諾文（MIT）
+    expect(engineContentType('eval/license-1.txt')).toBe('text/plain; charset=utf-8');
   });
 
   it('manifest.json だけはキャッシュさせず、ほかは長期キャッシュ', () => {

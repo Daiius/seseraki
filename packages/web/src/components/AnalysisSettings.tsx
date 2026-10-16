@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useRouter } from '@tanstack/react-router';
+import { engineEntryDownloadBytes, engineEntryOf } from 'shared';
 import { forgetMe, type AnalysisAssignee, type Me } from '../lib/auth';
 import { client } from '../lib/honoClient';
 import {
@@ -9,7 +10,8 @@ import {
   type AnalysisMode,
 } from '../lib/browserAnalysis/settings';
 import { useBrowserAnalysisState } from '../lib/browserAnalysis/store';
-import { BrowserAnalysisNotice } from './BrowserAnalysis';
+import { ENGINE_BASE_PATH } from '../lib/browserAnalysis/enginePaths';
+import { BrowserAnalysisNotice, megabytes } from './BrowserAnalysis';
 
 const ASSIGNEE_OPTIONS: { value: AnalysisAssignee; label: string; hint: string }[] = [
   {
@@ -50,6 +52,15 @@ const LOAD_OPTIONS: { value: AnalysisLoad; label: string; hint: string }[] = [
   },
 ];
 
+/**
+ * 評価関数の一言の説明（manifest のエントリの id ごと。知らない id は説明なし）。
+ * 作者の説明（prd/14 §5.5）: mini の方が局面の評価の精度が高く、micro は速い代わりに大局観が劣る
+ */
+const EVAL_HINTS: Record<string, string> = {
+  tsuyo11mini: '局面の評価の精度が高い評価関数です。',
+  tsuyo11micro: '解析は速くなりますが、大局観は mini に劣ります。',
+};
+
 /** やねうら王の上流リポジトリ（対応ソースの所在。コミットは配信物の manifest が持つ） */
 const UPSTREAM_REPO = 'https://github.com/yaneurao/YaneuraOu';
 
@@ -59,14 +70,20 @@ const UPSTREAM_REPO = 'https://github.com/yaneurao/YaneuraOu';
  * - **解析する場所**（サーバー / ブラウザ）: アカウントの設定。選べるユーザー（`canChooseWorker`）にだけ出す
  * - **解析するタイミング**・**解析の負荷**: 端末ごとの設定（localStorage）。ブラウザで解析するときだけ出す。
  *   負荷の変更は、次に解析を始めるときから効く（エンジンを作り直すため。解析中の棋譜は区切りまで今の負荷のまま）
+ * - **評価関数**（つようら王11mini / micro。§5.5）: 端末ごとの設定。配信されている一覧（manifest）から選ぶ。
+ *   変更は負荷と同じく次の解析の開始から効く。同意していない評価関数を選ぶと、ダウンロードの同意を求める
  * - **エンジンと評価関数のライセンス・対応ソースの所在**: ブラウザへ配っているので表示する（§5.5）
  *
  * 文言に内部の用語（担当・段階・世代）は出さない。
  */
 export function AnalysisSettings({ me }: { me: Me }) {
   const router = useRouter();
-  const { mode, load } = useBrowserAnalysisSettings();
+  const { mode, load, evalId } = useBrowserAnalysisSettings();
   const { manifest } = useBrowserAnalysisState();
+  // 選んでいない・配っていない id は既定として表示する（解析の側と同じ読み方）
+  const selectedEval = manifest ? engineEntryOf(manifest, evalId) : null;
+  // エンジンはどの評価関数でも同じ上流のコミットからビルドしている
+  const upstreamSha = selectedEval?.engine.upstreamSha ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const browser = me.analysisAssignee === 'browser';
@@ -183,6 +200,41 @@ export function AnalysisSettings({ me }: { me: Me }) {
             </p>
           </fieldset>
 
+          {manifest && (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="text-sm font-semibold mb-1">
+                評価関数（この端末の設定）
+              </legend>
+              {manifest.evals.map((entry) => (
+                <label key={entry.id} className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="analysis-eval"
+                    className="radio radio-sm mt-0.5"
+                    checked={selectedEval?.id === entry.id}
+                    onChange={() => setBrowserAnalysisSettings({ evalId: entry.id })}
+                  />
+                  <span>
+                    {entry.name}
+                    {entry.id === manifest.defaultId && '（既定）'}
+                    <span className="ms-1 text-base-content/70 tabular-nums">
+                      約 {megabytes(engineEntryDownloadBytes(entry))}
+                    </span>
+                    {EVAL_HINTS[entry.id] && (
+                      <span className="block text-base-content/70">
+                        {EVAL_HINTS[entry.id]}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+              <p className="text-xs text-base-content/70">
+                変更は、次に解析を始めるときから効きます。まだダウンロードしていない評価関数を選ぶと、ダウンロードの確認が出ます。
+                解析済みの棋譜は、そのときの評価関数の結果のまま残ります。
+              </p>
+            </fieldset>
+          )}
+
           <BrowserAnalysisNotice />
 
           <div className="text-sm text-base-content/70 flex flex-col gap-1">
@@ -195,16 +247,16 @@ export function AnalysisSettings({ me }: { me: Me }) {
                 やねうら王
               </a>
               （GPL-3.0）を WebAssembly にビルドしたもので、変更は加えていません。
-              {manifest ? (
+              {upstreamSha ? (
                 <>
                   対応するソースは上流のコミット{' '}
                   <a
                     className="link font-mono"
-                    href={`${UPSTREAM_REPO}/tree/${manifest.engine.upstreamSha}`}
+                    href={`${UPSTREAM_REPO}/tree/${upstreamSha}`}
                     target="_blank"
                     rel="noreferrer"
                   >
-                    {manifest.engine.upstreamSha.slice(0, 12)}
+                    {upstreamSha.slice(0, 12)}
                   </a>
                   、ビルドの手順はこのアプリのリポジトリの{' '}
                   <span className="font-mono">packages/engine-wasm</span>{' '}
@@ -218,9 +270,38 @@ export function AnalysisSettings({ me }: { me: Me }) {
                 </>
               )}
             </p>
-            <p>
-              評価関数は水匠5 で、エンジンとは別の著作物です（やねうら王のリリースで配布されているもの）。
-            </p>
+            {manifest && (
+              <p>
+                評価関数はエンジンとは別の著作物です。
+                {manifest.evals.map((entry) => (
+                  <span key={entry.id} className="block">
+                    {entry.name}（{entry.license.name}・
+                    <a
+                      className="link"
+                      href={entry.license.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      配布元
+                    </a>
+                    {entry.license.file && (
+                      <>
+                        ・
+                        <a
+                          className="link"
+                          href={`${ENGINE_BASE_PATH}${entry.license.file}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          許諾文
+                        </a>
+                      </>
+                    )}
+                    ）
+                  </span>
+                ))}
+              </p>
+            )}
           </div>
         </>
       )}

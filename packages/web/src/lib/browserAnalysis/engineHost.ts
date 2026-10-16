@@ -6,10 +6,22 @@
  * ここでは Worker の `error` と送信の例外も同じく**エンジンの死**として扱う。死んだ transport は使い回さない
  * ——呼び出し側は Worker ごと作り直す（遅れて届く行を次の探索に混ぜない）。
  */
-import type { EngineManifest, UsiTransport } from 'shared';
+import type { EngineManifestEntry, UsiTransport } from 'shared';
 import type { BrowserAnalysisSettings as ServerAnalysisSettings } from 'shared';
 import type { EngineUrls } from './enginePaths';
 import type { AnalysisLoad } from './settings';
+
+/** 評価関数のファイルを置く仮想 FS のディレクトリ（`EvalDir`）。🔴 絶対パスにする（{@link engineOptions}） */
+export const EVAL_DIR = '/eval';
+
+/** ホストが受信して仮想 FS に置く、評価関数の 1 ファイル */
+export interface HostEvalFile {
+  url: string;
+  bytes: number;
+  sha256: string;
+  /** 仮想 FS の置き場（`/eval/nn.bin` など） */
+  path: string;
+}
 
 /** ホストへ送るメッセージ */
 export type HostRequest =
@@ -18,9 +30,8 @@ export type HostRequest =
       glueUrl: string;
       baseUrl: string;
       exportName: string;
-      evalUrl: string;
-      evalBytes: number;
-      evalSha256: string;
+      /** 評価関数のファイル（`nn.bin` と `progress.bin`）。ホストが大きさと sha256 を照合して置く */
+      evalFiles: HostEvalFile[];
     }
   | { type: 'cmd'; line: string }
   | { type: 'quit' };
@@ -51,15 +62,27 @@ export function toError(thrown: unknown): Error {
   return new Error(typeof thrown === 'string' ? thrown : 'エンジンが停止しました');
 }
 
-export function initRequest(manifest: EngineManifest, urls: EngineUrls): HostRequest {
+/** 選んだ評価関数のエントリから、ホストへの初期化の依頼を作る */
+export function initRequest(entry: EngineManifestEntry, urls: EngineUrls): HostRequest {
   return {
     type: 'init',
     glueUrl: urls.glue,
     baseUrl: urls.base,
-    exportName: manifest.engine.exportName,
-    evalUrl: urls.eval,
-    evalBytes: manifest.eval.bytes,
-    evalSha256: manifest.eval.sha256,
+    exportName: entry.engine.exportName,
+    evalFiles: [
+      {
+        url: urls.nn,
+        bytes: entry.nn.bytes,
+        sha256: entry.nn.sha256,
+        path: `${EVAL_DIR}/nn.bin`,
+      },
+      {
+        url: urls.progress,
+        bytes: entry.progress.bytes,
+        sha256: entry.progress.sha256,
+        path: `${EVAL_DIR}/progress.bin`,
+      },
+    ],
   };
 }
 
@@ -198,14 +221,17 @@ export function analysisThreads(
 /**
  * エンジンのオプション（prd/14 §5.5）。
  *
- * - 評価関数は仮想 FS のルートに `nn.bin` で置いてある（ホスト）ので、`EvalDir .` / `EvalFile nn.bin`
- * - `FV_SCALE` は manifest の値（手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない）
+ * - 評価関数は仮想 FS の `/eval/nn.bin`・`/eval/progress.bin` に置いてある（ホスト）ので、`EvalDir /eval` / `EvalFile nn.bin`。
+ *   🔴 **`EvalDir` は絶対パス**——上流は `progress.bin` を「実行ファイルのフォルダ + EvalDir」から探すので、
+ *   `.` だと見つからず `isready` で黙って終了する（絶対パスはそのまま使われる）
+ * - `FV_SCALE` は選んだエントリの値（16。手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない。
+ *   作者の推奨 24 を書いた `eval_options.txt` は置いていないので、setoption の値が効く）
  * - スレッド数は負荷の設定で決まる（{@link analysisThreads}）
  * - 定跡は使わない（`BookFile no_book`）
  * - `ConsiderationMode true` は手元 worker と同じ（探索を打ち切ったときの読み筋を置換表から延ばす）
  */
 export function engineOptions(
-  manifest: Pick<EngineManifest, 'fvScale'>,
+  entry: Pick<EngineManifestEntry, 'fvScale'>,
   settings: Pick<ServerAnalysisSettings, 'maxThreads' | 'hashMb'>,
   hardwareConcurrency: number | undefined,
   load: AnalysisLoad,
@@ -216,9 +242,9 @@ export function engineOptions(
     threads,
     hashMb,
     options: [
-      ['EvalDir', '.'],
+      ['EvalDir', EVAL_DIR],
       ['EvalFile', 'nn.bin'],
-      ['FV_SCALE', String(manifest.fvScale)],
+      ['FV_SCALE', String(entry.fvScale)],
       ['Threads', String(threads)],
       ['USI_Hash', String(hashMb)],
       ['BookFile', 'no_book'],

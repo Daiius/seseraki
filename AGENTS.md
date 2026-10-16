@@ -57,7 +57,7 @@
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 | [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
-| [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド）と評価関数を配信物の形に揃える。**このパッケージだけ GPL-3.0**・上流の SHA は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web は `packages/web/engine-plugin` が `/engine/*` として配り、Worker から読み込む） |
+| [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド。評価関数の arch ごとに 1 本）と評価関数（つようら王11mini / micro・MIT。`nn.bin` + `progress.bin`）を配信物の形に揃える。**このパッケージだけ GPL-3.0**（評価関数は MIT・許諾文を同梱）・上流の SHA と配布物の sha256 は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web は `packages/web/engine-plugin` が `/engine/*` として配り、Worker から読み込む） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
 
@@ -289,8 +289,12 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 >   順序（開いている詳細は quick → full を最優先・使用中は常にで quick を先に）は `scheduler.ts`。並びは server の未解析の一覧に従い、
 >   web で段を推測しない（prd/14 §5.10）。
 > - 経過はコンソールに `[browser-analysis]` の接頭辞で出る。
-> - ⚠ **今の評価関数は水匠5（`halfkp.noeval`・`EvalDir .`）。** つようら王11mini / micro への切り替え（arch ごとの WASM・manifest に評価関数の一覧・
->   `EvalDir /eval`・同意は評価関数ごと・`eval_options.txt` を置かず `FV_SCALE` 16）は決定のみで未実装（[prd/14](./prd/14-multi-user.md) §5.5）。
+> - **評価関数は つようら王11mini（既定）/ micro から端末ごとに選ぶ**（設定ページ。localStorage の `evalId`。prd/14 §5.5）。
+>   arch ごとにエンジン（WASM）が別で、manifest（`shared` の `engine-manifest.ts`）が評価関数の一覧と既定を持つ。
+>   **同意は評価関数ごと**（`nn.bin` の sha256 の集合）。選択の変更は次の段・次の棋譜の開始から効き、同意していない評価関数に替えたら同意を求める。
+>   来歴（`engineBuild` / `evalHash` / `fvScale`）は選んでいるエントリから。
+> - 🔴 **`EvalDir` は絶対パス `/eval`**（`.` だと上流が `progress.bin` を見つけられず `isready` で黙って終了する）。ホストが `nn.bin` と
+>   `progress.bin` を仮想 FS の `/eval/` に置く。🔴 **配布物の `eval_options.txt` は置かない**（`FV_SCALE` が 24 に上書きされる。16 を `setoption` で渡す）
 >
 > compose watch・環境変数（`.env.*`）・DB 初回セットアップ・Docker 外での worker 実行（`USE_MOCK=true`）の
 > 詳細は [prd/02](./prd/02-architecture.md) §6。

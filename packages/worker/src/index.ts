@@ -1,4 +1,5 @@
 import {
+  evalProvenance,
   hasQuickProfile,
   loadConfig,
   profileSettings,
@@ -36,6 +37,11 @@ async function configureEngine(engine: UsiEngine, config: Config): Promise<void>
   if (config.engineEvalDir) {
     engine.setOption("EvalDir", config.engineEvalDir);
   }
+  // 🔴 評価値の尺度（prd/05 §1.2・§1.3）。本番は 16 を明示する——EvalDir に eval_options.txt を置かない前提で、
+  // isready で上書きされない。悪手判定・出題の閾値と保存済みの値の尺度を合わせるため、エンジンの既定値に頼らない
+  if (config.engineFvScale !== undefined) {
+    engine.setOption("FV_SCALE", String(config.engineFvScale));
+  }
   if (config.engineBookDir) {
     engine.setOption("BookDir", config.engineBookDir);
     engine.setOption("BookFile", "user_book1.db");
@@ -61,6 +67,8 @@ async function main() {
     engineThreads: config.engineThreads,
     // hashfull のログ（1 局ごとに出る peak）と突き合わせられるよう、設定値も残す
     engineHash: config.engineHash,
+    engineFvScale: config.engineFvScale,
+    engineEvalSha256: config.engineEvalSha256,
     pollIntervalMs: config.pollIntervalMs,
     useMock: config.useMock,
   });
@@ -215,6 +223,8 @@ async function main() {
           movetimeMs: settings.movetime ?? null,
           targetDepth: settings.movetime === undefined ? settings.depth : null,
           multiPv: config.engineMultiPv,
+          // 評価関数の識別と尺度（設定されているときだけ。prd/14 §5.9）
+          ...evalProvenance(config),
         };
         console.log(
           `[Worker] Analyzing kifu ${kifu.id} (${profile}): ${kifu.title}`,

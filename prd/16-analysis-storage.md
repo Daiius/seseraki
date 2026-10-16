@@ -90,8 +90,8 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 
   このうち `engineBuild` と `evalHash` だけは、途中の解析をやり直すかの判定に使う（§8）。
   ブラウザ解析の受け口は全項目を書く（`runtime: 'wasm'`・`book: false` は server が固定）。手元 worker の報告も同じ項目を
-  受けるが、worker はまだ送っていない（送らなければ項目なしで保存される）
-  - 2026-10-16 決定（未実装）: 手元 worker の評価関数を つようら王11mini に替えるのに合わせ、worker も `evalHash`（`nn.bin` の sha256）と
+  受ける（送らなければ項目なしで保存される）
+  - 2026-10-16 決定（実装済み・本番は未反映）: 手元 worker の評価関数を つようら王11mini に替えるのに合わせ、worker も `evalHash`（`nn.bin` の sha256）と
     `fvScale` を送る（[05](./05-analysis.md) §1.2）。ブラウザの `evalHash` も `nn.bin` の sha256 で、`progress.bin` は来歴に載せない（[14](./14-multi-user.md) §5.5）
 - 🔒 **書き込みのたびに、どの局面からも指されなくなった run を消して添字を詰める。** 再送を繰り返しても `runs` の件数は局面数を超えない（ブラウザから届く submit で行を際限なく大きくさせない。[14](./14-multi-user.md) §6.2）
 - 🔒 **CHECK で形を守る**（配列であること）。中身の検査は submit の zod で行う（[14](./14-multi-user.md) §6.2 の上限もここで掛ける）
@@ -189,7 +189,7 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 ## 8. 後に回すもの
 
 - **エンジン・評価関数の切り替え**（[14](./14-multi-user.md) §5.5 の持ち込みを含む）: 置き換えるか、並べて持つかは保留。
-  - **2026-10-16 決定（未実装）**: ブラウザの評価関数を つようら王11mini / micro にして端末ごとに選べるようにし、手元 worker も mini に替える
+  - **2026-10-16 決定（実装済み（本番は未反映））**: ブラウザの評価関数を つようら王11mini / micro にして端末ごとに選べるようにし、手元 worker も mini に替える
     （[14](./14-multi-user.md) §5.5・[05](./05-analysis.md) §1.2）。**保存の形は変えない**（今の 1 棋譜 1 行。並べて持たない）。
     完了済みの解析はそのまま残し、評価関数を替えても過去の棋譜を解析し直さない（再解析は利用者・所有者の手で）。
     棋譜ごとに水匠5 / mini / micro の結果が混在するのは許し、どれの結果かは来歴（`evalHash`）で分かる。

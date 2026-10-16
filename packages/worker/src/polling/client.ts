@@ -20,6 +20,10 @@ export interface AnalysisProvenance {
   movetimeMs?: number | null;
   targetDepth?: number | null;
   multiPv?: number | null;
+  /** 評価関数 `nn.bin` の sha256（`ENGINE_EVAL_SHA256`。prd/14 §5.9）。未設定なら送らない */
+  evalHash?: string;
+  /** エンジンに渡した `FV_SCALE`（`ENGINE_FV_SCALE`）。未設定なら送らない */
+  fvScale?: number;
 }
 
 export function createClient(baseUrl: string, apiKey: string) {

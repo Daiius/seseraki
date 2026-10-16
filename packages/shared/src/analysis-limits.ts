@@ -64,9 +64,9 @@ export const browserCandidateSchema = z.object({
 /** 世代（`kifus.analysisRevision`。integer の列に収まる値） */
 const revision = z.number().int().min(0).max(2_147_483_647);
 
-/** エンジンのビルド識別（manifest の `engine.buildId`。`engine-manifest.ts`） */
+/** エンジンのビルド識別（manifest のエントリの `engine.buildId`。`engine-manifest.ts`） */
 const engineBuild = z.string().regex(/^[0-9a-f]+-[0-9a-f]+$/).max(128);
-/** 評価関数のハッシュ（manifest の `eval.sha256`） */
+/** 評価関数のハッシュ（manifest のエントリの `nn.sha256`） */
 const evalHash = z.string().regex(/^[0-9a-f]{64}$/);
 
 /**

@@ -47,6 +47,8 @@ export function engineContentType(rel: string): string {
   if (rel.endsWith('.wasm')) return 'application/wasm';
   if (rel.endsWith('.js')) return 'text/javascript; charset=utf-8';
   if (rel.endsWith('.json')) return 'application/json; charset=utf-8';
+  // 評価関数の許諾文（MIT。engine/eval/license-<hash>.txt）
+  if (rel.endsWith('.txt')) return 'text/plain; charset=utf-8';
   return 'application/octet-stream';
 }
 

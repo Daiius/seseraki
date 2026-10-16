@@ -2,8 +2,17 @@ import { useEffect } from 'react';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { forgetMe } from '../lib/auth';
 import {
+  engineEntryDownloadBytes,
+  engineEntryOf,
+  type EngineManifest,
+} from 'shared';
+import {
+  getBrowserAnalysisSettings,
+  hasConsented,
   setBrowserAnalysisSettings,
   useBrowserAnalysisSettings,
+  withConsent,
+  type BrowserAnalysisSettings,
 } from '../lib/browserAnalysis/settings';
 import {
   pokeBrowserAnalysis,
@@ -18,12 +27,21 @@ import { unsupportedMessage } from '../lib/browserAnalysis/support';
  *
  * 🔒 **`enabled`（= 担当がブラウザ）のときだけ動かす。** サーバーで解析するユーザーでは、
  * エンジンの一覧の取得も、エンジンの読み込みも一切しない。
- * 範囲・同意（端末の設定）が変わったら、止めて起動し直す。
+ * 範囲・同意（端末の設定）が変わったら、止めて起動し直す。評価関数の選択は、同意済みのものどうしなら
+ * 起動し直さない（常駐が次の解析の開始で読む）。同意していないものに切り替えたら、止めて同意を求める。
  */
 export function BrowserAnalysisHost({ enabled }: { enabled: boolean }) {
   const router = useRouter();
-  const { mode, consentEvalSha256 } = useBrowserAnalysisSettings();
-  const { restartNonce } = useBrowserAnalysisState();
+  const settings = useBrowserAnalysisSettings();
+  const { mode } = settings;
+  const { restartNonce, manifest } = useBrowserAnalysisState();
+  // 同意が増えたら起動し直す（同意を待っていた評価関数で解析を始める）
+  const consentKey = settings.consentedEvalSha256s.join(',');
+  // 同意していない評価関数に切り替えたら、すぐ止めて同意を求める（前の評価関数でも解析しない。prd/14 §5.10）。
+  // 同意済みの評価関数どうしの切り替えでは起動し直さない——常駐が次の解析の開始で読み、エンジンを作り直す
+  const unconsentedSha256 = manifest
+    ? unconsentedSelection(manifest, settings)
+    : null;
 
   useEffect(() => {
     if (!enabled) return;
@@ -36,7 +54,6 @@ export function BrowserAnalysisHost({ enabled }: { enabled: boolean }) {
         if (stopped) return;
         stop = startBrowserAnalysis({
           mode,
-          consentEvalSha256,
           // 完了・失敗した棋譜の表示を入れ替える（一覧のバッジ・詳細の解析結果はローダー経由）
           onSettled: () => void router.invalidate(),
           // 担当が変わっていた・ログインが切れていた。`GET /api/me` を取り直す（ルートの beforeLoad が叩く）
@@ -53,7 +70,7 @@ export function BrowserAnalysisHost({ enabled }: { enabled: boolean }) {
       stopped = true;
       stop?.();
     };
-  }, [enabled, mode, consentEvalSha256, restartNonce, router]);
+  }, [enabled, mode, consentKey, unconsentedSha256, restartNonce, router]);
 
   // ページを移ったら、待機中の解析に次の棋譜を選び直させる（棋譜を登録した直後など）
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -75,9 +92,19 @@ export function useBrowserAnalysisFocus(kifuNo: number | null): void {
   }, [kifuNo]);
 }
 
-/** バイト数を「約 64MB」の形にする */
-function megabytes(bytes: number): string {
-  return `${Math.round(bytes / 1_000_000)}MB`;
+/** 選んだ評価関数が同意済みでなければ、その `nn.bin` の sha256。同意済みなら null */
+function unconsentedSelection(
+  manifest: EngineManifest,
+  settings: BrowserAnalysisSettings,
+): string | null {
+  const entry = engineEntryOf(manifest, settings.evalId);
+  return hasConsented(settings, entry.nn.sha256) ? null : entry.nn.sha256;
+}
+
+/** バイト数を「約 8.7MB」の形にする（10MB 未満は小数 1 桁） */
+export function megabytes(bytes: number): string {
+  const mb = bytes / 1_000_000;
+  return mb < 10 ? `${mb.toFixed(1)}MB` : `${Math.round(mb)}MB`;
 }
 
 /**
@@ -91,25 +118,31 @@ function megabytes(bytes: number): string {
 export function BrowserAnalysisNotice() {
   const { phase, manifest, unsupported, download, error } =
     useBrowserAnalysisState();
+  const settings = useBrowserAnalysisSettings();
 
   switch (phase) {
     case 'needs-consent': {
       if (!manifest) return null;
+      // 同意は選んでいる評価関数ごと（prd/14 §5.10）
+      const entry = engineEntryOf(manifest, settings.evalId);
       return (
         <div
           role="status"
           className="alert shadow-lg py-2 flex flex-col items-stretch gap-2"
         >
           <div className="text-sm">
-            棋譜をこのブラウザで解析します。最初に解析エンジンのデータ（約{' '}
-            {megabytes(manifest.eval.bytes)}）をダウンロードします。
+            棋譜をこのブラウザで解析します。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
+            {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。
           </div>
           <button
             type="button"
             className="btn btn-primary btn-sm self-end"
             onClick={() =>
               setBrowserAnalysisSettings({
-                consentEvalSha256: manifest.eval.sha256,
+                consentedEvalSha256s: withConsent(
+                  getBrowserAnalysisSettings().consentedEvalSha256s,
+                  entry.nn.sha256,
+                ),
               })
             }
           >

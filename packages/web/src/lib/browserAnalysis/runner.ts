@@ -140,18 +140,40 @@ export interface LocalProgress {
   total: number;
 }
 
+/** 来歴に記録するエンジンの値（選んだ評価関数の manifest のエントリから。prd/14 §5.9） */
+export interface EngineInfo {
+  /** エントリのエンジンのビルド識別（arch ごとに別） */
+  engineBuild: string;
+  /** `nn.bin` の sha256 */
+  evalHash: string;
+  fvScale: number;
+}
+
+/** いま選んでいる評価関数（端末の設定と manifest から。prd/14 §5.5） */
+export interface EngineChoice {
+  /** 評価関数の id（ログ用） */
+  id: string;
+  info: EngineInfo;
+}
+
 export interface RunnerDeps {
   api: RunnerApi;
-  /** 来歴に記録する値（manifest から。prd/14 §5.9） */
-  engineInfo: { engineBuild: string; evalHash: string; fvScale: number };
+  /**
+   * いま選んでいる評価関数。開始の口を叩くたびに読み、前と違えばエンジンを作り直す
+   * ——選択の変更は、次の解析（次の段・次の棋譜）の開始から効く（負荷の設定と同じ。prd/14 §5.10）。
+   * 🔒 **選んだ評価関数のダウンロードに同意していなければ null**。解析を止める（`halt` の `needs-consent`）
+   * ——前の評価関数でも解析しない（選んだものと違う結果を作らない）
+   */
+  currentEngine(): EngineChoice | null;
   /**
    * エンジンを読み込んで起動する。評価関数のダウンロードもここ（投げたら読み込みの失敗）。
-   * ⚠ 棋譜の中断では止めない（詳細ページを離れただけで、数十 MB のダウンロードを捨てない）。
+   * ⚠ 棋譜の中断では止めない（詳細ページを離れただけで、数 MB のダウンロードを捨てない）。
    * 止めるのは常駐そのものを止めるときで、それは呼び出し側（`createEngine` の実装）が受け持つ
    */
   createEngine(
     settings: ServerAnalysisSettings,
     load: AnalysisLoad,
+    choice: EngineChoice,
   ): Promise<AnalysisEngine>;
   /**
    * 今の負荷の設定（端末の設定。prd/14 §5.10）。開始の口を叩くたびに読み、前と違えばエンジンを作り直す
@@ -227,9 +249,13 @@ export type KifuOutcome =
   /** これ以上どの棋譜も解析しない */
   | {
       kind: 'halt';
-      reason: 'wrong-assignee' | 'unauthorized' | 'fatal' | 'engine-load';
+      /** `needs-consent`: 選んだ評価関数のダウンロードに同意していない（{@link RunnerDeps.currentEngine}） */
+      reason: 'wrong-assignee' | 'unauthorized' | 'fatal' | 'engine-load' | 'needs-consent';
       detail: string;
     };
+
+/** 選んだ評価関数に同意していないときの文（ログ・採点の読みの失敗） */
+const NEEDS_CONSENT_DETAIL = '選んだ評価関数のダウンロードに同意していません';
 
 /** 通信の失敗の後に待つ時間（この回数だけ再試行し、尽きたら後回しにする） */
 export const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
@@ -287,7 +313,7 @@ export interface KifuRunner {
 }
 
 export function createKifuRunner(deps: RunnerDeps): KifuRunner {
-  const { api, engineInfo, log } = deps;
+  const { api, log } = deps;
   /** 棋譜をまたいで使い回すエンジン。失敗したら捨てて作り直す */
   let engine: AnalysisEngine | null = null;
   let engineSettingsKey = '';
@@ -300,15 +326,16 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
 
   const ensureEngine = async (
     settings: ServerAnalysisSettings,
+    choice: EngineChoice,
   ): Promise<AnalysisEngine> => {
-    // スレッド数・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
+    // 評価関数の選択（端末の設定）・スレッド数・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
     // ⚠ スレッド数は動いているエンジンに setoption で変えず、作り直す（WASM のスレッドの確保を実機で確かめていないため）
     const load = deps.currentLoad();
-    const key = `${settings.maxThreads}:${settings.hashMb}:${load}`;
+    const key = `${choice.id}:${choice.info.engineBuild}:${choice.info.evalHash}:${settings.maxThreads}:${settings.hashMb}:${load}`;
     if (engine && engineSettingsKey === key) return engine;
     if (engine) log.info(`recreating the engine (${engineSettingsKey} -> ${key})`);
     disposeEngine();
-    const created = await deps.createEngine(settings, load);
+    const created = await deps.createEngine(settings, load, choice);
     if (disposed) {
       // 読み込んでいる間に止められた。使わずに捨てる
       created.dispose();
@@ -405,8 +432,18 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (signal.aborted) return { kind: 'aborted' };
 
+        // 評価関数の選択は段ごとに読む（開始の口・エンジン・報告で同じものを使う）
+        const choice = deps.currentEngine();
+        if (choice === null) {
+          return { kind: 'halt', reason: 'needs-consent', detail: NEEDS_CONSENT_DETAIL };
+        }
+        const engineInfo = choice.info;
+
         const started = await withRetry('start', signal, () =>
-          api.start(kifuNo, engineInfo),
+          api.start(kifuNo, {
+            engineBuild: engineInfo.engineBuild,
+            evalHash: engineInfo.evalHash,
+          }),
         );
         switch (started.kind) {
           case 'skip':
@@ -439,7 +476,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
 
         let current: AnalysisEngine;
         try {
-          current = await ensureEngine(run.settings);
+          current = await ensureEngine(run.settings, choice);
         } catch (error) {
           disposeEngine();
           if (signal.aborted) return { kind: 'aborted' };
@@ -663,12 +700,15 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
 
   const evaluateNamed = async (request: NamedEvalRequest): Promise<NamedEvalOutcome> => {
     const { sfen, move, settings } = request;
+    const choice = deps.currentEngine();
+    if (choice === null) return { kind: 'failed', detail: NEEDS_CONSENT_DETAIL };
+    const engineInfo = choice.info;
     let detail = '';
     // エンジンが失敗したら 1 度だけ作り直して読み直す（全局面解析と同じく、端末の不調 1 回で諦めない）
     for (let attempt = 0; attempt < 2; attempt++) {
       let current: AnalysisEngine;
       try {
-        current = await ensureEngine(settings);
+        current = await ensureEngine(settings, choice);
       } catch (error) {
         disposeEngine();
         detail = `解析エンジンを読み込めませんでした（${messageOf(error)}）`;

@@ -9,7 +9,7 @@
 //   最後に process.exit で確実に終える。
 //
 // 使い方: node usi-runner.cjs '<筋書きの JSON>'
-//   { "js": グルーの絶対パス, "evalFile": nn.bin の絶対パス,
+//   { "js": グルーの絶対パス, "nnFile": nn.bin の絶対パス, "progressFile": progress.bin の絶対パス,
 //     "steps": [{ "send": [コマンド...], "until": 待つ行の正規表現, "timeoutMs": 上限 }] }
 
 const fs = require('node:fs');
@@ -37,10 +37,18 @@ const fail = (message) => {
     process.stdout.write(`< ${line}\n`);
   });
 
-  // 評価関数は仮想 FS のルートに置き、EvalDir / EvalFile で指す。
-  engine.FS.writeFile('/nn.bin', fs.readFileSync(scenario.evalFile), {
+  // 評価関数は仮想 FS の /eval に置き、EvalDir（絶対パス /eval）/ EvalFile で指す。
+  // ⚠ EvalDir を . にすると、上流は progress.bin を「実行ファイルのフォルダ + EvalDir」から探して見つけられず、
+  // isready で黙って終了する。ほかのファイル（eval_options.txt）は置かない（FV_SCALE が上書きされる）。
+  engine.FS.mkdir('/eval');
+  engine.FS.writeFile('/eval/nn.bin', fs.readFileSync(scenario.nnFile), {
     canOwn: true,
   });
+  engine.FS.writeFile(
+    '/eval/progress.bin',
+    fs.readFileSync(scenario.progressFile),
+    { canOwn: true },
+  );
 
   const waitFor = (pattern, from, timeoutMs) =>
     new Promise((resolve, reject) => {

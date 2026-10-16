@@ -8,20 +8,57 @@ YANEURAOU_REPO=https://github.com/yaneurao/YaneuraOu
 YANEURAOU_SHA=c1b80eaa09fe13d5f12b1599d1ae4d53c224de30
 # Emscripten の Docker イメージ（タグが版）。
 EMSDK_IMAGE=emscripten/emsdk:3.1.43
-# 上流の script/wasm_build.js のビルド対象。評価関数を埋め込まない版。
-BUILD_TARGET=halfkp.noeval
-# グルーが公開する関数名（上流の wasm_build.js が対象ごとに決める）。build.sh が成果物と照合する。
-EXPORT_NAME=YaneuraOu_HalfKP_noeval
-# エンジンに渡す FV_SCALE（halfkp.noeval の既定値と同じ。手元 worker と揃える）。
-FV_SCALE=16
-
-# --- 評価関数（水匠5） ---
-EVAL_NAME=Suisho5
-EVAL_URL=https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suisho5.7z
-# アーカイブの中から取り出すファイル名。
-EVAL_ENTRY=nn.bin
-# 取り出した nn.bin の大きさと sha256。fetch-eval.sh が照合し、合わなければ止まる。
-EVAL_BYTES=64217066
-EVAL_SHA256=768068f0d534a0603a5d38bcd143de6bbca820d5f1c95a14d40863e5b7892d76
+# WASM の初期メモリ（上流の script/wasm_build.js が渡す値と同じ）。
+EM_INITIAL_MEMORY_SIZE=167772160
 # ホストに 7z が無いときに、展開に使う使い捨てコンテナのイメージ（中で p7zip-full を入れる）。
 EVAL_EXTRACT_IMAGE=debian:bookworm-slim
+
+# --- 評価関数の一覧 ---
+# 配る評価関数の id（: 区切り）と既定。id ごとの値は EVAL_<id を大文字にしたもの>_<項目> に書く。
+# 評価関数の型（arch）はエンジンのコンパイル時に固定なので、EDITION ごとにエンジンを 1 本ビルドする
+# （EDITION が同じ評価関数はエンジンを共有する）。
+EVAL_IDS=tsuyo11mini:tsuyo11micro
+EVAL_DEFAULT=tsuyo11mini
+
+# 項目:
+#   NAME            表示名
+#   EDITION         上流の Makefile の YANEURAOU_EDITION（arch を決める）
+#   EXPORT_NAME     グルーが公開する関数名（EDITION ごとに別名にする。build.sh が成果物と照合する）
+#   FV_SCALE        エンジンに渡す FV_SCALE（手元 worker・悪手判定の閾値と尺度を揃える。作者の推奨 24 は採らない）
+#   URL             配布物（7z）。ARCHIVE_BYTES / ARCHIVE_SHA256 はその大きさと sha256
+#   NN_* / PROGRESS_*  アーカイブの中の nn.bin / progress.bin の大きさと sha256。
+#                   取り出すのはこの 2 つだけ（eval_options.txt は FV_SCALE を 24 に上書きするので置かない）
+#   LICENSE         評価関数のライセンス。LICENSE_FILE はその許諾文（このパッケージからの相対）
+#   SOURCE_URL      出典（作者による公開の告知）
+
+# --- つようら王11mini（既定。評価の精度が高い） ---
+EVAL_TSUYO11MINI_NAME=つようら王11mini
+EVAL_TSUYO11MINI_EDITION=YANEURAOU_ENGINE_SFNN_ka2_4096_8_64_progress8
+EVAL_TSUYO11MINI_EXPORT_NAME=YaneuraOu_SFNN_ka2_4096
+EVAL_TSUYO11MINI_FV_SCALE=16
+EVAL_TSUYO11MINI_URL=https://storage.yaneu.com/yaneuraou/TuyouraOu11mini-SFNN_ka2_4096_8_64_progress8-epoch0010-20261003.7z
+EVAL_TSUYO11MINI_ARCHIVE_BYTES=5629131
+EVAL_TSUYO11MINI_ARCHIVE_SHA256=bd5cd719e000ee3e8c4f158ecd7b56913655569fa73911bd95209f55bbb772ea
+EVAL_TSUYO11MINI_NN_BYTES=7711372
+EVAL_TSUYO11MINI_NN_SHA256=45323c65135da65d6c2c364eea93a5af6a285c27ebfb07eab4afbe737ef74508
+EVAL_TSUYO11MINI_PROGRESS_BYTES=1003104
+EVAL_TSUYO11MINI_PROGRESS_SHA256=a2d18f0564639c945b5d6469e9b437cd64a526ad4fbcef02ab1d8f547d08e5f1
+EVAL_TSUYO11MINI_LICENSE=MIT
+EVAL_TSUYO11MINI_LICENSE_FILE=eval-licenses/tsuyo11.txt
+EVAL_TSUYO11MINI_SOURCE_URL=https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/
+
+# --- つようら王11micro（速いが大局観は劣る） ---
+EVAL_TSUYO11MICRO_NAME=つようら王11micro
+EVAL_TSUYO11MICRO_EDITION=YANEURAOU_ENGINE_SFNN_ka2_2048_8_64_progress8
+EVAL_TSUYO11MICRO_EXPORT_NAME=YaneuraOu_SFNN_ka2_2048
+EVAL_TSUYO11MICRO_FV_SCALE=16
+EVAL_TSUYO11MICRO_URL=https://storage.yaneu.com/yaneuraou/TuyouraOu11micro-SFNN_ka2_2048_8_64_progress8-epoch0010-20261001.7z
+EVAL_TSUYO11MICRO_ARCHIVE_BYTES=3137698
+EVAL_TSUYO11MICRO_ARCHIVE_SHA256=d1326e9a620c30d40ae553259dd0b6828d2f4e9fca3b6ab9440566579ab0e8c2
+EVAL_TSUYO11MICRO_NN_BYTES=3864610
+EVAL_TSUYO11MICRO_NN_SHA256=7f9545dbf73b87acf312146daabf59c4f17d0845c87d587fa19caed51707dddb
+EVAL_TSUYO11MICRO_PROGRESS_BYTES=1003104
+EVAL_TSUYO11MICRO_PROGRESS_SHA256=a2d18f0564639c945b5d6469e9b437cd64a526ad4fbcef02ab1d8f547d08e5f1
+EVAL_TSUYO11MICRO_LICENSE=MIT
+EVAL_TSUYO11MICRO_LICENSE_FILE=eval-licenses/tsuyo11.txt
+EVAL_TSUYO11MICRO_SOURCE_URL=https://yaneuraou.yaneu.com/2026/10/14/tsuyou-11-mini-micro-released-under-mit-license/

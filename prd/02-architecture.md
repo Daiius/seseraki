@@ -115,6 +115,8 @@
   - server: esbuild でバンドル → distroless で実行（コンテナレジストリへ発行。レジストリ/namespace の具体は `.claude-personal/`）。
   - worker: `packages/worker/Dockerfile.prod` で本番ホスト上でビルド。やねうら王 NNUE + 評価関数 +
     定跡を同梱し、esbuild バンドルで実行（[05](./05-analysis.md) §エンジン構成）。
+    - 2026-10-16 決定（未実装）: 評価関数を水匠5 から **つようら王11mini**（SFNN・`nn.bin` + `progress.bin`）に替え、
+      上流のコミットを `packages/engine-wasm/UPSTREAM` と同じものに固定し、配布物を sha256 で照合する（[05](./05-analysis.md) §1.2）。
 - **web**: Vite の静的ビルド（`index.html` + ハッシュ付きの `assets/*`）を配信ディレクトリへ置く
   （`pnpm deploy:web`・`packages/deploy-static`。接続先は `.env.deploy`、既定 dry-run / `--apply` で書き込む）。
   - **`assets/` には「今回」と「1 つ前」のデプロイのファイルだけを残す。** 上書きだけだと古いチャンクが
@@ -134,9 +136,13 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
-- **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドと web への同梱は実装済み・本番の配信の設定は未**。[14](./14-multi-user.md) §5.5）:
+- **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドと web への同梱は実装済み・本番の配信の設定も済み（2026-10-15）**。[14](./14-multi-user.md) §5.5）:
   - エンジン（WASM）は `packages/engine-wasm` でビルドする（`pnpm engine:build`。`packages/engine-wasm/dist/engine/` に
     配信物の形で揃う）。**成果物はコミットせず**、ビルドして配信先へ置く。
+    - 2026-10-16 決定（未実装）: 評価関数を **つようら王11mini / micro** の 2 つにし、端末ごとに選べるようにする（[14](./14-multi-user.md) §5.5）。
+      arch ごとにエンジンを 1 本ずつビルドするので、`engine/` には**エンジン 2 本**（arch ごとのディレクトリ）と、
+      それぞれの `nn.bin`・共通の `progress.bin` と MIT の許諾文が並び、`manifest.json` が評価関数の一覧と既定を持つ。
+      水匠5 は配らない（本番に反映するまでは水匠5 を配っている）。
   - **web のビルドが `dist/engine/` へコピーする**（`packages/web/engine-plugin`）。成果物が無ければ警告して飛ばし、
     `ENGINE_REQUIRED=1` のときは落とす。**`pnpm deploy:web` はこれを立てる**ので、先に `pnpm engine:build` を流しておく
     （エンジンを入れ忘れたデプロイを止める）。
@@ -163,7 +169,7 @@
 - ファイル変更は docker watch の `sync+restart` で自動同期・再起動。`pnpm-lock.yaml` 変更時はコンテナ再ビルド。
 - **ブラウザ解析のエンジン**（[14](./14-multi-user.md) §5.5）: web のコンテナは `packages/engine-wasm/dist/engine` を
   読み取り専用で bind mount し（`ENGINE_DIST_DIR`）、Vite のプラグインが `/engine/*` として配る。
-  評価関数（64MB）をイメージにも watch の sync にも乗せないため。
+  評価関数（64MB。つようら王11 に替えた後は mini と micro を合わせて約 13MB）をイメージにも watch の sync にも乗せないため。
   - **使うときは `pnpm engine:build` を流してから `pnpm dev`**（起動した後に流しても、作り直さずに見える）。
     流していなくても dev は起動する（ブラウザ解析が「エンジンが配置されていない」の案内になるだけ）。
   - dev の Vite は**全応答に COOP / COEP を付ける**（SharedArrayBuffer に要る）。

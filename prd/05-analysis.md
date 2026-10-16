@@ -158,8 +158,8 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
   （同段階の再送は入れ直し・現行どおり）。既存行が full なのに quick が届いた局面は**書かずに無視する**
   （単一 worker では起きないが安い保険）。
 - 🔴 **エンジン識別子は記録するが、上書き・再開の条件には使わない**（[03](./03-data-model.md) §3）。
-  本番イメージはやねうら王を最新で clone してビルドするため、**再ビルドで `id name` の版文字列が変わる**
-  （2026-10-16 決定・未実装: 本番イメージも上流のコミットを固定する。§1.2。それでもこの規則は変えない）。
+  本番イメージはかつてやねうら王を最新で clone してビルドしており、**再ビルドで `id name` の版文字列が変わった**
+  （2026-10-16 決定・実装済み（本番は未反映）: 本番イメージも上流のコミットを固定する。§1.2。それでもこの規則は変えない）。
   識別子で「別エンジン＝やり直し」と判定すると**全棋譜の意図しない全再解析**が起きる。記録だけしておき、
   構成変更時の作り直しは従来どおり `reanalyze` の運用で受ける（§1.2）。
   - ⚠ **例外（決定・2026-10-14・未実装）**: ブラウザ解析の**途中の解析だけ**は、エンジンのビルドか評価関数が違えば
@@ -233,7 +233,8 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 ### 1.2 エンジン構成（開発 / 本番）
 
 > ⚠ **一部改定済み**（本番の評価関数を水匠5 から つようら王11mini に・上流のコミットの固定・`FV_SCALE` の明示・来歴）
-> →「本番の評価関数を つようら王11mini にする」（下・2026-10-16）。**未実装（PRD のみ）**——今の本番イメージは水匠5 のまま。
+> →「本番の評価関数を つようら王11mini にする」（下・2026-10-16）。**実装済み（本番は未反映）**——`Dockerfile.prod` と worker は置き換えた。
+> 今動いている本番のイメージは、建て替えるまで水匠5 のまま。
 
 | | 開発用 (Dockerfile) | 本番用 (Dockerfile.prod) |
 |---|---|---|
@@ -244,7 +245,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | 定跡 | なし | 定跡（ペタブック系） |
 | TARGET_CPU | OTHER | OTHER |
 
-#### 本番の評価関数を つようら王11mini にする（2026-10-16 決定・未実装）
+#### 本番の評価関数を つようら王11mini にする（2026-10-16 決定・実装済み・本番は未反映）
 
 経緯は [決定ログ](./_grilling/decisions.md)「ブラウザ解析と手元 worker の評価関数をつようら王11 にする」。
 ブラウザ解析の評価関数（[14](./14-multi-user.md) §5.5）と同じものに揃える。
@@ -257,11 +258,14 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
   - 🔒 **上流のコミットを `packages/engine-wasm/UPSTREAM` と同じコミットに固定する**（ブラウザと同じソース。c1b80ea でパッチ無しにビルドでき、評価関数を読めた）
   - 配布物は **sha256 で照合**してから置く（合わなければビルドを落とす）。`nn.bin` と `progress.bin` を `EvalDir` に置く
   - 🔴 **`eval_options.txt` は置かない**（`isready` で `FV_SCALE` が作者の推奨の 24 に上書きされる。[14](./14-multi-user.md) §5.5）
-  - 照合した `nn.bin` の sha256 をイメージの環境変数で worker に渡す（来歴に載せるため）
+  - 照合した `nn.bin` の sha256 をイメージの環境変数（`ENGINE_EVAL_SHA256`）で worker に渡す（来歴に載せるため）。
+    照合の値と渡す値は `Dockerfile.prod` 冒頭の 1 つの `ARG`（`EVAL_NN_SHA256`）から取る（食い違わないように）
+  - 配布物の `tag.json` と、MIT の旨と出典を書いた `NOTICE.txt` をイメージの `/usr/local/share/yaneuraou/eval-license` に置く（`EvalDir` の外）
 - 🔴 **`FV_SCALE` 16 を worker から明示的に `setoption` する**（§1.3）。悪手判定・出題の閾値・保存済みの値と尺度を合わせる
   （24 では評価値が水匠5 の 0.56 倍に縮み、悪手が 3 分の 1 になる。実測は [14](./14-multi-user.md) §5.5）。
   エンジンの既定値に頼らない（SFNN のビルドの既定が 16 である保証を置かない）
 - **来歴（`runs`）に `evalHash`（`nn.bin` の sha256）と `fvScale` を載せる**（[16](./16-analysis-storage.md) §3.1）。
+  `ENGINE_EVAL_SHA256` / `ENGINE_FV_SCALE` が設定されているときだけ送る（dev の MATERIAL は送らない・今までどおり項目なし）。
   手元 worker の経路では、これを上書き・再開の条件に使わない（§1.1d の 🔴 のまま）
 - **dev の worker（`Dockerfile` / `Dockerfile.engine` の MATERIAL）は変えない。** 定跡（ペタブック）も変えない
 - **混在**: 置き換えの前に解析した棋譜は水匠5、後は つようら王11mini の結果になる。**棋譜ごとの混在は許す**（来歴で分かる・再解析は手動）。
@@ -291,7 +295,8 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 | — | `ENGINE_QUICK_MOVETIME` | 未設定 | quick 段階の 1 局面あたり思考時間(ms)。§1.1d |
 | — | `ENGINE_QUICK_DEPTH` | 未設定 | quick 段階の探索深さ。`ENGINE_QUICK_MOVETIME` 設定時はそちらが優先 |
 | EvalDir | `ENGINE_EVAL_DIR` | — | 本番: 評価関数ディレクトリ（`nn.bin` と `progress.bin`。§1.2） |
-| FV_SCALE | `ENGINE_FV_SCALE` | 未設定（エンジンの既定） | 本番: 16（2026-10-16 決定・未実装。§1.2）。`Dockerfile.prod` が渡す |
+| FV_SCALE | `ENGINE_FV_SCALE` | 未設定（エンジンの既定） | 本番: 16（2026-10-16 決定。§1.2）。`Dockerfile.prod` が渡す。正の整数でなければ worker は起動時に止まる |
+| — | `ENGINE_EVAL_SHA256` | 未設定（来歴に載せない） | 評価関数 `nn.bin` の sha256。来歴（`runs`）の `evalHash` に載せる（§1.2）。`Dockerfile.prod` が照合した値を渡す。sha256 の形でなければ起動時に止まる |
 | BookDir | `ENGINE_BOOK_DIR` | — | 本番: 定跡ディレクトリ |
 | ConsiderationMode | — | true | 読み筋を置換表から延長して出力する（§1.3a） |
 

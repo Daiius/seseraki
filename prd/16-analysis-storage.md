@@ -90,8 +90,8 @@ runs[run] = { profile, engineName, movetimeMs, targetDepth, multiPv, at }
 
   このうち `engineBuild` と `evalHash` だけは、途中の解析をやり直すかの判定に使う（§8）。
   ブラウザ解析の受け口は全項目を書く（`runtime: 'wasm'`・`book: false` は server が固定）。手元 worker の報告も同じ項目を
-  受けるが、worker はまだ送っていない（送らなければ項目なしで保存される）
-  - 2026-10-16 決定（未実装）: 手元 worker の評価関数を つようら王11mini に替えるのに合わせ、worker も `evalHash`（`nn.bin` の sha256）と
+  受ける（送らなければ項目なしで保存される）
+  - 2026-10-16 決定（実装済み・本番は未反映）: 手元 worker の評価関数を つようら王11mini に替えるのに合わせ、worker も `evalHash`（`nn.bin` の sha256）と
     `fvScale` を送る（[05](./05-analysis.md) §1.2）。ブラウザの `evalHash` も `nn.bin` の sha256 で、`progress.bin` は来歴に載せない（[14](./14-multi-user.md) §5.5）
 - 🔒 **書き込みのたびに、どの局面からも指されなくなった run を消して添字を詰める。** 再送を繰り返しても `runs` の件数は局面数を超えない（ブラウザから届く submit で行を際限なく大きくさせない。[14](./14-multi-user.md) §6.2）
 - 🔒 **CHECK で形を守る**（配列であること）。中身の検査は submit の zod で行う（[14](./14-multi-user.md) §6.2 の上限もここで掛ける）

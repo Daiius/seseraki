@@ -12,6 +12,32 @@ function optionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
 }
 
+/**
+ * `ENGINE_FV_SCALE`（任意・正の整数。prd/05 §1.3）。未設定・空ならエンジンの既定に任せる（dev の MATERIAL など）。
+ * 🔴 誤った値は起動時に落とす——黙って既定に戻すと、評価値の尺度が変わったまま解析が溜まる。
+ */
+export function parseFvScale(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`ENGINE_FV_SCALE must be a positive integer: ${raw}`);
+  }
+  return value;
+}
+
+/**
+ * `ENGINE_EVAL_SHA256`（任意。評価関数 `nn.bin` の sha256・小文字 16 進 64 桁）。来歴の `evalHash` に載せる
+ * （prd/05 §1.2・prd/14 §5.9）。本番イメージが照合した値を渡す。未設定・空なら送らない。
+ */
+export function parseEvalSha256(raw: string | undefined): string | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = raw.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error(`ENGINE_EVAL_SHA256 must be a sha256 hex digest: ${raw}`);
+  }
+  return value;
+}
+
 export function loadConfig() {
   const enginePath = requireEnv("ENGINE_PATH");
 
@@ -51,6 +77,9 @@ export function loadConfig() {
     engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
     engineHash: Number(optionalEnv("ENGINE_HASH", "128")),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,
+    // 評価関数の尺度と識別（prd/05 §1.2・§1.3）。本番イメージ（Dockerfile.prod）が渡す
+    engineFvScale: parseFvScale(process.env.ENGINE_FV_SCALE),
+    engineEvalSha256: parseEvalSha256(process.env.ENGINE_EVAL_SHA256),
     engineBookDir: process.env.ENGINE_BOOK_DIR,
     serverUrl: optionalEnv("SERVER_URL", "http://localhost:4000"),
     pollIntervalMs: Number(optionalEnv("POLL_INTERVAL_MS", "10000")),
@@ -85,4 +114,22 @@ export function profileSettings(
     };
   }
   return { movetime: config.engineMovetime, depth: config.engineDepth };
+}
+
+/**
+ * 報告の来歴（`runs`）に添える評価関数の項目（prd/14 §5.9・prd/16 §3.1）。
+ * 設定されているものだけを載せる（未設定の worker は今までどおり項目なしで送る）。
+ * 🔒 手元 worker の経路では server はこれを上書き・再開の条件に使わない（prd/05 §1.1d）。
+ */
+export function evalProvenance(
+  config: Pick<Config, "engineFvScale" | "engineEvalSha256">,
+): { evalHash?: string; fvScale?: number } {
+  return {
+    ...(config.engineEvalSha256 !== undefined
+      ? { evalHash: config.engineEvalSha256 }
+      : {}),
+    ...(config.engineFvScale !== undefined
+      ? { fvScale: config.engineFvScale }
+      : {}),
+  };
 }

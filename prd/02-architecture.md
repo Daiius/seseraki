@@ -115,7 +115,7 @@
   - server: esbuild でバンドル → distroless で実行（コンテナレジストリへ発行。レジストリ/namespace の具体は `.claude-personal/`）。
   - worker: `packages/worker/Dockerfile.prod` で本番ホスト上でビルド。やねうら王 NNUE + 評価関数 +
     定跡を同梱し、esbuild バンドルで実行（[05](./05-analysis.md) §エンジン構成）。
-    - 2026-10-16 決定（未実装）: 評価関数を水匠5 から **つようら王11mini**（SFNN・`nn.bin` + `progress.bin`）に替え、
+    - 2026-10-16 決定（実装済み・本番は未反映）: 評価関数を水匠5 から **つようら王11mini**（SFNN・`nn.bin` + `progress.bin`）に替え、
       上流のコミットを `packages/engine-wasm/UPSTREAM` と同じものに固定し、配布物を sha256 で照合する（[05](./05-analysis.md) §1.2）。
 - **web**: Vite の静的ビルド（`index.html` + ハッシュ付きの `assets/*`）を配信ディレクトリへ置く
   （`pnpm deploy:web`・`packages/deploy-static`。接続先は `.env.deploy`、既定 dry-run / `--apply` で書き込む）。

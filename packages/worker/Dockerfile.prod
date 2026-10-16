@@ -1,16 +1,28 @@
+# 評価関数 つようら王11mini の nn.bin の sha256（prd/05 §1.2）。engine-builder が配布物から取り出した nn.bin を
+# これで照合し、最終イメージは同じ値を ENGINE_EVAL_SHA256 として worker に渡す（来歴の evalHash）。
+# 照合と来歴の値が食い違わないよう、1 か所（ここ）で持つ。
+ARG EVAL_NN_SHA256=45323c65135da65d6c2c364eea93a5af6a285c27ebfb07eab4afbe737ef74508
+
 # ========================================
 # Stage 1: やねうら王エンジン + 評価関数 + 定跡
 # ========================================
 FROM debian:bookworm-slim AS engine-builder
 
+# python3: 上流の Makefile が SFNN の arch ヘッダを nnue_arch_gen.py で生成する（標準ライブラリだけで動く）。
+# lld: 上流の Makefile は clang++ のとき -fuse-ld=lld でリンクする。
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential clang lld git ca-certificates p7zip-full wget \
+    build-essential clang lld git ca-certificates p7zip-full wget python3 \
     && rm -rf /var/lib/apt/lists/*
 
-ARG EDITION=YANEURAOU_ENGINE_NNUE
+# 上流のやねうら王のコミット。🔒 packages/engine-wasm/UPSTREAM の YANEURAOU_SHA と同じ値にする
+# （ブラウザ解析と同じソース。prd/05 §1.2）。最新を追うと再ビルドのたびにエンジンが変わる。
+ARG YANEURAOU_SHA=c1b80eaa09fe13d5f12b1599d1ae4d53c224de30
+# つようら王11mini の arch（SFNN_ka2_4096_8_64_progress8）。arch はコンパイル時に固定なので、
+# 評価関数を替えるときはここも合わせる。⚠ 改定前は YANEURAOU_ENGINE_NNUE（HalfKP・水匠5）。
+ARG EDITION=YANEURAOU_ENGINE_SFNN_ka2_4096_8_64_progress8
 # ⚠ **既定の OTHER は SIMD 最適化が一切効かない**。どの CPU でも動く代わりに NNUE の評価が
 # 数倍遅く、同じ思考時間で読める深さがはっきり落ちる（実測: OTHER 3.5M nps / depth 14 に対し、
-# Zen4 機で ZEN3AVX512VNNI は 10.2M nps / depth 16 ＝ **約 2.9 倍**）。
+# Zen4 機で ZEN3AVX512VNNI は 10.2M nps / depth 16 ＝ **約 2.9 倍**。水匠5 での値）。
 #
 # 稼働ホストが決まっているなら、その命令セットに合わせた値を**ビルド時に注入する**:
 #
@@ -25,15 +37,44 @@ ARG EDITION=YANEURAOU_ENGINE_NNUE
 # 移送先が変わるときは `lscpu` で対応を確認すること。
 ARG TARGET_CPU=OTHER
 
-RUN git clone --depth 1 https://github.com/yaneurao/YaneuraOu.git /yaneuraou
+# 特定のコミットを depth 1 で取る（clone --depth 1 は既定ブランチの先頭しか取れない）
+RUN git init -q /yaneuraou && \
+    git -C /yaneuraou fetch -q --depth 1 https://github.com/yaneurao/YaneuraOu.git "${YANEURAOU_SHA}" && \
+    git -C /yaneuraou checkout -q FETCH_HEAD && \
+    test "$(git -C /yaneuraou rev-parse HEAD)" = "${YANEURAOU_SHA}"
 WORKDIR /yaneuraou/source
+# Makefile の PYTHON の既定は `python`（bookworm-slim には無い）なので python3 を渡す
 RUN make clean YANEURAOU_EDITION=${EDITION} && \
-    make -j$(nproc) tournament COMPILER=clang++ YANEURAOU_EDITION=${EDITION} TARGET_CPU=${TARGET_CPU}
+    make -j$(nproc) tournament COMPILER=clang++ PYTHON=python3 YANEURAOU_EDITION=${EDITION} TARGET_CPU=${TARGET_CPU}
 
-# 水匠5 評価関数ファイル
-RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/suisho5/Suisho5.7z -O /tmp/suisho5.7z && \
-    7z x /tmp/suisho5.7z -o/eval && \
-    rm /tmp/suisho5.7z
+# 評価関数 つようら王11mini（MIT。prd/05 §1.2）。配布物・nn.bin・progress.bin をそれぞれ sha256 で照合し、
+# 合わなければビルドを落とす。EvalDir に置くのは nn.bin と progress.bin だけ。
+# 🔴 eval_options.txt は置かない（isready で FV_SCALE が作者の推奨の 24 に上書きされる。prd/14 §5.5）。
+ARG EVAL_URL=https://storage.yaneu.com/yaneuraou/TuyouraOu11mini-SFNN_ka2_4096_8_64_progress8-epoch0010-20261003.7z
+ARG EVAL_ARCHIVE_SHA256=bd5cd719e000ee3e8c4f158ecd7b56913655569fa73911bd95209f55bbb772ea
+ARG EVAL_PROGRESS_SHA256=a2d18f0564639c945b5d6469e9b437cd64a526ad4fbcef02ab1d8f547d08e5f1
+ARG EVAL_NN_SHA256
+RUN set -eu && \
+    test -n "${EVAL_NN_SHA256}" && \
+    wget -q "${EVAL_URL}" -O /tmp/eval.7z && \
+    echo "${EVAL_ARCHIVE_SHA256}  /tmp/eval.7z" | sha256sum -c - && \
+    mkdir -p /eval /tmp/eval-x /eval-license && \
+    7z x -bd -y /tmp/eval.7z -o/tmp/eval-x >/dev/null && \
+    for f in nn.bin progress.bin; do \
+      n=$(find /tmp/eval-x -type f -name "$f" | wc -l); \
+      if [ "$n" -ne 1 ]; then echo "配布物に $f が 1 つではない（$n 個）" >&2; exit 1; fi; \
+      cp "$(find /tmp/eval-x -type f -name "$f")" "/eval/$f"; \
+    done && \
+    echo "${EVAL_NN_SHA256}  /eval/nn.bin" | sha256sum -c - && \
+    echo "${EVAL_PROGRESS_SHA256}  /eval/progress.bin" | sha256sum -c - && \
+    find /tmp/eval-x -type f -name tag.json -exec cp {} /eval-license/ \; && \
+    printf '%s\n' \
+      'つようら王11mini の評価関数（nn.bin・progress.bin）' \
+      '作者: やねうら王プロジェクト（配布物の tag.json の author）' \
+      'ライセンス: MIT License（配布元の告知 https://yaneurao.fanbox.cc/posts/12761272 ）' \
+      "配布物: ${EVAL_URL}" \
+      > /eval-license/NOTICE.txt && \
+    rm -rf /tmp/eval.7z /tmp/eval-x
 
 # ペタブック定跡ファイル
 RUN wget -q https://github.com/yaneurao/YaneuraOu/releases/download/new_petabook233/new_petabook_20250505c.7z -O /tmp/petabook.7z && \
@@ -73,11 +114,18 @@ WORKDIR /app
 
 COPY --from=engine-builder /yaneuraou/source/YaneuraOu-by-gcc /usr/local/bin/yaneuraou
 COPY --from=engine-builder /eval /usr/local/share/yaneuraou/eval
+COPY --from=engine-builder /eval-license /usr/local/share/yaneuraou/eval-license
 COPY --from=engine-builder /book /usr/local/share/yaneuraou/book
 COPY --from=node-builder /workspace/packages/worker/dist/worker.js ./worker.js
 
+# ENGINE_FV_SCALE: 🔴 16 を worker から明示的に setoption する（作者の推奨 24 では評価値の尺度が縮み、
+# 悪手判定・出題の閾値と合わなくなる。エンジンの既定値には頼らない。prd/05 §1.2・§1.3）。
+# ENGINE_EVAL_SHA256: engine-builder で照合した nn.bin の sha256（来歴の evalHash。ファイル冒頭の ARG）。
+ARG EVAL_NN_SHA256
 ENV ENGINE_PATH=/usr/local/bin/yaneuraou \
     ENGINE_EVAL_DIR=/usr/local/share/yaneuraou/eval \
-    ENGINE_BOOK_DIR=/usr/local/share/yaneuraou/book
+    ENGINE_BOOK_DIR=/usr/local/share/yaneuraou/book \
+    ENGINE_FV_SCALE=16 \
+    ENGINE_EVAL_SHA256=${EVAL_NN_SHA256}
 
 CMD ["node", "worker.js"]

@@ -34,5 +34,6 @@ export const MENU_ITEM = 'min-h-11 gap-3';
  * メニューの器（`<ul>`）。項目間は 4px（`gap-1`）。
  * Material の 8px はメニュー内では隙間が目立ちすぎ、44px の高さが既に十分な
  * 当たり判定を与えているので、区切りが分かる最小限に留める。
+ * 背景はページ本体（base-100）と同じ色にしない——影だけでは境目が見えず、ダークでは同化する。
  */
-export const MENU_LIST = 'dropdown-content menu bg-base-100 rounded-box z-20 mt-1 gap-1 p-2 shadow';
+export const MENU_LIST = 'dropdown-content menu bg-base-200 rounded-box z-20 mt-1 gap-1 p-2 shadow-lg';

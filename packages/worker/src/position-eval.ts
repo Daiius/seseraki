@@ -162,7 +162,8 @@ export async function evaluateJob(
     const result = await withMultiPv(engine, multiPv, () =>
       engine.analyze(position, goCommand),
     );
-    return { candidates: extractMultiPvResults(result.infoLines), fallback: false };
+    // 定跡の列挙が MultiPV を超えて候補を出すので、要求した本数に切り詰める（issue #67）
+    return { candidates: extractMultiPvResults(result.infoLines, { multiPv }), fallback: false };
   }
 
   // 🔴 名指しの間だけ GenerateAllLegalMoves を有効にする（やねうら王は既定で歩・角・飛の不成を合法手に含めず、

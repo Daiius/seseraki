@@ -2,12 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeKifu,
   ChunkSubmitError,
+  extractMultiPvResults,
   isPermanentSubmitStatus,
   leadingContiguousCandidates,
   type UsiAnalysisEngine,
   type UsiCandidate,
   type UsiMoveAnalysis,
 } from "./kifu-analysis";
+import { parseInfoLine } from "./parser";
 import type { UsiInfo, UsiSearchResult } from "./types";
 
 /** 相掛かり序盤のサンプル（10 手 = 11 局面） */
@@ -631,5 +633,115 @@ describe("isPermanentSubmitStatus", () => {
     for (const status of [200, 201, 500, 502, 503]) {
       expect(isPermanentSubmitStatus(status)).toBe(false);
     }
+  });
+});
+
+/**
+ * 定跡ヒット局面・終局局面の出力（issue #67。本番と同じオプションでやねうら王を直接叩いて観察した形）。
+ * 定跡にヒットすると、MultiPV の設定によらず定跡の候補を `multipv 1..N` で列挙し、最後に採用手の
+ * 確定行（depth 0・pv は指し手＋ponder の 2 手固定）を出す。
+ */
+describe("定跡ヒット局面・終局局面の候補手（issue #67）", () => {
+  const lines = (text: string): UsiInfo[] =>
+    text.trim().split("\n").map((l) => parseInfoLine(l.trim()));
+
+  /** 初期局面（BookMoves=999）: 定跡の列挙 → 採用手の確定行 */
+  const BOOK_HIT = lines(`
+    info depth 32 multipv 1 score cp 50 nodes 0 pv 2g2f 8c8d 2f2e 8d8e 6i7h 4a3b 2e2d 2c2d
+    info depth 30 multipv 2 score cp 44 nodes 0 pv 7g7f 8c8d 2g2f 4a3b 6i7h 8d8e 8h7g 3c3d
+    info depth 36 multipv 3 score cp 35 nodes 0 pv 6i7h 8c8d 2g2f 8d8e 2f2e 4a3b 2e2d 2c2d
+    info depth 28 multipv 4 score cp 20 nodes 0 pv 5g5f 8c8d 2h5h 4a3b 6i7h 8d8e 8h7g 3c3d
+    info depth 25 multipv 5 score cp 10 nodes 0 pv 3i4h 8c8d 2g2f 4a3b 6i7h 8d8e 8h7g 3c3d
+    info depth 0 multipv 1 score cp 50 nodes 0 pv 2g2f 8c8d
+  `);
+
+  /** 4 手目（定跡を採用しなかった局面）: 列挙の残骸（depth 0・pv 1 手）の後に通常の探索 */
+  const BOOK_RESIDUE = lines(`
+    info depth 0 multipv 1 score cp 30 nodes 0 pv 2g2f
+    info depth 0 multipv 2 score cp 25 nodes 0 pv 6i7h
+    info depth 0 multipv 3 score cp 20 nodes 0 pv 2h6h
+    info depth 0 multipv 4 score cp 15 nodes 0 pv 5g5f
+    info depth 0 multipv 5 score cp 10 nodes 0 pv 4i5h
+    info depth 18 seldepth 24 multipv 1 score cp 41 nodes 912345 nps 1500000 time 600 pv 2g2f 8d8e 8h7g 3c3d 7i6h
+    info depth 18 seldepth 22 multipv 2 score cp 33 nodes 912345 nps 1500000 time 600 pv 6i7h 8d8e 8h7g 3c3d 2g2f
+    info depth 18 seldepth 21 multipv 3 score cp 12 nodes 912345 nps 1500000 time 600 pv 2h6h 8d8e 8h7g 3c3d 7i6h
+  `);
+
+  /** 詰んでいる局面 */
+  const MATED = lines(`
+    info depth 0 score mate -1 pv resign
+  `);
+
+  function engineOf(infoLines: UsiInfo[], bestmove: string): UsiAnalysisEngine {
+    return {
+      setOption: () => {},
+      analyze: async () => ({
+        bestmove: { move: bestmove },
+        infoLines,
+        lastInfo: infoLines.at(-1) ?? {},
+      }),
+    };
+  }
+
+  async function analyzeOne(infoLines: UsiInfo[], bestmove: string, multiPv = 3) {
+    const chunks: UsiMoveAnalysis[][] = [];
+    const info: string[] = [];
+    await analyzeKifu(engineOf(infoLines, bestmove), [], {
+      multiPv,
+      log: { info: (m) => info.push(m), error: () => {} },
+      onChunk: async (analyses) => {
+        chunks.push(analyses);
+      },
+    });
+    return { candidates: chunks.flat()[0].candidates, log: info.at(-1) ?? "" };
+  }
+
+  it("定跡の列挙は MultiPV の本数に切り詰め、確定行で rank 1 の読み筋を上書きしない", async () => {
+    const { candidates, log } = await analyzeOne(BOOK_HIT, "2g2f");
+
+    expect(candidates.map((c) => [c.rank, c.move, c.pv.length])).toEqual([
+      [1, "2g2f", 8],
+      [2, "7g7f", 8],
+      [3, "6i7h", 8],
+    ]);
+    expect(candidates[0].depth).toBe(32);
+    // 定跡ヒットはログに出る（候補手の depth ではなく生の確定行で判定する）
+    expect(log).toMatch(/ BOOK 3candidates$/);
+  });
+
+  it("定跡を採用しなかった局面では、列挙の残骸を候補手に残さない", async () => {
+    const { candidates, log } = await analyzeOne(BOOK_RESIDUE, "2g2f");
+
+    expect(candidates.map((c) => [c.rank, c.move, c.depth])).toEqual([
+      [1, "2g2f", 18],
+      [2, "6i7h", 18],
+      [3, "2h6h", 18],
+    ]);
+    expect(log).toMatch(/ d18 3candidates$/);
+  });
+
+  it("MultiPV 1 なら 1 本に切り詰める（ブラウザ解析の構成）", async () => {
+    const { candidates } = await analyzeOne(BOOK_HIT, "2g2f", 1);
+    expect(candidates.map((c) => [c.rank, c.move, c.pv.length])).toEqual([[1, "2g2f", 8]]);
+  });
+
+  it("確定行しか無ければそれを採る", async () => {
+    const { candidates, log } = await analyzeOne(lines("info depth 0 multipv 1 score cp 50 nodes 0 pv 2g2f 8c8d"), "2g2f");
+    expect(candidates.map((c) => [c.rank, c.move, c.pv])).toEqual([[1, "2g2f", ["2g2f", "8c8d"]]]);
+    expect(log).toMatch(/ BOOK 1candidates$/);
+  });
+
+  it("投了（pv resign）は候補手にしない。終局局面は候補なしで送り、定跡とも出さない", async () => {
+    const { candidates, log } = await analyzeOne(MATED, "resign");
+    expect(candidates).toEqual([]);
+    expect(log).toMatch(/ d0 0candidates$/);
+  });
+
+  it("extractMultiPvResults: multiPv を指定しなければ切り詰めない（名指し評価は手で探す）", () => {
+    expect(extractMultiPvResults(BOOK_HIT)).toHaveLength(5);
+    expect(extractMultiPvResults(BOOK_HIT, { multiPv: 2 }).map((c) => c.move)).toEqual([
+      "2g2f",
+      "7g7f",
+    ]);
   });
 });

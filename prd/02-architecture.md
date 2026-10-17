@@ -228,3 +228,28 @@
   テストは移動先に付いていく前提で書く（対象を import する以外の依存を持たせない）。
   board 抽出では実際にこれが効き、テスト 19 件が無修正で移った（環境非依存の制約に触れた
   `structuredClone` の 1 行だけ置き換えた）。`shared` も web と同じく **node 環境の最小構成**で回す。
+
+## 8. ホーム画面に追加して使う（PWA）
+
+iOS の「ホーム画面に追加」で、ブラウザの枠の無い standalone の画面として開けるようにしている（2026-10-18）。
+
+- 🔒 **service worker は置かない。** オフライン対応はしない（manifest とアイコン・`<meta>` だけ）。
+  ブラウザ解析の配信物（[14](./14-multi-user.md) §5.5）のキャッシュも今の HTTP キャッシュのまま。
+- **manifest**: `packages/web/public/manifest.webmanifest`（`display: standalone`・`start_url` / `scope` は `/`）。
+  `theme_color` は navbar（`bg-base-200`）の色。daisyUI は light / dark を `prefers-color-scheme` で切り替えるので、
+  `index.html` の `theme-color` は media 付きで 2 つ置く（manifest は light の値）。
+- **ステータスバーは `default`**（本文はステータスバーの下から始まる）。`black-translucent` は文字が白に固定され、
+  light の navbar の上で読めなくなる。替えるなら、sticky の要素（盤のまとまり・棋譜詳細の通知）の `top` にも
+  `env(safe-area-inset-top)` を足す。
+- **safe-area**: `viewport-fit=cover` にし、navbar と `main`（`__root.tsx`）の padding に `env(safe-area-inset-*)` を足す
+  （横向きのノッチ・下端のホームインジケータ）。通常のブラウザでは inset が 0 なので見た目は変わらない。
+  `position: fixed` の要素は無い（通知も `sticky`）。固定の要素を足したら inset を考える。
+- **アイコン**: 原本は SVG（駒の五角形に「細」。文字はロゴ `Logo.tsx` のグリフ輪郭を流用し、フォントを読まない）。
+  `pnpm --filter web gen:icons` が `packages/web/icons/*.svg` と `public/favicon.svg` を書き、`CHROME` に手元の Chrome
+  （headless）を渡すと PNG（apple-touch-icon 180・192・512・maskable 512・favicon 32）も書き出す。
+  リポジトリに依存は足さず、成果物の PNG をコミットする。maskable は駒を安全域（直径 80% の円）の内側に収める。
+- **配信**: `public/` の中身はビルドで `dist/` のトップレベルに出る。`deploy:web` はトップレベルを毎回送る（§5）。
+  manifest・アイコンは同一オリジンなので COEP（`require-corp`）に掛からない。manifest の Content-Type
+  （`application/manifest+json`）は静的配信の側で付ける。
+- ⚠ **standalone は Safari と cookie を共有しない。** ログイン（Google。リダイレクト型）は standalone の中でやり直しになる。
+  standalone にはブラウザの戻るボタンも無い——画面の中に戻る導線を置く。

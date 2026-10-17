@@ -52,7 +52,7 @@
 
 | パッケージ | 役割 |
 |---|---|
-| [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind）。ブラウザ解析の実行（`src/lib/browserAnalysis`）と、エンジンの配信物を配る Vite のプラグイン（`engine-plugin`）もここ |
+| [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind）。ホーム画面に追加して standalone で使える（manifest・アイコン。service worker なし。[prd/02](./prd/02-architecture.md) §8）。ブラウザ解析の実行（`src/lib/browserAnalysis`）と、エンジンの配信物を配る Vite のプラグイン（`engine-plugin`）もここ |
 | [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |

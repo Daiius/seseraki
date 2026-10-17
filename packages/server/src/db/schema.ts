@@ -422,7 +422,7 @@ export const kifus = table(
   (table) => [
     ownerPolicy(table.ownerId),
     index('kifus_analysis_completed_at_idx').on(table.analysisCompletedAt),
-    // 動画解析の一覧は source で絞ってから並べる（prd/10 §6.1）
+    // source で絞る索引。もとは動画解析の一覧のため（一覧は撤去した。prd/10 §6.1。索引は残す）
     index('kifus_source_idx').on(table.source),
     // 🔒 ユーザーを消しても棋譜は道連れにしない（CASCADE にしない。prd/14 §3.1）。
     // ユーザー行を 1 度誤って消しただけで全データが道連れになるため。削除は退会のバッチが明示的に行う

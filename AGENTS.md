@@ -23,7 +23,7 @@
 | [prd/07-auth-and-privacy.md](./prd/07-auth-and-privacy.md) | 認証 / API_KEY / 公開配置 |
 | [prd/08-roadmap.md](./prd/08-roadmap.md) | フェーズ分け / 未実装・計画中 / 確定事項 |
 | [prd/09-analytics.md](./prd/09-analytics.md) | 分析ページ（戦型別成績 / 取りこぼし / 一覧へのドリルダウン） |
-| [prd/10-video-analysis.md](./prd/10-video-analysis.md) | 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索） |
+| [prd/10-video-analysis.md](./prd/10-video-analysis.md) | 動画解析（録画から復元した棋譜の保存 / 局面索引 / ツリー検索）。所有者専用——取り込みは API_KEY の口だけ・web の一覧画面と一覧口は撤去済み（2026-10-17）。局面索引・局面検索は自分の対局にも使う |
 | [prd/11-users.md](./prd/11-users.md) | ユーザー（自分）を server 側に持つ / 名前候補と有効期間 / 主体側の導出 |
 | [prd/12-position-lab.md](./prd/12-position-lab.md) | 検討モードと局面評価（検討盤のフル編集 / 局面・名指し評価 / LLM 向け MCP） |
 | [prd/13-drills.md](./prd/13-drills.md) | 出題（次の一手・実戦詰将棋。抽出条件 / 採点 / 解答履歴） |
@@ -56,6 +56,7 @@
 | [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
+| [`packages/kifu-vision`](./packages/kifu-vision) | 録画から棋譜を復元して取り込む手元の CLI（実験。取り込みは server の API_KEY の口へ送る。[prd/10](./prd/10-video-analysis.md)） |
 | [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
 | [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド。評価関数の arch ごとに 1 本）と評価関数（つようら王11mini / micro・MIT。`nn.bin` + `progress.bin`）を配信物の形に揃える。**このパッケージだけ GPL-3.0**（評価関数は MIT・許諾文を同梱）・上流の SHA と配布物の sha256 は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web は `packages/web/engine-plugin` が `/engine/*` として配り、Worker から読み込む） |
 

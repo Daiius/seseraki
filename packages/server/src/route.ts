@@ -98,7 +98,6 @@ import {
   deleteKifu,
   getKifuDetail,
   listKifus,
-  listVideoKifus,
   reanalyzeKifu,
   statsTactics,
   updateKifuMemo,
@@ -823,11 +822,6 @@ const route = app
       const resolved = await answerWithEngine({ ...(await engineInput()), drill, state, move, line, scoring }, reveal);
       return c.json(resolved.body, resolved.status);
     },
-  )
-  // --- 動画解析（prd/10）---
-  // 一覧は動画ごと → 局ごと（所有者の棋譜だけ）。取り込み（API_KEY）は `worker-routes.ts`
-  .get('/video-analysis/kifus', sessionRequired, async (c) =>
-    c.json(await listVideoKifus(c.get('tx'), c.get('userId'))),
   )
   .post(
     '/kifus/:no/reanalyze',

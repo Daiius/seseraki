@@ -10,10 +10,10 @@
  *
  * worker・動画解析の取り込み（API_KEY の経路）は全員ぶんを扱うので、ここではなく `worker-routes.ts`。
  */
-import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import { attributionOf, type TacticLabel } from 'shared';
 import type { Tx } from './db/index.js';
-import { kifuAnalyses, kifus, kifuTactics, videoKifuSources } from './db/schema.js';
+import { kifuAnalyses, kifus, kifuTactics } from './db/schema.js';
 import { ANALYSIS_STATE_RESET } from './analysis-submit.js';
 import { drillConfigFromEnv, syncDrills } from './drills.js';
 import { decodeAll } from './kifu-analysis-detail.js';
@@ -399,50 +399,4 @@ export async function updateKifuMemo(
     .where(byNo(ownerId, no))
     .returning({ id: kifus.id });
   return updated.length > 0;
-}
-
-/**
- * 動画解析の棋譜の一覧（prd/10）。動画ごと → 局ごと。件数が少ない（1 動画 2〜3 局）ため
- * ページングは持たない。所有者の棋譜だけ
- */
-export async function listVideoKifus(tx: Tx, ownerId: string) {
-  const rows = await tx
-    .select({
-      // 内部の主キーは戦型を引くためだけに読む（応答には載せない。prd/14 §4.4）
-      kifuId: kifus.id,
-      kifuNo: kifus.displayNo,
-      title: kifus.title,
-      videoId: videoKifuSources.videoId,
-      gameIndex: videoKifuSources.gameIndex,
-      startedAtSec: videoKifuSources.startedAtSec,
-      endedAtSec: videoKifuSources.endedAtSec,
-      bottomIsSente: videoKifuSources.bottomIsSente,
-      extractorRev: videoKifuSources.extractorRev,
-      updatedAt: videoKifuSources.updatedAt,
-      // 一覧に要るのは手数だけ。指し手列そのものを載せると 1 局 100 手ぶんが無駄に流れる
-      moveCount: sql<number>`jsonb_array_length(${kifus.usiMoves})`,
-      analyzedAt: kifus.analysisCompletedAt,
-      analysisError: kifus.analysisError,
-    })
-    .from(videoKifuSources)
-    .innerJoin(kifus, eq(kifus.id, videoKifuSources.kifuId))
-    .where(and(eq(videoKifuSources.ownerId, ownerId), eq(kifus.ownerId, ownerId)))
-    .orderBy(asc(videoKifuSources.videoId), asc(videoKifuSources.gameIndex));
-
-  const tactics = await tacticsByKifu(
-    tx,
-    ownerId,
-    rows.map((r) => r.kifuId),
-  );
-
-  return {
-    games: rows.map(({ kifuId, analyzedAt, analysisError, ...r }) => ({
-      ...r,
-      moveCount: Number(r.moveCount ?? 0),
-      analyzed: analyzedAt !== null,
-      failed: analysisError !== null,
-      analysisError,
-      tactics: tactics.get(kifuId) ?? [],
-    })),
-  };
 }

@@ -16,7 +16,6 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as PositionsRouteImport } from './routes/positions'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as StatsRouteImport } from './routes/stats'
-import { Route as VideoAnalysisRouteImport } from './routes/video-analysis'
 import { Route as KifusIdRouteImport } from './routes/kifus/$id'
 import { Route as KifusNewRouteImport } from './routes/kifus/new'
 
@@ -55,11 +54,6 @@ const StatsRoute = StatsRouteImport.update({
   path: '/stats',
   getParentRoute: () => rootRouteImport,
 } as any)
-const VideoAnalysisRoute = VideoAnalysisRouteImport.update({
-  id: '/video-analysis',
-  path: '/video-analysis',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const KifusIdRoute = KifusIdRouteImport.update({
   id: '/kifus/$id',
   path: '/kifus/$id',
@@ -79,7 +73,6 @@ export interface FileRoutesByFullPath {
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
-  '/video-analysis': typeof VideoAnalysisRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -91,7 +84,6 @@ export interface FileRoutesByTo {
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
-  '/video-analysis': typeof VideoAnalysisRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -104,7 +96,6 @@ export interface FileRoutesById {
   '/positions': typeof PositionsRoute
   '/settings': typeof SettingsRoute
   '/stats': typeof StatsRoute
-  '/video-analysis': typeof VideoAnalysisRoute
   '/kifus/$id': typeof KifusIdRoute
   '/kifus/new': typeof KifusNewRoute
 }
@@ -118,7 +109,6 @@ export interface FileRouteTypes {
     | '/positions'
     | '/settings'
     | '/stats'
-    | '/video-analysis'
     | '/kifus/$id'
     | '/kifus/new'
   fileRoutesByTo: FileRoutesByTo
@@ -130,7 +120,6 @@ export interface FileRouteTypes {
     | '/positions'
     | '/settings'
     | '/stats'
-    | '/video-analysis'
     | '/kifus/$id'
     | '/kifus/new'
   id:
@@ -142,7 +131,6 @@ export interface FileRouteTypes {
     | '/positions'
     | '/settings'
     | '/stats'
-    | '/video-analysis'
     | '/kifus/$id'
     | '/kifus/new'
   fileRoutesById: FileRoutesById
@@ -155,7 +143,6 @@ export interface RootRouteChildren {
   PositionsRoute: typeof PositionsRoute
   SettingsRoute: typeof SettingsRoute
   StatsRoute: typeof StatsRoute
-  VideoAnalysisRoute: typeof VideoAnalysisRoute
   KifusIdRoute: typeof KifusIdRoute
   KifusNewRoute: typeof KifusNewRoute
 }
@@ -211,13 +198,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StatsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/video-analysis': {
-      id: '/video-analysis'
-      path: '/video-analysis'
-      fullPath: '/video-analysis'
-      preLoaderRoute: typeof VideoAnalysisRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/kifus/$id': {
       id: '/kifus/$id'
       path: '/kifus/$id'
@@ -243,7 +223,6 @@ const rootRouteChildren: RootRouteChildren = {
   PositionsRoute: PositionsRoute,
   SettingsRoute: SettingsRoute,
   StatsRoute: StatsRoute,
-  VideoAnalysisRoute: VideoAnalysisRoute,
   KifusIdRoute: KifusIdRoute,
   KifusNewRoute: KifusNewRoute,
 }

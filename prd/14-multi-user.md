@@ -27,7 +27,7 @@
 
 - 課金・プラン管理
 - ユーザー間の共有（棋譜・局面検索の横断）。**既定は所有者に閉じる**
-- 動画解析の他ユーザーへの可視性（[10](./10-video-analysis.md) §8.3 の保留のまま）
+- 動画解析は**所有者専用。一般ユーザーには出さない**（取り込みは API_KEY の口だけ・web の画面は撤去済み。[10](./10-video-analysis.md) §6.1・§8.3。2026-10-17 確定）
 - 一般ユーザー向けの出題（§8）と評価関数の持ち込み（§5.5）は後の段階
 
 ## 2. 現状の制約（見積もり）
@@ -130,8 +130,9 @@
 | `kifu_positions` | 索引を `(ownerId, 局面ハッシュ)`・`(ownerId, moveNumber)` にする（§6.3） | join 後に絞るのでは、初期局面で**全ユーザーぶん読んでから捨てる** |
 | `user_aliases.name` | UNIQUE を **`(userId, name)`** に（[11](./11-users.md) §2.1 の `name` 単独 UNIQUE を改める） | 主体側の判定は所有者の名前候補と所有者の棋譜だけで完結する（`refreshSubjectSide`）。全体 UNIQUE は**他人による名前の先取り**を生むだけ。名前の所有の証明は作らない |
 
-🔒 **動画解析の取り込みは所有者専用のまま**（`POST /video-analysis/kifus` は API_KEY 認証で、手元の走査ツールから送る）。
-一般ユーザーには開かないので、`video_kifu_sources` の UNIQUE `(videoId, gameIndex)` は変えない。
+🔒 **動画解析は所有者専用。一般ユーザーには出さない**（2026-10-17 確定。[10](./10-video-analysis.md) §8.3）。
+取り込みは API_KEY の口（`POST /video-analysis/kifus`。手元の走査ツールから送る）だけで、web の画面（`/video-analysis`）と
+一覧口は撤去済み（[10](./10-video-analysis.md) §6.1）。一般ユーザーには開かないので、`video_kifu_sources` の UNIQUE `(videoId, gameIndex)` は変えない。
 
 ### 4.2 プロセス内の状態
 
@@ -172,7 +173,7 @@ CSA 直接貼り付けの再利用に備えて残す。
     埋め戻しの間は `updated_at` のトリガーを止める
 - 🔒 **内部の主キーは外に出さない。** URL だけでなく **API のパスと応答も番号で扱い**、応答に内部 ID が含まれないことをテストで検査する。
   内部の主キーは FK・worker・ログで使う（worker の API は API_KEY の内部経路なので内部 ID のまま）。MCP からも番号で参照する。
-  **実装**: 棋譜は `/api/kifus/:no`、応答は一覧・詳細が `no`、他の応答（局面検索・動画解析の一覧・解析の進捗・出題）の棋譜の参照は `kifuNo`。
+  **実装**: 棋譜は `/api/kifus/:no`、応答は一覧・詳細が `no`、他の応答（局面検索・解析の進捗・出題）の棋譜の参照は `kifuNo`。
   検査は test:db の `display-no.db.test.ts`（ログインの経路の**全ルート**を叩き、応答に `id` / `kifuId` / `drillId` が無いことを見る。
   ルートを足したらそこにも足さないと落ちる）
   - **範囲外**: 名前候補の ID（`/users/me/aliases/:id`・`GET /users/me` の `aliases[].id`）——棋譜ではなく件数も少ないので、

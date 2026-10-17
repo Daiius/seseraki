@@ -731,10 +731,12 @@ describe("定跡ヒット局面・終局局面の候補手（issue #67）", () =
     expect(log).toMatch(/ BOOK 1candidates$/);
   });
 
-  it("投了（pv resign）は候補手にしない。終局局面は候補なしで送り、定跡とも出さない", async () => {
+  it("終局局面の投了（depth 0・pv resign）しか無ければそれを残し、定跡とは出さない", async () => {
     const { candidates, log } = await analyzeOne(MATED, "resign");
-    expect(candidates).toEqual([]);
-    expect(log).toMatch(/ d0 0candidates$/);
+    expect(candidates).toEqual([
+      { rank: 1, move: "resign", score: { type: "mate", value: -1 }, pv: ["resign"], depth: 0 },
+    ]);
+    expect(log).toMatch(/ d0 1candidates$/);
   });
 
   it("extractMultiPvResults: multiPv を指定しなければ切り詰めない（名指し評価は手で探す）", () => {

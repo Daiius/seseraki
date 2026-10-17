@@ -351,10 +351,9 @@ export async function analyzeKifu(
     }
     const elapsed = Date.now() - t0;
     // server の受理条件（rank が 1..n の連番。prd/16 §4.1）に合わせ、欠番以降は捨てる。
-    // 投了（pv が `resign`。詰んでいる局面で `info depth 0 score mate -1 pv resign` が出る）は
-    // 指し手ではないので保存しない——終局局面は候補なしになる（エンジンが info を返さない局面と同じ扱い）
+    // 🔒 終局局面の投了（`info depth 0 score mate -1 pv resign`）は残す——詰み筋の分類（`gameover`）が読む
     const candidates = leadingContiguousCandidates(
-      extractMultiPvResults(result.infoLines, { multiPv }).filter((c) => c.move !== RESIGN),
+      extractMultiPvResults(result.infoLines, { multiPv }),
     );
     const isBook = isBookHit(result);
     const hashfull = extractHashfull(result.infoLines);

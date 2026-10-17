@@ -43,3 +43,14 @@ Google Fonts から現行 TTF を取得してグリフ輪郭を抽出するた�
 10MB → 約 7KB（gzip 後 ~2.5KB）と十分軽量なため、パスのこれ以上の削減はしない。
 （整数化や em 縮小による削減も検証したが、効果は 1 割未満か、丸め由来の曲線退化で
 グリフが壊れるため見送った。）
+
+## gen-icons.mjs — ホーム画面・favicon のアイコン生成
+
+駒の五角形に「細」を載せたアイコン（[prd/02](../../../prd/02-architecture.md) §8）。文字は `Logo.tsx` のグリフ輪郭を流用する。
+
+```bash
+# SVG の原本（icons/*.svg・public/favicon.svg）だけ
+pnpm --filter web gen:icons
+# PNG（public/*.png）も。CHROME に手元の Chrome / Chromium / Playwright の headless shell を渡す
+CHROME=~/.cache/ms-playwright/chromium_headless_shell-<版>/chrome-headless-shell-linux64/chrome-headless-shell pnpm --filter web gen:icons
+```

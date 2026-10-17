@@ -2,8 +2,35 @@
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover: standalone（ホーム画面から開く）で画面の端まで使い、余白は safe-area の inset で取る（prd/02 §8） -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <title>細流棋</title>
+
+    <!-- PWA（service worker は置かない。prd/02 §8）。アイコンの原本と生成は scripts/gen-icons.mjs -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- navbar（bg-base-200）の色。daisyUI の light / dark は prefers-color-scheme で切り替わる -->
+    <meta
+      name="theme-color"
+      content="#f8f8f8"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#191e24"
+      media="(prefers-color-scheme: dark)"
+    />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="細流棋" />
+    <!-- default: 本文はステータスバーの下から始まる（black-translucent にすると文字が白固定になり、
+         light の navbar の上で時計が読めない） -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   </head>
   <body>
     <div id="root"></div>

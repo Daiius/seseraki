@@ -102,8 +102,11 @@ function RootComponent() {
       <BrowserAnalysisHost enabled={account?.analysisAssignee === 'browser'} />
       {!isLogin && (
         // ヘッダーのメニューはページ側のメニュー（kifus/$id のケバブ・z-20）より必ず上に出す。
-        // nav 自身に z-index を与えて stacking context を作り、中身をまとめて持ち上げる
-        <nav className="navbar bg-base-200 relative z-30">
+        // nav 自身に z-index を与えて stacking context を作り、中身をまとめて持ち上げる。
+        // safe-area（prd/02 §8）: ホーム画面から開いた standalone ではブラウザの枠が無いので、
+        // ステータスバー・ノッチ（横向き）にかからないよう navbar の padding（0.5rem）に inset を足す。
+        // 通常のブラウザでは inset が 0 なので見た目は変わらない
+        <nav className="navbar bg-base-200 relative z-30 pt-[calc(0.5rem+env(safe-area-inset-top))] ps-[max(0.5rem,env(safe-area-inset-left))] pe-[max(0.5rem,env(safe-area-inset-right))]">
           <div className="flex-1">
             {/* ロゴは極小幅でだけ縮める（44px ターゲットを優先して幅を譲る） */}
             <Link
@@ -210,7 +213,8 @@ function RootComponent() {
           </div>
         </nav>
       )}
-      <main className="max-w-3xl mx-auto p-4">
+      {/* safe-area: 横向きのノッチと、下端のホームインジケータの分だけ余白を広げる（inset 0 なら p-4 のまま） */}
+      <main className="max-w-3xl mx-auto p-4 ps-[max(1rem,env(safe-area-inset-left))] pe-[max(1rem,env(safe-area-inset-right))] pb-[calc(1rem+env(safe-area-inset-bottom))]">
         <Outlet />
       </main>
     </div>

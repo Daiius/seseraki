@@ -165,20 +165,33 @@ export function buildGoCommand(options: {
 function shouldReplace(next: UsiInfo, prev: UsiInfo): boolean {
   if (!next.pv?.length) return false;
   if (next.bound && !prev.bound) return false;
+  // 定跡の確定行（depth 0・pv は指し手＋ponder の 2 手固定）は、列挙側の行（読み筋が長い）を上書きしない。
+  // 採ると rank 1 の読み筋が 2 手になり、確定行の手が別の rank と重複する（issue #67）
+  if (next.depth === 0 && prev.depth !== 0) return false;
   return true;
 }
 
 /**
  * MultiPV の info 行群から各 PV の最終結果を抽出する
- * (同じ multipv 番号の最後の info を採用。ただし暫定値への後退は採らない)
+ * (同じ multipv 番号の最後の info を採用。ただし暫定値・定跡の確定行への後退は採らない)
  *
  * 検討局面の評価（worker の `position-eval.ts`）も同じ抽出を使う。
+ *
+ * @param options.multiPv - 指定すると rank がこの値以下の候補だけを返す。やねうら王は定跡にヒットすると
+ *   **MultiPV の設定によらず**定跡の候補を `multipv 1..N` で列挙し、定跡を採用しなかった局面でも
+ *   列挙の残骸（depth 0・pv 1 手）が rank 4 以降に残る（issue #67）。名指し評価（`searchmoves`）は
+ *   手で探すので切り詰めない
  */
-export function extractMultiPvResults(infoLines: UsiInfo[]): UsiCandidate[] {
+export function extractMultiPvResults(
+  infoLines: UsiInfo[],
+  options: { multiPv?: number } = {},
+): UsiCandidate[] {
+  const { multiPv } = options;
   const best = new Map<number, UsiInfo>();
 
   for (const info of infoLines) {
     const pvNum = info.multipv ?? 1;
+    if (multiPv !== undefined && pvNum > multiPv) continue;
     // 同じ PV 番号は後のもので上書き（より深い結果）
     const prev = best.get(pvNum);
     if (prev && !shouldReplace(info, prev)) continue;
@@ -194,6 +207,23 @@ export function extractMultiPvResults(infoLines: UsiInfo[]): UsiCandidate[] {
       pv: info.pv ?? [],
       depth: info.depth ?? 0,
     }));
+}
+
+const RESIGN = "resign";
+
+/**
+ * 定跡にヒットしたか（ログ用）。やねうら王は定跡を採用すると、最後に採用手の確定行
+ * （`depth 0`・pv は指し手＋ponder）を出して `bestmove` を返す。
+ *
+ * 候補手の rank 1 は列挙側の行が残る（確定行で上書きしない）ので、候補手の depth では判定できない。
+ * **生の出力の最後の（depth を持つ）info 行が depth 0 で、その手が bestmove か**で見る。
+ * 投了（`pv resign`）は depth 0 でも定跡ではない。
+ */
+function isBookHit(result: UsiSearchResult): boolean {
+  const last = result.infoLines.findLast((info) => info.depth !== undefined);
+  if (!last || last.depth !== 0) return false;
+  const move = last.pv?.[0];
+  return move !== undefined && move !== RESIGN && move === result.bestmove.move;
 }
 
 /**
@@ -320,9 +350,12 @@ export async function analyzeKifu(
       throw err;
     }
     const elapsed = Date.now() - t0;
-    // server の受理条件（rank が 1..n の連番。prd/16 §4.1）に合わせ、欠番以降は捨てる
-    const candidates = leadingContiguousCandidates(extractMultiPvResults(result.infoLines));
-    const isBook = candidates.length > 0 && candidates[0].depth === 0;
+    // server の受理条件（rank が 1..n の連番。prd/16 §4.1）に合わせ、欠番以降は捨てる。
+    // 🔒 終局局面の投了（`info depth 0 score mate -1 pv resign`）は残す——詰み筋の分類（`gameover`）が読む
+    const candidates = leadingContiguousCandidates(
+      extractMultiPvResults(result.infoLines, { multiPv }),
+    );
+    const isBook = isBookHit(result);
     const hashfull = extractHashfull(result.infoLines);
     if (hashfull !== undefined && (maxHashfull === undefined || hashfull > maxHashfull)) {
       maxHashfull = hashfull;

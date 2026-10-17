@@ -96,6 +96,22 @@ describe("evaluateJob（局面評価）", () => {
     expect(result.candidates[0].score).toEqual({ type: "cp", value: 50 });
   });
 
+  it("定跡の列挙が MultiPV を超えても、要求した本数に切り詰める（issue #67）", async () => {
+    const { engine } = createStubEngine([
+      searchResult([
+        info(1, ["2g2f", "8c8d"], 50),
+        info(2, ["7g7f", "8c8d"], 44),
+        info(3, ["6i7h", "8c8d"], 35),
+        info(4, ["5g5f", "8c8d"], 20),
+        info(5, ["3i4h", "8c8d"], 10),
+      ]),
+    ]);
+
+    const result = await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+
+    expect(result.candidates.map((c) => c.move)).toEqual(["2g2f", "7g7f", "6i7h"]);
+  });
+
   // 🔴 dev 実測（2026-08-28）: `analyzeKifu` が解析の終わりに MultiPV を 1 へ戻すため、
   // エンジンの設定に乗るだけだと候補手が「解析中なら 3 本・アイドルなら 1 本」と揺れた。
   // 局面評価は自分で設定し、終わったら元へ戻す（prd/12 §2.2）

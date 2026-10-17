@@ -48,7 +48,7 @@ export const playedOrCreatedAt = sql`coalesce(${kifus.playedAt}, ${kifus.created
  *
  * 🔒 **これを引数で外せる条件にしない。** トグルにすると集計の意味が UI 状態に依存し、
  * 「この数字は何を数えたのか」が画面を見ても決まらなくなる。動画解析データは
- * 専用ページ（`/video-analysis`）と棋譜ビューアから見る。
+ * 棋譜ビューアと局面検索から見る（専用の一覧ページは撤去した。prd/10 §6.1）。
  * ⚠ 混ざっても SQL は何も言わない——だから条件の側を固定する。
  */
 export function ownGamesOnly(): SQL {

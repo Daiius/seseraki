@@ -26,7 +26,6 @@ import {
   deleteKifu,
   getKifuDetail,
   listKifus,
-  listVideoKifus,
   reanalyzeKifu,
   statsTactics,
   updateKifuMemo,
@@ -262,12 +261,6 @@ describe('所有者スコープ: B から A の棋譜が見えない（prd/14 §
     expect(theirs.totalGames).toBe(1);
     expect(theirs.excluded).toEqual({ ambiguousSelf: 0, draw: 0, unknownResult: 0 });
     expect(theirs.rows.map((r) => [r.label, r.games, r.wins])).toEqual([['四間飛車', 1, 0]]);
-  });
-
-  it('動画解析の一覧', async () => {
-    const mine = await asA((tx) => listVideoKifus(tx, userA));
-    expect(mine.games.map((g) => g.kifuNo)).toEqual([videoKifuA.no]);
-    expect((await asB((tx) => listVideoKifus(tx, userB))).games).toEqual([]);
   });
 
   it('主体側が決まらない棋譜の数', async () => {

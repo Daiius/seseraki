@@ -10,12 +10,12 @@
  * ⚠ 所有者ゲート（prd/07 §5.1）があるので、API は所有者（"1"）として叩く。DATABASE はファイル間で共有なので、
  *   所有者の行には他のテストが入れた棋譜も混ざる（それも含めて内部 ID が出ないことを見る）。
  */
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
 import { client, db } from './db/index.js';
-import { drills, kifus, kifuTactics, users, videoKifuSources } from './db/schema.js';
+import { drills, kifus, kifuTactics, users } from './db/schema.js';
 import { insertKifu } from './kifu-number.js';
 import { encodeCandidates, type CandidateMove } from './kifu-analysis-detail.js';
 import { saveAnalysis } from './kifu-analysis-store.js';
@@ -185,7 +185,6 @@ interface Call {
 let app: Hono;
 /** 所有者の棋譜（解析済み・局面索引・戦型・出題つき） */
 let analyzed: { id: number; displayNo: number };
-let video: { id: number; displayNo: number };
 let drillId: number;
 let pendingJobId: string;
 /** POST /kifus で作った棋譜の番号（再解析・削除はこれで行う） */
@@ -269,7 +268,6 @@ const CALLS: Call[] = [
     request: () => ({ url: `${drillPath()}/unexclude`, init: { method: 'POST' } }),
     status: 200,
   },
-  { route: 'GET /api/video-analysis/kifus', request: () => ({ url: '/api/video-analysis/kifus' }), status: 200 },
   { route: 'GET /api/analysis/progress', request: () => ({ url: '/api/analysis/progress' }), status: 200 },
   {
     route: 'PATCH /api/kifus/:no',
@@ -414,28 +412,6 @@ beforeAll(async () => {
     .returning({ id: drills.id });
   drillId = drill.id;
 
-  video = await db.transaction(async (tx) => {
-    const row = await insertKifu(tx, {
-      title: 'video',
-      kifText: '',
-      ownerId: OWNER,
-      source: 'video',
-      usiMoves: MOVES,
-    });
-    await tx.insert(videoKifuSources).values({
-      kifuId: row.id,
-      ownerId: OWNER,
-      videoId: randomBytes(8).toString('hex'), // video_id は varchar(32)
-      gameIndex: 1,
-      startedAtSec: 0,
-      endedAtSec: 5,
-      bottomIsSente: true,
-      extractorRev: 'r',
-      raw: {},
-    });
-    return row;
-  });
-
   // 解析中の進捗（worker の報告が入れる形）と、待ちの評価ジョブ
   setProgress(
     { kifuId: analyzed.id, kifuNo: analyzed.displayNo, ownerId: OWNER, revision: 0, profile: 'full', analyzed: 1, total: 4 },
@@ -449,7 +425,6 @@ beforeAll(async () => {
 describe('🔒 web 向けの API に内部 ID を出さない（prd/14 §4.4）', () => {
   it('前提: 内部 ID と番号が食い違っている（同じ値だと検査が空振りする）', () => {
     expect(analyzed.id).not.toBe(analyzed.displayNo);
-    expect(video.id).not.toBe(video.displayNo);
     expect(drillId).toBeGreaterThan(0);
   });
 
@@ -506,10 +481,6 @@ describe('🔒 web 向けの API に内部 ID を出さない（prd/14 §4.4）'
     }
     const progress = (await (await app.request('/api/analysis/progress')).json()) as { kifuNo: number };
     expect(progress.kifuNo).toBe(analyzed.displayNo);
-    const games = (await (await app.request('/api/video-analysis/kifus')).json()) as {
-      games: { kifuNo: number; title: string }[];
-    };
-    expect(games.games.map((g) => g.kifuNo)).toContain(video.displayNo);
   });
 
   it('番号の引数は正の整数だけ（それ以外は 400）', async () => {

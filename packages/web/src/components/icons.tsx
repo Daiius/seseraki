@@ -182,25 +182,6 @@ export function MagnifyingGlassIcon({ className = 'size-5' }: IconProps) {
   );
 }
 
-/** 動画解析（video-camera） */
-export function VideoCameraIcon({ className = 'size-5' }: IconProps) {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      width="24"
-      height="24"
-      strokeWidth={2}
-      stroke="currentColor"
-      aria-hidden="true"
-      className={className}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5 21 6.75v10.5l-5.25-3.75M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
-    </svg>
-  );
-}
-
 /** 設定（cog-6-tooth） */
 export function CogIcon({ className = 'size-5' }: IconProps) {
   return (

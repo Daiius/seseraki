@@ -20,7 +20,6 @@ import {
   LogoutIcon,
   MagnifyingGlassIcon,
   PlusIcon,
-  VideoCameraIcon,
 } from '../components/icons';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 
@@ -135,7 +134,7 @@ function RootComponent() {
               <AcademicCapIcon />
             </Link>
             {/*
-              戦型別成績・局面検索・動画解析・設定・ログアウトはたまにしか使わないのでメニューへ。
+              戦型別成績・局面検索・設定・ログアウトはたまにしか使わないのでメニューへ。
               幅では出し分けない（デスクトップでも同じ場所にある方が探しやすい）。
               表のアイコンを増やすと 375px 幅で navbar が横にあふれる（5 個で 415px になった）。
               表に出す項目を選べるようにする件は Issue #139。
@@ -148,7 +147,7 @@ function RootComponent() {
               (3) 開いている間はトリガーを押下状態にし、chevron を 180° 回す
 
               記号は ☰ のままにした。この中身はページ固有の操作ではなくヘッダーの行き先
-              （戦型別成績・局面検索・動画解析・設定・ログアウト）なので ☰ の方が意味に合い、︙ は kifus/$id の
+              （戦型別成績・局面検索・設定・ログアウト）なので ☰ の方が意味に合い、︙ は kifus/$id の
               ページ内操作メニューで既に使っているため、同じ記号を別の階層に当てたくない
             */}
             <details ref={menuRef} className="dropdown dropdown-end group ms-3">
@@ -185,12 +184,6 @@ function RootComponent() {
                   >
                     <MagnifyingGlassIcon />
                     局面検索
-                  </Link>
-                </li>
-                <li>
-                  <Link to="/video-analysis" onClick={closeMenu} className={MENU_ITEM}>
-                    <VideoCameraIcon />
-                    動画解析
                   </Link>
                 </li>
                 <li>

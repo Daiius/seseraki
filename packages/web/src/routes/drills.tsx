@@ -25,7 +25,16 @@ import {
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillHistory, DrillList } from '../components/DrillTables';
 import { BrowserAnalysisNotice } from '../components/BrowserAnalysis';
-import { answerBodyWithEvaluation, answerStepOf, type AnswerBody } from '../lib/drillAnswer';
+import {
+  answerBodyWithEvaluation,
+  answerStepOf,
+  lineAfterUndoTurn,
+  matePliesText,
+  missText,
+  practiceNote,
+  type AnswerBody,
+  type MissReason,
+} from '../lib/drillAnswer';
 import { gradingFailureMessage, requestBrowserGrading } from '../lib/browserAnalysis/grading';
 import {
   getBrowserAnalysisState,
@@ -181,6 +190,25 @@ interface Reveal {
   answerPv: string[] | null;
   playedMove: string | null;
   playedLossCp: number | null;
+  /** ユーザーの手順の手数（詰将棋の詰み上がりに出す） */
+  plies: number;
+  /** 当初の正解手順の手数 */
+  answerPlies: number | null;
+  /** 「答えを見る」で出した結果 */
+  gaveUp?: boolean;
+}
+
+/** 解答後の表示に要る、画面側の事情（練習で解いたか・記録済みの判定） */
+interface Shown extends Reveal {
+  practice: boolean;
+  recorded: Reveal['verdict'] | null;
+}
+
+/** 詰将棋で間違えた手の案内（その手は盤から取り消してある） */
+interface Miss {
+  reason: MissReason;
+  /** 咎め筋（受けの手）。日本語にして持つ（読む局面は取り消す前の盤） */
+  refutationText: string | null;
 }
 
 const VERDICT_TEXT = {
@@ -421,8 +449,17 @@ function DrillRunner({
   /** 出題局面からの確定した手順（受方の応手を含む。prd/13 §5.3） */
   const [line, setLine] = useState<string[]>([]);
   const [session, setSession] = useState<StudySession | null>(() => sessionOf(initial.drill, []));
-  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [reveal, setReveal] = useState<Shown | null>(null);
   const [judging, setJudging] = useState(false);
+  /** 詰将棋で間違えた手の案内（次の操作で消える） */
+  const [miss, setMiss] = useState<Miss | null>(null);
+  /**
+   * この問題で記録した判定（prd/13 §6.2）。🔒 **記録は 1 問 1 回**——最初に間違えた・答えを見た・解き終えた時点で
+   * 決まり、以後の操作（続けて詰ませる・1 手戻す・最初から・解答後のやり直し）は練習（`practice`）で送る
+   */
+  const [recorded, setRecorded] = useState<Reveal['verdict'] | null>(null);
+  /** 「答えを見る」の 1 段目を押した（画面内の 2 段の確認。`confirm()` は使わない） */
+  const [confirmGiveUp, setConfirmGiveUp] = useState(false);
   /** この端末のエンジンで採点できなかった（同意の前・解析できない環境など）。案内（同意のボタンなど）も並べて出す */
   const [ungradable, setUngradable] = useState(false);
 
@@ -451,12 +488,69 @@ function DrillRunner({
     setSession(tapHand(session, currentState(session).sideToMove, kind));
   }
 
-  async function answer(move: string) {
+  /** 確定した手順まで盤を戻す（間違えた手・確定前の手を捨てる） */
+  function resetTo(next: string[]) {
+    setLine(next);
+    setSession(sessionOf(drill, next));
+    setMiss(null);
+    setError(null);
+    setUngradable(false);
+    setConfirmGiveUp(false);
+  }
+
+  /** 最初から（出題局面へ）。解答後も押せる——以後は練習（記録しない） */
+  function restart() {
+    resetTo([]);
+    setReveal(null);
+  }
+
+  /** 1 手戻す（詰将棋。受方の応手と自分の手の 2 手ぶん） */
+  function undoTurn() {
+    const next = lineAfterUndoTurn(line);
+    if (next) resetTo(next);
+  }
+
+  /** 答えを見る（諦め）。記録は不正解（記録済みなら練習） */
+  async function giveUp() {
     if (!drill) return;
+    const practice = recorded !== null;
+    setConfirmGiveUp(false);
+    setJudging(true);
+    setError(null);
+    try {
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind']['give-up'].$post({
+        param: refParam(drill),
+        // 確定した手順だけ送る（確定前の手は捨てる）
+        json: { line, practice },
+      });
+      const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
+      if (step.kind !== 'done') {
+        setError(step.kind === 'error' ? step.text : `サーバーエラー (${res.status})`);
+        return;
+      }
+      const nextRecorded = practice ? recorded : step.result.verdict;
+      setRecorded(nextRecorded);
+      setSession(sessionOf(drill, line));
+      setMiss(null);
+      setReveal({ ...step.result, practice, recorded: nextRecorded });
+    } catch {
+      setError('サーバーに接続できません');
+    } finally {
+      setJudging(false);
+    }
+  }
+
+  async function answer(move: string) {
+    if (!drill || !session) return;
     setJudging(true);
     setError(null);
     setUngradable(false);
-    let body: AnswerBody = { line: [...line, move], ...scoring };
+    setMiss(null);
+    setConfirmGiveUp(false);
+    const practice = recorded !== null;
+    /** 答えた手を指した後の局面（咎め筋はここから読む） */
+    const answered = currentState(session);
+    let body: AnswerBody = { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) };
     let deadline = Date.now() + POLL_BUDGET_MS;
     try {
       while (Date.now() < deadline) {
@@ -508,10 +602,25 @@ function DrillRunner({
             setJudging(false);
             return;
           }
-          case 'done':
-            setReveal(step.result);
+          case 'miss': {
+            // 詰将棋で間違えた。**その手を取り消して同じ局面で考え直す**（prd/13 §5.2）。
+            // 記録は最初の間違いの 1 回（server が記録済み）。以後は練習で送る
+            if (!practice) setRecorded('wrong');
+            setMiss({
+              reason: step.reason,
+              refutationText: step.refutation.length > 0 ? movesText(answered, step.refutation) : null,
+            });
+            setSession(sessionOf(drill, line));
             setJudging(false);
             return;
+          }
+          case 'done': {
+            const nextRecorded = practice ? recorded : step.result.verdict;
+            setRecorded(nextRecorded);
+            setReveal({ ...step.result, practice, recorded: nextRecorded });
+            setJudging(false);
+            return;
+          }
         }
       }
       setError('判定が終わりませんでした。もう一度お試しください');
@@ -590,6 +699,13 @@ function DrillRunner({
         </p>
       )}
 
+      {miss && !reveal && !judging && (
+        <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1">
+          <span>{missText(miss.reason)}。その手を取り消しました</span>
+          {miss.refutationText && <span className="break-all">咎め筋 {miss.refutationText}</span>}
+        </div>
+      )}
+
       {pending && !reveal && !judging && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm">
@@ -618,6 +734,47 @@ function DrillRunner({
         </div>
       )}
 
+      {!reveal && !judging && (
+        // 🔒 「この手で答える」から離して控えめに置く（prd/13 §7.1）
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-base-300">
+          {drill.kind === 'mate' && (
+            <>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                disabled={lineAfterUndoTurn(line) === null}
+                onClick={undoTurn}
+              >
+                1 手戻す
+              </button>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                disabled={line.length === 0 && !pending}
+                onClick={restart}
+              >
+                最初から
+              </button>
+            </>
+          )}
+          <span className="ms-auto" />
+          {confirmGiveUp ? (
+            <>
+              <button type="button" className="btn btn-xs btn-outline btn-error" onClick={giveUp}>
+                本当に答えを見る（不正解になります）
+              </button>
+              <button type="button" className="btn btn-xs btn-ghost" onClick={() => setConfirmGiveUp(false)}>
+                やめる
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn-xs btn-ghost" onClick={() => setConfirmGiveUp(true)}>
+              答えを見る
+            </button>
+          )}
+        </div>
+      )}
+
       {reveal && (
         <Result
           reveal={reveal}
@@ -627,6 +784,7 @@ function DrillRunner({
           answered={state}
           onNext={onNext}
           onExclude={exclude}
+          onRestart={restart}
         />
       )}
     </div>
@@ -641,16 +799,20 @@ function Result({
   answered,
   onNext,
   onExclude,
+  onRestart,
 }: {
-  reveal: Reveal;
+  reveal: Shown;
   drill: Drill;
   base: BoardState;
   /** 答えた手を指した後の局面（咎め筋の読み出しに使う） */
   answered: BoardState;
   onNext: () => void;
   onExclude: () => void;
+  /** 最初から解き直す（練習。記録しない） */
+  onRestart: () => void;
 }) {
   const verdict = VERDICT_TEXT[reveal.verdict];
+  const note = practiceNote(reveal.practice, reveal.recorded);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -658,10 +820,15 @@ function Result({
         {reveal.lossCp !== null && (
           <span className="text-sm">損失 {reveal.lossCp}cp</span>
         )}
+        {drill.kind === 'mate' && reveal.verdict === 'correct' && (
+          <span className="text-sm">{matePliesText(reveal.plies, reveal.answerPlies)}</span>
+        )}
+        {reveal.gaveUp && <span className="text-sm text-base-content/70">答えを見ました</span>}
         <span className="text-sm">
           正解 {usiToJapaneseWithPiece(base, reveal.answerMove)}
         </span>
       </div>
+      {note && <p className="text-xs text-base-content/60">{note}</p>}
 
       {drill.kind === 'mate' && reveal.answerPv && (
         <p className="text-sm break-all">
@@ -700,6 +867,9 @@ function Result({
         {/* 🔒 自動判定は作らない（「取り返し」の定義から詰まる。prd/13 §4.2） */}
         <button type="button" className="btn btn-sm btn-ghost" onClick={onExclude}>
           自明だった
+        </button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onRestart}>
+          最初から
         </button>
       </div>
     </div>

@@ -293,35 +293,29 @@ describe('担当 browser（prd/13 §5.3）', () => {
     expect(await retried.json()).toMatchObject({ status: 'done', verdict: 'correct', plies: 1 });
   });
 
-  it('🔴 詰将棋: 王手でない手は読ませずに即不正解（記録する・ジョブも積まない）', async () => {
+  it('🔴 詰将棋: 王手でない手は読ませずに miss（答えは載せない・不正解を記録する・ジョブも積まない）', async () => {
     const before = (await attemptsOf('mate')).length;
     const res = await answer('mate', { line: ['B*5e'] });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({
-      status: 'done',
-      verdict: 'wrong',
-      lossCp: null,
-      wrongReason: 'not_check',
-      answerMove: 'B*4b',
-    });
+    expect(await res.json()).toEqual({ status: 'miss', wrongReason: 'not_check' });
     expect(claimEvaluationJob()).toBeNull();
     const after = await attemptsOf('mate');
     expect(after).toHaveLength(before + 1);
     expect(after).toContainEqual({ move: 'B*5e', verdict: 'wrong', lossCp: null, line: ['B*5e'] });
   });
 
-  it('詰将棋: 詰まない手は不正解と咎め筋', async () => {
+  it('詰将棋: 詰まない手は miss と咎め筋（答えは載せない）', async () => {
     const res = await answer('mate', {
       line: ['B*6b'],
       evaluation: evaluation('B*6b', { scoreType: 'cp', scoreValue: 100, depth: 10, pv: ['B*6b', '5a4b'] }),
     });
-    expect(await res.json()).toMatchObject({ status: 'done', verdict: 'wrong', refutation: ['5a4b'] });
+    expect(await res.json()).toEqual({ status: 'miss', wrongReason: 'no_mate', refutation: ['5a4b'] });
   });
 
   it('練習（practice）は判定を返すが記録しない', async () => {
     const before = (await attemptsOf('mate')).length;
     const res = await answer('mate', { line: ['B*5e'], practice: true });
-    expect(await res.json()).toMatchObject({ status: 'done', verdict: 'wrong', wrongReason: 'not_check' });
+    expect(await res.json()).toEqual({ status: 'miss', wrongReason: 'not_check' });
     expect(await attemptsOf('mate')).toHaveLength(before);
   });
 });

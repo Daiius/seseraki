@@ -73,9 +73,18 @@ export type EngineAnswer =
       /** 不正解のときの咎め筋（相手の応手から始まる読み筋） */
       refutation?: string[];
     }
+  /**
+   * 詰将棋で**間違えた手**（prd/13 §5.2・2026-10-19 決定）。終わりにせず、利用者はその手を取り消して続けられる。
+   * 🔒 **答え（正解手順）は載せない**——「答えを見る」を押すまで出さない（prd/13 §5.3）。
+   * `not_check` は王手でない手（盤面で判定・エンジン不要）、`no_mate` はエンジンが正の mate を返さない手（咎め筋付き）
+   */
+  | { status: 'miss'; wrongReason: DrillMissReason; refutation?: string[] }
   | { status: 'failed'; error: string }
   /** キューが一杯（worker が止まっている疑い）。route は 503 で返す */
   | { status: 'busy' };
+
+/** 詰将棋で間違えた理由（prd/13 §5.2） */
+export type DrillMissReason = 'not_check' | 'no_mate';
 
 /** 名指し評価の結果（その手 1 本。`pv` の先頭が名指しした手）。どの経路の結果もこの形にそろえて判定する */
 export type NamedCandidate = Pick<EvalCandidate, 'scoreType' | 'scoreValue' | 'pv'>;
@@ -125,8 +134,11 @@ export function evaluationSourceOf(
 
 /** 判定の結果。副作用（解答の記録・別解の手順の記憶）は呼び出し側が行う */
 export interface Judged {
-  answer: Extract<EngineAnswer, { status: 'continue' | 'done' }>;
-  /** 記録する判定（`continue` では null——まだ解き終わっていない） */
+  answer: Extract<EngineAnswer, { status: 'continue' | 'done' | 'miss' }>;
+  /**
+   * 記録する判定（`continue` では null——まだ解き終わっていない）。
+   * 詰将棋の `miss` は `wrong` を記録する（最初に間違えた時点で不正解。以降は web が `practice` で送る）
+   */
   attempt: { verdict: DrillVerdict; lossCp: number | null } | null;
   /** 以降の正解手順として覚える手順（別解に入ったとき。prd/13 §5.2） */
   remember: string[] | null;
@@ -148,6 +160,11 @@ export function judgeNamedEvaluation(
     attempt: { verdict, lossCp },
     remember: null,
   });
+  const miss = (wrongReason: DrillMissReason, refutation?: string[]): Judged => ({
+    answer: { status: 'miss', wrongReason, ...(refutation ? { refutation } : {}) },
+    attempt: { verdict: 'wrong', lossCp: null },
+    remember: null,
+  });
 
   // 🔴 **「候補なし」を「詰みません」と読まない**（prd/13 §5.2・レビュー `OCL-7ABC2973`）。
   // `searchmoves` 非対応の worker はフォールバックで手を適用した局面を評価するため、
@@ -158,7 +175,9 @@ export function judgeNamedEvaluation(
   // 🔒 **不正解も記録する。** 記録を落とすと `wrongBefore`・解答済み件数・復習順の
   // どれにも表れない（レビュー `OCL-2652C1DA`）
   if (!best) {
-    return done(isMateAfter(state, move, attacker) ? 'correct' : 'wrong', null);
+    if (isMateAfter(state, move, attacker)) return done('correct', null);
+    // 詰将棋は終わりにしない（王手でない手。route が先に弾くので、ここへは来ないはず）
+    return drill.kind === 'mate' ? miss('not_check') : done('wrong', null);
   }
 
   if (drill.kind === 'mate') {
@@ -174,8 +193,8 @@ export function judgeNamedEvaluation(
         remember: [...line, ...best.pv.slice(1)],
       };
     }
-    // 詰まない。咎め筋（受けの手）を見せる
-    return done('wrong', null, best.pv.slice(1));
+    // 詰まない。咎め筋（受けの手）を見せ、**終わりにしない**（取り消して続けられる。prd/13 §5.2）
+    return miss('no_mate', best.pv.slice(1));
   }
 
   const scored = scoreMove(drill, best, scoring);

@@ -261,6 +261,9 @@ async function answerWithEngine(input: ResolveInput, reveal: Record<string, unkn
       };
     case 'continue':
       return { body: { status: 'continue' as const, reply: answer.reply }, status: 200 as const };
+    case 'miss':
+      // 🔒 **答えは載せない**（`reveal` を付けない）。利用者は取り消して続ける（prd/13 §5.2）
+      return { body: answer, status: 200 as const };
     case 'done':
       return { body: { ...answer, ...reveal }, status: 200 as const };
   }
@@ -762,6 +765,8 @@ const route = app
   // 先に渡さないための置き場所でもある（上記 `/drills/next`）。
   // `line` は**出題局面からの全手順**（受方の応手を含み、最後がユーザーの手）。
   // `best` は 1 手、`mate` は詰み上がりまで積み上がる（prd/13 §5.2）。
+  // 詰将棋で間違えた手（王手でない・詰まない）は `miss` を返し、利用者はその手を取り消して続ける（答えは載せない）。
+  // `practice: true` は記録しない（最初の間違い・答えを見た後の操作。web が画面の状態で付ける）
   //
   // 候補手の外の手（詰将棋で正解手順を外れた手）は名指し評価で採点する。読む場所は解析の担当（prd/14 §5.7）:
   // 担当 `worker` は手元 worker にジョブを積み（`pending`）、担当 `browser` は「この局面のこの手を名指しで読んで」
@@ -853,19 +858,14 @@ const route = app
       };
 
       if (drill.kind === 'mate' && mateMatch) {
-        // 🔴 **王手でない手は即不正解**（prd/13 §5.2・2026-10-19 決定）。エンジンの mate は静かな手や
-        // 回り道も詰みと数えるので、エンジン（棋譜解析の再利用・worker・ブラウザ）に回す前に盤面で見る。
-        // 🔒 ブラウザに `evaluate` を返さない。手数の上限は設けない（王手の連続で詰むなら回り道でも別解）
+        // 🔴 **王手でない手は間違い**（prd/13 §5.2・2026-10-19 決定）。エンジンの mate は静かな手も
+        // 詰みと数えるので、エンジン（棋譜解析の再利用・worker・ブラウザ）に回す前に盤面で見る。
+        // 🔒 ブラウザに `evaluate` を返さない。手数の上限は設けない（王手の連続で詰むなら回り道でも別解）。
+        // 終わりにはしない（`miss`。利用者は取り消して続ける）。🔒 **答えは載せない**。
+        // 不正解は記録する（最初に間違えた時点。以降は web が `practice` で送る）
         if (!givesCheck(state, move, state.sideToMove)) {
           await record('wrong', null);
-          forgetLine(id);
-          return c.json({
-            status: 'done' as const,
-            verdict: 'wrong' as const,
-            lossCp: null,
-            wrongReason: 'not_check' as const,
-            ...reveal,
-          });
+          return c.json({ status: 'miss' as const, wrongReason: 'not_check' as const });
         }
         const step = mateMatch;
         if (step.state === 'match') {

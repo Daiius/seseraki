@@ -408,7 +408,7 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
  * 「自明だった」の取り消し（prd/13 §7.2）。
  *
  * 🔒 **除外の行そのものを消す**——印を取り消す操作なので、印を残さない。
- * 解答の行（`move` を持つ行）は触らないので、**解答履歴は消えない**。
+ * 解答の行（判定を持つ行・諦めを含む）は触らないので、**解答履歴は消えない**。
  * 🔒 **所有者の行だけ**（prd/14 §4）。呼び出し側は先に `loadDrill` で問題が本人のものか確かめる。
  */
 export async function unexcludeDrill(tx: Tx, ownerId: string, drillId: number): Promise<void> {

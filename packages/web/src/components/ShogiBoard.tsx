@@ -118,7 +118,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
   );
   const [flipped, setFlipped] = useState(userSide === 'gote');
   const [branchRank, setBranchRank] = useState<number | null>(null);
-  const [branchDepth, setBranchDepth] = useState(0);
+  const [storedBranchDepth, setBranchDepth] = useState(0);
   const candidateListRef = useRef<HTMLDivElement>(null);
 
   const goToMain = (newIndex: number) => {
@@ -166,6 +166,9 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     ? prevAnalysis?.candidates.find((c) => c.rank === branchRank) ?? null
     : null;
   const branchPv = branchCandidate?.pv ?? null;
+  // 🔴 **進めた手数は今の読み筋の長さで頭打ちにする。** 分岐を開いたまま解析が進むと（quick → full・再解析）、
+  // 同じ順位の読み筋が短くなることがある。頭打ちにしないと存在しない手を `applyMove` に渡して落ちる
+  const branchDepth = Math.min(storedBranchDepth, branchPv?.length ?? 0);
   const branchActive = branchRank !== null
     && branchDepth > 0
     && branchPv !== null

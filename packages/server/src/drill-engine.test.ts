@@ -119,14 +119,18 @@ describe('judgeNamedEvaluation（実戦詰将棋の別解。prd/13 §5.2）', ()
     ).toEqual({ status: 'done', verdict: 'correct', lossCp: null });
   });
 
-  it('詰まなければ不正解と咎め筋', () => {
-    expect(
-      judgeNamedEvaluation(input(MATE, 'G*9i'), { scoreType: 'cp', scoreValue: 900, pv: ['G*9i', '5a4b'] }).answer,
-    ).toEqual({ status: 'done', verdict: 'wrong', lossCp: null, refutation: ['5a4b'] });
+  it('🔴 詰まなければ miss（終わりにしない）と咎め筋。答えは載せず、不正解を記録する', () => {
+    const judged = judgeNamedEvaluation(input(MATE, 'G*5b'), { scoreType: 'cp', scoreValue: 900, pv: ['G*5b', '5a4b'] });
+    expect(judged.answer).toEqual({ status: 'miss', wrongReason: 'no_mate', refutation: ['5a4b'] });
+    expect(judged.attempt).toEqual({ verdict: 'wrong', lossCp: null });
+    expect(judged.remember).toBeNull();
   });
 
   it('🔴 候補なしを「詰みません」と読まない（王手なら詰み上がり）', () => {
     expect(judgeNamedEvaluation(input(MATE, 'G*5b'), undefined).answer).toMatchObject({ verdict: 'correct' });
-    expect(judgeNamedEvaluation(input(MATE, 'G*9i'), undefined).answer).toMatchObject({ verdict: 'wrong' });
+    expect(judgeNamedEvaluation(input(MATE, 'G*9i'), undefined).answer).toEqual({
+      status: 'miss',
+      wrongReason: 'not_check',
+    });
   });
 });

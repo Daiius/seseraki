@@ -60,9 +60,10 @@ describe('drillListHaving', () => {
     expect(sql).toContain('> 0');
   });
 
-  it('status=unanswered は解答回数 0 の問題', () => {
+  it('status=unanswered は解答回数 0 の問題（諦めも解答として数える＝判定の有無で数える）', () => {
     const { sql } = render(drillListHaving(parse({ status: 'unanswered' })));
-    expect(sql).toContain('"move" is not null');
+    expect(sql).toContain('"verdict" is not null');
+    expect(sql).not.toContain('"move" is not null');
     expect(sql).toContain('= 0');
   });
 
@@ -109,10 +110,17 @@ describe('drillAttemptWhere', () => {
     expect(params).toEqual(['7', true]);
   });
 
-  it('verdict=correct は解答の行だけ（除外だけの行を混ぜない）', () => {
+  it('verdict=correct は判定で絞る（除外だけの行は verdict が null なので混ざらない）', () => {
     const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'correct' })));
-    expect(sql).toContain('"move" is not null');
+    expect(sql).toContain('"verdict" = ');
+    expect(sql).not.toContain('"move"');
     expect(params).toEqual(['7', 'correct']);
+  });
+
+  it('verdict=wrong は諦めの行（move が null）を落とさない', () => {
+    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'wrong' })));
+    expect(sql).not.toContain('"move"');
+    expect(params).toEqual(['7', 'wrong']);
   });
 
   it('kind は出題の種類で絞る', () => {
@@ -146,7 +154,8 @@ describe('選択リストの中で組み立てた SQL', () => {
     const sql = renderAttemptsSelect();
     expect(sql).toContain('"prior"."drill_id" = "drill_attempts"."drill_id"');
     expect(sql).toContain('"prior"."id" <= "drill_attempts"."id"');
-    expect(sql).toContain('"prior"."move" is not null');
+    // 諦め（move が null・verdict あり）も数え、除外だけの行（verdict が null）は数えない
+    expect(sql).toContain('"prior"."verdict" is not null');
   });
 
   it('一覧の集計は列をテーブルで修飾する（"created_at" は kifus にもある）', () => {
@@ -162,7 +171,8 @@ describe('選択リストの中で組み立てた SQL', () => {
       .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
       .groupBy(drills.id, kifus.createdAt);
     const sql = dialect.sqlToQuery(query.getSQL()).sql;
-    expect(sql).toContain('max(case when "drill_attempts"."move" is not null then "drill_attempts"."created_at" end)');
+    expect(sql).toContain('max(case when "drill_attempts"."verdict" is not null then "drill_attempts"."created_at" end)');
+    expect(sql).toContain('count(case when "drill_attempts"."verdict" is not null then 1 end)');
   });
 });
 

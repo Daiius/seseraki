@@ -139,6 +139,53 @@ export function mateStep(pv: string[] | null, line: string[]): MateStep {
   return { state: 'match', reply, solved: reply === null };
 }
 
+export type MateLineMatch =
+  /** どの手順の先頭とも合わない（任意の派生局面を作らせない。400） */
+  | { state: 'mismatch' }
+  /** ユーザーの手まで一致した手順がある。`reply` は受方の応手（無ければ詰み上がり） */
+  | { state: 'match'; reply: string | null; solved: boolean }
+  /** ここまでの手順は合うが、ユーザーの手で外れた。エンジンに聞く（別解かもしれない） */
+  | { state: 'deviated' };
+
+/**
+ * 詰みの解答の手順を、**いま受け付ける正解手順のどれか**に照らす（prd/13 §5.2・§5.3）。
+ *
+ * 🔴 **元の正解手順（`answerPv`）と覚えた別解の両方を受ける**（2026-10-19 決定）。覚えた別解だけで
+ * 照らすと、「最初からやり直す」で元の手順を指したときに 400 になる。
+ * 一致した手順で受方の応手を選ぶ——並べた順に見て、**ユーザーの手まで一致した最初の手順**を使う。
+ *
+ * @param candidates 受け付ける正解手順（覚えた別解・元の pv の順。null / 空は飛ばす）
+ * @param line 出題局面からの全手順（最後がユーザーの手）
+ */
+export function matchMateLine(candidates: (string[] | null)[], line: string[]): MateLineMatch {
+  const lines = candidates.filter((c): c is string[] => Array.isArray(c) && c.length > 0);
+  const prefix = line.slice(0, -1);
+  const fitting = lines.filter((c) => isPrefixOf(prefix, c));
+  if (fitting.length === 0) return { state: 'mismatch' };
+  for (const candidate of fitting) {
+    const step = mateStep(candidate, line);
+    if (step.state === 'match') return step;
+  }
+  return { state: 'deviated' };
+}
+
+/**
+ * 「諦めて答えを見る」の手順が、その問いのものか（prd/13 §5.3。2026-10-19 決定）。
+ *
+ * - `best` は**空のみ**（1 手も答えていない）
+ * - `mate` は確定済みの手順（最後は受方の応手か空 ＝ **偶数手**）で、受け付ける正解手順の**どれかの先頭と一致**
+ */
+export function isGiveUpLine(
+  kind: 'mate' | 'best',
+  line: string[],
+  candidates: (string[] | null)[],
+): boolean {
+  if (kind === 'best') return line.length === 0;
+  if (line.length % 2 !== 0) return false;
+  if (line.length === 0) return true;
+  return candidates.some((c) => Array.isArray(c) && isPrefixOf(line, c));
+}
+
 /** USI の升表記 → 盤の添字（`1a` = 右上） */
 function squareIndex(usi: string): { row: number; col: number } | null {
   const file = Number(usi[0]);
@@ -186,6 +233,18 @@ export function isReachableMove(state: BoardState, move: string): boolean {
  * 王手の確認を省かない（候補が空になるのは入玉宣言でも起きうる。prd/05 §2.2）。
  */
 export function isMateAfter(state: BoardState, move: string, attacker: Side): boolean {
+  return givesCheck(state, move, attacker);
+}
+
+/**
+ * その手を指した局面で、**受方の玉が攻方に王手されているか**（`shared` の `isInCheck`＝`isAttackedBy`）。
+ *
+ * 🔴 **詰将棋（kind=mate）の解答はどの手にもこれを要求する**（prd/13 §5.2。2026-10-19 決定）。
+ * エンジンの mate は静かな手（王手でない手）や回り道も詰みと数えるので、判定をエンジンに任せると
+ * 詰め損なっても延々と指し継げる。出題の抽出（`classifyMateLine` の `checkmate`）と同じ条件を判定でも課す。
+ * 🔒 新しいルールの実装ではない（prd/13 §3）。読めない手は false
+ */
+export function givesCheck(state: BoardState, move: string, attacker: Side): boolean {
   let next: BoardState;
   try {
     next = applyMove(state, move);

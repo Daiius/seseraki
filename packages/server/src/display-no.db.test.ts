@@ -257,6 +257,11 @@ const CALLS: Call[] = [
     status: 200,
   },
   {
+    route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/give-up',
+    request: () => ({ url: `${drillPath()}/give-up`, init: jsonFromBrowser('POST', { line: [], practice: true }) }),
+    status: 200,
+  },
+  {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/exclude',
     request: () => ({ url: `${drillPath()}/exclude`, init: { method: 'POST' } }),
     status: 200,

@@ -30,12 +30,25 @@
  * 置き場だが、実際には**盤から抜いた駒の退避先でしかない**——駒台がその役を兼ねられる。
  * 駒の総数は元から変えられないので、失われる機能もない。
  * ⚠ `shared` の `pieceBox` は残っているが、**web からはもう使わない**（server / MCP 向け）。
+ *
+ * ## モード: 自由編集 / ルールどおり（2026-10-19 決定）
+ *
+ * - **`free`（自由編集。既定）**: 上の表のとおり。検討盤（`StudyBoard`）はこれ。合法性は問わない（prd/12 §2.5）。
+ * - **`rules`（ルールどおり）**: 出題（prd/13 §7.1）が使う。
+ *   - 選べるのは**手番側の駒と手番側の持ち駒だけ**（相手の駒・相手の駒台は叩いても何も起きない）
+ *   - 行き先は `shared` の `moveDestinations` / `dropDestinations` の中だけ（外を叩いても無視）
+ *   - 🔴 **盤の駒を選択中に駒台の駒を叩いたら、その持ち駒の選択に切り替える**（駒台へ移さない）
+ *   - 成 / 不成の指し直しは**成れる手だけ**（`shared` の `canPromoteMove`。server の検証と同じ出所）
+ *   🔒 **合法手生成器ではない**（王手放置・打ち歩詰めは見ない。prd/13 §3）。
  */
 import {
   applyMove,
   canPromote,
+  canPromoteMove,
+  dropDestinations,
   dropFromHand,
   handCount,
+  moveDestinations,
   movePiece,
   moveToHand,
   pieceAt,
@@ -49,6 +62,11 @@ import {
   type Side,
   type SquareRef,
 } from 'shared';
+
+/**
+ * 盤操作のモード（冒頭の「モード」）。`free` は検討盤のフル編集、`rules` は出題の「指せる手だけ」
+ */
+export type StudyMode = 'free' | 'rules';
 
 /** 選択中のもの。行き先を叩くまで保持する */
 export type StudySelection =
@@ -98,14 +116,17 @@ export interface StudySession {
   /** 今どこを見ているか（0 = 起点）。`steps.length - 1` 未満なら redo できる */
   cursor: number;
   selection: StudySelection | null;
+  /** 盤操作のモード。作ったときに決まり、以後変わらない */
+  mode: StudyMode;
 }
 
-/** 棋譜の局面を起点にセッションを作る */
-export function createStudySession(base: BoardState): StudySession {
+/** 棋譜の局面を起点にセッションを作る（`mode` を省けば自由編集） */
+export function createStudySession(base: BoardState, mode: StudyMode = 'free'): StudySession {
   return {
     steps: [{ state: base, move: null, faithful: true }],
     cursor: 0,
     selection: null,
+    mode,
   };
 }
 
@@ -191,7 +212,7 @@ function push(
   if (state === currentState(session)) return { ...session, selection: null };
   const steps = session.steps.slice(0, session.cursor + 1);
   steps.push({ state, move, faithful });
-  return { steps, cursor: steps.length - 1, selection: null };
+  return { ...session, steps, cursor: steps.length - 1, selection: null };
 }
 
 /**
@@ -209,8 +230,36 @@ function advanceTurn(next: BoardState, moverSide: Side, before: BoardState): Boa
 
 /* ---------- タップの解決 ---------- */
 
+/**
+ * 選択中の駒が動けるマス（prd/13 §3）。選択が無ければ null。
+ * `rules` のモードはこの中しか行き先にしない。盤の塗り（着手可能マス）にも使う
+ */
+export function selectionDestinations(session: StudySession | null): SquareRef[] | null {
+  if (!session?.selection) return null;
+  const state = currentState(session);
+  return session.selection.kind === 'square'
+    ? moveDestinations(state, session.selection.square)
+    : dropDestinations(state, session.selection.side, session.selection.piece);
+}
+
+/**
+ * `rules` のモードで、その叩き方を受け付けるか（`free` は常に受け付ける）。
+ * 受け付けない叩き方は**何も起きない**（選択も解かない）
+ */
+function acceptsSquareTap(session: StudySession, square: SquareRef): boolean {
+  if (session.mode === 'free') return true;
+  const state = currentState(session);
+  const sel = session.selection;
+  // 1 段目: 手番側の駒だけ選べる
+  if (sel === null) return pieceAt(state, square)?.side === state.sideToMove;
+  // 選択の解除（同じマスをもう一度叩く）は行き先の外でも通す
+  if (sel.kind === 'square' && sameSquare(sel.square, square)) return true;
+  return (selectionDestinations(session) ?? []).some((d) => sameSquare(d, square));
+}
+
 /** 盤のマスを叩いた */
 export function tapSquare(session: StudySession, square: SquareRef): StudySession {
+  if (!acceptsSquareTap(session, square)) return session;
   const state = currentState(session);
   const sel = session.selection;
 
@@ -266,6 +315,8 @@ export function tapHand(
   const state = currentState(session);
   const sel = session.selection;
 
+  if (session.mode === 'rules') return tapHandByRules(session, side, piece);
+
   if (sel === null) {
     if (!piece || handCount(state, side, piece) <= 0) return session;
     return { ...session, selection: { kind: 'hand', side, piece } };
@@ -287,6 +338,23 @@ export function tapHand(
 }
 
 /**
+ * `rules` のモードの駒台（冒頭の「モード」）。
+ *
+ * 🔴 **盤の駒を選択中でも駒台へ移さない**——叩いた持ち駒の選択に切り替える（2026-10-19 決定）。
+ * 自由編集の「駒台が駒箱の代わり」は出題では指し手にならない操作で、出題画面から漏れていた。
+ * 相手の駒台・持っていない駒種・受け皿（`piece` 省略）は何も起きない。
+ */
+function tapHandByRules(session: StudySession, side: Side, piece?: HandPieceKind): StudySession {
+  const state = currentState(session);
+  if (side !== state.sideToMove || !piece || handCount(state, side, piece) <= 0) return session;
+  const sel = session.selection;
+  if (sel?.kind === 'hand' && sel.side === side && sel.piece === piece) {
+    return { ...session, selection: null };
+  }
+  return { ...session, selection: { kind: 'hand', side, piece } };
+}
+
+/**
  * 選択中の盤の駒を駒台へ移せるか（＝受け皿の「+」を出してよいか）。
  *
  * 🔴 **玉は移せない**（決定・2026-08-28。レビュー指摘 `OCL-3528F9AD`）。
@@ -305,6 +373,8 @@ export function tapHand(
  * `unpromoted(kind) === 'K'` のときだけで、成駒を含む他の駒種はすべて生駒として並ぶ。
  */
 export function canPutSelectionOnHand(session: StudySession): boolean {
+  // `rules` のモードは駒台へ移さない（{@link tapHandByRules}）
+  if (session.mode === 'rules') return false;
   const sel = session.selection;
   if (sel?.kind !== 'square') return false;
   const piece = pieceAt(currentState(session), sel.square);
@@ -350,7 +420,7 @@ export function redoAll(session: StudySession): StudySession {
 
 /** 棋譜の局面へ戻す（検討を捨てる） */
 export function resetStudy(session: StudySession): StudySession {
-  return createStudySession(baseState(session));
+  return createStudySession(baseState(session), session.mode);
 }
 
 /**
@@ -382,7 +452,7 @@ export function togglePromotion(session: StudySession): StudySession {
   // 現在位置の段を差し替える。⚠ その先の redo 分は元の手から続いていたので捨てる
   const steps = session.steps.slice(0, session.cursor);
   steps.push({ state: retry.state, move: retry.move, faithful: retry.faithful });
-  return { steps, cursor: steps.length - 1, selection: null };
+  return { ...session, steps, cursor: steps.length - 1, selection: null };
 }
 
 /** 直前の手が今「成った形」になっているか（ボタンの文言に使う） */
@@ -406,6 +476,8 @@ function promotionRetry(
   const prevStep = session.steps[session.cursor - 1];
   const move = last.move;
   if (!move) return null;
+  // `rules` のモードは**成れる手だけ**（打った駒は成らせない。server の検証と同じ出所の `canPromoteMove`）
+  if (session.mode === 'rules' && !canPromoteMove(prevStep.state, move)) return null;
 
   // 駒打ち（`P*5e`）: 前の局面から作り直さず、**盤に乗っている駒の成りを反転する**。
   // ⚠ 打ち直しではないので持ち駒の増減は起きない（局面編集としての成り変え）
@@ -448,8 +520,12 @@ function promotionRetry(
  * 盤面をハードコードせず、実際のタップと同じ経路（`tapSquare` / `tapHand`）を通すので、
  * 操作モデルを変えたらここも一緒に壊れる（＝嘘をつかない）。
  */
-export function applyStudyMoves(base: BoardState, moves: string[]): StudySession {
-  let session = createStudySession(base);
+export function applyStudyMoves(
+  base: BoardState,
+  moves: string[],
+  mode: StudyMode = 'free',
+): StudySession {
+  let session = createStudySession(base, mode);
   for (const move of moves) {
     const drop = move.match(/^([PLNSGBR])\*([1-9][a-i])$/);
     if (drop) {
@@ -517,7 +593,7 @@ export function commitReplay(
     // `state` は `move` を適用した結果そのものなので `faithful`（採点の対象になりうる）
     steps.push({ state, move: pv[i], faithful: true });
   }
-  return { steps, cursor: steps.length - 1, selection: null };
+  return { ...session, steps, cursor: steps.length - 1, selection: null };
 }
 
 /* ---------- 評価の送り先 ---------- */

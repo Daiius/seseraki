@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
-  canPromoteMove,
-  dropDestinations,
-  moveDestinations,
   parseSfen,
   usiToJapaneseWithPiece,
   type BoardState,
@@ -18,6 +15,7 @@ import {
   currentState,
   isLastMovePromoted,
   lastMove,
+  selectionDestinations,
   tapHand,
   tapSquare,
   togglePromotion,
@@ -27,7 +25,17 @@ import {
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillHistory, DrillList } from '../components/DrillTables';
 import { BrowserAnalysisNotice } from '../components/BrowserAnalysis';
-import { answerBodyWithEvaluation, answerStepOf, type AnswerBody } from '../lib/drillAnswer';
+import {
+  answerBodyWithEvaluation,
+  answerStepOf,
+  lineAfterUndoTurn,
+  matePliesText,
+  missText,
+  practiceNote,
+  resultBadge,
+  type AnswerBody,
+  type MissReason,
+} from '../lib/drillAnswer';
 import { gradingFailureMessage, requestBrowserGrading } from '../lib/browserAnalysis/grading';
 import {
   getBrowserAnalysisState,
@@ -183,13 +191,26 @@ interface Reveal {
   answerPv: string[] | null;
   playedMove: string | null;
   playedLossCp: number | null;
+  /** ユーザーの手順の手数（詰将棋の詰み上がりに出す） */
+  plies: number;
+  /** 当初の正解手順の手数 */
+  answerPlies: number | null;
+  /** 「答えを見る」で出した結果 */
+  gaveUp?: boolean;
 }
 
-const VERDICT_TEXT = {
-  correct: { label: '正解', className: 'badge-success' },
-  close: { label: '惜しい', className: 'badge-warning' },
-  wrong: { label: '不正解', className: 'badge-error' },
-} as const;
+/** 解答後の表示に要る、画面側の事情（練習で解いたか・記録済みの判定） */
+interface Shown extends Reveal {
+  practice: boolean;
+  recorded: Reveal['verdict'] | null;
+}
+
+/** 詰将棋で間違えた手の案内（その手は盤から取り消してある） */
+interface Miss {
+  reason: MissReason;
+  /** 咎め筋（受けの手）。日本語にして持つ（読む局面は取り消す前の盤） */
+  refutationText: string | null;
+}
 
 /** ポーリングの間隔と総予算。server の期限（最大 240 秒）に合わせて切る（prd/12 §2.4） */
 const POLL_INTERVAL_MS = 1500;
@@ -423,8 +444,17 @@ function DrillRunner({
   /** 出題局面からの確定した手順（受方の応手を含む。prd/13 §5.3） */
   const [line, setLine] = useState<string[]>([]);
   const [session, setSession] = useState<StudySession | null>(() => sessionOf(initial.drill, []));
-  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [reveal, setReveal] = useState<Shown | null>(null);
   const [judging, setJudging] = useState(false);
+  /** 詰将棋で間違えた手の案内（次の操作で消える） */
+  const [miss, setMiss] = useState<Miss | null>(null);
+  /**
+   * この問題で記録した判定（prd/13 §6.2）。🔒 **記録は 1 問 1 回**——最初に間違えた・答えを見た・解き終えた時点で
+   * 決まり、以後の操作（続けて詰ませる・1 手戻す・最初から・解答後のやり直し）は練習（`practice`）で送る
+   */
+  const [recorded, setRecorded] = useState<Reveal['verdict'] | null>(null);
+  /** 「答えを見る」の 1 段目を押した（画面内の 2 段の確認。`confirm()` は使わない） */
+  const [confirmGiveUp, setConfirmGiveUp] = useState(false);
   /** この端末のエンジンで採点できなかった（同意の前・解析できない環境など）。案内（同意のボタンなど）も並べて出す */
   const [ungradable, setUngradable] = useState(false);
 
@@ -437,33 +467,14 @@ function DrillRunner({
 
 
   /**
-   * 盤を叩く。⚠ **動かせるのは手番側の駒だけ**（出題は自分の手番の局面。prd/13 §4.1）。
-   *
-   * 🔴 **行き先も候補に無ければ受け付けない**（レビュー `OCL-1A2B07B9`）。塗るだけだと
-   * **歩を横に動かす・飛車が駒を飛び越える**といった手を盤から作れてしまい、
-   * server の検証（`validateMoveOnPosition`）は駒の動き方を見ないので**エンジンまで届く**。
-   * ⚠ 検討盤（フル編集）はこの制限を持たない——**出題だけの規則**。
+   * 盤を叩く。🔒 **盤操作は「ルールどおり」のモード**（`lib/study.ts`）——手番側の駒だけ選べ、
+   * 行き先は駒の動き方の中だけ（レビュー `OCL-1A2B07B9`。server の `validateMoveOnPosition` は
+   * 駒の動き方を見ないので、塗るだけだと歩を横に動かす手がエンジンまで届く）。
+   * 盤の駒を選択中に駒台を叩いても駒台へは移らず、持ち駒の選択に切り替わる（prd/13 §7.1）。
+   * ⚠ 検討盤は自由編集のまま——**出題だけの規則**。
    */
   function onSquare(square: SquareRef) {
     if (!session || reveal || judging || pending) return;
-    const current = currentState(session);
-    const piece = current.board[square.row][square.col];
-    if (session.selection === null) {
-      if (piece?.side !== current.sideToMove) return;
-      setSession(tapSquare(session, square));
-      return;
-    }
-    // 選択の解除（同じマスをもう一度叩く）は候補の外でも通す
-    if (
-      session.selection.kind === 'square' &&
-      session.selection.square.row === square.row &&
-      session.selection.square.col === square.col
-    ) {
-      setSession(tapSquare(session, square));
-      return;
-    }
-    const allowed = destinationsOf(session) ?? [];
-    if (!allowed.some((d) => d.row === square.row && d.col === square.col)) return;
     setSession(tapSquare(session, square));
   }
 
@@ -472,12 +483,69 @@ function DrillRunner({
     setSession(tapHand(session, currentState(session).sideToMove, kind));
   }
 
-  async function answer(move: string) {
+  /** 確定した手順まで盤を戻す（間違えた手・確定前の手を捨てる） */
+  function resetTo(next: string[]) {
+    setLine(next);
+    setSession(sessionOf(drill, next));
+    setMiss(null);
+    setError(null);
+    setUngradable(false);
+    setConfirmGiveUp(false);
+  }
+
+  /** 最初から（出題局面へ）。解答後も押せる——以後は練習（記録しない） */
+  function restart() {
+    resetTo([]);
+    setReveal(null);
+  }
+
+  /** 1 手戻す（詰将棋。受方の応手と自分の手の 2 手ぶん） */
+  function undoTurn() {
+    const next = lineAfterUndoTurn(line);
+    if (next) resetTo(next);
+  }
+
+  /** 答えを見る（諦め）。記録は不正解（記録済みなら練習） */
+  async function giveUp() {
     if (!drill) return;
+    const practice = recorded !== null;
+    setConfirmGiveUp(false);
+    setJudging(true);
+    setError(null);
+    try {
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind']['give-up'].$post({
+        param: refParam(drill),
+        // 確定した手順だけ送る（確定前の手は捨てる）
+        json: { line, practice },
+      });
+      const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
+      if (step.kind !== 'done') {
+        setError(step.kind === 'error' ? step.text : `サーバーエラー (${res.status})`);
+        return;
+      }
+      const nextRecorded = practice ? recorded : step.result.verdict;
+      setRecorded(nextRecorded);
+      setSession(sessionOf(drill, line));
+      setMiss(null);
+      setReveal({ ...step.result, practice, recorded: nextRecorded });
+    } catch {
+      setError('サーバーに接続できません');
+    } finally {
+      setJudging(false);
+    }
+  }
+
+  async function answer(move: string) {
+    if (!drill || !session) return;
     setJudging(true);
     setError(null);
     setUngradable(false);
-    let body: AnswerBody = { line: [...line, move], ...scoring };
+    setMiss(null);
+    setConfirmGiveUp(false);
+    const practice = recorded !== null;
+    /** 答えた手を指した後の局面（咎め筋はここから読む） */
+    const answered = currentState(session);
+    let body: AnswerBody = { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) };
     let deadline = Date.now() + POLL_BUDGET_MS;
     try {
       while (Date.now() < deadline) {
@@ -529,10 +597,25 @@ function DrillRunner({
             setJudging(false);
             return;
           }
-          case 'done':
-            setReveal(step.result);
+          case 'miss': {
+            // 詰将棋で間違えた。**その手を取り消して同じ局面で考え直す**（prd/13 §5.2）。
+            // 記録は最初の間違いの 1 回（server が記録済み）。以後は練習で送る
+            if (!practice) setRecorded('wrong');
+            setMiss({
+              reason: step.reason,
+              refutationText: step.refutation.length > 0 ? movesText(answered, step.refutation) : null,
+            });
+            setSession(sessionOf(drill, line));
             setJudging(false);
             return;
+          }
+          case 'done': {
+            const nextRecorded = practice ? recorded : step.result.verdict;
+            setRecorded(nextRecorded);
+            setReveal({ ...step.result, practice, recorded: nextRecorded });
+            setJudging(false);
+            return;
+          }
         }
       }
       setError('判定が終わりませんでした。もう一度お試しください');
@@ -587,7 +670,7 @@ function DrillRunner({
         flipped={flipped}
         onSquareClick={reveal ? undefined : onSquare}
         selected={session?.selection?.kind === 'square' ? session.selection.square : null}
-        destinations={destinationsOf(session)}
+        destinations={selectionDestinations(session)}
       />
       <HandDisplay
         hand={state.hand[flipped ? 'gote' : 'sente']}
@@ -611,19 +694,24 @@ function DrillRunner({
         </p>
       )}
 
+      {miss && !reveal && !judging && (
+        <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1">
+          <span>{missText(miss.reason)}。その手を取り消しました</span>
+          {miss.refutationText && <span className="break-all">咎め筋 {miss.refutationText}</span>}
+        </div>
+      )}
+
       {pending && !reveal && !judging && (
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm">
             {usiToJapaneseWithPiece(session!.steps[session!.cursor - 1].state, pending)}
           </span>
           {/*
-            🔒 **成れる手のときだけ「成」を出す。** 検討盤の `canTogglePromotion` は
-            フル編集向けで打った駒まで成らせるため、そのまま使うと
-            **押せるのに server が 400（illegal_promotion）を返すボタン**ができる。
-            規則は `shared` の `canPromoteMove`（server の検証と同じ出所）。
+            🔒 **成れる手のときだけ「成」を出す。** 自由編集の `canTogglePromotion` は打った駒まで
+            成らせるため、そのままだと**押せるのに server が 400（illegal_promotion）を返すボタン**ができる。
+            「ルールどおり」のモードは `shared` の `canPromoteMove`（server の検証と同じ出所）で絞る（`lib/study.ts`）。
           */}
-          {canPromoteMove(session!.steps[session!.cursor - 1].state, pending) &&
-            canTogglePromotion(session!) && (
+          {canTogglePromotion(session!) && (
             <button
               type="button"
               className="btn btn-sm"
@@ -641,6 +729,52 @@ function DrillRunner({
         </div>
       )}
 
+      {!reveal && !judging && (
+        // 🔒 「この手で答える」から離して控えめに置く（prd/13 §7.1）
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-base-300">
+          {drill.kind === 'mate' && (
+            <>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                disabled={lineAfterUndoTurn(line) === null}
+                onClick={undoTurn}
+              >
+                1 手戻す
+              </button>
+              <button
+                type="button"
+                className="btn btn-xs btn-ghost"
+                disabled={line.length === 0 && !pending}
+                onClick={restart}
+              >
+                最初から
+              </button>
+            </>
+          )}
+          {!confirmGiveUp && (
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost ms-auto"
+              onClick={() => setConfirmGiveUp(true)}
+            >
+              答えを見る
+            </button>
+          )}
+          {confirmGiveUp && (
+            // 確認の 2 ボタンだけを 1 行に並べる（スマホ幅で「やめる」が次の行に落ちないように）
+            <div className="flex items-center gap-2 flex-nowrap w-full justify-end">
+              <button type="button" className="btn btn-xs btn-outline btn-error" onClick={giveUp}>
+                本当に答えを見る（不正解になります）
+              </button>
+              <button type="button" className="btn btn-xs btn-ghost" onClick={() => setConfirmGiveUp(false)}>
+                やめる
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {reveal && (
         <Result
           reveal={reveal}
@@ -650,6 +784,7 @@ function DrillRunner({
           answered={state}
           onNext={onNext}
           onExclude={exclude}
+          onRestart={restart}
         />
       )}
     </div>
@@ -664,16 +799,20 @@ function Result({
   answered,
   onNext,
   onExclude,
+  onRestart,
 }: {
-  reveal: Reveal;
+  reveal: Shown;
   drill: Drill;
   base: BoardState;
   /** 答えた手を指した後の局面（咎め筋の読み出しに使う） */
   answered: BoardState;
   onNext: () => void;
   onExclude: () => void;
+  /** 最初から解き直す（練習。記録しない） */
+  onRestart: () => void;
 }) {
-  const verdict = VERDICT_TEXT[reveal.verdict];
+  const verdict = resultBadge(drill.kind, reveal.verdict, reveal.practice);
+  const note = practiceNote(reveal.practice, reveal.recorded);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -681,10 +820,15 @@ function Result({
         {reveal.lossCp !== null && (
           <span className="text-sm">損失 {reveal.lossCp}cp</span>
         )}
+        {drill.kind === 'mate' && reveal.verdict === 'correct' && (
+          <span className="text-sm">{matePliesText(reveal.plies, reveal.answerPlies)}</span>
+        )}
+        {reveal.gaveUp && <span className="text-sm text-base-content/70">答えを見ました</span>}
         <span className="text-sm">
           正解 {usiToJapaneseWithPiece(base, reveal.answerMove)}
         </span>
       </div>
+      {note && <p className="text-xs text-base-content/60">{note}</p>}
 
       {drill.kind === 'mate' && reveal.answerPv && (
         <p className="text-sm break-all">
@@ -724,6 +868,9 @@ function Result({
         <button type="button" className="btn btn-sm btn-ghost" onClick={onExclude}>
           自明だった
         </button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onRestart}>
+          最初から
+        </button>
       </div>
     </div>
   );
@@ -733,16 +880,8 @@ function Result({
 function sessionOf(drill: Drill | null, line: string[]): StudySession | null {
   if (!drill) return null;
   const base = parseSfen(drill.sfen);
-  return base ? applyStudyMoves(base, line) : null;
-}
-
-/** 選択中の駒が動けるマス（prd/13 §3）。**盤の見た目の助けで、合否には使わない** */
-function destinationsOf(session: StudySession | null): SquareRef[] | null {
-  if (!session?.selection) return null;
-  const state = currentState(session);
-  return session.selection.kind === 'square'
-    ? moveDestinations(state, session.selection.square)
-    : dropDestinations(state, session.selection.side, session.selection.piece);
+  // 🔒 出題の盤は「ルールどおり」（`lib/study.ts`。prd/13 §7.1）
+  return base ? applyStudyMoves(base, line, 'rules') : null;
 }
 
 /** 読み筋を日本語にする（盤面を進めながら読むので `shared` の変換をそのまま使う） */

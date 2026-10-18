@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { solveDrillSearch, type DrillRef } from '../lib/drillSearch';
+import { attemptMoveLabel } from '../lib/drillAnswer';
 
 /**
  * 出題の一覧と解答履歴の表（prd/13 §7.2 / §7.3）。
@@ -340,7 +341,7 @@ export function DrillHistory({
                   </td>
                   <td className="whitespace-nowrap">{row.moveNumber + 1} 手目</td>
                   <td className="whitespace-nowrap">{KIND_LABEL[row.kind]}</td>
-                  <td className="whitespace-nowrap">{row.moveText ?? '—'}</td>
+                  <td className="whitespace-nowrap">{attemptMoveLabel(row)}</td>
                   <td className="whitespace-nowrap">
                     {verdict ? (
                       <span className={`badge badge-sm whitespace-nowrap ${verdict.className}`}>

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { parseSfen, usiToJapaneseWithPiece } from 'shared';
 import {
   DEFAULT_SCORING,
+  givesCheck,
+  isGiveUpLine,
   isMateAfter,
+  matchMateLine,
   isPrefixOf,
   isReachableMove,
   mateStep,
@@ -169,6 +172,69 @@ describe('isMateAfter（候補なしの終局判定。prd/13 §5.2）', () => {
 
   it('読めない手は false（数字を捏造しない）', () => {
     expect(isMateAfter(state, 'zzz', 'sente')).toBe(false);
+  });
+});
+
+describe('givesCheck（詰将棋の手は王手でなければ不正解。prd/13 §5.2）', () => {
+  const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b G 1')!;
+
+  it('受方の玉に王手が掛かる手だけ true', () => {
+    expect(givesCheck(state, 'G*5b', 'sente')).toBe(true);
+    expect(givesCheck(state, 'G*9i', 'sente')).toBe(false);
+  });
+
+  it('読めない手は false', () => {
+    expect(givesCheck(state, 'zzz', 'sente')).toBe(false);
+  });
+});
+
+describe('matchMateLine（元の正解手順と覚えた別解の両方で照らす。prd/13 §5.2）', () => {
+  const pv = ['a1', 'r1', 'a2'];
+  const alt = ['b1', 'r2', 'b2', 'r3', 'b3'];
+
+  it('どちらの先頭にも合わなければ mismatch（400）', () => {
+    expect(matchMateLine([alt, pv], ['c1', 'r1', 'x'])).toEqual({ state: 'mismatch' });
+  });
+
+  it('🔴 別解を覚えていても、元の正解手順をなぞれば受方の応手を返す（やり直し）', () => {
+    expect(matchMateLine([alt, pv], ['a1'])).toEqual({ state: 'match', reply: 'r1', solved: false });
+    expect(matchMateLine([alt, pv], ['a1', 'r1', 'a2'])).toEqual({ state: 'match', reply: null, solved: true });
+  });
+
+  it('覚えた別解をなぞれば別解の応手を返す', () => {
+    expect(matchMateLine([alt, pv], ['b1', 'r2', 'b2'])).toEqual({ state: 'match', reply: 'r3', solved: false });
+  });
+
+  it('手順は合うが最後の手が外れたら deviated（エンジンへ）', () => {
+    expect(matchMateLine([alt, pv], ['a1', 'r1', 'z'])).toEqual({ state: 'deviated' });
+    expect(matchMateLine([null, pv], ['z'])).toEqual({ state: 'deviated' });
+  });
+
+  it('正解手順が 1 本も無ければ mismatch', () => {
+    expect(matchMateLine([null, null], ['a1'])).toEqual({ state: 'mismatch' });
+  });
+});
+
+describe('isGiveUpLine（諦めの手順の検証。prd/13 §5.3）', () => {
+  const pv = ['a1', 'r1', 'a2', 'r2', 'a3'];
+  const alt = ['b1', 'r9', 'b2'];
+
+  it('次の一手は空の手順だけ', () => {
+    expect(isGiveUpLine('best', [], [])).toBe(true);
+    expect(isGiveUpLine('best', ['a1'], [])).toBe(false);
+  });
+
+  it('詰将棋は空か、正解手順（元の pv・覚えた別解）の先頭の偶数手', () => {
+    expect(isGiveUpLine('mate', [], [null, pv])).toBe(true);
+    expect(isGiveUpLine('mate', ['a1', 'r1'], [null, pv])).toBe(true);
+    expect(isGiveUpLine('mate', ['b1', 'r9'], [alt, pv])).toBe(true);
+    expect(isGiveUpLine('mate', ['a1', 'r1'], [alt, pv])).toBe(true);
+  });
+
+  it('奇数手（最後がユーザーの手）・先頭が合わない手順は false', () => {
+    expect(isGiveUpLine('mate', ['a1'], [null, pv])).toBe(false);
+    expect(isGiveUpLine('mate', ['a1', 'x'], [null, pv])).toBe(false);
+    expect(isGiveUpLine('mate', ['b1', 'r9'], [null, pv])).toBe(false);
   });
 });
 

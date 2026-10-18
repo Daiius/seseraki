@@ -191,7 +191,8 @@ export async function drillCounts(tx: Tx, ownerId: string) {
   const [row] = await tx
     .select({
       total: sql<number>`count(distinct ${drills.id})`.mapWith(Number),
-      answered: sql<number>`count(distinct case when ${drillAttempts.move} is not null then ${drills.id} end)`.mapWith(
+      // 判定を持つ行（諦めを含む）。除外だけの行（`verdict` が null）は数えない（prd/13 §6.2）
+      answered: sql<number>`count(distinct case when ${drillAttempts.verdict} is not null then ${drills.id} end)`.mapWith(
         Number,
       ),
       correct: sql<number>`count(distinct case when ${drillAttempts.verdict} = 'correct' then ${drills.id} end)`.mapWith(
@@ -330,6 +331,7 @@ export async function listDrills(tx: Tx, ownerId: string, query: DrillListQuery)
  *
  * 🔒 **同じ問題の複数回はまとめない**——間違えた後に正解した経過が読めなくなる。
  * ⚠ **「自明だった」の行（`move` / `verdict` が null）も出す**（prd/13 §6.2）。
+ * 「諦めて答えを見る」の行は `verdict='wrong'`・`move` が null（web は手の欄に「（諦めた）」と出す）。
  */
 export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAttemptQuery) {
   const where = drillAttemptWhere(ownerId, query);
@@ -390,7 +392,8 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
         // 盤面を作れない行（`line` を持たない既存の詰将棋・作り直した `usiMoves`）は
         // **USI のまま出す**——復元できない表記を作らない
         moveText: state && move ? usiToJapaneseWithPiece(state, move) : move,
-        attemptNo: move ? row.attemptNo : null,
+        // 何回目かは判定を持つ行だけ（諦めは数える・除外だけの行は null）
+        attemptNo: row.verdict ? row.attemptNo : null,
       };
     }),
     pagination: {
@@ -405,7 +408,7 @@ export async function listDrillAttempts(tx: Tx, ownerId: string, query: DrillAtt
  * 「自明だった」の取り消し（prd/13 §7.2）。
  *
  * 🔒 **除外の行そのものを消す**——印を取り消す操作なので、印を残さない。
- * 解答の行（`move` を持つ行）は触らないので、**解答履歴は消えない**。
+ * 解答の行（判定を持つ行・諦めを含む）は触らないので、**解答履歴は消えない**。
  * 🔒 **所有者の行だけ**（prd/14 §4）。呼び出し側は先に `loadDrill` で問題が本人のものか確かめる。
  */
 export async function unexcludeDrill(tx: Tx, ownerId: string, drillId: number): Promise<void> {

@@ -5,6 +5,7 @@ import {
   pieceAt,
   positionSfen,
   handCount,
+  parseSfen,
 } from 'shared';
 import {
   applyStudyMoves,
@@ -25,6 +26,7 @@ import {
   redo,
   redoAll,
   resetStudy,
+  selectionDestinations,
   squareOfUsi,
   tapHand,
   tapSquare,
@@ -605,5 +607,82 @@ describe('clearSelection', () => {
     expect(cleared.selection).toBeNull();
     expect(cleared.steps).toBe(s.steps);
     expect(cleared.cursor).toBe(s.cursor);
+  });
+});
+
+describe('ルールどおりのモード（出題。prd/13 §7.1）', () => {
+  // 平手の先手番に、先手・後手とも金を 1 枚ずつ持たせた局面
+  const withGold = parseSfen('lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b Gg 1')!;
+  const rules = () => createStudySession(withGold, 'rules');
+
+  it('相手の駒は選べない・手番側の駒は選べる', () => {
+    expect(tapSquare(rules(), sq('3c')).selection).toBeNull();
+    expect(tapSquare(rules(), sq('7g')).selection).toEqual({ kind: 'square', square: sq('7g') });
+  });
+
+  it('行き先の外を叩いても何も起きない（選択も解かない）・行き先の中なら指す', () => {
+    const selected = tapSquare(rules(), sq('7g'));
+    const ignored = tapSquare(selected, sq('7e'));
+    expect(ignored).toBe(selected);
+    const moved = tapSquare(selected, sq('7f'));
+    expect(lastMove(moved)).toBe('7g7f');
+    expect(currentState(moved).sideToMove).toBe('gote');
+  });
+
+  it('同じマスをもう一度叩けば選択を解く', () => {
+    expect(tapSquare(tapSquare(rules(), sq('7g')), sq('7g')).selection).toBeNull();
+  });
+
+  it('🔴 盤の駒を選択中に駒台を叩いたら、その持ち駒の選択に切り替える（駒台へ移さない）', () => {
+    const switched = tapHand(tapSquare(rules(), sq('7g')), 'sente', 'G');
+    expect(switched.selection).toEqual({ kind: 'hand', side: 'sente', piece: 'G' });
+    expect(isStudying(switched)).toBe(false);
+    expect(pieceAt(currentState(switched), sq('7g'))).toEqual({ side: 'sente', kind: 'P' });
+    expect(handCount(currentState(switched), 'sente', 'P')).toBe(0);
+    expect(canPutSelectionOnHand(tapSquare(rules(), sq('7g')))).toBe(false);
+  });
+
+  it('相手の駒台・持っていない駒種・受け皿は何も起きない', () => {
+    const selected = tapSquare(rules(), sq('7g'));
+    expect(tapHand(selected, 'gote', 'G')).toBe(selected);
+    expect(tapHand(selected, 'sente', 'R')).toBe(selected);
+    expect(tapHand(selected, 'sente')).toBe(selected);
+  });
+
+  it('打てるのは空いたマスだけ・打った駒は成らせない', () => {
+    const hand = tapHand(rules(), 'sente', 'G');
+    expect(tapSquare(hand, sq('7g'))).toBe(hand);
+    const dropped = tapSquare(hand, sq('5e'));
+    expect(lastMove(dropped)).toBe('G*5e');
+    expect(canTogglePromotion(dropped)).toBe(false);
+  });
+
+  it('成れる手だけ成 / 不成を切り替えられる', () => {
+    // 角道を開けて角を敵陣へ（成れる手）
+    const session = applyStudyMoves(withGold, ['7g7f', '3c3d', '8h2b'], 'rules');
+    expect(lastMove(session)).toBe('8h2b');
+    expect(canTogglePromotion(session)).toBe(true);
+    expect(lastMove(togglePromotion(session))).toBe('8h2b+');
+  });
+
+  it('モードは手順を進めても・最初に戻しても保たれる', () => {
+    const moved = tapSquare(tapSquare(rules(), sq('7g')), sq('7f'));
+    expect(moved.mode).toBe('rules');
+    expect(resetStudy(moved).mode).toBe('rules');
+    expect(undo(moved).mode).toBe('rules');
+  });
+
+  it('塗りは選択中の駒の行き先', () => {
+    expect(selectionDestinations(tapSquare(rules(), sq('7g')))).toEqual([sq('7f')]);
+    expect(selectionDestinations(rules())).toBeNull();
+  });
+});
+
+describe('自由編集のモード（検討盤。既定）', () => {
+  it('盤の駒を選択中に駒台を叩けば、その駒は駒台へ移る（従来どおり）', () => {
+    const session = tapHand(tapSquare(createStudySession(initial), sq('7g')), 'sente', 'P');
+    expect(session.mode).toBe('free');
+    expect(pieceAt(currentState(session), sq('7g'))).toBeNull();
+    expect(handCount(currentState(session), 'sente', 'P')).toBe(1);
   });
 });

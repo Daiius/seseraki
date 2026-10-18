@@ -66,9 +66,10 @@ import {
 import { parsePositionKey } from './positions.js';
 import {
   DEFAULT_SCORING,
-  isPrefixOf,
+  givesCheck,
+  isGiveUpLine,
   isReachableMove,
-  mateStep,
+  matchMateLine,
   scoreFromCandidates,
   type DrillScoring,
 } from './drill-answer.js';
@@ -216,6 +217,27 @@ function applyLine(base: BoardState, moves: string[]): BoardState | null {
     }
   }
   return state;
+}
+
+/**
+ * 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）。
+ * `plies` はユーザーの手順の手数、`answerPlies` は当初の正解手順の手数（詰将棋の結果に出す。prd/13 §7.1）
+ */
+function drillReveal(
+  drill: NonNullable<Awaited<ReturnType<typeof loadDrill>>>,
+  line: string[],
+) {
+  return {
+    kifuNo: drill.kifuNo,
+    moveNumber: drill.moveNumber,
+    reason: drill.reason,
+    answerMove: drill.answerMove,
+    answerPv: drill.answerPv,
+    playedMove: drill.playedMove,
+    playedLossCp: drill.playedLossCp,
+    plies: line.length,
+    answerPlies: drill.answerPv?.length ?? null,
+  };
 }
 
 /**
@@ -690,6 +712,52 @@ const route = app
       return c.json({ ok: true } as const);
     },
   )
+  // 「諦めて答えを見る」（prd/13 §5.3・2026-10-19 決定）。**不正解として記録する**
+  // （`verdict: 'wrong'`・`move: null`・`line` はそこまで確定した手順）。応答は解答の口の `done` と同じ形。
+  // `line` は確定済みの手順（最後は受方の応手か空）。`best` は空のみ、`mate` は受け付ける正解手順
+  // （元の pv・覚えた別解）のどれかの先頭と一致すること。違えば 400。
+  // `practice: true`（解答後のやり直し）は記録しない
+  .post(
+    '/drills/:kifuNo/:moveNumber/:kind/give-up',
+    trustedOrigin,
+    smallBody,
+    sessionRequired,
+    zv('param', drillRefParam),
+    zv(
+      'json',
+      z.object({
+        line: z.array(z.string().min(2).max(8)).max(64),
+        practice: z.boolean().optional(),
+      }),
+    ),
+    async (c) => {
+      const { line, practice } = c.req.valid('json');
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      const { id } = drill;
+      if (!isGiveUpLine(drill.kind, line, [recallLine(id), drill.answerPv])) {
+        return c.json({ error: '手順が出題と噛み合いません' } as const, 400);
+      }
+      if (!practice) {
+        await recordAttempt(c.get('tx'), {
+          drillId: id,
+          ownerId: drill.ownerId,
+          move: null,
+          line,
+          verdict: 'wrong',
+          lossCp: null,
+        });
+      }
+      forgetLine(id);
+      return c.json({
+        status: 'done' as const,
+        verdict: 'wrong' as const,
+        lossCp: null,
+        gaveUp: true as const,
+        ...drillReveal(drill, line),
+      });
+    },
+  )
   // 解答（prd/13 §5）。**採点は server が持つ**——候補手と正解手をクライアントへ
   // 先に渡さないための置き場所でもある（上記 `/drills/next`）。
   // `line` は**出題局面からの全手順**（受方の応手を含み、最後がユーザーの手）。
@@ -715,10 +783,12 @@ const route = app
         closeMargin: z.number().int().min(0).max(10000).optional(),
         // ブラウザの名指し評価（`evaluate` を受けたブラウザが付けて送り直す。prd/13 §5.3）
         evaluation: drillNamedEvaluationSchema.optional(),
+        // 練習（解答後の「最初からやり直す」）。判定は返すが記録しない（prd/13 §5.3）
+        practice: z.boolean().optional(),
       }),
     ),
     async (c) => {
-      const { line, correctMargin, closeMargin, evaluation } = c.req.valid('json');
+      const { line, correctMargin, closeMargin, evaluation, practice } = c.req.valid('json');
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       // 出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない。prd/14 §4.4）
@@ -731,10 +801,11 @@ const route = app
       // 🔴 **手順が問いに対応していることを、局面を作る前に確かめる**
       // （レビュー `OCL-41F41851`）。任意の派生局面を作らせると、**別の局面で採点して
       // 出題局面の最善値と比べる**ことになり、採点も解答履歴も問いと噛み合わなくなる。
-      // 覚えている手順（別解に入った後）を優先し、無ければ出題時の pv（prd/13 §5.2）
-      const expected = drill.kind === 'mate' ? (recallLine(id) ?? drill.answerPv ?? []) : [];
+      // 🔴 **元の正解手順と覚えた別解のどちらかの先頭と一致すれば受ける**（2026-10-19 決定。prd/13 §5.2）。
+      // 覚えた別解だけで照らすと、「最初からやり直す」で元の手順を指したときに 400 になる
+      const mateMatch = drill.kind === 'mate' ? matchMateLine([recallLine(id), drill.answerPv], line) : null;
       const prefix = line.slice(0, -1);
-      if (drill.kind === 'best' ? line.length !== 1 : !isPrefixOf(prefix, expected)) {
+      if (drill.kind === 'best' ? line.length !== 1 : mateMatch?.state === 'mismatch') {
         return c.json({ error: '手順が出題と噛み合いません' } as const, 400);
       }
 
@@ -774,31 +845,35 @@ const route = app
       });
 
       // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）
-      const reveal = {
-        kifuNo: drill.kifuNo,
-        moveNumber: drill.moveNumber,
-        reason: drill.reason,
-        answerMove: drill.answerMove,
-        answerPv: drill.answerPv,
-        playedMove: drill.playedMove,
-        playedLossCp: drill.playedLossCp,
+      const reveal = drillReveal(drill, line);
+      /** 解答の記録。🔒 練習（`practice`）は書かない */
+      const record = async (verdict: 'correct' | 'close' | 'wrong', lossCp: number | null) => {
+        if (practice) return;
+        await recordAttempt(c.get('tx'), { drillId: id, ownerId: drill.ownerId, move, line, verdict, lossCp });
       };
 
-      if (drill.kind === 'mate') {
-        const step = mateStep(expected, line);
+      if (drill.kind === 'mate' && mateMatch) {
+        // 🔴 **王手でない手は即不正解**（prd/13 §5.2・2026-10-19 決定）。エンジンの mate は静かな手や
+        // 回り道も詰みと数えるので、エンジン（棋譜解析の再利用・worker・ブラウザ）に回す前に盤面で見る。
+        // 🔒 ブラウザに `evaluate` を返さない。手数の上限は設けない（王手の連続で詰むなら回り道でも別解）
+        if (!givesCheck(state, move, state.sideToMove)) {
+          await record('wrong', null);
+          forgetLine(id);
+          return c.json({
+            status: 'done' as const,
+            verdict: 'wrong' as const,
+            lossCp: null,
+            wrongReason: 'not_check' as const,
+            ...reveal,
+          });
+        }
+        const step = mateMatch;
         if (step.state === 'match') {
           if (!step.solved) {
             // 途中。受方の応手だけ返す（**残りの手順は渡さない**）
             return c.json({ status: 'continue' as const, reply: step.reply });
           }
-          await recordAttempt(c.get('tx'), {
-            drillId: id,
-            ownerId: drill.ownerId,
-            move,
-            line,
-            verdict: 'correct',
-            lossCp: null,
-          });
+          await record('correct', null);
           forgetLine(id);
           // ⚠ `lossCp` は必ず載せる（mate では常に null）。応答の形を分岐で変えない
           return c.json({
@@ -809,17 +884,23 @@ const route = app
           });
         }
         // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）
-        const deviated = await answerWithEngine({ ...(await engineInput()), drill, state, move, line, scoring }, reveal);
+        const deviated = await answerWithEngine(
+          { ...(await engineInput()), drill, state, move, line, scoring, practice },
+          reveal,
+        );
         return c.json(deviated.body, deviated.status);
       }
 
       // 次の一手。**出題時の候補手にあれば往復ゼロで採点する**（prd/13 §5.1）
       const scored = scoreFromCandidates(drill, move, scoring);
       if (scored) {
-        await recordAttempt(c.get('tx'), { drillId: id, ownerId: drill.ownerId, move, line, ...scored });
+        await record(scored.verdict, scored.lossCp);
         return c.json({ status: 'done' as const, ...scored, ...reveal });
       }
-      const resolved = await answerWithEngine({ ...(await engineInput()), drill, state, move, line, scoring }, reveal);
+      const resolved = await answerWithEngine(
+        { ...(await engineInput()), drill, state, move, line, scoring, practice },
+        reveal,
+      );
       return c.json(resolved.body, resolved.status);
     },
   )

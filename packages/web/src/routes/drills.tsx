@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
-  canPromoteMove,
-  dropDestinations,
-  moveDestinations,
   parseSfen,
   usiToJapaneseWithPiece,
   type BoardState,
@@ -18,6 +15,7 @@ import {
   currentState,
   isLastMovePromoted,
   lastMove,
+  selectionDestinations,
   tapHand,
   tapSquare,
   togglePromotion,
@@ -437,33 +435,14 @@ function DrillRunner({
 
 
   /**
-   * 盤を叩く。⚠ **動かせるのは手番側の駒だけ**（出題は自分の手番の局面。prd/13 §4.1）。
-   *
-   * 🔴 **行き先も候補に無ければ受け付けない**（レビュー `OCL-1A2B07B9`）。塗るだけだと
-   * **歩を横に動かす・飛車が駒を飛び越える**といった手を盤から作れてしまい、
-   * server の検証（`validateMoveOnPosition`）は駒の動き方を見ないので**エンジンまで届く**。
-   * ⚠ 検討盤（フル編集）はこの制限を持たない——**出題だけの規則**。
+   * 盤を叩く。🔒 **盤操作は「ルールどおり」のモード**（`lib/study.ts`）——手番側の駒だけ選べ、
+   * 行き先は駒の動き方の中だけ（レビュー `OCL-1A2B07B9`。server の `validateMoveOnPosition` は
+   * 駒の動き方を見ないので、塗るだけだと歩を横に動かす手がエンジンまで届く）。
+   * 盤の駒を選択中に駒台を叩いても駒台へは移らず、持ち駒の選択に切り替わる（prd/13 §7.1）。
+   * ⚠ 検討盤は自由編集のまま——**出題だけの規則**。
    */
   function onSquare(square: SquareRef) {
     if (!session || reveal || judging || pending) return;
-    const current = currentState(session);
-    const piece = current.board[square.row][square.col];
-    if (session.selection === null) {
-      if (piece?.side !== current.sideToMove) return;
-      setSession(tapSquare(session, square));
-      return;
-    }
-    // 選択の解除（同じマスをもう一度叩く）は候補の外でも通す
-    if (
-      session.selection.kind === 'square' &&
-      session.selection.square.row === square.row &&
-      session.selection.square.col === square.col
-    ) {
-      setSession(tapSquare(session, square));
-      return;
-    }
-    const allowed = destinationsOf(session) ?? [];
-    if (!allowed.some((d) => d.row === square.row && d.col === square.col)) return;
     setSession(tapSquare(session, square));
   }
 
@@ -587,7 +566,7 @@ function DrillRunner({
         flipped={flipped}
         onSquareClick={reveal ? undefined : onSquare}
         selected={session?.selection?.kind === 'square' ? session.selection.square : null}
-        destinations={destinationsOf(session)}
+        destinations={selectionDestinations(session)}
       />
       <HandDisplay
         hand={state.hand[flipped ? 'gote' : 'sente']}
@@ -617,13 +596,11 @@ function DrillRunner({
             {usiToJapaneseWithPiece(session!.steps[session!.cursor - 1].state, pending)}
           </span>
           {/*
-            🔒 **成れる手のときだけ「成」を出す。** 検討盤の `canTogglePromotion` は
-            フル編集向けで打った駒まで成らせるため、そのまま使うと
-            **押せるのに server が 400（illegal_promotion）を返すボタン**ができる。
-            規則は `shared` の `canPromoteMove`（server の検証と同じ出所）。
+            🔒 **成れる手のときだけ「成」を出す。** 自由編集の `canTogglePromotion` は打った駒まで
+            成らせるため、そのままだと**押せるのに server が 400（illegal_promotion）を返すボタン**ができる。
+            「ルールどおり」のモードは `shared` の `canPromoteMove`（server の検証と同じ出所）で絞る（`lib/study.ts`）。
           */}
-          {canPromoteMove(session!.steps[session!.cursor - 1].state, pending) &&
-            canTogglePromotion(session!) && (
+          {canTogglePromotion(session!) && (
             <button
               type="button"
               className="btn btn-sm"
@@ -733,16 +710,8 @@ function Result({
 function sessionOf(drill: Drill | null, line: string[]): StudySession | null {
   if (!drill) return null;
   const base = parseSfen(drill.sfen);
-  return base ? applyStudyMoves(base, line) : null;
-}
-
-/** 選択中の駒が動けるマス（prd/13 §3）。**盤の見た目の助けで、合否には使わない** */
-function destinationsOf(session: StudySession | null): SquareRef[] | null {
-  if (!session?.selection) return null;
-  const state = currentState(session);
-  return session.selection.kind === 'square'
-    ? moveDestinations(state, session.selection.square)
-    : dropDestinations(state, session.selection.side, session.selection.piece);
+  // 🔒 出題の盤は「ルールどおり」（`lib/study.ts`。prd/13 §7.1）
+  return base ? applyStudyMoves(base, line, 'rules') : null;
 }
 
 /** 読み筋を日本語にする（盤面を進めながら読むので `shared` の変換をそのまま使う） */

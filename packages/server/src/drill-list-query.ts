@@ -1,7 +1,7 @@
 // 出題の一覧（`GET /api/drills`）と解答履歴（`GET /api/drills/attempts`）の
 // 絞り込み・並べ替え（prd/13 §5.4）。
 // DB 接続を持たない組み立てだけを置き、`drill-query.ts` から使う（単体テスト可能に保つため）。
-import { and, asc, desc, eq, getTableName, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableName, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { drillAttempts, drills, kifus } from './db/schema.js';
 
@@ -35,16 +35,20 @@ export type DrillAttemptQuery = z.infer<typeof drillAttemptQuerySchema>;
 
 // --- 一覧の集計（1 問 1 行にまとめる。prd/13 §7.2）---
 
-/** 解答回数。**除外だけの行（`move` が null）は数えない**（prd/13 §6.2） */
-export const ANSWER_COUNT = sql<number>`count(case when ${drillAttempts.move} is not null then 1 end)`;
+/**
+ * 解答回数。**判定を持つ行（`verdict` が null でない）を数える**（prd/13 §6.2）。
+ * 「諦めて答えを見る」の行（`verdict='wrong'`・`move` が null）は解答として数え、
+ * 除外だけの行（`verdict` が null）は数えない
+ */
+export const ANSWER_COUNT = sql<number>`count(case when ${drillAttempts.verdict} is not null then 1 end)`;
 /** 正解した回数 */
 export const CORRECT_COUNT = sql<number>`count(case when ${drillAttempts.verdict} = 'correct' then 1 end)`;
 /** 「自明だった」の印（prd/13 §7.1）。1 つでも立っていれば除外 */
 export const EXCLUDED_COUNT = sql<number>`count(case when ${drillAttempts.excluded} then 1 end)`;
-/** 最終解答日時。未解答なら null */
+/** 最終解答日時（諦めを含む。除外だけの行は含めない）。未解答なら null */
 export const LAST_ANSWERED_AT = sql<
   Date | string | null
->`max(case when ${drillAttempts.move} is not null then ${drillAttempts.createdAt} end)`;
+>`max(case when ${drillAttempts.verdict} is not null then ${drillAttempts.createdAt} end)`;
 
 /**
  * 日時を常に ISO 文字列で返す（`sql` 断片の戻りはドライバ依存で Date とは限らない）。
@@ -104,12 +108,14 @@ export function drillAttemptWhere(ownerId: string, query: DrillAttemptQuery): SQ
       ? eq(drillAttempts.excluded, true)
       : query.verdict === 'all'
         ? undefined
-        : and(eq(drillAttempts.verdict, query.verdict), isNotNull(drillAttempts.move)),
+        : // 判定で絞る（除外だけの行は `verdict` が null なので混ざらない）。
+          // 「諦め」の行（`move` が null）も不正解として出す（prd/13 §6.2）
+          eq(drillAttempts.verdict, query.verdict),
   );
 }
 
 /**
- * その解答が**その問題の何回目か**（prd/13 §7.3）。除外だけの行（`move` が null）は数えない。
+ * その解答が**その問題の何回目か**（prd/13 §7.3）。除外だけの行（`verdict` が null）は数えない（諦めは数える）。
  *
  * 🔴 **`alias()` したテーブルを `sql` テンプレートに差し込まない**（実際に踏んだ）。
  * 選択リストの中では**別名だけが出力されて元のテーブル名が消える**ため、
@@ -125,7 +131,7 @@ export const ATTEMPT_NO = sql<number>`${sql.raw(
     const inner = (column: { name: string }) => `"prior"."${column.name}"`;
     return `(select count(*) from "${table}" "prior"
       where ${inner(drillAttempts.drillId)} = ${outer(drillAttempts.drillId)}
-        and ${inner(drillAttempts.move)} is not null
+        and ${inner(drillAttempts.verdict)} is not null
         and ${inner(drillAttempts.id)} <= ${outer(drillAttempts.id)})`;
   })(),
 )}`;

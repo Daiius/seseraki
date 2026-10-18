@@ -99,6 +99,11 @@ export interface ResolveInput {
   /** 出題局面からの全手順（最後が `move`） */
   line: string[];
   scoring: DrillScoring;
+  /**
+   * 練習（解答後の「最初からやり直す」。prd/13 §5.3）。true なら判定は返すが **`drillAttempts` に書かない**
+   * （別解の手順の記憶は通常どおり）
+   */
+  practice?: boolean;
 }
 
 /**
@@ -181,7 +186,7 @@ export function judgeNamedEvaluation(
 async function settle(input: ResolveInput, best: NamedCandidate | undefined): Promise<EngineAnswer> {
   const { tx, drill, move, line } = input;
   const judged = judgeNamedEvaluation(input, best);
-  if (judged.attempt) {
+  if (judged.attempt && !input.practice) {
     await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...judged.attempt });
   }
   if (judged.remember) rememberLine(drill.id, judged.remember);

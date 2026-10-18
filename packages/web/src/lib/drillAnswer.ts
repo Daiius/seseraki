@@ -135,3 +135,24 @@ export function attemptMoveLabel(row: { verdict: string | null; move: string | n
   if (row.move === null) return row.verdict !== null ? '（諦めた）' : '—';
   return row.moveText ?? row.move;
 }
+
+/**
+ * 結果の札（prd/13 §7.1）。🔴 **練習で詰ませた（記録は別に確定済み）ときは「詰み」**——緑の「正解」にすると、
+ * 「記録は不正解のままです」と並んで紛らわしい。記録した解答・次の一手は判定どおり
+ */
+export function resultBadge(
+  kind: 'mate' | 'best',
+  verdict: 'correct' | 'close' | 'wrong',
+  practice: boolean,
+): { label: string; className: string } {
+  if (kind === 'mate' && verdict === 'correct' && practice) {
+    return { label: '詰み', className: 'badge-success badge-outline' };
+  }
+  return VERDICT_BADGE[verdict];
+}
+
+const VERDICT_BADGE = {
+  correct: { label: '正解', className: 'badge-success' },
+  close: { label: '惜しい', className: 'badge-warning' },
+  wrong: { label: '不正解', className: 'badge-error' },
+} as const;

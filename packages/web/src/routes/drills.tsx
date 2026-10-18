@@ -32,6 +32,7 @@ import {
   matePliesText,
   missText,
   practiceNote,
+  resultBadge,
   type AnswerBody,
   type MissReason,
 } from '../lib/drillAnswer';
@@ -210,12 +211,6 @@ interface Miss {
   /** 咎め筋（受けの手）。日本語にして持つ（読む局面は取り消す前の盤） */
   refutationText: string | null;
 }
-
-const VERDICT_TEXT = {
-  correct: { label: '正解', className: 'badge-success' },
-  close: { label: '惜しい', className: 'badge-warning' },
-  wrong: { label: '不正解', className: 'badge-error' },
-} as const;
 
 /** ポーリングの間隔と総予算。server の期限（最大 240 秒）に合わせて切る（prd/12 §2.4） */
 const POLL_INTERVAL_MS = 1500;
@@ -757,20 +752,25 @@ function DrillRunner({
               </button>
             </>
           )}
-          <span className="ms-auto" />
-          {confirmGiveUp ? (
-            <>
+          {!confirmGiveUp && (
+            <button
+              type="button"
+              className="btn btn-xs btn-ghost ms-auto"
+              onClick={() => setConfirmGiveUp(true)}
+            >
+              答えを見る
+            </button>
+          )}
+          {confirmGiveUp && (
+            // 確認の 2 ボタンだけを 1 行に並べる（スマホ幅で「やめる」が次の行に落ちないように）
+            <div className="flex items-center gap-2 flex-nowrap w-full justify-end">
               <button type="button" className="btn btn-xs btn-outline btn-error" onClick={giveUp}>
                 本当に答えを見る（不正解になります）
               </button>
               <button type="button" className="btn btn-xs btn-ghost" onClick={() => setConfirmGiveUp(false)}>
                 やめる
               </button>
-            </>
-          ) : (
-            <button type="button" className="btn btn-xs btn-ghost" onClick={() => setConfirmGiveUp(true)}>
-              答えを見る
-            </button>
+            </div>
           )}
         </div>
       )}
@@ -811,7 +811,7 @@ function Result({
   /** 最初から解き直す（練習。記録しない） */
   onRestart: () => void;
 }) {
-  const verdict = VERDICT_TEXT[reveal.verdict];
+  const verdict = resultBadge(drill.kind, reveal.verdict, reveal.practice);
   const note = practiceNote(reveal.practice, reveal.recorded);
   return (
     <div className="card bg-base-200 p-3 space-y-2">

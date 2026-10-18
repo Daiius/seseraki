@@ -7,6 +7,7 @@ import {
   matePliesText,
   missText,
   practiceNote,
+  resultBadge,
 } from './drillAnswer';
 
 const SETTINGS = {
@@ -117,5 +118,17 @@ describe('attemptMoveLabel（履歴の手の欄。prd/13 §7.3）', () => {
     expect(attemptMoveLabel({ verdict: 'wrong', move: null, moveText: null })).toBe('（諦めた）');
     expect(attemptMoveLabel({ verdict: null, move: null, moveText: null })).toBe('—');
     expect(attemptMoveLabel({ verdict: 'correct', move: '7g7f', moveText: '▲7六歩' })).toBe('▲7六歩');
+  });
+});
+
+describe('resultBadge（結果の札）', () => {
+  it('🔴 練習で詰ませたら「詰み」（正解とは別の見た目）', () => {
+    expect(resultBadge('mate', 'correct', true)).toEqual({ label: '詰み', className: 'badge-success badge-outline' });
+  });
+
+  it('記録した詰み上がり・次の一手は判定どおり', () => {
+    expect(resultBadge('mate', 'correct', false).label).toBe('正解');
+    expect(resultBadge('best', 'correct', true).label).toBe('正解');
+    expect(resultBadge('mate', 'wrong', true).label).toBe('不正解');
   });
 });

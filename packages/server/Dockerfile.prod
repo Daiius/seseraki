@@ -1,7 +1,7 @@
 # ========================================
 # Stage 1: ビルド
 # ========================================
-FROM node:22-slim AS build
+FROM node:24-slim AS build
 
 WORKDIR /workspace
 
@@ -27,7 +27,7 @@ RUN pnpm --filter server build
 # ========================================
 # 🔒 nonroot（uid 65532）で動かす。server はファイルを書かないので権限は要らない。
 # :debug（root・busybox のシェル入り）にすると侵入後の足場が増える
-FROM gcr.io/distroless/nodejs22-debian12:nonroot
+FROM gcr.io/distroless/nodejs24-debian13:nonroot
 
 WORKDIR /app
 

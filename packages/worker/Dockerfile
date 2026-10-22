@@ -12,7 +12,7 @@ WORKDIR /yaneuraou/source
 RUN make clean YANEURAOU_EDITION=${EDITION} && \
     make -j$(nproc) tournament COMPILER=clang++ YANEURAOU_EDITION=${EDITION} TARGET_CPU=${TARGET_CPU}
 
-FROM node:22-slim
+FROM node:24-slim
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

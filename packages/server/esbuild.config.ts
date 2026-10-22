@@ -48,7 +48,7 @@ await build({
   outdir: "./dist",
   bundle: true,
   platform: "node",
-  target: "node22",
+  target: "node24",
   format: "esm",
   minify: true,
   sourcemap: false,

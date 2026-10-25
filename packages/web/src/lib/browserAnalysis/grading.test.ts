@@ -109,6 +109,51 @@ describe('requestBrowserGrading', () => {
     expect(await pending).toEqual({ kind: 'unavailable', reason: 'off' });
   });
 
+  it('同意を求める手立て（askConsent）があれば、同意の前でも答えを待つ。同意したら起動を待って頼む', async () => {
+    const { d, setPhase } = deps('needs-consent');
+    let agree!: (agreed: boolean) => void;
+    let asked = 0;
+    const pending = requestBrowserGrading(REQUEST, {
+      ...d,
+      askConsent: () => {
+        asked++;
+        return new Promise((resolve) => (agree = resolve));
+      },
+    });
+    await Promise.resolve();
+    expect(asked).toBe(1);
+    agree(true);
+    await Promise.resolve();
+    // 起動し直すまで同意の前の状態が残っても、求め直さない
+    setPhase('needs-consent');
+    expect(asked).toBe(1);
+    setPhase('off');
+    offs.push(setBrowserGrader(async () => OK));
+    expect(await pending).toEqual(OK);
+  });
+
+  it('同意を断ったら declined（頼まない）', async () => {
+    const { d } = deps('needs-consent');
+    expect(await requestBrowserGrading(REQUEST, { ...d, askConsent: async () => false })).toEqual({
+      kind: 'unavailable',
+      reason: 'declined',
+    });
+  });
+
+  it('同意を待つ間は時間切れを数えない', async () => {
+    const { d, state } = deps('needs-consent');
+    let agree!: (agreed: boolean) => void;
+    const pending = requestBrowserGrading(REQUEST, {
+      ...d,
+      askConsent: () => new Promise((resolve) => (agree = resolve)),
+    });
+    await Promise.resolve();
+    // 最初に掛けたタイマーは同意を求めたときに外してある（発火しても off にしない）
+    state.timers[0]();
+    agree(false);
+    expect(await pending).toEqual({ kind: 'unavailable', reason: 'declined' });
+  });
+
   it('読み終える前に常駐が止まったら、起動し直すのを待って頼み直す', async () => {
     let calls = 0;
     const off = setBrowserGrader(async () => {
@@ -128,7 +173,7 @@ describe('gradingFailureMessage', () => {
     const messages = [
       gradingFailureMessage({ kind: 'mismatch', returned: '7g7f' }),
       gradingFailureMessage({ kind: 'failed', detail: 'x' }),
-      ...(['needs-consent', 'unsupported', 'no-engine', 'error', 'off'] as const).map((reason) =>
+      ...(['needs-consent', 'unsupported', 'no-engine', 'error', 'off', 'declined'] as const).map((reason) =>
         gradingFailureMessage({ kind: 'unavailable', reason }),
       ),
     ];

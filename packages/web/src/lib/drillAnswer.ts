@@ -2,13 +2,14 @@
  * 出題の解答の口（`POST /api/drills/:kifuNo/:moveNumber/:kind/answer`。prd/13 §5.3）の応答を、次にすることで分ける。
  *
  * - `wait-job`（202 `pending`）: 手元 worker の名指し評価を待って、同じ本文を投げ直す（担当がサーバーのとき）
- * - `evaluate`（200 `evaluate`）: このブラウザのエンジンで名指しで読み、結果を付けて同じ解答を送り直す（担当がブラウザのとき）
+ * - `evaluate`（200 `evaluate`）: このブラウザのエンジンで名指しで読み、結果を付けて同じ解答を送り直す
+ *   （次の一手は担当がブラウザのとき・詰将棋は担当によらず。読めなければ「読めない」と申告して送り直す。prd/13 §5.5）
  * - `continue` / `done`: 詰みが続く / 採点が確定した
  * - `miss`（詰将棋）: 間違えた手（王手でない・詰まない）。その手を取り消して続ける。答えは載らない（prd/13 §5.2）
  *
  * 🔒 **判定は server**。ここは応答の振り分けと、送り直しの本文の組み立てだけ。
  */
-import type { BrowserAnalysisSettings, DrillNamedEvaluation } from 'shared';
+import type { DrillNamedEvaluation, NamedEvalSettings } from 'shared';
 
 /** 解答の本文（送り直しても `line` と線引きは変えない） */
 export interface AnswerBody {
@@ -16,6 +17,11 @@ export interface AnswerBody {
   correctMargin?: number;
   closeMargin?: number;
   evaluation?: DrillNamedEvaluation;
+  /**
+   * この端末のエンジンでは読めない（同意しない・解析できない環境・エンジンが無い・読みが失敗した。prd/13 §5.5）。
+   * 詰将棋で付ける。server は担当がサーバーならそれを見て手元 worker で判定する
+   */
+  browserUnavailable?: boolean;
   /**
    * 練習（記録しない）。🔒 その問題の記録が済んだ後の操作（最初の間違い・答えを見た・解答後のやり直しの後）は
    * すべて練習で送る（prd/13 §6.2）
@@ -30,7 +36,8 @@ export type MissReason = 'not_check' | 'no_mate';
 export interface EvaluateRequest {
   sfen: string;
   move: string;
-  settings: BrowserAnalysisSettings;
+  /** 読む設定（server が決める。詰将棋は固定のスレッド数・打ち切りが付く） */
+  settings: NamedEvalSettings;
 }
 
 export type AnswerStep<Done> =
@@ -44,10 +51,14 @@ export type AnswerStep<Done> =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
-function isSettings(value: unknown): value is BrowserAnalysisSettings {
+function isSettings(value: unknown): value is NamedEvalSettings {
   if (!isRecord(value)) return false;
-  return ['movetimeMs', 'multiPv', 'hashMb', 'maxThreads', 'chunkIntervalMs', 'chunkMaxPositions', 'pvMaxPlies'].every(
-    (key) => typeof value[key] === 'number',
+  return (
+    ['movetimeMs', 'multiPv', 'hashMb', 'maxThreads', 'chunkIntervalMs', 'chunkMaxPositions', 'pvMaxPlies'].every(
+      (key) => typeof value[key] === 'number',
+    ) &&
+    (value.threads === undefined || typeof value.threads === 'number') &&
+    (value.stopOnMate === undefined || typeof value.stopOnMate === 'boolean')
   );
 }
 
@@ -68,6 +79,7 @@ export function answerStepOf<Done>(status: number, body: unknown): AnswerStep<Do
   switch (body.status) {
     case 'evaluate':
       if (typeof body.sfen === 'string' && typeof body.move === 'string' && isSettings(body.settings)) {
+        // 🔒 設定は server の値をそのまま使う（ブラウザが決めない）
         return { kind: 'evaluate', request: { sfen: body.sfen, move: body.move, settings: body.settings } };
       }
       break;
@@ -93,6 +105,23 @@ export function answerStepOf<Done>(status: number, body: unknown): AnswerStep<Do
  */
 export function answerBodyWithEvaluation(body: AnswerBody, evaluation: DrillNamedEvaluation): AnswerBody {
   return { ...body, evaluation };
+}
+
+/**
+ * 「この端末では読めない」を申告する送り直しの本文（詰将棋。prd/13 §5.5）。`line` と線引きは最初の解答のまま。
+ * server は担当がサーバーなら手元 worker で判定し（`pending`）、担当がブラウザならまた `evaluate` を返す（このとき画面は採点できない旨を出す）
+ */
+export function answerBodyUnavailable(body: AnswerBody): AnswerBody {
+  return { ...body, browserUnavailable: true };
+}
+
+/**
+ * `evaluate` を受けたときにすること（prd/13 §5.3・§5.5）。
+ * - `read`: このブラウザで読む
+ * - `give-up`: 読んだ結果を付けた・読めないと申告した送り直しに、また `evaluate` が返った（噛み合っていない・担当がブラウザで読めない）。回り続けない
+ */
+export function onEvaluate(body: AnswerBody): 'read' | 'give-up' {
+  return body.evaluation || body.browserUnavailable ? 'give-up' : 'read';
 }
 
 /** 間違えた手の案内（prd/13 §7.1）。🔒 内部の用語を出さない */

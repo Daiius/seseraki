@@ -41,14 +41,14 @@ import {
 import { findKifuPositionMatches, lookupKifuEvaluation } from './position-kifu-reuse.js';
 import {
   drillCounts,
-  listDrillAttempts,
+  listDrillAttemptsOf,
   listDrills,
   loadDrill,
   loadDrillQuestion,
   pickNextDrill,
   unexcludeDrill,
 } from './drill-query.js';
-import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query.js';
+import { drillListQuerySchema } from './drill-list-query.js';
 import { encodeCandidates, type CandidateMove } from './kifu-analysis-detail.js';
 import { saveAnalysis } from './kifu-analysis-store.js';
 import { parsePositionKey, replacePositions } from './positions.js';
@@ -360,11 +360,10 @@ describe('所有者スコープ: 出題（prd/13・prd/14 §4）', () => {
   });
 
   it('件数・一覧・解答履歴に A のぶんが入らない', async () => {
-    expect(await asB((tx) => drillCounts(tx, userB))).toEqual({ total: 0, answered: 0, correct: 0 });
+    expect(await asB((tx) => drillCounts(tx, userB))).toEqual({ total: 0, recommend: 0, mate: 0, best: 0, wrong: 0 });
     expect((await asB((tx) => listDrills(tx, userB, drillListQuerySchema.parse({})))).pagination.total).toBe(0);
-    expect(
-      (await asB((tx) => listDrillAttempts(tx, userB, drillAttemptQuerySchema.parse({})))).pagination.total,
-    ).toBe(0);
+    const ref = { kifuNo: kifuA.no, moveNumber: 0, kind: 'best' as const };
+    expect((await asB((tx) => listDrillAttemptsOf(tx, userB, ref))).attempts).toEqual([]);
     // A からは見える（空振りしていない）
     expect((await asA((tx) => drillCounts(tx, userA))).total).toBe(1);
   });

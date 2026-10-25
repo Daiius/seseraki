@@ -493,13 +493,14 @@ describe('集計の戻り値（node-postgres は bigint を文字列で返す。
       .returning({ createdAt: drillAttempts.createdAt });
 
     const counts = await withUserTx(db, ownerId, (tx) => drillCounts(tx, ownerId));
-    expect(counts).toEqual({ total: 1, answered: 1, correct: 1 });
+    // 正解済みはおすすめの在庫（④）に入り、未解答・間違えたには入らない（prd/13 §6.4）
+    expect(counts).toEqual({ total: 1, recommend: 1, mate: 0, best: 0, wrong: 0 });
 
     const list = await withUserTx(db, ownerId, (tx) =>
       listDrills(tx, ownerId, drillListQuerySchema.parse({})),
     );
     expect(list.pagination.total).toBe(1);
-    expect(list.drills[0]).toMatchObject({ answers: 1, correct: 1, excluded: false, status: 'correct' });
+    expect(list.drills[0]).toMatchObject({ answers: 1, excluded: false, status: 'correct' });
     // 集計で取った日時（sql 断片）も、列から読んだ日時と同じ時刻を指す（セッションは Asia/Tokyo）
     expect(list.drills[0].lastAnsweredAt).toBe(attempt.createdAt.toISOString());
   });

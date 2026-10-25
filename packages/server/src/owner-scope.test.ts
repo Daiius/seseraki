@@ -30,14 +30,14 @@ import {
 import { findKifuPositionMatches } from './position-kifu-reuse.js';
 import {
   drillCounts,
-  listDrillAttempts,
+  listDrillAttemptsOf,
   listDrills,
   loadDrill,
   loadDrillQuestion,
   pickNextDrill,
   unexcludeDrill,
 } from './drill-query.js';
-import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query.js';
+import { drillListQuerySchema, drillNextQuerySchema } from './drill-list-query.js';
 import { countUnresolvedSubjects, removeAlias, updateAliasPeriod } from './users.js';
 
 const ME = 'user-a';
@@ -100,11 +100,13 @@ const CASES: [string, (tx: Tx) => Promise<unknown>][] = [
   ['findKifuPositionMatches（局面評価）', (tx) => findKifuPositionMatches(tx, ME, { sfen: INITIAL_SFEN, move: null })],
   ['findKifuPositionMatches（名指し評価）', (tx) => findKifuPositionMatches(tx, ME, { sfen: INITIAL_SFEN, move: '7g7f' })],
   ['pickNextDrill', (tx) => pickNextDrill(tx, ME)],
+  ['pickNextDrill（間違えた問題・この回）', (tx) =>
+    pickNextDrill(tx, ME, drillNextQuerySchema.parse({ mode: 'wrong', since: '2026-10-23T00:00:00Z' }))],
   ['loadDrill', (tx) => loadDrill(tx, ME, { kifuNo: 1, moveNumber: 0, kind: 'best' })],
   ['loadDrillQuestion', (tx) => loadDrillQuestion(tx, ME, { kifuNo: 1, moveNumber: 0, kind: 'best' })],
   ['drillCounts', (tx) => drillCounts(tx, ME)],
   ['listDrills', (tx) => listDrills(tx, ME, drillListQuerySchema.parse({}))],
-  ['listDrillAttempts', (tx) => listDrillAttempts(tx, ME, drillAttemptQuerySchema.parse({}))],
+  ['listDrillAttemptsOf', (tx) => listDrillAttemptsOf(tx, ME, { kifuNo: 1, moveNumber: 0, kind: 'best' })],
   ['unexcludeDrill', (tx) => unexcludeDrill(tx, ME, 1)],
   ['updateAliasPeriod', (tx) => updateAliasPeriod(tx, ME, 1, { validFrom: null, validTo: null })],
   ['removeAlias', (tx) => removeAlias(tx, ME, 1)],

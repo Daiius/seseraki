@@ -6,10 +6,12 @@ import {
   ANSWER_COUNT,
   ATTEMPT_NO,
   LAST_ANSWERED_AT,
+  LAST_VERDICT,
   drillAttemptOrderBy,
-  drillAttemptQuerySchema,
-  drillAttemptWhere,
   drillListHaving,
+  drillNextPlan,
+  drillNextQuerySchema,
+  drillStatusOf,
   isoOf,
   drillListOrderBy,
   drillListQuerySchema,
@@ -26,13 +28,8 @@ function render(fragment: SQL | undefined) {
 }
 
 describe('drillListQuerySchema', () => {
-  it('未指定は既定に落ちる（対局日降順・除外は隠す・全件）', () => {
-    expect(drillListQuerySchema.parse({})).toEqual({
-      page: 1,
-      status: 'all',
-      excluded: 'hide',
-      sort: 'played',
-    });
+  it('未指定は既定に落ちる（全件・除外は隠す）', () => {
+    expect(drillListQuerySchema.parse({})).toEqual({ page: 1, status: 'all' });
   });
 
   it('page は数値に変換し、1 未満は弾く', () => {
@@ -43,6 +40,10 @@ describe('drillListQuerySchema', () => {
   it('未知の値は弾く（URL 直入力）', () => {
     expect(drillListQuerySchema.safeParse({ status: 'unknown' }).success).toBe(false);
     expect(drillListQuerySchema.safeParse({ kind: 'tsume' }).success).toBe(false);
+  });
+
+  it('状態に excluded がある（旧 excluded=only を畳んだ。prd/13 §7.8）', () => {
+    expect(drillListQuerySchema.parse({ status: 'excluded' }).status).toBe('excluded');
   });
 });
 
@@ -55,9 +56,10 @@ describe('drillListHaving', () => {
     expect(sql).toContain('= 0');
   });
 
-  it('excluded=only は除外した問題だけに絞る', () => {
-    const { sql } = render(drillListHaving(parse({ excluded: 'only' })));
+  it('status=excluded は除外した問題だけに絞る', () => {
+    const { sql } = render(drillListHaving(parse({ status: 'excluded' })));
     expect(sql).toContain('> 0');
+    expect(sql).not.toContain('= 0');
   });
 
   it('status=unanswered は解答回数 0 の問題（諦めも解答として数える＝判定の有無で数える）', () => {
@@ -67,65 +69,96 @@ describe('drillListHaving', () => {
     expect(sql).toContain('= 0');
   });
 
-  it('status=wrong は「解答済みだがまだ正解していない」', () => {
+  it('🔒 status=wrong は最後の判定が正解でない問題（一度でも正解したかではない。prd/13 §6.4）', () => {
     const { sql } = render(drillListHaving(parse({ status: 'wrong' })));
-    expect(sql).toContain('> 0');
-    expect(sql).toContain("'correct'");
+    expect(sql).toContain('array_agg');
+    expect(sql).toContain("<> 'correct'");
   });
 
-  it('status=correct は正解した問題', () => {
+  it('status=correct は最後の判定が正解の問題', () => {
     const { sql } = render(drillListHaving(parse({ status: 'correct' })));
-    expect(sql).toContain("'correct'");
-    expect(sql).toContain('> 0');
+    expect(sql).toContain('array_agg');
+    expect(sql).toContain("= 'correct'");
   });
 });
 
 describe('drillListOrderBy', () => {
-  it('既定は対局日降順 + id を副キーにする', () => {
-    const order = drillListOrderBy(drillListQuerySchema.parse({}));
+  it('対局日降順 + id を副キーにする（出題順の並びは外した）', () => {
+    const order = drillListOrderBy();
     expect(order).toHaveLength(2);
     expect(render(order[0]).sql).toContain('coalesce');
     expect(render(order[1]).sql).toContain('desc');
   });
+});
 
-  it('sort=status は出題順の段を先頭に置く', () => {
-    const order = drillListOrderBy(drillListQuerySchema.parse({ sort: 'status' }));
-    expect(order).toHaveLength(3);
-    expect(render(order[0]).sql).toContain('case');
+describe('drillStatusOf', () => {
+  it('最後の判定で読む（惜しいも間違えた側）', () => {
+    expect(drillStatusOf(0, null)).toBe('unanswered');
+    expect(drillStatusOf(2, 'correct')).toBe('correct');
+    expect(drillStatusOf(2, 'close')).toBe('wrong');
+    expect(drillStatusOf(1, 'wrong')).toBe('wrong');
   });
 });
 
-describe('drillAttemptWhere', () => {
-  const parse = (q: Record<string, string>) => drillAttemptQuerySchema.parse(q);
-
-  it('既定は所有者だけで絞る（除外の行も含む）', () => {
-    const { sql, params } = render(drillAttemptWhere('7', parse({})));
-    expect(sql).toContain('"owner_id"');
-    expect(params).toEqual(['7']);
+describe('drillNextQuerySchema', () => {
+  it('既定はおすすめ', () => {
+    expect(drillNextQuerySchema.parse({})).toEqual({ mode: 'recommend' });
   });
 
-  it('verdict=excluded は「自明だった」の行', () => {
-    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'excluded' })));
-    expect(sql).toContain('"excluded"');
-    expect(params).toEqual(['7', true]);
+  it('since は日時として読み、読めない値は弾く', () => {
+    expect(drillNextQuerySchema.parse({ since: '2026-10-23T00:00:00.000Z' }).since).toEqual(
+      new Date('2026-10-23T00:00:00.000Z'),
+    );
+    expect(drillNextQuerySchema.safeParse({ since: 'yesterday' }).success).toBe(false);
+    expect(drillNextQuerySchema.safeParse({ mode: 'all' }).success).toBe(false);
+  });
+});
+
+describe('drillNextPlan（入口ごとの出題順。prd/13 §6.4）', () => {
+  const plan = (q: Record<string, string>) => drillNextPlan(drillNextQuerySchema.parse(q));
+
+  it('🔒 どの入口でも除外した問題を出さない', () => {
+    for (const mode of ['recommend', 'mate', 'best', 'wrong']) {
+      expect(render(plan({ mode }).having).sql).toContain('count(case when "drill_attempts"."excluded" then 1 end) = 0');
+    }
   });
 
-  it('verdict=correct は判定で絞る（除外だけの行は verdict が null なので混ざらない）', () => {
-    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'correct' })));
-    expect(sql).toContain('"verdict" = ');
-    expect(sql).not.toContain('"move"');
-    expect(params).toEqual(['7', 'correct']);
+  it('詰将棋・次の一手はその種類の未解答だけ（ランダム）', () => {
+    const mate = plan({ mode: 'mate' });
+    expect(render(mate.where).params).toEqual(['mate']);
+    expect(render(mate.having).sql).toContain('"verdict" is not null then 1 end) = 0');
+    expect(mate.orderBy.map((o) => render(o).sql)).toEqual(['random()']);
   });
 
-  it('verdict=wrong は諦めの行（move が null）を落とさない', () => {
-    const { sql, params } = render(drillAttemptWhere('7', parse({ verdict: 'wrong' })));
-    expect(sql).not.toContain('"move"');
-    expect(params).toEqual(['7', 'wrong']);
+  it('間違えた問題は種類混在・最後の解答が古い順で、1 日の待ちを掛けない', () => {
+    const wrong = plan({ mode: 'wrong' });
+    expect(wrong.where).toBeUndefined();
+    const having = render(wrong.having).sql;
+    expect(having).toContain("<> 'correct'");
+    expect(having).not.toContain("interval '1 day'");
+    expect(render(wrong.orderBy[0]).sql).toContain('max(');
+    expect(render(wrong.orderBy[0]).sql).toContain('asc');
   });
 
-  it('kind は出題の種類で絞る', () => {
-    const { params } = render(drillAttemptWhere('7', parse({ kind: 'mate' })));
-    expect(params).toEqual(['7', 'mate']);
+  it('おすすめは間違えた直後（1 日未満）を外し、段の順（間違えた → 直近 30 日の未解答 → 未解答 → 正解済み）', () => {
+    const recommend = plan({ mode: 'recommend' });
+    expect(render(recommend.having).sql).toContain("interval '1 day'");
+    const tier = render(recommend.orderBy[0]).sql;
+    expect(tier).toContain("interval '30 days'");
+    expect(tier).toMatch(/then 0[\s\S]*then 1[\s\S]*then 2[\s\S]*else 3/);
+    // ④だけ最後の解答が古い順、ほかはランダム
+    expect(render(recommend.orderBy[1]).sql).toContain('asc');
+    expect(render(recommend.orderBy[2]).sql).toBe('random()');
+  });
+
+  it('🔒 since を渡すとこの回に記録した問題を外す（除外だけの行は記録に数えない）', () => {
+    const since = '2026-10-23T00:00:00.000Z';
+    for (const mode of ['recommend', 'mate', 'best', 'wrong']) {
+      const { sql, params } = render(plan({ mode, since }).having);
+      expect(sql).toContain('"verdict" is not null and "drill_attempts"."created_at" >= ?');
+      expect(params).toContain(since);
+    }
+    expect(render(plan({}).having).sql).not.toContain('>= ?');
   });
 });
 
@@ -136,7 +169,7 @@ describe('drillAttemptWhere', () => {
  * **別名だけが出力されて元のテーブル名が消え**、`Table 'prior' doesn't exist` で 500 になる。
  */
 describe('選択リストの中で組み立てた SQL', () => {
-  /** 履歴の一覧（`listDrillAttempts`）と同じ結合で組み立てる */
+  /** その問題の解答履歴（`listDrillAttemptsOf`）と同じ結合で組み立てる */
   function renderAttemptsSelect() {
     const query = new QueryBuilder()
       .select({ attemptNo: ATTEMPT_NO, createdAt: drillAttempts.createdAt })
@@ -165,6 +198,7 @@ describe('選択リストの中で組み立てた SQL', () => {
         kifuCreatedAt: kifus.createdAt,
         answers: ANSWER_COUNT,
         lastAnsweredAt: LAST_ANSWERED_AT,
+        lastVerdict: LAST_VERDICT,
       })
       .from(drills)
       .innerJoin(kifus, eq(kifus.id, drills.kifuId))
@@ -173,6 +207,9 @@ describe('選択リストの中で組み立てた SQL', () => {
     const sql = dialect.sqlToQuery(query.getSQL()).sql;
     expect(sql).toContain('max(case when "drill_attempts"."verdict" is not null then "drill_attempts"."created_at" end)');
     expect(sql).toContain('count(case when "drill_attempts"."verdict" is not null then 1 end)');
+    expect(sql).toContain(
+      '(array_agg("drill_attempts"."verdict" order by "drill_attempts"."created_at" desc, "drill_attempts"."id" desc) filter (where "drill_attempts"."verdict" is not null))[1]',
+    );
   });
 });
 

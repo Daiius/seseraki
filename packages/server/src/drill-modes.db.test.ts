@@ -131,11 +131,52 @@ describe('入口ごとの出題順（prd/13 §6.4）', () => {
   });
 
   it('間違えた問題は最後の解答が古い順で、1 日の待ちを掛けない', async () => {
+    // 2 日前の d3 が 1 時間前の d4 より先
     expect(await next({ mode: 'wrong' })).toMatchObject({ moveNumber: 3 });
-    // d3 をこの回に解いたことにすると、間違えた直後の d4 が出る
-    expect(await next({ mode: 'wrong', since: ago(2 * DAY + HOUR).toISOString() })).toMatchObject({
-      moveNumber: 4,
+
+    // 1 日の待ちを掛けないこと: 間違えた直後の問題だけを持つ別のユーザーで見る。
+    // ⚠ 上のユーザーでは確かめられない——d3 だけを since で外そうとすると、それより新しい d4 の記録も
+    // since 以降になり、この回に記録した問題として一緒に外れる（§7.6 の規則どおり）
+    const [other] = await db
+      .insert(users)
+      .values({ name: 'n', email: `${randomUUID()}@example.invalid`, displayName: 'd' })
+      .returning({ id: users.id });
+    const kifu = await db.transaction((tx) =>
+      insertKifu(tx, { title: 't', kifText: '', ownerId: other.id, usiMoves: MOVES }),
+    );
+    const [only] = await db
+      .insert(drills)
+      .values({
+        kifuId: kifu.id,
+        ownerId: other.id,
+        moveNumber: 2,
+        kind: 'best',
+        reason: 'own_blunder',
+        answerMove: '2g2f',
+        answerScoreType: 'cp',
+        answerScoreValue: 100,
+        answerPv: null,
+        candidates: [],
+        matePlies: null,
+        analysisRevision: 0,
+        blunderCp: 600,
+        mateMaxPlies: 10,
+        generatorRev: 't',
+      })
+      .returning({ id: drills.id });
+    await db.insert(drillAttempts).values({
+      drillId: only.id,
+      ownerId: other.id,
+      move: '2g2f',
+      line: ['2g2f'],
+      verdict: 'wrong',
+      createdAt: ago(HOUR),
     });
+    const nextOf = (query: Record<string, string>) =>
+      withUserTx(db, other.id, (tx) => pickNextDrill(tx, other.id, drillNextQuerySchema.parse(query)));
+    expect(await nextOf({ mode: 'wrong' })).toMatchObject({ kifuNo: kifu.displayNo, moveNumber: 2 });
+    // おすすめには間違えた直後は出さない
+    expect(await nextOf({})).toBeNull();
   });
 
   it('在庫が尽きたら null', async () => {

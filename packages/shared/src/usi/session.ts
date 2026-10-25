@@ -7,7 +7,7 @@
  * （`shared` は `lib: esnext`・`types: []` で、`setTimeout` も `console` も型を持たない）。
  */
 import { parseBestmove, parseInfoLine } from './parser';
-import type { UsiInfo, UsiSearchResult } from './types';
+import type { UsiAnalyzeOptions, UsiInfo, UsiSearchResult } from './types';
 
 /**
  * エンジンとの行の入出力。**1 つのエンジンの 1 回の起動**に対応する
@@ -74,8 +74,11 @@ export interface UsiSession {
    * **全棋譜の意図しない全再解析**を招く。
    */
   getName(): string | undefined;
-  /** `position …` と `go …` を送り、`bestmove` までの info 行を集めて返す */
-  analyze(position: string, goCommand: string): Promise<UsiSearchResult>;
+  /**
+   * `position …` と `go …` を送り、`bestmove` までの info 行を集めて返す。
+   * `options.stopWhen` を渡すと、それが true を返した `info` で `stop` を送って打ち切る（詰将棋の判定。prd/13 §5.5）
+   */
+  analyze(position: string, goCommand: string, options?: UsiAnalyzeOptions): Promise<UsiSearchResult>;
   /** `expected` と一致する行（前後の空白は無視）が来るまで待つ */
   waitFor(expected: string, timeoutMs?: number): Promise<void>;
   /** コマンドをそのまま送る（`quit` など）。エンジンが死んでいれば投げる */
@@ -229,8 +232,9 @@ export function createUsiSession(
 
     getName: () => name,
 
-    analyze(position, goCommand) {
+    analyze(position, goCommand, analyzeOptions = {}) {
       const infoLines: UsiInfo[] = [];
+      let stoppedBy: UsiInfo | undefined;
       return waitForReply<UsiSearchResult>(
         defaultTimeoutMs,
         '[USI] Analysis timed out',
@@ -241,11 +245,21 @@ export function createUsiSession(
             return;
           }
           if (line.startsWith('info ')) {
-            infoLines.push(parseInfoLine(line));
+            const info = parseInfoLine(line);
+            infoLines.push(info);
+            // 打ち切りは 1 度だけ（`stop` の後に出る行では送り直さない）
+            if (stoppedBy === undefined && analyzeOptions.stopWhen?.(info)) {
+              stoppedBy = info;
+              try {
+                send('stop');
+              } catch (error) {
+                settle.reject(toError(error));
+              }
+            }
           } else if (line.startsWith('bestmove ')) {
             const bestmove = parseBestmove(line);
             const lastInfo = infoLines.at(-1) ?? {};
-            settle.resolve({ bestmove, infoLines, lastInfo });
+            settle.resolve({ bestmove, infoLines, lastInfo, ...(stoppedBy ? { stoppedBy } : {}) });
           }
         },
         () => {

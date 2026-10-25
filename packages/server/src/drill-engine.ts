@@ -1,12 +1,15 @@
 /**
  * 出題時の候補手に無い手を、エンジンに採点させる（prd/13 §5.1 / §5.2 / §5.3）。
  *
- * 読む場所は解答した利用者の**解析の担当**（prd/14 §5.7）で決まる:
+ * 読む場所は解答した利用者の**解析の担当**（prd/14 §5.7）で決まる（次の一手。詰将棋は下の別の規則）:
  * - **`worker`**: 手元 worker の名指し評価（prd/12 §2.4）にジョブを積む（`pending`）。server / worker に
  *   新しい経路を足さない——待ち時間の性質も、キャッシュも、キューの上限も共有される。
  * - **`browser`**: ジョブを積まず「この局面のこの手を名指しで読んでほしい」（`evaluate`）を返す。
  *   ブラウザが読み、結果を付けて同じ解答を送り直したら、その結果で判定する。
  *   🔒 **手元 worker にジョブを積むのは担当 `worker` の利用者だけ**（絞らないとログインした誰もが所有者の worker を使える）。
+ *
+ * **詰将棋**（prd/13 §5.5。2026-10-23 決定）は**担当によらずブラウザで読む**（{@link drillMateEvalSettings} の読み方）。
+ * ブラウザが読めない旨を申告してきた（`browserUnavailable`）ときだけ、担当 `worker` なら手元 worker に回す。
  *
  * 🔒 **判定は 1 本**（{@link judgeNamedEvaluation}）。手元 worker の結果も、棋譜解析の再利用も、ブラウザの結果も
  * 同じ関数を通す（正解 / 惜しい / 不正解・別解・詰み上がり・「候補なし」の扱い・別解の正解手順の記憶）。
@@ -14,7 +17,7 @@
  * ⚠ **待ちが出るのはここだけ。** 出題時の候補手にある手と、詰みの正解手順をなぞっている間は
  * エンジンを呼ばない（prd/13 §5.1）。
  */
-import { positionSfen, type BoardState, type Side } from 'shared';
+import { positionSfen, type BoardState, type NamedEvalSettings, type Side } from 'shared';
 import type { Tx } from './db/index.js';
 import {
   BROWSER_ANALYSIS_MOVETIME_MS,
@@ -52,6 +55,43 @@ export function drillBrowserEvalSettings(): BrowserStageSettings {
 /** ブラウザの名指しの思考時間（ms）。テスト・文書の照合用 */
 export const DRILL_BROWSER_EVAL_MOVETIME_MS = BROWSER_ANALYSIS_MOVETIME_MS[DRILL_BROWSER_EVAL_PROFILE];
 
+/**
+ * 詰将棋の判定の読み方（prd/13 §5.5。2026-10-24 決定）。🔒 **値はここ 1 か所**（全局面解析の full の設定とは別の値）。
+ * - `threads`: 固定のスレッド数。負荷の設定（「全力」「控えめ」）によらない（1 手の判定に端末を使い切らない）
+ * - `movetimeMs` / `longMovetimeMs`: 上限。残り手数が `longFromPlies` 以上なら長いほう。
+ *   🔒 短い問題でも `movetimeMs` より縮めない（回り道の別解を取りこぼさない。短い詰みは打ち切りで速く返る）
+ */
+export const DRILL_MATE_EVAL = {
+  threads: 2,
+  movetimeMs: 1000,
+  longMovetimeMs: 2000,
+  longFromPlies: 11,
+} as const;
+
+/** 詰将棋の判定の上限（ms）。`remainingPlies` は今の局面からの正解手順の残りの長さ（利用者の手を含む） */
+export function drillMateMovetimeMs(remainingPlies: number): number {
+  return remainingPlies >= DRILL_MATE_EVAL.longFromPlies
+    ? DRILL_MATE_EVAL.longMovetimeMs
+    : DRILL_MATE_EVAL.movetimeMs;
+}
+
+/**
+ * 詰将棋の判定でブラウザに渡す設定（prd/13 §5.5）。置換表・読み筋の長さなどは全局面解析の full と同じ
+ * （`maxThreads` も残す——全局面解析と共用のエンジンを作り直さないため）で、思考時間・スレッド数・打ち切りを差し替える。
+ * MultiPV は 1（全局面解析と同じ値）。🔒 **ブラウザは決めない**
+ */
+export function drillMateEvalSettings(remainingPlies: number): DrillEvalSettings {
+  return {
+    ...drillBrowserEvalSettings(),
+    movetimeMs: drillMateMovetimeMs(remainingPlies),
+    threads: DRILL_MATE_EVAL.threads,
+    stopOnMate: true,
+  };
+}
+
+/** ブラウザに名指しで読ませる設定（次の一手は full の設定そのもの・詰将棋は {@link drillMateEvalSettings}） */
+export type DrillEvalSettings = BrowserStageSettings & Pick<NamedEvalSettings, 'threads' | 'stopOnMate'>;
+
 export type EngineAnswer =
   /** まだ出ていない。要求側は `GET /positions/evaluate/:jobId` で取りに来て、同じ body を投げ直す */
   | { status: 'pending'; jobId: string }
@@ -59,7 +99,7 @@ export type EngineAnswer =
    * ブラウザに読ませる（担当 `browser`）。🔒 **答えは何も含めない**——局面はいま利用者が見ている局面、
    * 手は利用者自身の手、設定は全局面解析の full と同じもの
    */
-  | { status: 'evaluate'; sfen: string; move: string; settings: BrowserStageSettings }
+  | { status: 'evaluate'; sfen: string; move: string; settings: DrillEvalSettings }
   /**
    * 詰みが続いている。`reply` は**受方の応手**。
    * 🔒 **詰み上がりをここで返さない**（`done` で返す）——`continue` は「まだ続く」の意味に
@@ -101,6 +141,16 @@ export interface ResolveInput {
    * 🔒 **手は route が解答の手と照合済み**（別の手の評価で採点させない）
    */
   browserEvaluation?: { candidate: NamedCandidate | null };
+  /**
+   * ブラウザが「この端末では読めない」と申告してきた（同意しない・配信の設定で使えないなど。prd/13 §5.5）。
+   * 詰将棋で担当 `worker` ならこれを見て手元 worker に回す。申告を偽っても手元 worker を使えるのは担当 `worker` だけ
+   */
+  browserUnavailable?: boolean;
+  /**
+   * 詰将棋の残り手数（今の局面からの正解手順——別解を覚えていればそれ——の残りの長さ。利用者の手を含む）。
+   * 判定の上限を決める（{@link drillMateMovetimeMs}）。次の一手では使わない
+   */
+  mateRemainingPlies?: number;
   drill: DrillAnswerKey & { id: number; ownerId: string };
   /** ユーザーが手を指す**直前**の局面 */
   state: BoardState;
@@ -116,20 +166,36 @@ export interface ResolveInput {
 }
 
 /**
- * 評価を手元 worker / ブラウザのどちらで得るか（prd/13 §5.1・prd/14 §5.7）。
+ * 評価を手元 worker / ブラウザのどちらで得るか（prd/13 §5.1・§5.5・prd/14 §5.7）。
  * - `worker`: 手元 worker にジョブを積む（担当 `worker` の利用者だけ）
- * - `ask-browser`: ブラウザに名指しで読ませる（担当 `browser` で、まだ結果が付いていない）
+ * - `ask-browser`: ブラウザに名指しで読ませる（まだ結果が付いていない）
  * - `use-browser`: ブラウザが付けてきた結果で判定する
  *
- * 🔒 担当 `worker` の利用者がブラウザの結果を付けてきても使わない（担当を切り替えた直後の送り直しなど）。
- * 担当が読めない（null）ときは手元 worker を使わせない
+ * **次の一手**: 担当で決まる。🔒 担当 `worker` の利用者がブラウザの結果を付けてきても使わない（担当を切り替えた直後の送り直しなど）。
+ * **詰将棋**: 🔒 **担当によらずブラウザで読む**。ブラウザが読めない旨を申告してきたら、担当 `worker` だけ手元 worker に回す
+ * （担当 `browser` は読ませ続ける——web は「この端末では採点できない」を出す）。
+ * どちらも、担当が読めない（null）ときは手元 worker を使わせない
  */
-export function evaluationSourceOf(
-  assignee: AnalysisAssignee | null,
-  hasBrowserEvaluation: boolean,
-): 'worker' | 'ask-browser' | 'use-browser' {
+export function evaluationSourceOf(input: {
+  kind: 'mate' | 'best';
+  assignee: AnalysisAssignee | null;
+  hasBrowserEvaluation: boolean;
+  browserUnavailable: boolean;
+}): 'worker' | 'ask-browser' | 'use-browser' {
+  const { kind, assignee, hasBrowserEvaluation, browserUnavailable } = input;
+  if (kind === 'mate') {
+    if (hasBrowserEvaluation) return 'use-browser';
+    return assignee === 'worker' && browserUnavailable ? 'worker' : 'ask-browser';
+  }
   if (assignee === 'worker') return 'worker';
   return hasBrowserEvaluation ? 'use-browser' : 'ask-browser';
+}
+
+/** ブラウザに読ませるときの設定（詰将棋は判定の読み方・次の一手は全局面解析の full） */
+export function drillEvalSettingsFor(input: Pick<ResolveInput, 'drill' | 'mateRemainingPlies'>): DrillEvalSettings {
+  return input.drill.kind === 'mate'
+    ? drillMateEvalSettings(input.mateRemainingPlies ?? 0)
+    : drillBrowserEvalSettings();
 }
 
 /** 判定の結果。副作用（解答の記録・別解の手順の記憶）は呼び出し側が行う */
@@ -222,9 +288,15 @@ export async function resolveWithEngine(input: ResolveInput): Promise<EngineAnsw
   const reused = await lookupKifuEvaluation(tx, userId, { sfen, move });
   if (reused) return settle(input, reused.candidates[0]);
 
-  switch (evaluationSourceOf(input.assignee, input.browserEvaluation !== undefined)) {
+  const source = evaluationSourceOf({
+    kind: input.drill.kind,
+    assignee: input.assignee,
+    hasBrowserEvaluation: input.browserEvaluation !== undefined,
+    browserUnavailable: input.browserUnavailable === true,
+  });
+  switch (source) {
     case 'ask-browser':
-      return { status: 'evaluate', sfen, move, settings: drillBrowserEvalSettings() };
+      return { status: 'evaluate', sfen, move, settings: drillEvalSettingsFor(input) };
     case 'use-browser':
       return settle(input, input.browserEvaluation?.candidate ?? undefined);
     case 'worker':

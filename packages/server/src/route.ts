@@ -775,9 +775,11 @@ const route = app
   // 詰将棋で間違えた手（王手でない・詰まない）は `miss` を返し、利用者はその手を取り消して続ける（答えは載せない）。
   // `practice: true` は記録しない（最初の間違い・答えを見た後の操作。web が画面の状態で付ける）
   //
-  // 候補手の外の手（詰将棋で正解手順を外れた手）は名指し評価で採点する。読む場所は解析の担当（prd/14 §5.7）:
+  // 候補手の外の手（詰将棋で正解手順を外れた手）は名指し評価で採点する。次の一手は読む場所が解析の担当（prd/14 §5.7）で決まる:
   // 担当 `worker` は手元 worker にジョブを積み（`pending`）、担当 `browser` は「この局面のこの手を名指しで読んで」
   // （`evaluate`）を返す。ブラウザは読んだ結果を `evaluation` に付けて同じ解答を送り直し、判定は server が行う。
+  // 詰将棋は担当によらず `evaluate`（詰将棋の判定の読み方。prd/13 §5.5）。ブラウザが読めないと `browserUnavailable` で
+  // 申告してきたら、担当 `worker` だけ手元 worker に回す
   // 🔒 ブラウザから届く評価は信用できない入力なので、Origin の検査・本文の上限・形の検証（`shared` の
   // `drillNamedEvaluationSchema`）を掛け、評価の手が解答の手と一致することも確かめる（prd/14 §5.8）
   .post(
@@ -795,12 +797,14 @@ const route = app
         closeMargin: z.number().int().min(0).max(10000).optional(),
         // ブラウザの名指し評価（`evaluate` を受けたブラウザが付けて送り直す。prd/13 §5.3）
         evaluation: drillNamedEvaluationSchema.optional(),
+        // 「この端末では読めない」の申告（詰将棋。担当 worker なら手元 worker で判定する。prd/13 §5.5）
+        browserUnavailable: z.boolean().optional(),
         // 練習（解答後の「最初からやり直す」）。判定は返すが記録しない（prd/13 §5.3）
         practice: z.boolean().optional(),
       }),
     ),
     async (c) => {
-      const { line, correctMargin, closeMargin, evaluation, practice } = c.req.valid('json');
+      const { line, correctMargin, closeMargin, evaluation, practice, browserUnavailable } = c.req.valid('json');
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
       // 出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない。prd/14 §4.4）
@@ -854,6 +858,7 @@ const route = app
         userId: c.get('userId'),
         assignee: await analysisAssigneeOf(c.get('tx'), c.get('userId')),
         ...(evaluation ? { browserEvaluation: { candidate: evaluation.candidate } } : {}),
+        ...(browserUnavailable ? { browserUnavailable: true } : {}),
       });
 
       // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）
@@ -890,9 +895,19 @@ const route = app
             ...reveal,
           });
         }
-        // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）
+        // 手順から外れた。**別解かもしれない**のでエンジンに聞く（prd/13 §5.2）。
+        // 詰将棋は担当によらずブラウザで読み、上限は残り手数で決める（prd/13 §5.5）
         const deviated = await answerWithEngine(
-          { ...(await engineInput()), drill, state, move, line, scoring, practice },
+          {
+            ...(await engineInput()),
+            drill,
+            state,
+            move,
+            line,
+            scoring,
+            practice,
+            mateRemainingPlies: step.state === 'deviated' ? step.remainingPlies : 0,
+          },
           reveal,
         );
         return c.json(deviated.body, deviated.status);

@@ -24,10 +24,16 @@ import {
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
 import { DrillAttemptHistory, DrillCardList, type DrillAttemptRow } from '../components/DrillCards';
-import { BrowserAnalysisNotice } from '../components/BrowserAnalysis';
 import {
+  BrowserAnalysisNotice,
+  DrillEngineConsent,
+  DrillGradingHost,
+} from '../components/BrowserAnalysis';
+import {
+  answerBodyUnavailable,
   answerBodyWithEvaluation,
   answerStepOf,
+  onEvaluate,
   lineAfterUndoTurn,
   matePliesText,
   missText,
@@ -36,11 +42,18 @@ import {
   type AnswerBody,
   type MissReason,
 } from '../lib/drillAnswer';
-import { gradingFailureMessage, requestBrowserGrading } from '../lib/browserAnalysis/grading';
+import {
+  gradingFailureMessage,
+  requestBrowserGrading,
+  type GradingResult,
+} from '../lib/browserAnalysis/grading';
 import {
   getBrowserAnalysisState,
   subscribeBrowserAnalysisState,
+  useBrowserAnalysisState,
 } from '../lib/browserAnalysis/store';
+import { askDrillEngineConsent, requestDrillEngine } from '../lib/browserAnalysis/drillEngine';
+import { useAnalysisAssignee } from '../lib/useMe';
 import {
   drillRefOf,
   drillScreenOf,
@@ -70,6 +83,8 @@ import { drillRound, roundText } from '../lib/drillRound';
  * 🔒 **採点は server**。ここがやるのは盤の操作と、返ってきた判定の表示だけ。
  * 候補手の外の答えで server が「この局面のこの手を名指しで読んで」と返したら（ブラウザで解析する利用者。prd/13 §5.3）、
  * このブラウザのエンジンで読んだ結果を付けて同じ解答を送り直す。読めない端末では「採点できない」旨を出す（推測で判定しない）。
+ * 🔒 **詰将棋の判定は担当によらずこのブラウザで読む**（prd/13 §5.5）。サーバーで解析する利用者には、初めて詰将棋の 1 手を
+ * 指したときに判定だけのエンジンを用意し（同意を求める）、読めなければ「読めない」と申告して送り直す（サーバーで判定される）。
  */
 export const Route = createFileRoute('/drills')({
   validateSearch: validateDrillsSearch,
@@ -209,8 +224,11 @@ async function loadList(search: DrillsSearch) {
 function DrillsPage() {
   const data = Route.useLoaderData();
   const search = Route.useSearch();
+  const assignee = useAnalysisAssignee();
   return (
     <div className="p-2 space-y-2">
+      {/* 詰将棋の判定だけのエンジン（サーバーで解析する利用者。prd/13 §5.5）。問題をまたいで使い回し、出題の画面を離れたら止める */}
+      <DrillGradingHost enabled={assignee === 'worker'} />
       {data.screen === 'home' && <DrillHome counts={data.counts} error={data.error} />}
       {data.screen === 'list' && <DrillListScreen list={data.list} error={data.error} search={search} />}
       {data.screen === 'solve' && (
@@ -457,6 +475,8 @@ const POLL_BUDGET_MS = 240_000;
 
 function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSearch }) {
   const { scoring } = useDrillScoring();
+  const assignee = useAnalysisAssignee();
+  const engineLoading = useBrowserAnalysisState().phase === 'loading';
   const navigate = useNavigate({ from: '/drills' });
   /** 入ってきた入口。一覧から名指しで開いた問題は null（大きいボタンが「一覧に戻る」になる。prd/13 §7.6） */
   const mode = search.mode ?? null;
@@ -575,6 +595,8 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
 
   async function answer(move: string) {
     if (!drill || !session) return;
+    // 🔒 初めて詰将棋の 1 手を指したら、判定のためのエンジンを用意する（同意の前なら同意を求める。prd/13 §5.5）
+    if (drill.kind === 'mate') requestDrillEngine();
     setJudging(true);
     setError(null);
     setUngradable(false);
@@ -585,6 +607,8 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     const answered = currentState(session);
     let body: AnswerBody = { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) };
     let deadline = Date.now() + POLL_BUDGET_MS;
+    /** このブラウザで読めなかった理由（読めない旨を申告した後、サーバーでも判定されなかったときに出す） */
+    let unreadable: Exclude<GradingResult, { kind: 'ok' }> | null = null;
     try {
       while (Date.now() < deadline) {
         const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
@@ -599,19 +623,30 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
             await waitForEvaluation(step.jobId, deadline);
             continue;
           case 'evaluate': {
-            // 🔒 読んだ結果を付けて送り直したのに、また読んでと返る ＝ 噛み合っていない。回り続けない
-            if (body.evaluation) {
-              setError('判定できませんでした。もう一度お試しください');
+            // 🔒 読んだ結果を付けて送り直したのに、また読んでと返る ＝ 噛み合っていない。回り続けない。
+            // 読めないと申告してまた返る ＝ サーバーでも判定できない（ブラウザで解析する利用者）。読めなかった理由を出す
+            if (onEvaluate(body) === 'give-up') {
+              setError(unreadable ? gradingFailureMessage(unreadable) : '判定できませんでした。もう一度お試しください');
+              setUngradable(unreadable?.kind === 'unavailable');
               setJudging(false);
               return;
             }
-            // このブラウザのエンジンで名指しで読む（全局面解析より先に。prd/14 §5.10）
+            // このブラウザのエンジンで名指しで読む（全局面解析より先に。prd/14 §5.10）。
+            // サーバーで解析する利用者の詰将棋は、同意の前ならここで同意を待つ（断ったらサーバーで判定する。prd/13 §5.5）
             const graded = await requestBrowserGrading(step.request, {
               getPhase: () => getBrowserAnalysisState().phase,
               subscribe: subscribeBrowserAnalysisState,
               setTimeout: (callback, ms) => setTimeout(callback, ms),
               clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+              ...(assignee === 'worker' && drill.kind === 'mate' ? { askConsent: askDrillEngineConsent } : {}),
             });
+            if (graded.kind !== 'ok' && drill.kind === 'mate') {
+              // 詰将棋は「この端末では読めない」と申告して送り直す（サーバーで解析する利用者はサーバーで判定される）
+              unreadable = graded;
+              body = answerBodyUnavailable(body);
+              deadline = Date.now() + POLL_BUDGET_MS;
+              continue;
+            }
             if (graded.kind !== 'ok') {
               setError(gradingFailureMessage(graded));
               setUngradable(graded.kind === 'unavailable');
@@ -719,7 +754,15 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         このブラウザで読むときの案内（初回のダウンロードの進捗・同意のボタン・止まったときのやり直し）。
         サーバーで解析する利用者では何も出ない
       */}
-      {(judging || ungradable) && <BrowserAnalysisNotice />}
+      {assignee === 'browser' ? (
+        (judging || ungradable) && <BrowserAnalysisNotice />
+      ) : (
+        // サーバーで解析する利用者: 詰将棋の判定のための同意と、エンジンの準備の進捗だけ（解析の案内は出さない）
+        <>
+          <DrillEngineConsent />
+          {judging && engineLoading && <BrowserAnalysisNotice />}
+        </>
+      )}
 
       {judging && (
         <p className="text-sm text-base-content/70">

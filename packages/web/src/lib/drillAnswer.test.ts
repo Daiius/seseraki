@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  answerBodyUnavailable,
   answerBodyWithEvaluation,
   answerStepOf,
+  onEvaluate,
   attemptMoveLabel,
   lineAfterUndoTurn,
   matePliesText,
@@ -29,6 +31,17 @@ describe('answerStepOf（解答の応答の振り分け。prd/13 §5.3）', () =
     expect(
       answerStepOf(200, { status: 'evaluate', sfen: 's', move: '7g7f', settings: SETTINGS }),
     ).toEqual({ kind: 'evaluate', request: { sfen: 's', move: '7g7f', settings: SETTINGS } });
+  });
+
+  it('詰将棋の判定の設定（固定のスレッド数・打ち切り）もそのまま取り出す（prd/13 §5.5）', () => {
+    const settings = { ...SETTINGS, movetimeMs: 1000, threads: 2, stopOnMate: true };
+    expect(answerStepOf(200, { status: 'evaluate', sfen: 's', move: 'G*5b', settings })).toEqual({
+      kind: 'evaluate',
+      request: { sfen: 's', move: 'G*5b', settings },
+    });
+    expect(
+      answerStepOf(200, { status: 'evaluate', sfen: 's', move: 'G*5b', settings: { ...settings, threads: '2' } }),
+    ).toMatchObject({ kind: 'error' });
   });
 
   it('形の足りない evaluate は誤りとして扱う（読まない）', () => {
@@ -130,5 +143,19 @@ describe('resultBadge（結果の札）', () => {
     expect(resultBadge('mate', 'correct', false).label).toBe('正解');
     expect(resultBadge('best', 'correct', true).label).toBe('正解');
     expect(resultBadge('mate', 'wrong', true).label).toBe('不正解');
+  });
+});
+
+describe('読めない旨の申告と、evaluate を受けたときにすること（prd/13 §5.5）', () => {
+  const body = { line: ['G*5b'], correctMargin: 100 };
+
+  it('申告は line と線引きを変えずに付ける', () => {
+    expect(answerBodyUnavailable(body)).toEqual({ line: ['G*5b'], correctMargin: 100, browserUnavailable: true });
+  });
+
+  it('🔒 結果を付けた・申告した送り直しにまた evaluate が返ったら読み直さない（回り続けない）', () => {
+    expect(onEvaluate(body)).toBe('read');
+    expect(onEvaluate(answerBodyUnavailable(body))).toBe('give-up');
+    expect(onEvaluate({ ...body, evaluation: {} as never })).toBe('give-up');
   });
 });

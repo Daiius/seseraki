@@ -24,7 +24,9 @@ export type GradingUnavailableReason =
   /** 常駐の解析が止まっている（エンジンを読み込めないなど） */
   | 'error'
   /** 常駐の解析が動いていない（待っても起動しなかった） */
-  | 'off';
+  | 'off'
+  /** ダウンロードを断った（詰将棋の判定の同意。prd/13 §5.5。判定は手元 worker に回る） */
+  | 'declined';
 
 export type GradingResult =
   | NamedEvalOutcome
@@ -52,7 +54,7 @@ export function setBrowserGrader(next: Grader): () => void {
  */
 export function unavailableReasonOf(
   phase: BrowserAnalysisPhase,
-): Exclude<GradingUnavailableReason, 'off'> | null {
+): Exclude<GradingUnavailableReason, 'off' | 'declined'> | null {
   switch (phase) {
     case 'needs-consent':
     case 'unsupported':
@@ -73,6 +75,12 @@ export interface GradingDeps {
   subscribe(listener: () => void): () => void;
   setTimeout(callback: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
+  /**
+   * 同意の前（`needs-consent`）なら、利用者に同意を求めて答えを待つ（担当 `worker` の詰将棋の判定。prd/13 §5.5）。
+   * true は同意した（常駐が起動し直すのを待って頼む）、false は断った（`declined`）。
+   * 無ければ今までどおり、同意の前はすぐ `needs-consent` を返す（同意は画面の案内から）
+   */
+  askConsent?(): Promise<boolean>;
 }
 
 /**
@@ -96,14 +104,33 @@ export async function requestBrowserGrading(
   return { kind: 'unavailable', reason: unavailableReasonOf(deps.getPhase()) ?? 'off' };
 }
 
-/** 受け持ち手が付くのを待つ。頼めない状態になった・時間切れなら理由を返す */
+/**
+ * 受け持ち手が付くのを待つ。頼めない状態になった・時間切れなら理由を返す。
+ * 同意を求める（{@link GradingDeps.askConsent}）間は時間切れを数えない——同意の後に起動を待ち直す
+ */
 function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableReason> {
   return new Promise((resolve) => {
     let settled = false;
+    /** 同意を求めている（null）・同意した（true）。まだ求めていなければ false */
+    let consent: boolean | null = false;
+    let timer: unknown = null;
+    /** 掛けたタイマーの通し番号（外したタイマーが遅れて発火しても数えない） */
+    let timerGeneration = 0;
+    const startTimer = () => {
+      const generation = ++timerGeneration;
+      timer = deps.setTimeout(() => {
+        if (generation === timerGeneration) finish('off');
+      }, GRADER_WAIT_MS);
+    };
+    const stopTimer = () => {
+      timerGeneration++;
+      if (timer !== null) deps.clearTimeout(timer);
+      timer = null;
+    };
     const finish = (value: Grader | GradingUnavailableReason) => {
       if (settled) return;
       settled = true;
-      deps.clearTimeout(timer);
+      stopTimer();
       offPhase();
       graderListeners.delete(check);
       resolve(value);
@@ -111,9 +138,25 @@ function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableRe
     const check = () => {
       if (grader) return finish(grader);
       const reason = unavailableReasonOf(deps.getPhase());
+      if (reason === 'needs-consent' && deps.askConsent) {
+        // 同意した後は、常駐が起動し直すまで同意の前の状態が残る。求め直さずに待つ
+        if (consent !== false) return;
+        consent = null;
+        stopTimer();
+        deps.askConsent().then(
+          (agreed) => {
+            if (!agreed) return finish('declined');
+            consent = true;
+            startTimer();
+            check();
+          },
+          () => finish('declined'),
+        );
+        return;
+      }
       if (reason) finish(reason);
     };
-    const timer = deps.setTimeout(() => finish('off'), GRADER_WAIT_MS);
+    startTimer();
     const offPhase = deps.subscribe(check);
     graderListeners.add(check);
     check();
@@ -139,5 +182,7 @@ export function gradingFailureMessage(
       return '解析エンジンが止まっているため、この手を採点できません。';
     case 'off':
       return 'この端末では、この手を採点できません（解析エンジンを起動できませんでした）。';
+    case 'declined':
+      return 'この端末では、この手を採点できません（解析エンジンのデータをダウンロードしていません）。';
   }
 }

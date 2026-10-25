@@ -21,6 +21,11 @@ import {
   useBrowserAnalysisState,
 } from '../lib/browserAnalysis/store';
 import { unsupportedMessage } from '../lib/browserAnalysis/support';
+import {
+  answerDrillEngineConsent,
+  askDrillEngineConsent,
+  useDrillEngineState,
+} from '../lib/browserAnalysis/drillEngine';
 
 /**
  * ブラウザ解析の常駐（prd/14 §5.10）。`__root.tsx` に置き、どのページでも生きる。何も描かない。
@@ -79,6 +84,86 @@ export function BrowserAnalysisHost({ enabled }: { enabled: boolean }) {
   }, [pathname]);
 
   return null;
+}
+
+/**
+ * 詰将棋の判定だけの常駐（担当がサーバーの利用者。prd/13 §5.5）。出題の画面に置く。何も描かない。
+ *
+ * 🔒 **`enabled`（= 担当がサーバー）で、初めて詰将棋の 1 手を指した後（`requestDrillEngine`）だけ動かす。**
+ * それまではエンジンの一覧も取りに行かない。全局面解析は回さない（判定の読みを受け持つだけ）。
+ * 同意が増えたら止めて起動し直す。同意の前なら、その場で同意を求める（{@link DrillEngineConsent} が案内を出す）。
+ * 出題の画面を離れたら止める（エンジンも止まる）
+ */
+export function DrillGradingHost({ enabled }: { enabled: boolean }) {
+  const { wanted, asking, declined } = useDrillEngineState();
+  const settings = useBrowserAnalysisSettings();
+  const { restartNonce, phase, manifest } = useBrowserAnalysisState();
+  const consentKey = settings.consentedEvalSha256s.join(',');
+  const active = enabled && wanted;
+  // 同意した直後は、常駐が起動し直すまで同意の前の状態が残る。選んだ評価関数に同意済みなら聞き直さない
+  const needsConsent =
+    phase === 'needs-consent' && manifest !== null && unconsentedSelection(manifest, settings) !== null;
+
+  useEffect(() => {
+    if (!active) return;
+    let stopped = false;
+    let stop: (() => void) | null = null;
+    void import('../lib/browserAnalysis/controller')
+      .then(({ startDrillGrading }) => {
+        if (stopped) return;
+        stop = startDrillGrading();
+      })
+      .catch((error: unknown) => {
+        console.warn('[browser-analysis] failed to load the controller', error);
+      });
+    return () => {
+      stopped = true;
+      stop?.();
+    };
+  }, [active, consentKey, settings.evalId, restartNonce]);
+
+  // 🔒 同意は初めて詰将棋を解くとき（最初の 1 手を指したとき）に求める。断ったらこのタブでは聞き直さない
+  useEffect(() => {
+    if (active && needsConsent && !asking && !declined) void askDrillEngineConsent();
+  }, [active, needsConsent, asking, declined]);
+
+  return null;
+}
+
+/**
+ * 詰将棋の判定のための同意の案内（担当がサーバーの利用者。prd/13 §5.5）。同意を求めている間だけ出す。
+ * 断ったらサーバーで判定する。文言に内部の用語（担当・名指し）は出さない
+ */
+export function DrillEngineConsent() {
+  const { asking } = useDrillEngineState();
+  const { manifest } = useBrowserAnalysisState();
+  const settings = useBrowserAnalysisSettings();
+  if (!asking || !manifest) return null;
+  const entry = engineEntryOf(manifest, settings.evalId);
+  return (
+    <div role="status" className="alert shadow-lg py-2 flex flex-col items-stretch gap-2">
+      <div className="text-sm">
+        詰将棋の判定をこのブラウザで行うと、その場で結果が出ます。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
+        {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。
+      </div>
+      <div className="flex gap-2 self-end">
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => answerDrillEngineConsent(false, null)}
+        >
+          サーバーで判定する
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={() => answerDrillEngineConsent(true, entry.nn.sha256)}
+        >
+          ダウンロードする
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /**

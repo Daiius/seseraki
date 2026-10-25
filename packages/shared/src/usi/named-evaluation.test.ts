@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BROWSER_ANALYSIS_LIMITS, drillNamedEvaluationSchema } from '../analysis-limits';
 import {
+  isConclusiveMate,
   namedEvaluationOf,
   namedGoCommand,
   sfenPositionCommand,
@@ -87,6 +88,41 @@ describe('namedEvaluationOf', () => {
   });
 });
 
+describe('isConclusiveMate（詰将棋の判定の打ち切り。prd/13 §5.5）', () => {
+  it('bound の付かない正の mate で打ち切る', () => {
+    expect(
+      isConclusiveMate(parseInfoLine('info depth 5 multipv 1 score mate 9 pv 7g7f 3c3d 2g2f 4a3b 2f2e 3b2b 2e2d 2b1b 2d2c+'))).toBe(true);
+    // multipv が無い行（MultiPV 1 の名指し）も同じ
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 3 pv G*5b 5a4a 5b4b'))).toBe(true);
+  });
+
+  it('🔒 bound の付いた行・負の mate・cp・読み筋の無い行では打ち切らない', () => {
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9 lowerbound pv 7g7f'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9 upperbound pv 7g7f'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate -4 pv 7g7f 3c3d'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score cp 3000 pv 7g7f'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9'))).toBe(false);
+    // 🔴 読み筋が詰みの手数まで揃っていない行（レビュー OCL-D09F6297）
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9 pv 7g7f 3c3d 2g2f'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 3 pv G*5b 5a4a'))).toBe(false);
+    // `mate +`（手数の分からない詰み）は数として読めないので打ち切らない
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate + pv 7g7f'))).toBe(false);
+  });
+});
+
+describe('namedEvaluationOf — 打ち切った読み（prd/13 §5.5）', () => {
+  it('🔴 打ち切った行の評価値と読み筋を使う（stop の後の行は使わない）', () => {
+    const stopped = parseInfoLine('info depth 7 score mate 9 pv 7g7f 3c3d 2g2f 4a3b 2f2e');
+    const base = result(['info depth 7 score mate 9 pv 7g7f 3c3d 2g2f 4a3b 2f2e', 'info depth 8 score cp 900 pv 7g7f 8c8d'], '7g7f');
+    expect(namedEvaluationOf({ ...base, stoppedBy: stopped }, '7g7f')).toEqual({
+      kind: 'ok',
+      candidate: { scoreType: 'mate', scoreValue: 9, depth: 7, pv: ['7g7f', '3c3d', '2g2f', '4a3b', '2f2e'] },
+    });
+    // 打ち切らなかったら今までどおり最後の行
+    expect(namedEvaluationOf(base, '7g7f')).toMatchObject({ kind: 'ok', candidate: { scoreType: 'cp', scoreValue: 900 } });
+  });
+});
+
 describe('drillNamedEvaluationSchema（解答に付ける名指し評価）', () => {
   const body = (override: Record<string, unknown> = {}) => ({
     move: '7g7f',
@@ -98,6 +134,12 @@ describe('drillNamedEvaluationSchema（解答に付ける名指し評価）', ()
   it('形の合う評価・候補なしを受ける', () => {
     expect(drillNamedEvaluationSchema.safeParse(body()).success).toBe(true);
     expect(drillNamedEvaluationSchema.safeParse(body({ candidate: null })).success).toBe(true);
+  });
+
+  it('詰将棋の判定の設定（Threads 2・上限 1000 / 2000ms。prd/13 §5.5）の来歴を受ける', () => {
+    for (const movetimeMs of [1000, 2000]) {
+      expect(drillNamedEvaluationSchema.safeParse(body({ threads: 2, movetimeMs })).success).toBe(true);
+    }
   });
 
   it('読み筋の先頭が名指しした手でなければ拒む（別の手の評価で採点させない）', () => {

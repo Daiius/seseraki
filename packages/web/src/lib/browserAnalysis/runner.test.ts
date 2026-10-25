@@ -915,6 +915,101 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     expect(h.engines.map((e) => e.disposed)).toEqual([true, false]);
   });
 
+  it('🔒 詰将棋の判定（stopOnMate）は打ち切りの判定を渡し、打ち切った行の評価で返す（prd/13 §5.5）', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    const stopWhens: unknown[] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load, choice, threads) => {
+      const engine = await created(settings, load, choice, threads);
+      engine.session = {
+        setOption: () => {},
+        analyze: async (_position, _go, options) => {
+          stopWhens.push(options?.stopWhen);
+          const mate = { depth: 7, multipv: 1, score: { type: 'mate' as const, value: 3 }, pv: ['2g2f', '8c8d', '2f2e'] };
+          const after = { depth: 8, multipv: 1, score: { type: 'cp' as const, value: 900 }, pv: ['2g2f', '3c3d'] };
+          // 偽のエンジン: 打ち切りの判定が mate の行で true を返すことを確かめ、打ち切った行を残す
+          if (!options?.stopWhen?.(mate)) throw new Error('should stop at the mate');
+          return { bestmove: { move: '2g2f' }, infoLines: [mate, after], lastInfo: after, stoppedBy: mate };
+        },
+      };
+      return engine;
+    };
+    const runner = createKifuRunner(h.deps);
+    const outcome = await runner.evaluateNamed({
+      ...request,
+      settings: { ...request.settings, movetimeMs: 1000, threads: 2, stopOnMate: true },
+    });
+    expect(outcome).toMatchObject({
+      kind: 'ok',
+      stopped: true,
+      evaluation: { candidate: { scoreType: 'mate', scoreValue: 3, pv: ['2g2f', '8c8d', '2f2e'] }, movetimeMs: 1000 },
+    });
+    // 次の一手（stopOnMate なし）では打ち切らない
+    await runner.evaluateNamed(request).catch(() => {});
+    expect(stopWhens[1]).toBeUndefined();
+  });
+
+  it('🔒 固定のスレッド数: 作るときはその数で作り、使い回すエンジンは作り直さずに切り替え、全局面解析では負荷の設定の数に戻す', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    const createdWith: (number | undefined)[] = [];
+    const switched: (number | null)[] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load, choice, threads) => {
+      createdWith.push(threads);
+      const engine = await created(settings, load, choice, threads);
+      let current = threads ?? 4;
+      return {
+        ...engine,
+        get threads() {
+          return current;
+        },
+        setThreads: async (next: number | null) => {
+          switched.push(next);
+          current = next ?? 4;
+        },
+      };
+    };
+    const runner = createKifuRunner(h.deps);
+    const mateRequest = { ...request, settings: { ...request.settings, threads: 2 } };
+
+    // 担当がサーバーの端末: 判定のためだけに作るエンジンは、最初から 2 スレッドで作る
+    expect(await runner.evaluateNamed(mateRequest)).toMatchObject({ kind: 'ok', evaluation: { threads: 2 } });
+    expect(createdWith).toEqual([2]);
+    // 次の一手（固定なし）は同じエンジンを負荷の設定の数に戻して読む
+    expect(await runner.evaluateNamed(request)).toMatchObject({ kind: 'ok', evaluation: { threads: 4 } });
+    // 全局面解析の後に判定が割り込んでも、作り直さずに切り替える
+    expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'complete' });
+    expect(await runner.evaluateNamed(mateRequest)).toMatchObject({ kind: 'ok', evaluation: { threads: 2 } });
+    expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'complete' });
+    expect(createdWith).toEqual([2]);
+    expect(switched).toEqual([2, null, null, 2, null]);
+    // 全局面解析の来歴は負荷の設定の数
+    expect(h.chunks.every((c) => c.threads === 4)).toBe(true);
+  });
+
+  it('スレッド数の切り替えに失敗したら、エンジンを作り直して求める数で作る', async () => {
+    const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
+    const createdWith: (number | undefined)[] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load, choice, threads) => {
+      createdWith.push(threads);
+      const engine = await created(settings, load, choice, threads);
+      return {
+        ...engine,
+        threads: threads ?? 4,
+        dispose: engine.dispose,
+        setThreads: async (next: number | null) => {
+          if ((next ?? 4) !== (threads ?? 4)) throw new Error('resize failed');
+        },
+      };
+    };
+    const runner = createKifuRunner(h.deps);
+    await runner.evaluateNamed(request);
+    const outcome = await runner.evaluateNamed({ ...request, settings: { ...request.settings, threads: 2 } });
+    expect(outcome).toMatchObject({ kind: 'ok', evaluation: { threads: 2 } });
+    expect(createdWith).toEqual([undefined, 2]);
+  });
+
   it('2 度続けて失敗したら failed', async () => {
     const { h } = namedHarness(() => {
       throw new Error('dead');

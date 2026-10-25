@@ -6,6 +6,8 @@
  * 3. 結果を付けた送り直しを server が判定して記録する（次の一手・候補なし・詰将棋の別解と手順の記憶）
  * 4. 届いた評価の検証: 手が解答と違えば 400・形が違えば 400・Origin が無ければ 403
  * 5. 詰将棋: 王手でない手は読ませずに即不正解・やり直しで元の手順も受ける・諦め（give-up）と練習（practice）
+ * 6. 詰将棋の判定は担当によらずブラウザで（prd/13 §5.5）: 担当 `worker` にも詰将棋の読み方で `evaluate` を返し、結果を使う。
+ *    「読めない」の申告（`browserUnavailable`）があれば担当 `worker` だけ手元 worker に回す
  *
  * ⚠ 所有者ゲート（prd/07 §5.1）があるので API は所有者として叩き、担当は所有者の行で切り替える。
  *   DATABASE はファイル間で共有するため、**所有者の担当は最後に必ず `worker` に戻す**。
@@ -182,6 +184,44 @@ describe('担当 worker（prd/14 §5.7）', () => {
   });
 });
 
+describe('担当 worker の詰将棋（prd/13 §5.5）', () => {
+  /** 詰将棋の判定の読み方（正解手順の残りは 1 手なので上限は 1000ms） */
+  const MATE_SETTINGS = expect.objectContaining({ movetimeMs: 1000, threads: 2, stopOnMate: true, multiPv: 1 });
+
+  it('🔒 担当によらず「名指しで読んで」を詰将棋の読み方で返す（ジョブは積まない・答えは載せない）', async () => {
+    const res = await answer('mate', { line: ['B*6b'] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ status: 'evaluate', sfen: MATE_SFEN, move: 'B*6b', settings: MATE_SETTINGS });
+    for (const key of ['answerMove', 'answerPv', 'candidates', 'playedMove', 'verdict']) {
+      expect(body).not.toHaveProperty(key);
+    }
+    expect(claimEvaluationJob()).toBeNull();
+  });
+
+  it('ブラウザの結果を付けた送り直しで判定する（別解は手順を引き継ぐ）', async () => {
+    const res = await answer('mate', {
+      line: ['B*6b'],
+      practice: true,
+      evaluation: evaluation('B*6b', { scoreType: 'mate', scoreValue: 3, depth: 10, pv: ['B*6b', '5a4b', '6b5a+'] }),
+    });
+    expect(await res.json()).toEqual({ status: 'continue', reply: '5a4b' });
+    expect(claimEvaluationJob()).toBeNull();
+  });
+
+  it('「この端末では読めない」の申告があれば手元 worker にジョブを積む', async () => {
+    const res = await answer('mate', { line: ['B*6b'], browserUnavailable: true, practice: true });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toMatchObject({ status: 'pending' });
+    expect(claimEvaluationJob()).toMatchObject({ sfen: MATE_SFEN, move: 'B*6b' });
+  });
+
+  it('次の一手は今のまま（申告があってもなくても手元 worker）', async () => {
+    const res = await answer('best', { line: ['7g7f'], browserUnavailable: true });
+    expect(res.status).toBe(202);
+  });
+});
+
 describe('担当 browser（prd/13 §5.3）', () => {
   beforeAll(async () => {
     await switchOwner('browser');
@@ -258,7 +298,16 @@ describe('担当 browser（prd/13 §5.3）', () => {
 
   it('詰将棋: 手順を外れた手を名指しで読ませ、詰みなら別解として手順を引き継ぐ', async () => {
     const asked = await answer('mate', { line: ['B*6b'] });
-    expect(await asked.json()).toMatchObject({ status: 'evaluate', sfen: MATE_SFEN, move: 'B*6b' });
+    expect(await asked.json()).toMatchObject({
+      status: 'evaluate',
+      sfen: MATE_SFEN,
+      move: 'B*6b',
+      settings: { movetimeMs: 1000, threads: 2, stopOnMate: true },
+    });
+    // 🔒 「読めない」と申告しても担当 browser は手元 worker を使えない（読ませ続ける）
+    const declined = await answer('mate', { line: ['B*6b'], browserUnavailable: true });
+    expect(await declined.json()).toMatchObject({ status: 'evaluate' });
+    expect(claimEvaluationJob()).toBeNull();
 
     const alt = await answer('mate', {
       line: ['B*6b'],

@@ -226,7 +226,8 @@ export function analysisThreads(
  *   `.` だと見つからず `isready` で黙って終了する（絶対パスはそのまま使われる）
  * - `FV_SCALE` は選んだエントリの値（16。手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない。
  *   作者の推奨 24 を書いた `eval_options.txt` は置いていないので、setoption の値が効く）
- * - スレッド数は負荷の設定で決まる（{@link analysisThreads}）
+ * - スレッド数は負荷の設定で決まる（{@link analysisThreads}）。`threads` を渡せばその数（詰将棋の判定の固定のスレッド数。
+ *   prd/13 §5.5。server の上限と論理コア数では絞らない——server が決めた数をそのまま使う）
  * - 定跡は使わない（`BookFile no_book`）
  * - `ConsiderationMode true` は手元 worker と同じ（探索を打ち切ったときの読み筋を置換表から延ばす）
  */
@@ -235,8 +236,12 @@ export function engineOptions(
   settings: Pick<ServerAnalysisSettings, 'maxThreads' | 'hashMb'>,
   hardwareConcurrency: number | undefined,
   load: AnalysisLoad,
+  fixedThreads?: number,
 ): EngineOptions {
-  const threads = analysisThreads(hardwareConcurrency, settings.maxThreads, load);
+  const threads =
+    fixedThreads !== undefined && Number.isInteger(fixedThreads) && fixedThreads >= 1
+      ? fixedThreads
+      : analysisThreads(hardwareConcurrency, settings.maxThreads, load);
   const hashMb = Math.max(1, Math.floor(settings.hashMb));
   return {
     threads,

@@ -144,8 +144,12 @@ export type MateLineMatch =
   | { state: 'mismatch' }
   /** ユーザーの手まで一致した手順がある。`reply` は受方の応手（無ければ詰み上がり） */
   | { state: 'match'; reply: string | null; solved: boolean }
-  /** ここまでの手順は合うが、ユーザーの手で外れた。エンジンに聞く（別解かもしれない） */
-  | { state: 'deviated' };
+  /**
+   * ここまでの手順は合うが、ユーザーの手で外れた。エンジンに聞く（別解かもしれない）。
+   * `remainingPlies` は**今の局面からの正解手順の残りの長さ**（ユーザーが指すはずだった手を含む）。並べた順に見て
+   * 最初に合った手順（覚えた別解があればそれ）で数える——詰将棋の判定の上限を決める（prd/13 §5.5）
+   */
+  | { state: 'deviated'; remainingPlies: number };
 
 /**
  * 詰みの解答の手順を、**いま受け付ける正解手順のどれか**に照らす（prd/13 §5.2・§5.3）。
@@ -166,7 +170,7 @@ export function matchMateLine(candidates: (string[] | null)[], line: string[]): 
     const step = mateStep(candidate, line);
     if (step.state === 'match') return step;
   }
-  return { state: 'deviated' };
+  return { state: 'deviated', remainingPlies: fitting[0].length - prefix.length };
 }
 
 /**

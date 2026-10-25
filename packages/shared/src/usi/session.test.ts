@@ -227,6 +227,38 @@ describe('analyze（position + go → bestmove）', () => {
     });
   });
 
+  it('stopWhen が true を返した info で stop を 1 度だけ送り、その行を stoppedBy に残す（詰将棋の判定）', async () => {
+    const { session, sent, emit } = setup();
+    const seen: number[] = [];
+    const analysis = session.analyze('position startpos', 'go movetime 2000 searchmoves 7g7f', {
+      stopWhen: (info) => {
+        seen.push(info.depth ?? -1);
+        return info.score?.type === 'mate';
+      },
+    });
+    emit(
+      'info depth 3 multipv 1 score cp 300 pv 7g7f 3c3d',
+      'info depth 5 multipv 1 score mate 9 pv 7g7f 3c3d 2g2f',
+      // stop の後に出る行（置換表から延ばした読み筋など）。stop を送り直さない
+      'info depth 6 multipv 1 score mate 11 pv 7g7f 8c8d',
+      'bestmove 7g7f',
+    );
+    const result = await analysis;
+    expect(sent).toEqual(['position startpos', 'go movetime 2000 searchmoves 7g7f', 'stop']);
+    expect(seen).toEqual([3, 5]);
+    expect(result.stoppedBy).toMatchObject({ depth: 5, score: { type: 'mate', value: 9 } });
+    expect(result.infoLines).toHaveLength(3);
+  });
+
+  it('stopWhen が一度も true を返さなければ stop を送らず、stoppedBy も無い', async () => {
+    const { session, sent, emit } = setup();
+    const analysis = session.analyze('position startpos', 'go movetime 1000', { stopWhen: () => false });
+    emit('info depth 3 multipv 1 score cp 30 pv 7g7f', 'bestmove 7g7f');
+    const result = await analysis;
+    expect(sent).toEqual(['position startpos', 'go movetime 1000']);
+    expect(result).not.toHaveProperty('stoppedBy');
+  });
+
   it('bestmove が来なければ時間切れで失敗し、後から届いた行は次の探索に混ざらない', async () => {
     const { session, emit, clock } = setup(undefined, 5000);
 

@@ -666,9 +666,12 @@ const route = app
     zv('param', drillRefParam),
     async (c) => {
       const ref = c.req.valid('param');
+      const now = new Date().toISOString();
       const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), ref);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
-      return c.json({ drill });
+      // `now` も `/drills/next` と同じく載せる。名指しで開いた問題（保存した URL・一覧から）から回が始まっても、
+      // 最初の解答より前に回の開始時刻が決まるように（レビュー `OCL-BB10F0BB`。prd/13 §7.6）
+      return c.json({ drill, now });
     },
   )
   // その問題の解答履歴（prd/13 §7.7）。web は解いた後にだけ呼ぶ（正解の記録の手は答えそのもの）。

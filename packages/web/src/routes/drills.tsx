@@ -107,7 +107,18 @@ async function loadScreen(search: DrillsSearch, preload: boolean) {
   if (!preload) drillRound.ensure();
   const ref = drillRefOf(search);
   if (ref) {
-    return { screen: 'solve' as const, load: ++solveLoads, exhausted: false, ...(await loadOne(ref)) };
+    const one = await loadOne(ref);
+    // 🔴 **名指しで開いた問題でも、解答より前に回の開始時刻を決める**（レビュー `OCL-BB10F0BB`）。
+    // 決めないまま解くと、次の 1 問の取得が since なしで選び、さらに解答後の時刻を開始時刻にするので、
+    // この回で解いた問題がまた出る（保存した URL を新しいタブで開いた・一覧から開いたとき）
+    if (one.now && !preload) drillRound.startAt(one.now);
+    return {
+      screen: 'solve' as const,
+      load: ++solveLoads,
+      exhausted: false,
+      drill: one.drill,
+      error: one.error,
+    };
   }
   const mode = search.mode ?? 'recommend';
   const next = await loadNext(mode, drillRound.get()?.since ?? null);
@@ -170,12 +181,12 @@ async function loadOne(ref: DrillRef) {
     const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].$get({
       param: refParam(ref),
     });
-    if (res.status === 404) return { drill: null, error: '出題が見つかりません' };
-    if (!res.ok) return { drill: null, error: `サーバーエラー (${res.status})` };
+    if (res.status === 404) return { drill: null, now: null, error: '出題が見つかりません' };
+    if (!res.ok) return { drill: null, now: null, error: `サーバーエラー (${res.status})` };
     const body = await res.json();
-    return { drill: body.drill, error: null };
+    return { drill: body.drill, now: body.now, error: null };
   } catch {
-    return { drill: null, error: 'サーバーに接続できません' };
+    return { drill: null, now: null, error: 'サーバーに接続できません' };
   }
 }
 

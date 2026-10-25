@@ -6,7 +6,11 @@ import { BROWSER_ANALYSIS_MOVETIME_MS, browserAnalysisSettingsFor } from './anal
 import { DEFAULT_SCORING, type DrillAnswerKey } from './drill-answer.js';
 import {
   DRILL_BROWSER_EVAL_MOVETIME_MS,
+  DRILL_MATE_EVAL,
   drillBrowserEvalSettings,
+  drillEvalSettingsFor,
+  drillMateEvalSettings,
+  drillMateMovetimeMs,
   evaluationSourceOf,
   judgeNamedEvaluation,
 } from './drill-engine.js';
@@ -33,28 +37,65 @@ const input = (drill = BEST, move = '7g7f', line = [move]) => ({
   scoring: DEFAULT_SCORING,
 });
 
-describe('evaluationSourceOf（どこで読むか。prd/14 §5.7）', () => {
-  it('🔒 手元 worker にジョブを積むのは担当 worker だけ', () => {
-    expect(evaluationSourceOf('worker', false)).toBe('worker');
+describe('evaluationSourceOf（どこで読むか。prd/14 §5.7・prd/13 §5.5）', () => {
+  const source = (
+    kind: 'mate' | 'best',
+    assignee: 'worker' | 'browser' | null,
+    hasBrowserEvaluation: boolean,
+    browserUnavailable = false,
+  ) => evaluationSourceOf({ kind, assignee, hasBrowserEvaluation, browserUnavailable });
+
+  it('🔒 次の一手で手元 worker にジョブを積むのは担当 worker だけ', () => {
+    expect(source('best', 'worker', false)).toBe('worker');
     // 担当 worker がブラウザの結果を付けてきても使わない（切り替え直後の送り直しなど）
-    expect(evaluationSourceOf('worker', true)).toBe('worker');
+    expect(source('best', 'worker', true)).toBe('worker');
   });
 
-  it('担当 browser は結果が無ければ読ませ、付いていればそれで判定する', () => {
-    expect(evaluationSourceOf('browser', false)).toBe('ask-browser');
-    expect(evaluationSourceOf('browser', true)).toBe('use-browser');
+  it('次の一手の担当 browser は結果が無ければ読ませ、付いていればそれで判定する', () => {
+    expect(source('best', 'browser', false)).toBe('ask-browser');
+    expect(source('best', 'browser', true)).toBe('use-browser');
   });
 
   it('担当が読めなければ手元 worker を使わせない', () => {
-    expect(evaluationSourceOf(null, false)).toBe('ask-browser');
+    expect(source('best', null, false)).toBe('ask-browser');
+    expect(source('mate', null, false, true)).toBe('ask-browser');
+  });
+
+  it('🔒 詰将棋は担当によらずブラウザで読む（担当 worker の結果も使う）', () => {
+    expect(source('mate', 'worker', false)).toBe('ask-browser');
+    expect(source('mate', 'worker', true)).toBe('use-browser');
+    expect(source('mate', 'browser', false)).toBe('ask-browser');
+    expect(source('mate', 'browser', true)).toBe('use-browser');
+  });
+
+  it('詰将棋でブラウザが読めないと申告したら、担当 worker だけ手元 worker に回す', () => {
+    expect(source('mate', 'worker', false, true)).toBe('worker');
+    // 担当 browser は読ませ続ける（web が「この端末では採点できない」を出す）
+    expect(source('mate', 'browser', false, true)).toBe('ask-browser');
+    // 次の一手には効かない
+    expect(source('best', 'browser', false, true)).toBe('ask-browser');
   });
 });
 
 describe('ブラウザに読ませる設定', () => {
-  it('🔒 全局面解析の full と同じ値（思考時間 600ms）を共有する', () => {
+  it('🔒 次の一手は全局面解析の full と同じ値（思考時間 600ms）を共有する', () => {
     expect(drillBrowserEvalSettings()).toEqual(browserAnalysisSettingsFor('full'));
     expect(DRILL_BROWSER_EVAL_MOVETIME_MS).toBe(BROWSER_ANALYSIS_MOVETIME_MS.full);
     expect(drillBrowserEvalSettings().movetimeMs).toBe(600);
+    expect(drillEvalSettingsFor({ drill: BEST })).toEqual(drillBrowserEvalSettings());
+  });
+
+  it('🔒 詰将棋は Threads 2・MultiPV 1・打ち切りあり・上限は残り手数で 1000 / 2000ms（prd/13 §5.5）', () => {
+    expect(DRILL_MATE_EVAL).toEqual({ threads: 2, movetimeMs: 1000, longMovetimeMs: 2000, longFromPlies: 11 });
+    expect(drillMateEvalSettings(3)).toEqual({
+      ...browserAnalysisSettingsFor('full'),
+      movetimeMs: 1000,
+      threads: 2,
+      stopOnMate: true,
+    });
+    expect(drillMateEvalSettings(3).multiPv).toBe(1);
+    expect([1, 9, 10, 11, 15].map(drillMateMovetimeMs)).toEqual([1000, 1000, 1000, 2000, 2000]);
+    expect(drillEvalSettingsFor({ drill: MATE, mateRemainingPlies: 13 }).movetimeMs).toBe(2000);
   });
 });
 

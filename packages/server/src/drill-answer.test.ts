@@ -205,9 +205,14 @@ describe('matchMateLine（元の正解手順と覚えた別解の両方で照ら
     expect(matchMateLine([alt, pv], ['b1', 'r2', 'b2'])).toEqual({ state: 'match', reply: 'r3', solved: false });
   });
 
-  it('手順は合うが最後の手が外れたら deviated（エンジンへ）', () => {
-    expect(matchMateLine([alt, pv], ['a1', 'r1', 'z'])).toEqual({ state: 'deviated' });
-    expect(matchMateLine([null, pv], ['z'])).toEqual({ state: 'deviated' });
+  it('手順は合うが最後の手が外れたら deviated（エンジンへ）。残り手数は今の局面からの正解手順の長さ', () => {
+    expect(matchMateLine([alt, pv], ['a1', 'r1', 'z'])).toEqual({ state: 'deviated', remainingPlies: 1 });
+    expect(matchMateLine([null, pv], ['z'])).toEqual({ state: 'deviated', remainingPlies: 3 });
+  });
+
+  it('残り手数は覚えた別解があればそれで数える（prd/13 §5.5）', () => {
+    expect(matchMateLine([alt, pv], ['z'])).toEqual({ state: 'deviated', remainingPlies: 5 });
+    expect(matchMateLine([alt, pv], ['b1', 'r2', 'z'])).toEqual({ state: 'deviated', remainingPlies: 3 });
   });
 
   it('正解手順が 1 本も無ければ mismatch', () => {

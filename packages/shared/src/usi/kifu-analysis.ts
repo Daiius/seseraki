@@ -5,7 +5,7 @@
  * 各局面の候補手・評価値・読み筋を記録する
  */
 import type { UsiLog } from "./session";
-import type { UsiInfo, UsiScore, UsiSearchResult } from "./types";
+import type { UsiAnalyzeOptions, UsiInfo, UsiScore, UsiSearchResult } from "./types";
 
 /**
  * `analyzeKifu` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る）。
@@ -13,7 +13,8 @@ import type { UsiInfo, UsiScore, UsiSearchResult } from "./types";
  */
 export interface UsiAnalysisEngine {
   setOption(name: string, value: string): void;
-  analyze(position: string, goCommand: string): Promise<UsiSearchResult>;
+  /** `options`（打ち切り）を使うのはブラウザの名指し評価だけ。手元 worker の実装は受けなくてよい */
+  analyze(position: string, goCommand: string, options?: UsiAnalyzeOptions): Promise<UsiSearchResult>;
 }
 
 /**

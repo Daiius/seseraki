@@ -6,9 +6,39 @@
  * 🔒 **判定はしない**（server の仕事）。ここは USI の出力から「その手の評価」を取り出すだけ。
  */
 import { BROWSER_ANALYSIS_LIMITS } from '../analysis-limits';
-import { toBrowserReportCandidate } from './browser-analysis';
+import { toBrowserReportCandidate, type BrowserAnalysisSettings } from './browser-analysis';
 import { extractMultiPvResults } from './kifu-analysis';
-import type { UsiSearchResult } from './types';
+import type { UsiInfo, UsiSearchResult } from './types';
+
+/**
+ * 名指し評価の設定（server の `evaluate` の応答の `settings`）。全局面解析の設定に、詰将棋の判定（prd/13 §5.5）の
+ * 2 つを足したもの。🔒 **どちらも server が決める**（ブラウザは決めない）
+ */
+export interface NamedEvalSettings extends BrowserAnalysisSettings {
+  /**
+   * 固定のスレッド数（詰将棋の判定は 2）。無ければ全局面解析と同じ負荷の設定で決まる（次の一手の採点）。
+   * 🔒 負荷の設定（「全力」「控えめ」）によらない——1 手の判定に端末を使い切らない
+   */
+  threads?: number;
+  /** 最初に正の `mate`（bound の付かない `info`）が出たら `stop` を送って打ち切る（{@link isConclusiveMate}） */
+  stopOnMate?: boolean;
+}
+
+/**
+ * 打ち切ってよい `info` か（詰将棋の判定。prd/13 §5.5）: **手番側の正の `mate` で、bound が付かない**（確定した値）。
+ * `lowerbound` / `upperbound` の付いた行は途中の値なので打ち切らない。読み筋が無い行も打ち切らない（判定と別解の手順に使えない）。
+ * ⚠ やねうら王は MultiPV 1 でも 9 手以上の詰みは見つけても上限まで止まらない（実測）——だから打ち切りが要る
+ */
+export function isConclusiveMate(info: UsiInfo): boolean {
+  return (
+    info.score?.type === 'mate' &&
+    Number.isFinite(info.score.value) &&
+    info.score.value > 0 &&
+    info.bound === undefined &&
+    (info.multipv ?? 1) === 1 &&
+    (info.pv?.length ?? 0) > 0
+  );
+}
 
 /**
  * 局面（SFEN）を USI の `position` にする。手数の無い 3 フィールドなら 1 を補う
@@ -83,7 +113,9 @@ export function namedEvaluationOf(
   move: string,
   pvMaxPlies: number = BROWSER_ANALYSIS_LIMITS.pvMaxPlies,
 ): NamedEvaluationResult {
-  const candidates = extractMultiPvResults(result.infoLines);
+  // 🔴 **打ち切ったなら、打ち切った行の評価値と読み筋を使う**（prd/13 §5.5）。`stop` の後にエンジンが出す行は
+  // 打ち切りの理由（確定した詰み）ではないので、判定にも別解の手順にも使わない
+  const candidates = extractMultiPvResults(result.stoppedBy ? [result.stoppedBy] : result.infoLines);
   const named = candidates.find((c) => c.move === move);
   if (!named) {
     // 評価を 1 本も出さずに名指しした手を指した ＝ 候補なし。ほかの手の評価が出た・ほかの手を指したなら名指しが効いていない

@@ -128,7 +128,10 @@ export type BrowserAnalysisError = z.infer<typeof browserAnalysisErrorSchema>;
  *   （エンジンが評価を出さなかった。server は手元 worker のフォールバックの「候補なし」と同じ扱いで、
  *   その手で詰み上がったかを盤面から見る。prd/13 §5.2）
  * - 来歴（ビルド識別・評価関数・`FV_SCALE`・スレッド・置換表・思考時間）: 全局面解析のチャンクと同じ形。
- *   解答の記録には残さない（受けて形を確かめるだけ。実装時に決定）
+ *   解答の記録には残さない（受けて形を確かめるだけ。実装時に決定）。
+ *   詰将棋の判定（prd/13 §5.5）は server が渡した固定のスレッド数（2）と上限（1000 / 2000ms）を載せてくる——
+ *   範囲（スレッド 1〜64・思考時間 1〜60,000ms）はそれを含む。打ち切った読みも `movetimeMs` は上限の値のまま
+ *   （実際に読んだ時間ではない）。⚠ 上限を 60 秒より大きくするならここも広げる
  */
 export const drillNamedEvaluationSchema = z
   .object({

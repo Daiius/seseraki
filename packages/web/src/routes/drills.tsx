@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
   parseSfen,
@@ -23,7 +23,7 @@ import {
   type StudySession,
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
-import { DrillHistory, DrillList } from '../components/DrillTables';
+import { DrillAttemptHistory, DrillCardList, type DrillAttemptRow } from '../components/DrillCards';
 import { BrowserAnalysisNotice } from '../components/BrowserAnalysis';
 import {
   answerBodyWithEvaluation,
@@ -43,18 +43,26 @@ import {
 } from '../lib/browserAnalysis/store';
 import {
   drillRefOf,
-  nextDrillSearch,
+  drillScreenOf,
+  listSearch,
+  MODE_LABEL,
+  MODES,
+  modeSearch,
   option,
   pinnedSearch,
   STATUSES,
   validateDrillsSearch,
-  VERDICTS,
+  type DrillMode,
   type DrillRef,
   type DrillsSearch,
 } from '../lib/drillSearch';
+import { drillRound, roundText } from '../lib/drillRound';
 
 /**
  * 出題（prd/13）。溜め込んだ棋譜と解析から作った問題を解く。
+ *
+ * 画面は検索パラメータで決まる（prd/13 §7.8。`lib/drillSearch.ts`）: ホーム（入口 4 つと一覧へのリンク。§7.5）→
+ * 解く画面（入口の在庫が尽きるまで区切らずに続く。§7.6）/ 問題の一覧（カード。§7.7）。
  *
  * 🔴 **棋譜詳細から出題しない**（prd/13 §7）——あの画面では答えが既に見えている。
  * ここには**出題局面と問いしか届かない**（正解手も候補手も server が持っている。prd/13 §5.3）。
@@ -67,7 +75,7 @@ export const Route = createFileRoute('/drills')({
   validateSearch: validateDrillsSearch,
   loaderDeps: ({ search }) => search,
   loader: {
-    handler: ({ deps }) => loadTab(deps),
+    handler: ({ deps, preload }) => loadScreen(deps, preload),
     // 🔒 **読み直しを裏で走らせない**（prd/13 §7.4）。既定の stale-while-revalidate だと、
     // 戻るボタンで**古い読み込み結果を描いたあとに**新しい結果が届き、解きかけの盤が
     // 作り直される（`key` が読み込みごとに変わるため）。待ってから 1 度だけ描く
@@ -76,42 +84,69 @@ export const Route = createFileRoute('/drills')({
   component: DrillsPage,
 });
 
-type SolveResponse = Awaited<ReturnType<typeof loadNext>>;
-type Drill = NonNullable<SolveResponse['drill']>;
+type Drill = NonNullable<Awaited<ReturnType<typeof loadOne>>['drill']>;
+type SolveData = { drill: Drill | null; error: string | null };
 
 /**
- * 解くタブの読み込みの通し番号。**読み込むたびに盤を作り直す**ための `key`。
+ * 解く画面の読み込みの通し番号。**読み込むたびに盤を作り直す**ための `key`。
  * ⚠ 問題（棋譜の番号・手数・種類）だけを `key` にすると、「次の問題」で**同じ問題がまた選ばれた**とき
- * （出題順は段の中でランダム。prd/13 §6.3）に作り直されず、解答後の表示が残る
+ * （段の中はランダム。prd/13 §6.4）に作り直されず、解答後の表示が残る
  */
 let solveLoads = 0;
 
-/** タブごとに引くものが違う（prd/13 §7.4）。**タブは URL の検索パラメータ**なので loader で分ける */
-async function loadTab(search: DrillsSearch) {
-  if (search.tab === 'list') return { tab: 'list' as const, ...(await loadList(search)) };
-  if (search.tab === 'history') return { tab: 'history' as const, ...(await loadHistory(search)) };
+/** 画面ごとに引くものが違う（prd/13 §7.8）。**画面は URL の検索パラメータ**なので loader で分ける */
+async function loadScreen(search: DrillsSearch, preload: boolean) {
+  const screen = drillScreenOf(search);
+  if (screen === 'home') {
+    // 🔒 **ホームに戻ったら「この回」を終える**（prd/13 §7.6）。先読みでは触らない
+    if (!preload) drillRound.end();
+    return { screen: 'home' as const, ...(await loadCounts()) };
+  }
+  if (screen === 'list') return { screen: 'list' as const, ...(await loadList(search)) };
+
+  if (!preload) drillRound.ensure();
   const ref = drillRefOf(search);
   if (ref) {
-    return { tab: 'solve' as const, load: ++solveLoads, ...(await loadOne(ref)) };
+    return { screen: 'solve' as const, load: ++solveLoads, exhausted: false, ...(await loadOne(ref)) };
   }
-  const next = await loadNext(search.kind);
-  // 🔒 **選んだ問題を URL に載せる**（prd/13 §7.4）。載せないと、棋譜詳細から戻ったときに
+  const mode = search.mode ?? 'recommend';
+  const next = await loadNext(mode, drillRound.get()?.since ?? null);
+  // この回の開始時刻は server の時刻で決める（端末の時計のずれで、この回の記録を取りこぼさない）
+  if (next.now && !preload) drillRound.startAt(next.now);
+  // 🔒 **選んだ問題を URL に載せる**（prd/13 §7.8）。載せないと、棋譜詳細から戻ったときに
   // loader が**別の問題を選び直す**。loader の redirect は router が **replace** で扱うので
   // 履歴は積まれない。置き換え先は問題を指すので 2 度目は `loadOne` に入り、ループしない
   // ⚠ 取得は 2 回になる（next → 名指し）が、**取得経路を loader の 1 本に保つ**方を取る
   const pinned = next.drill ? pinnedSearch(search, refOf(next.drill)) : null;
   if (pinned) throw redirect({ to: '/drills', search: pinned });
-  return { tab: 'solve' as const, load: ++solveLoads, ...next };
+  return {
+    screen: 'solve' as const,
+    load: ++solveLoads,
+    // 在庫が尽きた（prd/13 §6.4）。取得の失敗とは分ける
+    exhausted: next.error === null && next.drill === null,
+    drill: next.drill,
+    error: next.error,
+  };
 }
 
-async function loadNext(kind?: 'mate' | 'best') {
+async function loadCounts() {
   try {
-    const res = await client.api.drills.next.$get({ query: kind ? { kind } : {} });
-    if (!res.ok) return { drill: null, error: `サーバーエラー (${res.status})` };
-    const body = await res.json();
-    return { drill: body.drill, error: null };
+    const res = await client.api.drills.counts.$get();
+    if (!res.ok) return { counts: null, error: `サーバーエラー (${res.status})` };
+    return { counts: await res.json(), error: null };
   } catch {
-    return { drill: null, error: 'サーバーに接続できません' };
+    return { counts: null, error: 'サーバーに接続できません' };
+  }
+}
+
+async function loadNext(mode: DrillMode, since: string | null) {
+  try {
+    const res = await client.api.drills.next.$get({ query: { mode, ...(since ? { since } : {}) } });
+    if (!res.ok) return { drill: null, now: null, error: `サーバーエラー (${res.status})` };
+    const body = await res.json();
+    return { drill: body.drill, now: body.now, error: null };
+  } catch {
+    return { drill: null, now: null, error: 'サーバーに接続できません' };
   }
 }
 
@@ -129,7 +164,7 @@ function refOf(drill: DrillRef): DrillRef {
   return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
 }
 
-/** 一覧から名指しで開いた 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
+/** 名指しの 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
 async function loadOne(ref: DrillRef) {
   try {
     const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].$get({
@@ -151,8 +186,6 @@ async function loadList(search: DrillsSearch) {
         page: search.page ?? 1,
         ...(search.kind ? { kind: search.kind } : {}),
         ...(search.solved ? { status: search.solved } : {}),
-        ...(search.excluded ? { excluded: search.excluded } : {}),
-        ...(search.sortBy ? { sort: search.sortBy } : {}),
       },
     });
     if (!res.ok) return { list: null, error: `サーバーエラー (${res.status})` };
@@ -162,20 +195,215 @@ async function loadList(search: DrillsSearch) {
   }
 }
 
-async function loadHistory(search: DrillsSearch) {
-  try {
-    const res = await client.api.drills.attempts.$get({
-      query: {
-        page: search.page ?? 1,
-        ...(search.kind ? { kind: search.kind } : {}),
-        ...(search.verdict ? { verdict: search.verdict } : {}),
-      },
-    });
-    if (!res.ok) return { history: null, error: `サーバーエラー (${res.status})` };
-    return { history: await res.json(), error: null };
-  } catch {
-    return { history: null, error: 'サーバーに接続できません' };
+function DrillsPage() {
+  const data = Route.useLoaderData();
+  const search = Route.useSearch();
+  return (
+    <div className="p-2 space-y-2">
+      {data.screen === 'home' && <DrillHome counts={data.counts} error={data.error} />}
+      {data.screen === 'list' && <DrillListScreen list={data.list} error={data.error} search={search} />}
+      {data.screen === 'solve' && (
+        <>
+          <RoundBar />
+          {data.exhausted ? (
+            <Exhausted mode={search.mode ?? 'recommend'} />
+          ) : (
+            // 🔴 **読み込むたびに中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
+            // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る。
+            // 次の問題・入口の切り替え・戻るボタンのどれも loader を通るので、ここ 1 か所で揃う
+            <DrillRunner key={data.load} initial={data} search={search} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+type Counts = NonNullable<Awaited<ReturnType<typeof loadCounts>>['counts']>;
+
+/**
+ * ホーム（prd/13 §7.5）。入口のカード 4 つと問題の一覧へのリンクだけ。
+ * 🔒 **正答率などの成績は出さない**（§10。棋力の向上に繋がらないため）
+ */
+function DrillHome({ counts, error }: { counts: Counts | null; error: string | null }) {
+  if (error || !counts) return <p className="text-error p-2">{error ?? '読み込めませんでした'}</p>;
+  if (counts.total === 0) {
+    return (
+      <p className="text-base-content/70 p-2">
+        まだ問題がありません。解析済みの棋譜が増えると問題が作られます。
+      </p>
+    );
   }
+  const entries: { mode: DrillMode; stock: number; detail: string }[] = [
+    { mode: 'recommend', stock: counts.recommend, detail: '間違えた問題・新しい対局の問題から' },
+    { mode: 'mate', stock: counts.mate, detail: `未解答 ${counts.mate}` },
+    { mode: 'best', stock: counts.best, detail: `未解答 ${counts.best}` },
+    { mode: 'wrong', stock: counts.wrong, detail: `${counts.wrong} 問` },
+  ];
+  return (
+    <div className="space-y-3 max-w-xl">
+      <h1 className="text-lg font-bold">出題</h1>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {entries.map(({ mode, stock, detail }) =>
+          // 在庫が 0 の入口は押せない形で出す（数が 0 と分かれば足りる）
+          stock > 0 ? (
+            <Link
+              key={mode}
+              to="/drills"
+              search={modeSearch(mode)}
+              className="card card-border bg-base-100 hover:bg-base-200 p-4"
+            >
+              <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
+              <span className="text-sm text-base-content/70">{detail}</span>
+            </Link>
+          ) : (
+            <div
+              key={mode}
+              aria-disabled="true"
+              className="card card-border bg-base-200/50 p-4 text-base-content/50"
+            >
+              <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
+              <span className="text-sm">{mode === 'recommend' ? 'いま出せる問題はありません' : detail}</span>
+            </div>
+          ),
+        )}
+      </div>
+      <Link to="/drills" search={{ view: 'list' }} className="link link-primary text-sm">
+        問題の一覧
+      </Link>
+    </div>
+  );
+}
+
+type DrillListData = NonNullable<Awaited<ReturnType<typeof loadList>>['list']>;
+
+/** 問題の一覧（カード。prd/13 §7.7）。絞り込みは状態・種類 */
+function DrillListScreen({
+  list,
+  error,
+  search,
+}: {
+  list: DrillListData | null;
+  error: string | null;
+  search: DrillsSearch;
+}) {
+  const navigate = useNavigate({ from: '/drills' });
+  const router = useRouter();
+  /** 「除外を取り消す」の結果。**失敗を黙って飲まない**——押しても何も起きないと読める */
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  /** 絞り込みを変えたら 1 ページ目に戻す（棋譜一覧と同じ姿勢。prd/05 §2.5） */
+  function setSearch(patch: Partial<DrillsSearch>) {
+    navigate({ search: (prev) => ({ ...prev, page: undefined, ...patch }) });
+  }
+
+  async function unexclude(ref: DrillRef) {
+    // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
+    // GET が成功すると、**除外されたままの一覧が普通に描き直される**
+    try {
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].unexclude.$post({
+        param: refParam(ref),
+      });
+      if (!res.ok) {
+        setActionError(`除外を取り消せませんでした (${res.status})`);
+        return;
+      }
+      setActionError(null);
+      await router.invalidate();
+    } catch {
+      setActionError('サーバーに接続できません');
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Link to="/drills" className="btn btn-sm btn-ghost">
+          ホーム
+        </Link>
+        <h1 className="text-lg font-bold">問題の一覧</h1>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <select
+          className="select select-sm w-auto"
+          value={search.solved ?? 'all'}
+          onChange={(e) => setSearch({ solved: option(STATUSES, e.target.value) })}
+        >
+          <option value="all">すべての状態</option>
+          <option value="unanswered">未解答</option>
+          <option value="wrong">間違えた</option>
+          <option value="correct">正解</option>
+          <option value="excluded">除外</option>
+        </select>
+        <div className="join">
+          {(
+            [
+              [undefined, 'すべて'],
+              ['mate', '詰将棋'],
+              ['best', '次の一手'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={label}
+              type="button"
+              className={`btn btn-sm join-item ${search.kind === value ? 'btn-active' : ''}`}
+              onClick={() => setSearch({ kind: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {list && (
+          <span className="text-sm text-base-content/70 ms-auto">{list.pagination.total} 問</span>
+        )}
+      </div>
+      {error && <p className="text-error text-sm">{error}</p>}
+      {actionError && <p className="text-error text-sm">{actionError}</p>}
+      {list && (
+        <DrillCardList
+          rows={list.drills}
+          pagination={list.pagination}
+          search={search}
+          filtered={Boolean(search.kind || search.solved)}
+          onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
+          onClearFilters={() => navigate({ search: { view: 'list' } })}
+          onUnexclude={unexclude}
+        />
+      )}
+    </div>
+  );
+}
+
+/** 解く画面の上部: 「この回 N 問中 M 問正解」と「ホーム」（prd/13 §7.6） */
+function RoundBar() {
+  const round = useSyncExternalStore(drillRound.subscribe, drillRound.get, () => null);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-base-content/70">{roundText(round)}</span>
+      <Link to="/drills" className="btn btn-sm btn-ghost ms-auto">
+        ホーム
+      </Link>
+    </div>
+  );
+}
+
+/** 入口の在庫が尽きた（prd/13 §6.4）。ほかの入口とホームへの導線を出す */
+function Exhausted({ mode }: { mode: DrillMode }) {
+  return (
+    <div className="space-y-3 p-2">
+      <p>この入口の問題はもうありません。</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        {MODES.filter((other) => other !== mode).map((other) => (
+          <Link key={other} to="/drills" search={modeSearch(other)} replace className="btn btn-sm">
+            {MODE_LABEL[other]}
+          </Link>
+        ))}
+        <Link to="/drills" className="btn btn-sm btn-ghost">
+          ホーム
+        </Link>
+      </div>
+    </div>
+  );
 }
 
 /** 解答後に server が明かす情報（prd/13 §5.3） */
@@ -216,228 +444,12 @@ interface Miss {
 const POLL_INTERVAL_MS = 1500;
 const POLL_BUDGET_MS = 240_000;
 
-/**
- * 🔴 **種類を変えたら中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。出題は loader が
- * 引いた 1 問を state に持って進めるので、`key` を変えずに loader だけ走らせると
- * **「詰み」に切り替えたのに直前の次の一手が残る**。`key` で作り直せば、
- * 盤・手順・判定が**まとめて**新しい問題のものになる。
- */
-function DrillsPage() {
-  const data = Route.useLoaderData();
-  const search = Route.useSearch();
-  const navigate = useNavigate({ from: '/drills' });
-  const router = useRouter();
-  /** 「戻す」の結果（prd/13 §7.2）。**失敗を黙って飲まない**——押しても何も起きないと読める */
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  /** 絞り込みを変えたら 1 ページ目に戻す（棋譜一覧と同じ姿勢。prd/05 §2.5） */
-  function setSearch(patch: Partial<DrillsSearch>) {
-    navigate({ search: (prev) => ({ ...prev, page: undefined, ...patch }) });
-  }
-
-  /** 絞り込みをすべて外す（タブは保つ）。0 件のときの案内から呼ぶ */
-  function clearFilters() {
-    navigate({ search: { tab: search.tab } });
-  }
-
-  async function unexclude(ref: DrillRef) {
-    // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
-    // GET が成功すると、**除外されたままの一覧が普通に描き直される**——押した側からは
-    // 「効かなかった」ことも理由も分からない
-    try {
-      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].unexclude.$post({
-        param: refParam(ref),
-      });
-      if (!res.ok) {
-        setActionError(`除外を戻せませんでした (${res.status})`);
-        return;
-      }
-      setActionError(null);
-      await router.invalidate();
-    } catch {
-      setActionError('サーバーに接続できません');
-    }
-  }
-
-  return (
-    <div className="p-2 space-y-2">
-      <DrillTabs search={search} />
-
-      {data.tab === 'solve' && (
-        // 🔴 **読み込むたびに中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
-        // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る。
-        // 種類の切り替え・次の問題・戻るボタンのどれも loader を通るので、ここ 1 か所で揃う
-        <DrillRunner
-          key={data.load}
-          initial={data}
-          // 🔒 **次の問題も loader に選ばせる**（prd/13 §7.4）。問題を指す組を落として replace で
-          // 移ると、loader が次の 1 問を選んで URL に載せ直す（履歴は積まない）
-          onNext={() => navigate({ search: nextDrillSearch, replace: true })}
-        />
-      )}
-
-      {data.tab === 'list' && (
-        <>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              className="select select-sm"
-              value={search.solved ?? 'all'}
-              onChange={(e) =>
-                setSearch({ solved: option(STATUSES, e.target.value) })
-              }
-            >
-              <option value="all">すべての状態</option>
-              <option value="unanswered">未解答</option>
-              <option value="wrong">間違えた</option>
-              <option value="correct">正解した</option>
-            </select>
-            <select
-              className="select select-sm"
-              value={search.sortBy ?? 'played'}
-              onChange={(e) =>
-                setSearch({ sortBy: e.target.value === 'status' ? 'status' : undefined })
-              }
-            >
-              <option value="played">対局日順</option>
-              <option value="status">出題順</option>
-            </select>
-            <label className="label cursor-pointer gap-1 text-sm">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm"
-                checked={search.excluded === 'only'}
-                onChange={(e) => setSearch({ excluded: e.target.checked ? 'only' : undefined })}
-              />
-              除外した問題
-            </label>
-            {data.list && (
-              <span className="text-sm text-base-content/70 ms-auto">
-                {data.list.pagination.total} 問
-              </span>
-            )}
-          </div>
-          {data.error && <p className="text-error text-sm">{data.error}</p>}
-          {actionError && <p className="text-error text-sm">{actionError}</p>}
-          {data.list && (
-            <DrillList
-              rows={data.list.drills}
-              pagination={data.list.pagination}
-              kind={search.kind}
-              filtered={Boolean(search.kind || search.solved || search.excluded)}
-              excludedOnly={search.excluded === 'only'}
-              onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
-              onClearFilters={clearFilters}
-              onUnexclude={unexclude}
-            />
-          )}
-        </>
-      )}
-
-      {data.tab === 'history' && (
-        <>
-          <div className="flex items-center gap-2 flex-wrap">
-            <select
-              className="select select-sm"
-              value={search.verdict ?? 'all'}
-              onChange={(e) => setSearch({ verdict: option(VERDICTS, e.target.value) })}
-            >
-              <option value="all">すべての判定</option>
-              <option value="correct">正解</option>
-              <option value="close">惜しい</option>
-              <option value="wrong">不正解</option>
-              <option value="excluded">除外</option>
-            </select>
-            {data.history && (
-              <span className="text-sm text-base-content/70 ms-auto">
-                {data.history.pagination.total} 件
-              </span>
-            )}
-          </div>
-          {data.error && <p className="text-error text-sm">{data.error}</p>}
-          {data.history && (
-            <DrillHistory
-              rows={data.history.attempts}
-              pagination={data.history.pagination}
-              kind={search.kind}
-              filtered={Boolean(search.kind || search.verdict)}
-              onPage={(page) => navigate({ search: (prev) => ({ ...prev, page }) })}
-              onClearFilters={clearFilters}
-            />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * タブと種類の絞り込み（prd/13 §7.4）。
- *
- * 🔒 **`kind` はタブをまたいで効く**（3 つとも種類で絞る意味がある）。
- * ⚠ **タブを移ったらタブ固有のつまみは落とす**（`page` / `solved` / `verdict` など）。
- */
-function DrillTabs({ search }: { search: DrillsSearch }) {
-  const tab = search.tab ?? 'solve';
-  return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <div role="tablist" className="tabs tabs-box tabs-sm">
-        {(
-          [
-            [undefined, '解く'],
-            ['list', '一覧'],
-            ['history', '履歴'],
-          ] as const
-        ).map(([value, label]) => (
-          <Link
-            key={label}
-            role="tab"
-            to="/drills"
-            search={{ tab: value, kind: search.kind }}
-            className={`tab ${tab === (value ?? 'solve') ? 'tab-active' : ''}`}
-          >
-            {label}
-          </Link>
-        ))}
-      </div>
-      {/* 種類の絞り込み。**答えの手掛かりにはならない**ので出題中に出してよい */}
-      <div className="join ms-auto">
-        {(
-          [
-            [undefined, 'すべて'],
-            ['mate', '詰み'],
-            ['best', '次の一手'],
-          ] as const
-        ).map(([value, label]) => (
-          <Link
-            key={label}
-            to="/drills"
-            search={{
-              ...search,
-              kind: value,
-              page: undefined,
-              kifu: undefined,
-              ply: undefined,
-              drillKind: undefined,
-            }}
-            className={`btn btn-xs join-item ${search.kind === value ? 'btn-active' : ''}`}
-          >
-            {label}
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function DrillRunner({
-  initial,
-  onNext,
-}: {
-  initial: SolveResponse;
-  /** 次の問題へ進む。**取得は loader が持つ**ので、ここは URL を変えるだけ（prd/13 §7.4） */
-  onNext: () => void;
-}) {
+function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSearch }) {
   const { scoring } = useDrillScoring();
+  const navigate = useNavigate({ from: '/drills' });
+  /** 入ってきた入口。一覧から名指しで開いた問題は null（大きいボタンが「一覧に戻る」になる。prd/13 §7.6） */
+  const mode = search.mode ?? null;
+
   // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない
   const [drill] = useState<Drill | null>(initial.drill);
   const [error, setError] = useState<string | null>(initial.error);
@@ -457,6 +469,21 @@ function DrillRunner({
   const [confirmGiveUp, setConfirmGiveUp] = useState(false);
   /** この端末のエンジンで採点できなかった（同意の前・解析できない環境など）。案内（同意のボタンなど）も並べて出す */
   const [ungradable, setUngradable] = useState(false);
+
+  /**
+   * 解いた後の大きいボタン。🔒 **次の問題も loader に選ばせる**（prd/13 §7.8）——問題の指定を落として replace で
+   * 移ると、loader が入口の次の 1 問を選んで URL に載せ直す（履歴は積まない）。**取得は loader が持つ**
+   */
+  function onNext() {
+    if (mode) navigate({ search: modeSearch(mode), replace: true });
+    else navigate({ search: listSearch(search) });
+  }
+
+  /** 記録した解答を「この回」に数える（記録は 1 問 1 回。練習は数えない。prd/13 §7.6） */
+  function noteRecorded(verdict: Reveal['verdict']) {
+    setRecorded(verdict);
+    drillRound.record(verdict);
+  }
 
   const base = drill ? parseSfen(drill.sfen) : null;
   const state = session ? currentState(session) : base;
@@ -524,7 +551,7 @@ function DrillRunner({
         return;
       }
       const nextRecorded = practice ? recorded : step.result.verdict;
-      setRecorded(nextRecorded);
+      if (!practice) noteRecorded(step.result.verdict);
       setSession(sessionOf(drill, line));
       setMiss(null);
       setReveal({ ...step.result, practice, recorded: nextRecorded });
@@ -600,7 +627,7 @@ function DrillRunner({
           case 'miss': {
             // 詰将棋で間違えた。**その手を取り消して同じ局面で考え直す**（prd/13 §5.2）。
             // 記録は最初の間違いの 1 回（server が記録済み）。以後は練習で送る
-            if (!practice) setRecorded('wrong');
+            if (!practice) noteRecorded('wrong');
             setMiss({
               reason: step.reason,
               refutationText: step.refutation.length > 0 ? movesText(answered, step.refutation) : null,
@@ -611,7 +638,7 @@ function DrillRunner({
           }
           case 'done': {
             const nextRecorded = practice ? recorded : step.result.verdict;
-            setRecorded(nextRecorded);
+            if (!practice) noteRecorded(step.result.verdict);
             setReveal({ ...step.result, practice, recorded: nextRecorded });
             setJudging(false);
             return;
@@ -638,11 +665,7 @@ function DrillRunner({
     return <p className="text-error p-2">{error}</p>;
   }
   if (!drill || !state) {
-    return (
-      <p className="text-base-content/70 p-2">
-        出題できる問題がありません。解析済みの棋譜が増えると問題が作られます。
-      </p>
-    );
+    return <p className="text-base-content/70 p-2">この問題を表示できません。</p>;
   }
 
   return (
@@ -782,6 +805,7 @@ function DrillRunner({
           base={base!}
           // 咎め筋は**答えた手を指した後**の局面から読む（相手の応手から始まるため）
           answered={state}
+          mode={mode}
           onNext={onNext}
           onExclude={exclude}
           onRestart={restart}
@@ -797,6 +821,7 @@ function Result({
   drill,
   base,
   answered,
+  mode,
   onNext,
   onExclude,
   onRestart,
@@ -806,6 +831,9 @@ function Result({
   base: BoardState;
   /** 答えた手を指した後の局面（咎め筋の読み出しに使う） */
   answered: BoardState;
+  /** 入ってきた入口（一覧から開いた問題は null） */
+  mode: DrillMode | null;
+  /** 大きいボタン（入口の次の問題 / 一覧に戻る） */
   onNext: () => void;
   onExclude: () => void;
   /** 最初から解き直す（練習。記録しない） */
@@ -847,12 +875,23 @@ function Result({
         </p>
       )}
 
+      {/* 解いた後のボタン（prd/13 §7.6）。上から: 入口の続き（大）→ 入口の切り替え → その他 */}
+      <button type="button" className="btn btn-primary btn-block" onClick={onNext}>
+        {mode ? `次の問題（${MODE_LABEL[mode]}）` : '一覧に戻る'}
+      </button>
       <div className="flex items-center gap-2 flex-wrap">
-        <button type="button" className="btn btn-sm btn-primary" onClick={onNext}>
-          次の問題
-        </button>
+        {/* 今の入口と同じになるものは出さない */}
+        {(['mate', 'best'] as const)
+          .filter((other) => other !== mode)
+          .map((other) => (
+            <Link key={other} to="/drills" search={modeSearch(other)} replace className="btn btn-sm flex-1">
+              次は{MODE_LABEL[other]}
+            </Link>
+          ))}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
         {/*
-          出題局面の**次の手**（＝この問題の手）まで進めた状態で開く。
+          元の対局。出題局面の**次の手**（＝この問題の手）まで進めた状態で開く。
           `moveNumber` は 0 始まりの指し手番号なので、盤の手数（初期局面からの手数）は +1。
           こうすると開いた瞬間にその手の評価値・候補手が出る（prd/13 §7.1）
         */}
@@ -860,19 +899,63 @@ function Result({
           to="/kifus/$id"
           params={{ id: String(reveal.kifuNo) }}
           search={{ ply: reveal.moveNumber + 1 }}
-          className="btn btn-sm"
+          className="btn btn-sm btn-ghost"
         >
-          この対局の {reveal.moveNumber + 1} 手目を見る
+          元の対局
         </Link>
+        {/* やり直す（§7.1 の解答後の「最初から」。以後は練習で記録しない） */}
+        <button type="button" className="btn btn-sm btn-ghost" onClick={onRestart}>
+          やり直す
+        </button>
         {/* 🔒 自動判定は作らない（「取り返し」の定義から詰まる。prd/13 §4.2） */}
         <button type="button" className="btn btn-sm btn-ghost" onClick={onExclude}>
           自明だった
         </button>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onRestart}>
-          最初から
-        </button>
+        <Link to="/drills" className="btn btn-sm btn-ghost">
+          ホーム
+        </Link>
       </div>
+
+      <AttemptsOf drill={drill} />
     </div>
+  );
+}
+
+/**
+ * この問題の解答履歴（prd/13 §7.7）。🔒 **解いた後にだけ出す**（`Result` の中だけで使う）——
+ * 正解の記録の「指した手」は答えそのもの。解いた直後の記録も入るよう、解答後の表示が出るたびに引く
+ */
+function AttemptsOf({ drill }: { drill: Drill }) {
+  const [rows, setRows] = useState<DrillAttemptRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { kifuNo, moveNumber, kind } = drill;
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].attempts.$get({
+          param: refParam({ kifuNo, moveNumber, kind }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const body = await res.json();
+        if (!cancelled) setRows(body.attempts);
+      } catch {
+        if (!cancelled) setError('解答履歴を読み込めませんでした');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [kifuNo, moveNumber, kind]);
+  return (
+    <details className="pt-2 border-t border-base-300">
+      <summary className="text-sm cursor-pointer">この問題の解答履歴</summary>
+      <div className="pt-1">
+        {error && <p className="text-error text-sm">{error}</p>}
+        {rows && <DrillAttemptHistory rows={rows} />}
+        {!rows && !error && <span className="loading loading-spinner loading-xs" />}
+      </div>
+    </details>
   );
 }
 

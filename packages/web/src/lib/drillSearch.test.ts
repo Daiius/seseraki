@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   drillRefOf,
-  nextDrillSearch,
+  drillScreenOf,
+  listSearch,
+  modeSearch,
   pinnedSearch,
-  solveDrillSearch,
+  solveFromListSearch,
   validateDrillsSearch,
   type DrillRef,
 } from './drillSearch';
@@ -44,83 +46,97 @@ describe('validateDrillsSearch', () => {
     }
   });
 
-  it('🔒 絞り込みの kind と問題の種類（drillKind）は別のパラメータ', () => {
+  it('🔒 一覧の kind と問題の種類（drillKind）は別のパラメータ', () => {
     const search = validateDrillsSearch({ kind: 'mate', kifu: '42', ply: '36', drillKind: 'best' });
     expect(search.kind).toBe('mate');
     expect(search.drillKind).toBe('best');
   });
 
-  it('旧形式の drill（出題の行の ID）は読まない', () => {
-    expect(validateDrillsSearch({ drill: '12' })).not.toHaveProperty('drill');
-  });
-
-  it('未知の値は既定に戻す', () => {
-    expect(validateDrillsSearch({ tab: 'solve', kind: 'tsume', page: '1' })).toEqual({
-      tab: undefined,
+  it('旧形式（drill・tab・sortBy・verdict・excluded）は読まない', () => {
+    const search = validateDrillsSearch({
+      drill: '12',
+      tab: 'list',
+      sortBy: 'status',
+      verdict: 'wrong',
+      excluded: 'only',
+    });
+    expect(search).toEqual({
+      mode: undefined,
+      view: undefined,
       kind: undefined,
+      solved: undefined,
+      page: undefined,
       kifu: undefined,
       ply: undefined,
       drillKind: undefined,
-      page: undefined,
-      solved: undefined,
-      excluded: undefined,
-      sortBy: undefined,
-      verdict: undefined,
     });
+    // 旧形式の tab=list はホームになる（prd/13 §7.8）
+    expect(drillScreenOf(search)).toBe('home');
   });
 
-  it('許可値はそのまま通す', () => {
-    const search = validateDrillsSearch({ tab: 'list', kind: 'mate', page: '3', solved: 'wrong' });
-    expect(search).toMatchObject({ tab: 'list', kind: 'mate', page: 3, solved: 'wrong' });
+  it('許可値はそのまま通し、未知の値は落とす', () => {
+    expect(
+      validateDrillsSearch({ view: 'list', kind: 'mate', page: '3', solved: 'excluded' }),
+    ).toMatchObject({ view: 'list', kind: 'mate', page: 3, solved: 'excluded' });
+    expect(validateDrillsSearch({ mode: 'wrong' }).mode).toBe('wrong');
+    expect(validateDrillsSearch({ mode: 'all', view: 'history', page: '1' })).toMatchObject({
+      mode: undefined,
+      view: undefined,
+      page: undefined,
+    });
+  });
+});
+
+describe('drillScreenOf（prd/13 §7.8）', () => {
+  it('何も無ければホーム・view=list は一覧・入口は解く画面', () => {
+    expect(drillScreenOf({})).toBe('home');
+    expect(drillScreenOf({ view: 'list' })).toBe('list');
+    expect(drillScreenOf({ mode: 'recommend' })).toBe('solve');
+  });
+
+  it('問題の指定は view より優先（一覧から名指しで開いた問題）', () => {
+    expect(drillScreenOf({ view: 'list', kifu: 42, ply: 36, drillKind: 'best' })).toBe('solve');
+    expect(drillScreenOf({ kifu: 42, ply: 36, drillKind: 'best' })).toBe('solve');
   });
 });
 
 describe('pinnedSearch', () => {
-  it('解くタブで問題が無ければ、選んだ問題を載せる（種類の絞り込みは保つ）', () => {
-    expect(pinnedSearch({ kind: 'best' }, REF)).toEqual({
-      kind: 'best',
+  it('入口で問題が無ければ、選んだ問題を載せる', () => {
+    expect(pinnedSearch({ mode: 'mate' }, REF)).toEqual({
+      mode: 'mate',
       kifu: 42,
       ply: 36,
       drillKind: 'best',
     });
-    expect(pinnedSearch({}, REF)).toEqual({ kifu: 42, ply: 36, drillKind: 'best' });
   });
 
   it('既に問題があれば置き換えない（読み直しのたびに書き換えるとループする）', () => {
-    const pinned = { kifu: 42, ply: 36, drillKind: 'best' } as const;
+    const pinned = { mode: 'recommend', kifu: 42, ply: 36, drillKind: 'best' } as const;
     expect(pinnedSearch(pinned, REF)).toBeNull();
     expect(pinnedSearch(pinned, { ...REF, kifuNo: 7 })).toBeNull();
   });
 
   it('置き換え先を読み直しても、もう置き換えない', () => {
-    const pinned = pinnedSearch({ kind: 'mate' }, { ...REF, kind: 'mate' })!;
+    const pinned = pinnedSearch({ mode: 'wrong' }, REF)!;
     expect(pinnedSearch(pinned, REF)).toBeNull();
   });
 
-  it('一覧・履歴のタブでは置き換えない', () => {
-    expect(pinnedSearch({ tab: 'list' }, REF)).toBeNull();
-    expect(pinnedSearch({ tab: 'history' }, REF)).toBeNull();
+  it('入口が無い（ホーム・一覧）では置き換えない', () => {
+    expect(pinnedSearch({}, REF)).toBeNull();
+    expect(pinnedSearch({ view: 'list' }, REF)).toBeNull();
   });
 });
 
-describe('nextDrillSearch', () => {
-  it('問題を指す組だけを落とし、種類の絞り込みは保つ', () => {
-    expect(nextDrillSearch({ kind: 'mate', kifu: 42, ply: 36, drillKind: 'mate' })).toEqual({
-      kind: 'mate',
-      kifu: undefined,
-      ply: undefined,
-      drillKind: undefined,
-    });
+describe('行き先', () => {
+  it('入口の次の問題は、入口だけを持つ（問題の指定・一覧のつまみは落とす）', () => {
+    expect(modeSearch('best')).toEqual({ mode: 'best' });
   });
-});
 
-describe('solveDrillSearch', () => {
-  it('一覧から開く行き先は、種類の絞り込みと問題を指す組', () => {
-    expect(solveDrillSearch(undefined, REF)).toEqual({
-      kind: undefined,
-      kifu: 42,
-      ply: 36,
-      drillKind: 'best',
-    });
+  it('一覧から開く問題は、一覧の絞り込みとページを持ったまま開き、同じ一覧へ戻れる', () => {
+    const list = { view: 'list', kind: 'mate', solved: 'wrong', page: 2 } as const;
+    const solve = solveFromListSearch(list, REF);
+    expect(solve).toEqual({ ...list, kifu: 42, ply: 36, drillKind: 'best' });
+    expect(drillScreenOf(solve)).toBe('solve');
+    expect(listSearch(solve)).toEqual(list);
   });
 });

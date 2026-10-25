@@ -18,6 +18,7 @@ import {
 } from 'shared';
 import { fetchPendingKifuNos, runnerApi } from './api';
 import {
+  analysisThreads,
   connectEngineHost,
   engineOptions,
   initRequest,
@@ -28,6 +29,9 @@ import {
   createKifuRunner,
   type AnalysisEngine,
   type EngineChoice,
+  type KifuRunner,
+  type NamedEvalOutcome,
+  type NamedEvalRequest,
   type RunnerDeps,
   type RunnerLog,
 } from './runner';
@@ -147,6 +151,7 @@ async function createEngine(
   load: AnalysisLoad,
   signal: AbortSignal,
   patch: typeof patchBrowserAnalysisState,
+  fixedThreads?: number,
 ): Promise<AnalysisEngine> {
   log.info(
     `loading engine eval=${entry.id} build=${entry.engine.buildId} nn=${entry.nn.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
@@ -184,18 +189,44 @@ async function createEngine(
         : undefined,
     });
     await session.start();
-    const options = engineOptions(entry, settings, navigator.hardwareConcurrency, load);
+    const options = engineOptions(
+      entry,
+      settings,
+      navigator.hardwareConcurrency,
+      load,
+      fixedThreads,
+    );
     for (const [name, value] of options.options) session.setOption(name, value);
     await session.ready();
     const name = session.getName() ?? null;
     log.info(
       `readyok name="${name ?? ''}" eval=${entry.id} threads=${options.threads} hash=${options.hashMb}MB fvScale=${entry.fvScale}`,
     );
+    /** 負荷の設定で決まる数（`setThreads(null)` で戻す数） */
+    const loadThreads = analysisThreads(
+      navigator.hardwareConcurrency,
+      settings.maxThreads,
+      load,
+    );
+    let threads = options.threads;
     return {
       session,
       name,
-      threads: options.threads,
+      get threads() {
+        return threads;
+      },
       hashMb: options.hashMb,
+      // 詰将棋の判定の固定のスレッド数（prd/13 §5.5）。上流は setoption Threads でその場でスレッドを作り直す
+      // （resize_threads。置換表も確保し直す）。isready で揃うのを待つ。評価関数は読み直さない
+      setThreads: async (next) => {
+        const want = next ?? loadThreads;
+        if (want === threads) return;
+        const started = Date.now();
+        session.setOption('Threads', String(want));
+        await session.ready();
+        log.info(`threads ${threads} -> ${want} (${Date.now() - started}ms)`);
+        threads = want;
+      },
       dispose: () => {
         log.info('engine disposed');
         connection.dispose();
@@ -218,29 +249,35 @@ export interface BrowserAnalysisOptions {
   onAccountChanged(): void;
 }
 
-async function main(
-  options: BrowserAnalysisOptions,
-  signal: AbortSignal,
-): Promise<void> {
-  // 止めた後に遅れて届く更新（ダウンロードの進捗など）で、止めた後の状態を書き換えない
-  const patch: typeof patchBrowserAnalysisState = (next) => {
+/** 止めた後に遅れて届く更新（ダウンロードの進捗など）で、止めた後の状態を書き換えない */
+function patcherFor(signal: AbortSignal): typeof patchBrowserAnalysisState {
+  return (next) => {
     if (!signal.aborted) patchBrowserAnalysisState(next);
   };
+}
 
+/**
+ * 解析できる環境か・エンジンが配信されているか・同意済みかを確かめる（常駐の解析と、詰将棋の判定だけの常駐で共通）。
+ * 進めないなら状態を書いて null。🔒 **同意の前は、エンジンの Worker を作らない**（manifest を読むだけ。prd/14 §5.10）
+ */
+async function prepare(
+  signal: AbortSignal,
+  patch: typeof patchBrowserAnalysisState,
+): Promise<{ origin: string; manifest: EngineManifest; selected: EngineManifestEntry } | null> {
   const support = detectSupport(readBrowserEnv());
   if (!support.supported) {
     log.warn(`unsupported: ${support.reasons.join(', ')}`);
     patch({ phase: 'unsupported', unsupported: support.reasons });
-    return;
+    return null;
   }
 
   const origin = window.location.origin;
   const manifest = await fetchEngineManifest(origin, (url, init) => fetch(url, init));
-  if (signal.aborted) return;
+  if (signal.aborted) return null;
   if (manifest === null) {
     log.warn('engine manifest not found (the engine is not deployed)');
     patch({ phase: 'no-engine', manifest: null });
-    return;
+    return null;
   }
   patch({ manifest });
   // 🔒 同意の前に評価関数を落とし始めない（prd/14 §5.10）。同意は評価関数ごと（選んだエントリの nn.bin の sha256）。
@@ -251,21 +288,30 @@ async function main(
       `waiting for consent (eval ${selected.id} ${engineEntryDownloadBytes(selected)} bytes)`,
     );
     patch({ phase: 'needs-consent' });
-    return;
+    return null;
   }
+  return { origin, manifest, selected };
+}
 
-  log.info(
-    `started mode=${options.mode} eval=${selected.id} build=${selected.engine.buildId} isolated=${String(globalThis.crossOriginIsolated)}`,
-  );
-  patch({ phase: 'idle' });
-
-  const runner = createKifuRunner({
+/** runner の依存のうち、常駐の解析と詰将棋の判定だけの常駐で共通のもの */
+function runnerBaseDeps(
+  origin: string,
+  manifest: EngineManifest,
+  signal: AbortSignal,
+  patch: typeof patchBrowserAnalysisState,
+) {
+  return {
     api: runnerApi,
     // 評価関数の選択は常駐を作り直さずに読む（変えたら次の解析の開始で、エンジンを作り直して効かせる）。
     // 同意していない評価関数に切り替えたら null（解析を止めて同意を求める）
     currentEngine: () => currentChoice(manifest),
     // エンジンの読み込みは、棋譜の中断ではなく常駐の停止（`signal`）で止める
-    createEngine: (settings, load, choice) =>
+    createEngine: (
+      settings: ServerAnalysisSettings,
+      load: AnalysisLoad,
+      choice: EngineChoice,
+      threads?: number,
+    ) =>
       createEngine(
         origin,
         engineEntryOf(manifest, choice.id),
@@ -273,12 +319,65 @@ async function main(
         load,
         signal,
         patch,
+        threads,
       ),
     // 負荷の設定は常駐を作り直さずに読む（変えたら次の解析の開始で、エンジンを作り直して効かせる）
     currentLoad: () => getBrowserAnalysisSettings().load,
     sleep,
     now: () => Date.now(),
     visibility: createVisibility(signal),
+    log,
+  };
+}
+
+/** 採点の読みを 1 つ読み、経過をコンソールに出す（`[browser-analysis] drill: …`） */
+async function gradeWithLog(
+  runner: KifuRunner,
+  request: NamedEvalRequest,
+): Promise<NamedEvalOutcome> {
+  const { threads, stopOnMate, movetimeMs } = request.settings;
+  log.info(
+    `drill: reading ${request.move} for ${movetimeMs}ms${threads !== undefined ? ` threads=${threads}` : ''}${stopOnMate ? ' (stop at the first mate)' : ''}`,
+  );
+  const started = Date.now();
+  const outcome = await runner.evaluateNamed(request);
+  const elapsed = Date.now() - started;
+  switch (outcome.kind) {
+    case 'ok': {
+      const { candidate } = outcome.evaluation;
+      log.info(
+        candidate
+          ? `drill: ${request.move} score ${candidate.scoreType} ${candidate.scoreValue} depth ${candidate.depth}${outcome.stopped ? ' stopped' : ''} in ${elapsed}ms`
+          : `drill: ${request.move} no candidate in ${elapsed}ms`,
+      );
+      break;
+    }
+    case 'mismatch':
+      log.warn(`drill: the engine did not read ${request.move} (returned ${outcome.returned})`);
+      break;
+    case 'failed':
+      log.warn(`drill: failed: ${outcome.detail}`);
+      break;
+  }
+  return outcome;
+}
+
+async function main(
+  options: BrowserAnalysisOptions,
+  signal: AbortSignal,
+): Promise<void> {
+  const patch = patcherFor(signal);
+  const prepared = await prepare(signal, patch);
+  if (!prepared) return;
+  const { origin, manifest, selected } = prepared;
+
+  log.info(
+    `started mode=${options.mode} eval=${selected.id} build=${selected.engine.buildId} isolated=${String(globalThis.crossOriginIsolated)}`,
+  );
+  patch({ phase: 'idle' });
+
+  const runner = createKifuRunner({
+    ...runnerBaseDeps(origin, manifest, signal, patch),
     onProgress: (progress) => {
       patch(
         progress
@@ -288,7 +387,6 @@ async function main(
     },
     // quick が揃ったら、full の完了を待たずに画面のデータを取り直す（quick の結果を出す）
     onStageCompleted: () => options.onSettled(),
-    log,
   });
   const scheduler = createScheduler({
     mode: options.mode,
@@ -330,30 +428,10 @@ async function main(
     },
   });
 
-  // 出題の採点の読み（prd/13 §5.3）。全局面解析より先に、同じエンジンで読む
+  // 出題の採点の読み（prd/13 §5.3・§5.5）。全局面解析より先に、同じエンジンで読む。
+  // 詰将棋の判定は固定のスレッド数に切り替えて読み、全局面解析に戻るときに負荷の設定の数へ戻す（runner の ensureEngine）
   const offGrader = setBrowserGrader((request) =>
-    scheduler.runPriority(async () => {
-      log.info(`drill: reading ${request.move} for ${request.settings.movetimeMs}ms`);
-      const outcome = await runner.evaluateNamed(request);
-      switch (outcome.kind) {
-        case 'ok': {
-          const { candidate } = outcome.evaluation;
-          log.info(
-            candidate
-              ? `drill: ${request.move} score ${candidate.scoreType} ${candidate.scoreValue} depth ${candidate.depth}`
-              : `drill: ${request.move} no candidate`,
-          );
-          break;
-        }
-        case 'mismatch':
-          log.warn(`drill: the engine did not read ${request.move} (returned ${outcome.returned})`);
-          break;
-        case 'failed':
-          log.warn(`drill: failed: ${outcome.detail}`);
-          break;
-      }
-      return outcome;
-    }),
+    scheduler.runPriority(() => gradeWithLog(runner, request)),
   );
   const offFocus = onAnalysisFocusChange(scheduler.setFocus);
   const offPoke = onBrowserAnalysisPoke(scheduler.poke);
@@ -367,6 +445,62 @@ async function main(
     runner.dispose();
     log.info('stopped');
   }
+}
+
+/**
+ * 詰将棋の判定だけの常駐（担当 `worker` の利用者。prd/13 §5.5）。🔒 **全局面解析は回さない**——棋譜の一覧も開始の口も叩かず、
+ * 採点の読みを受け持つだけ。エンジンは最初の判定で読み込み、止めるまで使い回す。
+ * 同意の前・解析できない環境・エンジンが無いときは状態を書いて何もしない（判定は手元 worker に回る）。
+ * ⚠ ほかのタブとロックを取り合わない（担当 `worker` の端末には全局面解析のタブが無い）
+ */
+async function drillOnlyMain(signal: AbortSignal): Promise<void> {
+  const patch = patcherFor(signal);
+  const prepared = await prepare(signal, patch);
+  if (!prepared) return;
+  const { origin, manifest, selected } = prepared;
+  log.info(`drill grading only: eval=${selected.id} build=${selected.engine.buildId}`);
+  patch({ phase: 'idle' });
+
+  const runner = createKifuRunner({
+    ...runnerBaseDeps(origin, manifest, signal, patch),
+    onProgress: () => {},
+    onStageCompleted: () => {},
+  });
+  // エンジンは 1 本なので、判定は 1 つずつ読む
+  let queue: Promise<unknown> = Promise.resolve();
+  const offGrader = setBrowserGrader((request) => {
+    const run = queue.then(() => gradeWithLog(runner, request));
+    queue = run.catch(() => {});
+    return run;
+  });
+  try {
+    await new Promise<void>((resolve) => {
+      if (signal.aborted) return resolve();
+      signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+  } finally {
+    offGrader();
+    runner.dispose();
+    log.info('drill grading stopped');
+  }
+}
+
+/**
+ * 詰将棋の判定だけの常駐を起動する（担当 `worker`。prd/13 §5.5）。返り値の関数で止める（エンジンも止まる）。
+ * 同意が増えたら止めて起動し直す（`DrillGradingHost`）
+ */
+export function startDrillGrading(): () => void {
+  const controller = new AbortController();
+  drillOnlyMain(controller.signal).catch((error: unknown) => {
+    if (controller.signal.aborted) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    log.warn(`drill grading stopped by error: ${detail}`);
+    patchBrowserAnalysisState({ phase: 'error', error: detail, progress: null });
+  });
+  return () => {
+    controller.abort();
+    resetBrowserAnalysisState();
+  };
 }
 
 /**

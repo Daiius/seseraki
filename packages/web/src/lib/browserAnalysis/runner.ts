@@ -23,6 +23,7 @@
 import {
   analyzeKifuForBrowser,
   BROWSER_ANALYSIS_LIMITS,
+  isConclusiveMate,
   isPermanentSubmitStatus,
   namedEvaluationOf,
   namedGoCommand,
@@ -32,6 +33,7 @@ import {
   type DrillNamedEvaluation,
   type BrowserAnalysisRun,
   type BrowserAnalysisSettings as ServerAnalysisSettings,
+  type NamedEvalSettings,
   type UsiAnalysisEngine,
 } from 'shared';
 import type { AnalysisLoad } from './settings';
@@ -118,8 +120,14 @@ export interface AnalysisEngine {
   session: UsiAnalysisEngine;
   /** エンジンの名乗り（USI の `id name`） */
   name: string | null;
-  threads: number;
+  /** いまのスレッド数（{@link AnalysisEngine.setThreads} で変わる） */
+  readonly threads: number;
   hashMb: number;
+  /**
+   * 動いているエンジンのスレッド数を変える（`setoption Threads` → `isready`。詰将棋の判定の固定のスレッド数。prd/13 §5.5）。
+   * null は作ったときの数（負荷の設定で決まる数）に戻す。同じ数なら何もしない。投げたらエンジンを作り直す（呼び出し側）
+   */
+  setThreads?(threads: number | null): Promise<void>;
   dispose(): void;
 }
 
@@ -174,6 +182,8 @@ export interface RunnerDeps {
     settings: ServerAnalysisSettings,
     load: AnalysisLoad,
     choice: EngineChoice,
+    /** 固定のスレッド数（詰将棋の判定）。無ければ負荷の設定で決める。どちらでも `setThreads(null)` は負荷の設定の数に戻す */
+    threads?: number,
   ): Promise<AnalysisEngine>;
   /**
    * 今の負荷の設定（端末の設定。prd/14 §5.10）。開始の口を叩くたびに読み、前と違えばエンジンを作り直す
@@ -221,13 +231,21 @@ export interface NamedEvalRequest {
   sfen: string;
   /** 名指しする手（利用者の手） */
   move: string;
-  /** 読む設定（全局面解析の深い段と同じ。思考時間・置換表・スレッドの上限・読み筋の長さ） */
-  settings: ServerAnalysisSettings;
+  /**
+   * 読む設定（server が決める）。次の一手は全局面解析の深い段と同じ（思考時間・置換表・スレッドの上限・読み筋の長さ）。
+   * 詰将棋は固定のスレッド数（`threads`）と、最初の正の mate での打ち切り（`stopOnMate`）が付く（prd/13 §5.5）
+   */
+  settings: NamedEvalSettings;
 }
 
 export type NamedEvalOutcome =
   /** 解答に付けて送り直す評価（server の `drillNamedEvaluationSchema` を通る形） */
-  | { kind: 'ok'; evaluation: DrillNamedEvaluation }
+  | {
+      kind: 'ok';
+      evaluation: DrillNamedEvaluation;
+      /** 最初の正の mate で打ち切った（詰将棋の判定。ログ用。server には送らない） */
+      stopped?: boolean;
+    }
   /** エンジンが名指しした手を読まなかった（その局面で指せない手など）。🔒 数字を作らず、採点を頼まない */
   | { kind: 'mismatch'; returned: string }
   /** エンジンを読み込めない・読みが失敗した（作り直して 1 度やり直した後） */
@@ -324,26 +342,38 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     engine = null;
   };
 
+  /**
+   * @param threads 固定のスレッド数（詰将棋の判定。prd/13 §5.5）。無ければ負荷の設定で決まる数（全局面解析・次の一手）
+   */
   const ensureEngine = async (
     settings: ServerAnalysisSettings,
     choice: EngineChoice,
+    threads?: number,
   ): Promise<AnalysisEngine> => {
-    // 評価関数の選択（端末の設定）・スレッド数・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
-    // ⚠ スレッド数は動いているエンジンに setoption で変えず、作り直す（WASM のスレッドの確保を実機で確かめていないため）
+    // 評価関数の選択（端末の設定）・スレッド数の上限・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
+    // ⚠ 負荷の設定の変更は動いているエンジンに setoption で変えず、作り直す（prd/14 §5.10 の決定のまま）
     const load = deps.currentLoad();
     const key = `${choice.id}:${choice.info.engineBuild}:${choice.info.evalHash}:${settings.maxThreads}:${settings.hashMb}:${load}`;
-    if (engine && engineSettingsKey === key) return engine;
-    if (engine) log.info(`recreating the engine (${engineSettingsKey} -> ${key})`);
-    disposeEngine();
-    const created = await deps.createEngine(settings, load, choice);
-    if (disposed) {
-      // 読み込んでいる間に止められた。使わずに捨てる
-      created.dispose();
-      throw new Error('解析は停止済みです');
+    if (!engine || engineSettingsKey !== key) {
+      if (engine) log.info(`recreating the engine (${engineSettingsKey} -> ${key})`);
+      disposeEngine();
+      // 作るときは求めるスレッド数で作る（起動の経路と同じ。setoption での切り替えに頼らない）
+      const created = await deps.createEngine(settings, load, choice, threads);
+      if (disposed) {
+        // 読み込んでいる間に止められた。使わずに捨てる
+        created.dispose();
+        throw new Error('解析は停止済みです');
+      }
+      engine = created;
+      engineSettingsKey = key;
     }
-    engine = created;
-    engineSettingsKey = key;
-    return created;
+    // 🔒 **詰将棋の判定の固定のスレッド数は、作り直さずに切り替える**（`setoption Threads` → `isready`）。
+    // 上流は `setoption Threads` でその場でスレッドを作り直し（`resize_threads`）、`isready` でもう一度揃える。
+    // 評価関数は読み直さない（作り直すと評価関数の読み込みからになり、1 手の判定が秒単位で遅れる）。
+    // 全局面解析に戻るときは null で負荷の設定の数に戻す。切り替えに失敗したら投げる——呼び出し側がエンジンを作り直す
+    // （作り直しは上の、求める数で作る経路を通る）
+    await engine.setThreads?.(threads ?? null);
+    return engine;
   };
 
   /** 通信の失敗を後退しながら再試行する。尽きたら DeferError */
@@ -708,7 +738,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     for (let attempt = 0; attempt < 2; attempt++) {
       let current: AnalysisEngine;
       try {
-        current = await ensureEngine(settings, choice);
+        current = await ensureEngine(settings, choice, settings.threads);
       } catch (error) {
         disposeEngine();
         detail = `解析エンジンを読み込めませんでした（${messageOf(error)}）`;
@@ -717,16 +747,20 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
       }
       try {
         // 🔴 不成の手も読めるよう、読みの間だけ GenerateAllLegalMoves を有効にする（終わったら戻す）
+        // 詰将棋の判定は、最初に正の mate（bound の付かない info）が出た時点で stop を送って打ち切る（prd/13 §5.5）。
+        // 判定と別解の手順には、その info の評価値と読み筋を使う（`namedEvaluationOf` が `stoppedBy` を読む）
         const result = await withAllLegalMoves(current.session, () =>
           current.session.analyze(
             sfenPositionCommand(sfen),
             namedGoCommand(settings.movetimeMs, move),
+            settings.stopOnMate ? { stopWhen: isConclusiveMate } : undefined,
           ),
         );
         const named = namedEvaluationOf(result, move, settings.pvMaxPlies);
         if (named.kind === 'mismatch') return named;
         return {
           kind: 'ok',
+          ...(result.stoppedBy ? { stopped: true } : {}),
           evaluation: {
             move,
             candidate: named.candidate,

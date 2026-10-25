@@ -209,6 +209,15 @@ describe('engineOptions', () => {
     expect(engineOptions(MINI, settings, undefined, 'max').threads).toBe(1);
   });
 
+  it('固定のスレッド数を渡せばその数（詰将棋の判定。負荷の設定・論理コア数によらない。prd/13 §5.5）', () => {
+    const options = engineOptions(MINI, settings, 16, 'gentle', 2);
+    expect(options.threads).toBe(2);
+    expect(options.options).toContainEqual(['Threads', '2']);
+    expect(engineOptions(MINI, settings, undefined, 'max', 2).threads).toBe(2);
+    // 数として使えない値は負荷の設定で決める
+    expect(engineOptions(MINI, settings, 16, 'max', 0).threads).toBe(8);
+  });
+
   it('評価関数の場所・FV_SCALE・定跡なし・ConsiderationMode を渡す', () => {
     expect(engineOptions(MINI, settings, 6, 'max').options).toEqual([
       ['EvalDir', '/eval'],

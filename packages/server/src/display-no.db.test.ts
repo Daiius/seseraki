@@ -266,8 +266,12 @@ const CALLS: Call[] = [
     request: () => ({ url: `${drillPath()}/exclude`, init: { method: 'POST' } }),
     status: 200,
   },
-  { route: 'GET /api/drills', request: () => ({ url: '/api/drills?excluded=only' }), status: 200 },
-  { route: 'GET /api/drills/attempts', request: () => ({ url: '/api/drills/attempts' }), status: 200 },
+  { route: 'GET /api/drills', request: () => ({ url: '/api/drills?status=excluded' }), status: 200 },
+  {
+    route: 'GET /api/drills/:kifuNo/:moveNumber/:kind/attempts',
+    request: () => ({ url: `${drillPath()}/attempts` }),
+    status: 200,
+  },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/unexclude',
     request: () => ({ url: `${drillPath()}/unexclude`, init: { method: 'POST' } }),

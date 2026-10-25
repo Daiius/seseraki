@@ -77,7 +77,7 @@ import { forgetLine, recallLine } from './drill-lines.js';
 import { resolveWithEngine, type ResolveInput } from './drill-engine.js';
 import {
   drillCounts,
-  listDrillAttempts,
+  listDrillAttemptsOf,
   listDrills,
   loadDrill,
   loadDrillQuestion,
@@ -85,7 +85,7 @@ import {
   recordAttempt,
   unexcludeDrill,
 } from './drill-query.js';
-import { drillAttemptQuerySchema, drillListQuerySchema } from './drill-list-query.js';
+import { drillListQuerySchema, drillNextQuerySchema } from './drill-list-query.js';
 import {
   addAlias,
   countUnresolvedSubjects,
@@ -643,27 +643,18 @@ const route = app
   // 渡した時点で答えが見えているのと同じで、専用ページにした意味が消える（prd/13 §7）。
   // 棋譜名・対局者も伏せる——解答後に `POST /drills/:kifuNo/:moveNumber/:kind/answer` が返す。
 // ⚠ 問題を指す組（棋譜の番号・手数・種類。prd/14 §4.4）は返す——URL に載せて同じ問題へ戻るため
-  .get(
-    '/drills/next',
-    sessionRequired,
-    zv('query', z.object({ kind: z.enum(['mate', 'best']).optional() })),
-    async (c) => {
-      const { kind } = c.req.valid('query');
-      const drill = await pickNextDrill(c.get('tx'), c.get('userId'), kind);
-      return c.json({ drill });
-    },
-  )
+  // 入口（`mode`）ごとに選ぶ（prd/13 §6.4）。`since`（この回の開始時刻）以降に記録した問題は選ばない（§7.6）。
+  // 在庫が尽きたら `drill: null`。`now` は server の時刻で、web はこの回の最初の値を `since` に使う
+  .get('/drills/next', sessionRequired, zv('query', drillNextQuerySchema), async (c) => {
+    const now = new Date().toISOString();
+    const drill = await pickNextDrill(c.get('tx'), c.get('userId'), c.req.valid('query'));
+    return c.json({ drill, now });
+  })
+  // ホームの数（入口ごとの在庫。prd/13 §7.5）。🔒 正答率は返さない（§10）
   .get('/drills/counts', sessionRequired, async (c) =>
     c.json(await drillCounts(c.get('tx'), c.get('userId'))),
   )
-  // 解答履歴の一覧（prd/13 §7.3）
-  .get(
-    '/drills/attempts',
-    sessionRequired,
-    zv('query', drillAttemptQuerySchema),
-    async (c) => c.json(await listDrillAttempts(c.get('tx'), c.get('userId'), c.req.valid('query'))),
-  )
-  // 問題の一覧（prd/13 §7.2）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
+  // 問題の一覧（prd/13 §7.7）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
   .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>
     c.json(await listDrills(c.get('tx'), c.get('userId'), c.req.valid('query'))),
   )
@@ -675,12 +666,28 @@ const route = app
     zv('param', drillRefParam),
     async (c) => {
       const ref = c.req.valid('param');
+      const now = new Date().toISOString();
       const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), ref);
       if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
-      return c.json({ drill });
+      // `now` も `/drills/next` と同じく載せる。名指しで開いた問題（保存した URL・一覧から）から回が始まっても、
+      // 最初の解答より前に回の開始時刻が決まるように（レビュー `OCL-BB10F0BB`。prd/13 §7.6）
+      return c.json({ drill, now });
     },
   )
-  // 「自明だった」の取り消し（prd/13 §7.2）。除外の行そのものを消すので解答履歴は残る
+  // その問題の解答履歴（prd/13 §7.7）。web は解いた後にだけ呼ぶ（正解の記録の手は答えそのもの）。
+  // 全体の解答履歴の口（`/drills/attempts`）は 2026-10-23 に外した
+  .get(
+    '/drills/:kifuNo/:moveNumber/:kind/attempts',
+    sessionRequired,
+    zv('param', drillRefParam),
+    async (c) => {
+      const ref = c.req.valid('param');
+      const drill = await loadDrill(c.get('tx'), c.get('userId'), ref);
+      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      return c.json(await listDrillAttemptsOf(c.get('tx'), c.get('userId'), ref));
+    },
+  )
+  // 「自明だった」の取り消し（prd/13 §7.7）。除外の行そのものを消すので解答履歴は残る
   .post(
     '/drills/:kifuNo/:moveNumber/:kind/unexclude',
     sessionRequired,

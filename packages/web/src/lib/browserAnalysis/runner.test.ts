@@ -925,7 +925,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
         setOption: () => {},
         analyze: async (_position, _go, options) => {
           stopWhens.push(options?.stopWhen);
-          const mate = { depth: 7, multipv: 1, score: { type: 'mate' as const, value: 9 }, pv: ['2g2f', '8c8d', '2f2e'] };
+          const mate = { depth: 7, multipv: 1, score: { type: 'mate' as const, value: 3 }, pv: ['2g2f', '8c8d', '2f2e'] };
           const after = { depth: 8, multipv: 1, score: { type: 'cp' as const, value: 900 }, pv: ['2g2f', '3c3d'] };
           // 偽のエンジン: 打ち切りの判定が mate の行で true を返すことを確かめ、打ち切った行を残す
           if (!options?.stopWhen?.(mate)) throw new Error('should stop at the mate');
@@ -942,7 +942,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     expect(outcome).toMatchObject({
       kind: 'ok',
       stopped: true,
-      evaluation: { candidate: { scoreType: 'mate', scoreValue: 9, pv: ['2g2f', '8c8d', '2f2e'] }, movetimeMs: 1000 },
+      evaluation: { candidate: { scoreType: 'mate', scoreValue: 3, pv: ['2g2f', '8c8d', '2f2e'] }, movetimeMs: 1000 },
     });
     // 次の一手（stopOnMate なし）では打ち切らない
     await runner.evaluateNamed(request).catch(() => {});

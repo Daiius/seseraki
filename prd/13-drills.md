@@ -450,7 +450,7 @@ dev の解析から拾った詰み局面 11 問（rank1 が正の `mate`・手�
   それ以外は `evaluate` のまま（`evaluationSourceOf`）。web は詰将棋で読めなかった（同意しない・解析できない環境・エンジンが無い・読みの失敗・名指しが効かない）
   ときに申告して送り直し、申告した送り直しにまた `evaluate` が返ったら（担当 `browser`）読めなかった理由を出して止める
 - **打ち切り**: `shared` の `createUsiSession` の `analyze` に `stopWhen` を足した（最初に true を返した `info` で `stop` を 1 度だけ送り、その行を `stoppedBy` に残す）。
-  打ち切りの条件は `isConclusiveMate`（正の `mate`・bound なし・multipv 1・読み筋あり）。`namedEvaluationOf` は `stoppedBy` があればその行だけで評価を作る
+  打ち切りの条件は `isConclusiveMate`（正の `mate`・bound なし・multipv 1・**読み筋が詰みの手数まで揃っている**。短い読み筋で打ち切ると、server が末尾を詰み上がりと読んで詰む前に正解を記録する・未完の手順を別解として覚えるため、揃うまで待つ。レビュー `OCL-D09F6297`）。`namedEvaluationOf` は `stoppedBy` があればその行だけで評価を作る
   （`stop` の後に出る行は使わない）。来歴の `movetimeMs` は上限の値のまま
 - **スレッド数の切り替え**: 動いているエンジンに `setoption name Threads value 2` → `isready` を送って切り替え、全局面解析（と次の一手の採点）の前に
   負荷の設定の数へ同じ手順で戻す（`runner.ts` の `ensureEngine`・`controller.ts` の `setThreads`）。新しく作るエンジンは求める数で作る（担当 `worker` の判定だけのエンジンは

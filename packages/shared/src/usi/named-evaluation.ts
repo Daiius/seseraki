@@ -26,7 +26,7 @@ export interface NamedEvalSettings extends BrowserAnalysisSettings {
 
 /**
  * 打ち切ってよい `info` か（詰将棋の判定。prd/13 §5.5）: **手番側の正の `mate` で、bound が付かない**（確定した値）。
- * `lowerbound` / `upperbound` の付いた行は途中の値なので打ち切らない。読み筋が無い行も打ち切らない（判定と別解の手順に使えない）。
+ * `lowerbound` / `upperbound` の付いた行は途中の値なので打ち切らない。読み筋が詰みの手数より短い行も打ち切らない（判定と別解の手順に使えない）。
  * ⚠ やねうら王は MultiPV 1 でも 9 手以上の詰みは見つけても上限まで止まらない（実測）——だから打ち切りが要る
  */
 export function isConclusiveMate(info: UsiInfo): boolean {
@@ -36,7 +36,10 @@ export function isConclusiveMate(info: UsiInfo): boolean {
     info.score.value > 0 &&
     info.bound === undefined &&
     (info.multipv ?? 1) === 1 &&
-    (info.pv?.length ?? 0) > 0
+    // 🔴 **読み筋が詰みの手数まで揃っていること**（レビュー `OCL-D09F6297`）。server は読み筋を別解の正解手順として覚え、
+    // その末尾を詰み上がりと読む（prd/13 §5.2）。短い読み筋で打ち切ると、詰む前に正解を記録する・未完の手順を使い切る。
+    // 揃っていなければ打ち切らず、後の行（読み筋が補われた行）か上限を待つ
+    (info.pv?.length ?? 0) >= info.score.value
   );
 }
 

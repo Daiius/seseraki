@@ -90,7 +90,8 @@ describe('namedEvaluationOf', () => {
 
 describe('isConclusiveMate（詰将棋の判定の打ち切り。prd/13 §5.5）', () => {
   it('bound の付かない正の mate で打ち切る', () => {
-    expect(isConclusiveMate(parseInfoLine('info depth 5 multipv 1 score mate 9 pv 7g7f 3c3d 2g2f'))).toBe(true);
+    expect(
+      isConclusiveMate(parseInfoLine('info depth 5 multipv 1 score mate 9 pv 7g7f 3c3d 2g2f 4a3b 2f2e 3b2b 2e2d 2b1b 2d2c+'))).toBe(true);
     // multipv が無い行（MultiPV 1 の名指し）も同じ
     expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 3 pv G*5b 5a4a 5b4b'))).toBe(true);
   });
@@ -101,6 +102,9 @@ describe('isConclusiveMate（詰将棋の判定の打ち切り。prd/13 §5.5）
     expect(isConclusiveMate(parseInfoLine('info depth 5 score mate -4 pv 7g7f 3c3d'))).toBe(false);
     expect(isConclusiveMate(parseInfoLine('info depth 5 score cp 3000 pv 7g7f'))).toBe(false);
     expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9'))).toBe(false);
+    // 🔴 読み筋が詰みの手数まで揃っていない行（レビュー OCL-D09F6297）
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 9 pv 7g7f 3c3d 2g2f'))).toBe(false);
+    expect(isConclusiveMate(parseInfoLine('info depth 5 score mate 3 pv G*5b 5a4a'))).toBe(false);
     // `mate +`（手数の分からない詰み）は数として読めないので打ち切らない
     expect(isConclusiveMate(parseInfoLine('info depth 5 score mate + pv 7g7f'))).toBe(false);
   });

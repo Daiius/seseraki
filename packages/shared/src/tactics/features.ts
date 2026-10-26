@@ -57,6 +57,13 @@ export type Feat = {
    * 駒組みは続く）。直前の局面が無い（初手）なら false
    */
   pawnClash: boolean;
+  /**
+   * **この手で自分の銀が動いた経路**（`"47-56"` のように移動元-移動先）。動いていなければ null。
+   * 局面ではなく**事象**（直前の局面との差）。「4七 に銀・5六 に銀」を別々の局面述語で見ると、
+   * 右銀が 4七 に居るまま左銀が 6七→5六 と来ても「4七→5六」を満たしてしまうので、
+   * **同じ銀が通った**ことはこの値で見る。成り・打ち・取られた手は経路にしない
+   */
+  silverMove: string | null;
 };
 
 function pawnRanks(board: Square[][]): (number | null)[] {
@@ -106,6 +113,25 @@ function pawnClashOf(prev: Square[][], board: Square[][]): boolean {
     }
   }
   return false;
+}
+
+/** 直前の局面から、自分の銀が 1 枚だけ動いた手の「移動元-移動先」（`Feat.silverMove`）。盤は正規化済み */
+function silverMoveOf(prev: Square[][], board: Square[][]): string | null {
+  const squares = (b: Square[][]) => {
+    const out = new Set<string>();
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const sq = b[r][c];
+        if (sq && sq.side === 'sente' && sq.kind === 'S') out.add(`${9 - c}${r + 1}`);
+      }
+    }
+    return out;
+  };
+  const a = squares(prev);
+  const b = squares(board);
+  const gone = [...a].filter((x) => !b.has(x));
+  const came = [...b].filter((x) => !a.has(x));
+  return gone.length === 1 && came.length === 1 ? `${gone[0]}-${came[0]}` : null;
 }
 
 export function features(
@@ -186,5 +212,6 @@ export function features(
     oppBishopSquare,
     oppPawn: pawnRanks(oppBoard),
     pawnClash: prev ? pawnClashOf(flipped ? flipBoard(prev.board) : prev.board, board) : false,
+    silverMove: prev ? silverMoveOf(flipped ? flipBoard(prev.board) : prev.board, board) : null,
   };
 }

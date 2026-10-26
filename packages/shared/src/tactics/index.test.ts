@@ -364,6 +364,15 @@ describe('detectTactics', () => {
       expect(names(ls)).not.toContain('sente:腰掛け銀');
     });
 
+    it('⚠ 腰掛け銀: 右銀が 4七 に居るまま左銀が 6七→5六 と来ても腰掛け銀ではない（同じ銀の経路で見る）', () => {
+      // 13手目に右銀が 4七、15手目に左銀が 6七→5六。マスごとの述語を順序で並べると「4七→5六」を満たしてしまう
+      const ls = detectTactics([
+        '7g7f', '3c3d', '6g6f', '8c8d', '7i6h', '8d8e', '6h6g', '4a3b',
+        '4g4f', '7a7b', '3i4h', '5c5d', '4h4g', '6c6d', '6g5f',
+      ]);
+      expect(names(ls)).not.toContain('sente:腰掛け銀');
+    });
+
     it('UFO銀: 引き飛車にして棒銀の経路（2七）から 3六 へ出る。棒銀ではない', () => {
       const ls = detectTactics([
         '2g2f', '8c8d', '2f2e', '8d8e', '2e2d', '2c2d', '2h2d', 'P*2c', '2d2h',

@@ -262,6 +262,94 @@ describe('detectTactics', () => {
       expect(names(ls)).not.toContain('sente:角換わり');
     });
   });
+
+  describe('銀の戦法 — 右銀をどこへ繰り出すか', () => {
+    it('棒銀: 飛車の前の 2六 へ銀が出た時点で立つ', () => {
+      // ▲2六歩 △8四歩 ▲2五歩 △8五歩 ▲3八銀 △3二金 ▲2七銀 △7二銀 ▲2六銀
+      const ls = detectTactics([
+        '2g2f', '8c8d', '2f2e', '8d8e', '3i3h', '4a3b', '3h2g', '7a7b', '2g2f',
+      ]);
+      expect(names(ls)).toContain('sente:棒銀');
+      expect(turnOf(ls, '棒銀')).toBe(9);
+      // 2七 にいる間はまだ棒銀ではない（成立は 2六）
+      expect(names(detectTactics(['2g2f', '8c8d', '2f2e', '8d8e', '3i3h', '4a3b', '3h2g'])))
+        .not.toContain('sente:棒銀');
+    });
+
+    it('棒銀: 飛車先の歩交換のあとに組んでも立つ（飛車先の歩交換は開戦ではない）', () => {
+      // ▲2四歩 △同歩 ▲同飛 △2三歩 ▲2八飛 と引き飛車にしてから ▲3八銀 ▲2七銀 ▲2六銀
+      const ls = detectTactics([
+        '2g2f', '8c8d', '2f2e', '8d8e', '2e2d', '2c2d', '2h2d', 'P*2c', '2d2h',
+        '7a7b', '3i3h', '4a3b', '3h2g', '3c3d', '2g2f',
+      ]);
+      expect(names(ls)).toContain('sente:棒銀');
+      expect(turnOf(ls, '棒銀')).toBe(15);
+    });
+
+    it('⚠ 棒銀: 飛車先以外で歩がぶつかった後の 2六銀 は戦法ではない（開戦の後）', () => {
+      // ▲3五歩 △同歩 と 3 筋で歩がぶつかってから銀を 2六 へ
+      const ls = detectTactics([
+        '2g2f', '3c3d', '2f2e', '8c8d', '3g3f', '8d8e', '3f3e', '3d3e',
+        '3i3h', '7a7b', '3h2g', '4a3b', '2g2f',
+      ]);
+      expect(names(ls)).not.toContain('sente:棒銀');
+    });
+
+    it('早繰り銀: 右銀が 3七 → 4六 と出た時点で立つ', () => {
+      // ▲3六歩 ▲3八銀 ▲3七銀 ▲4六銀
+      const ls = detectTactics([
+        '2g2f', '8c8d', '2f2e', '8d8e', '3g3f', '4a3b', '3i3h', '7a7b', '3h3g', '3c3d', '3g4f',
+      ]);
+      expect(names(ls)).toContain('sente:早繰り銀');
+      expect(turnOf(ls, '早繰り銀')).toBe(11);
+    });
+
+    it('⚠ 早繰り銀: 4七 から 4六 へ上がった銀は早繰り銀ではない（3七 を通らない）', () => {
+      // ▲4六歩 ▲4五歩 ▲4八銀 ▲4七銀 ▲4六銀
+      const ls = detectTactics([
+        '2g2f', '8c8d', '4g4f', '8d8e', '4f4e', '4a3b', '3i4h', '7a7b', '4h4g', '3c3d', '4g4f',
+      ]);
+      expect(names(ls)).not.toContain('sente:早繰り銀');
+      expect(names(ls)).not.toContain('sente:腰掛け銀');
+    });
+
+    it('腰掛け銀: 右銀が 4七 から 5七の歩の上の 5六 へ出た時点で立つ', () => {
+      // ▲4六歩 ▲4八銀 ▲4七銀 ▲5六銀
+      const ls = detectTactics([
+        '2g2f', '8c8d', '4g4f', '8d8e', '3i4h', '4a3b', '4h4g', '7a7b', '4g5f',
+      ]);
+      expect(names(ls)).toContain('sente:腰掛け銀');
+      expect(turnOf(ls, '腰掛け銀')).toBe(9);
+    });
+
+    it('⚠ 腰掛け銀: 左銀の 6七 → 5六 は腰掛け銀ではない（雁木・ひねり飛車の駒組み）', () => {
+      // ▲6六歩 ▲6八銀 ▲6七銀 ▲5六銀
+      const ls = detectTactics([
+        '7g7f', '3c3d', '6g6f', '8c8d', '7i6h', '8d8e', '6h6g', '4a3b', '6g5f',
+      ]);
+      expect(names(ls)).not.toContain('sente:腰掛け銀');
+    });
+
+    it('UFO銀: 引き飛車にして棒銀の経路（2七）から 3六 へ出る。棒銀ではない', () => {
+      const ls = detectTactics([
+        '2g2f', '8c8d', '2f2e', '8d8e', '2e2d', '2c2d', '2h2d', 'P*2c', '2d2h',
+        '7a7b', '3i3h', '4a3b', '3h2g', '3c3d', '2g3f',
+      ]);
+      expect(names(ls)).toContain('sente:UFO銀');
+      expect(names(ls)).not.toContain('sente:棒銀');
+    });
+
+    it('超速3七銀: 中飛車に対し玉 6八 のまま 3七 → 4六。早繰り銀も立ち、表示では隠す', () => {
+      // 実戦譜（`超速▲3七銀.kif` の 15 手目まで）
+      const ls = detectTactics([
+        '2g2f', '3c3d', '7g7f', '5c5d', '2f2e', '8b5b', '3i4h', '5d5e',
+        '5i6h', '2b3c', '3g3f', '5a6b', '4h3g', '6b7b', '3g4f',
+      ]);
+      expect(names(ls)).toContain('sente:超速3七銀');
+      expect(names(ls)).toContain('sente:早繰り銀');
+      expect(names(suppressForDisplay(ls))).not.toContain('sente:早繰り銀');
+    });
+  });
 });
 
 describe('観測窓（prd/01 §6.2）', () => {

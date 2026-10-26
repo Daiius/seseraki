@@ -105,6 +105,41 @@ export const INTERNAL: Internal[] = [
   // 一次ラベルから外した（下の `雁木` の跡地の注記）。囲い系を 3 層へ載せるときの語彙として残す
   { name: '_銀67', test: (f) => f.silverSquares.includes('67') },
   { name: '_銀57', test: (f) => f.silverSquares.includes('57') },
+  // --- 右銀の繰り出し（棒銀・早繰り銀・腰掛け銀・UFO銀・超速3七銀の骨格）---
+  //
+  // 盤上のどの銀かは区別しない。**右銀であることは参照側の経路（順序条件）で言う**
+  // （腰掛け銀は 4七 を経由した 5六 だけ・早繰り銀は 3七 を経由した 4六 だけ、など）。
+  { name: '_銀26', test: (f) => f.silverSquares.includes('26') },
+  { name: '_銀27', test: (f) => f.silverSquares.includes('27') },
+  { name: '_銀36', test: (f) => f.silverSquares.includes('36') },
+  { name: '_銀37', test: (f) => f.silverSquares.includes('37') },
+  { name: '_銀46', test: (f) => f.silverSquares.includes('46') },
+  { name: '_銀47', test: (f) => f.silverSquares.includes('47') },
+  { name: '_銀56', test: (f) => f.silverSquares.includes('56') },
+  // 5 筋の歩が初期位置（5七）。腰掛け銀は「5七の歩の上に銀が腰掛ける」形（Wikipedia「腰掛け銀」）
+  { name: '_歩57', test: (f) => f.pawn[4] === 7 },
+  // 玉が 6八。超速3七銀は「玉を 6八 のままで右銀を 4六 まで動かす」のが要点（Wikipedia「超速3七銀」）
+  { name: '_玉68', test: (f) => f.kingSquare === '68' },
+  // 相手の飛車が 5 筋（先手基準の 5八 = 実際には後手の 5二）。超速3七銀はゴキゲン中飛車への対策
+  { name: '_相手飛車58', test: (f) => f.oppRookFile === 5 && f.oppRookRank === 8 },
+  // **飛車先（2 筋・8 筋）以外の筋で歩がぶつかった**（どちらかの歩が盤上から消えた）。
+  //
+  // 銀の戦法は**飛車先の歩交換のあと**に組むのが普通（相掛かり棒銀は「飛車先を交換して引き飛車に
+  // してから銀を進める」Wikipedia「棒銀」）。窓の規則（駒がぶつかったら閉じる）のままだと
+  // 飛車先の歩交換で窓が閉じ、銀が出る前に観測が終わる。そこで:
+  //
+  // > **飛車先の歩交換は駒組みの手順であって開戦ではない。それ以外の筋で歩がぶつかったら開戦。**
+  //
+  // 「角交換は開戦ではない」（窓の第 2 の根拠）と同じ形の、述語に依存しない将棋的事実。
+  // この述語は**歩を取った結果**（歩が盤上に無い）を見ているので歩では窓を閉じない（ignores）。
+  // 参照側は「これが真になるより前に成立した」ことを要求して、開戦の後の銀の移動を落とす。
+  // ⚠ 筋を見るのは先手基準の自分・相手の両方の歩。相手の飛車先交換（相手基準の 2 筋）は
+  // 自分の 8 筋の歩も消える（△8六歩 ▲同歩 △同飛）ので、2 筋と 8 筋を両方とも除く。
+  {
+    name: '_飛車先以外で歩がぶつかった',
+    ignores: ['P'],
+    test: (f) => [0, 2, 3, 4, 5, 6, 8].some((i) => f.pawn[i] === null || f.oppPawn[i] === null),
+  },
   // 7八金。矢倉・雁木に共通する左金の定位置
   { name: '_金78', test: (f) => f.goldSquares.includes('78') },
   // 6六歩 / 7六歩。雁木の駒組み（角道を止めて銀を6七へ上げる形）の土台
@@ -286,6 +321,25 @@ const notAfterCastle = (v: Lens, hit: number | null): number | null => {
   return hidari !== null && hidari <= hit ? null : hit;
 };
 
+/**
+ * **銀の戦法（棒銀・早繰り銀・腰掛け銀 …）共通のガード**。参照する側は `uses` に
+ * {@link SILVER_USES} を含めること。
+ *
+ * 1. **居飛車の形に限る。** 成立時点で既に振っていたら取り下げる（判断5 の否定条件）。
+ *    振り飛車側の銀の繰り出し（逆棒銀など）は別の戦法
+ * 2. **開戦の後の銀の移動は戦法ではない。** 飛車先以外の筋で歩がぶつかった後に成立したら取り下げる。
+ *    `_飛車先以外で歩がぶつかった` が歩を除外するので、窓は「歩と角以外の駒がぶつかるまで」へ広がり、
+ *    歩については**飛車先の歩交換だけ**を素通しする形になる
+ */
+const SILVER_USES = ['_振り飛車', '_飛車先以外で歩がぶつかった'];
+const silverGuard = (v: Lens, hit: number | null): number | null => {
+  if (hit === null) return null;
+  const furi = v.first('_振り飛車');
+  if (furi !== null && furi <= hit) return null;
+  const clash = v.first('_飛車先以外で歩がぶつかった');
+  return clash !== null && clash <= hit ? null : hit;
+};
+
 export const PRIMARY: Primary[] = [
   // 中飛車 = 5八飛。ただし**玉が左辺へ囲ったあとの 5 筋回りは中飛車ではない**。
   // 実戦例: 居飛車で 28 手目まで組んでから、相手の右四間飛車に対抗して 30手目 △5二飛と
@@ -453,6 +507,60 @@ export const PRIMARY: Primary[] = [
       if (hit === null) return null;
       const hidari = v.first('_玉左辺');
       return hidari !== null && hidari <= hit ? null : hit;
+    },
+  },
+  // --- 銀の戦法（右銀をどこへ繰り出すか）---
+  //
+  // **成立は「その形に組んだ時点」**。攻めが成功したか（2五まで進んだ・銀交換できた）は問わない。
+  // 派生名・組み合わせ名は作らない（角換わり棒銀は `角換わり` + `棒銀`）。
+  // ⚠ `IMPLIES` に `居飛車` を入れない。成立時点で振っていないことは要求するが、`居飛車` の証拠
+  // （`_飛車先2六` / `_飛車48` / `_飛車38`）を含意しない（`右玉` と同じ）。
+  //
+  // 棒銀 = 右銀を飛車の前の 2六 へ出す（Wikipedia「棒銀」: 3八→2七→2六 / 矢倉棒銀は 4八→3七→2六）。
+  // 経路は問わない。飛車は 2 筋の定位置（2八 / 2九）に据えたまま
+  {
+    name: '棒銀',
+    uses: [...SILVER_USES, '_銀26', '_飛車2筋定位置'],
+    test: (v) => silverGuard(v, v.co('_銀26', '_飛車2筋定位置')),
+  },
+  // 早繰り銀 = 右銀を 3七 → 4六 と繰り出す（Wikipedia「早繰り銀」: 右銀を 3七〜4六 に活用する作戦の総称）
+  {
+    name: '早繰り銀',
+    uses: [...SILVER_USES, '_銀37', '_銀46'],
+    test: (v) => silverGuard(v, v.seq('_銀37', '_銀46')),
+  },
+  // 腰掛け銀 = 右銀を 5七 の歩の上の 5六 に構える（Wikipedia「腰掛け銀」・英語版 Reclining Silver:
+  // 「the right silver positioned on central file above the central pawn」。4 筋の歩を突いて銀を通す）。
+  // **4七 を経由したことを要求する**のが「右銀」の言い方。左銀の 6七 → 5六（雁木・ひねり飛車の駒組み）を落とす
+  {
+    name: '腰掛け銀',
+    uses: [...SILVER_USES, '_銀47', '_銀56', '_歩57'],
+    test: (v) => (v.seq('_銀47', '_銀56') === null ? null : silverGuard(v, v.co('_銀56', '_歩57'))),
+  },
+  // UFO銀 = 相掛かりで**引き飛車にして**、棒銀の経路（2七）から 2六 ではなく 3六 へ銀を出す
+  // （Wikipedia「UFO銀」: 相掛かり戦先手側が引き飛車にして、銀を繰り出す。通常の原始棒銀と異なり 3六 に）。
+  // 引き飛車 = 飛車先の歩を交換してから 2 筋の定位置へ引いた形
+  {
+    name: 'UFO銀',
+    uses: [...SILVER_USES, '_銀27', '_銀36', '_飛車2筋定位置', '_飛車先歩交換'],
+    test: (v) => {
+      if (v.seq('_銀27', '_銀36') === null) return null;
+      if (v.seq('_飛車先歩交換', '_銀36') === null) return null;
+      return silverGuard(v, v.co('_銀36', '_飛車2筋定位置'));
+    },
+  },
+  // 超速3七銀 = ゴキゲン中飛車に対し、**玉を 6八 のまま**右銀を 3七 → 4六 と繰り出す急戦
+  // （Wikipedia「超速3七銀」）。早繰り銀と同じ経路なので**両方立つ**（排他にしない）。
+  // 成立手数は早繰り銀の成立以降に取る（`Math.max`）。こうしておくと「超速3七銀が立てば
+  // 早繰り銀も必ず立つ」が判定条件どうしの含意になる（`IMPLIES`。窓も `uses` の除外集合が同じ）
+  {
+    name: '超速3七銀',
+    uses: [...SILVER_USES, '_銀37', '_銀46', '_玉68', '_相手飛車58'],
+    test: (v) => {
+      const hayakuri = v.seq('_銀37', '_銀46');
+      const chousoku = v.co('_銀46', '_玉68', '_相手飛車58');
+      if (hayakuri === null || chousoku === null) return null;
+      return silverGuard(v, Math.max(hayakuri, chousoku));
     },
   },
   // 筋違い角 = 交換した角を4五へ打つ。角交換はするが角換わりではない。

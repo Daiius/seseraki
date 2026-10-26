@@ -295,6 +295,12 @@ describe('detectTactics', () => {
       expect(names(ls)).not.toContain('sente:棒銀');
     });
 
+    it('⚠ 棒銀: 飛車先の歩が 2七 に残ったまま銀だけ 2六 へ出た形は棒銀ではない', () => {
+      // ▲3六歩 ▲3八銀 ▲3七銀 ▲2六銀。2 筋の歩は一度も突いていない（銀が歩の前に出ただけ）
+      const ls = detectTactics(['3g3f', '8c8d', '3i3h', '8d8e', '3h3g', '4a3b', '3g2f']);
+      expect(names(ls)).not.toContain('sente:棒銀');
+    });
+
     it('早繰り銀: 右銀が 3七 → 4六 と出た時点で立つ', () => {
       // ▲3六歩 ▲3八銀 ▲3七銀 ▲4六銀
       const ls = detectTactics([

@@ -110,6 +110,10 @@ export const INTERNAL: Internal[] = [
   // 盤上のどの銀かは区別しない。**右銀であることは参照側の経路（順序条件）で言う**
   // （腰掛け銀は 4七 を経由した 5六 だけ・早繰り銀は 3七 を経由した 4六 だけ、など）。
   { name: '_銀26', test: (f) => f.silverSquares.includes('26') },
+  // 飛車先の歩が 2五 より先へ伸びている（交換済みで盤上に無い場合を含む）。**棒銀は飛車先の歩を伸ばして
+  // その後ろから銀を繰り出す**戦法なので、銀が 2六 に居ても歩が 2七 に残っている形（銀が歩の前に出ただけ）は
+  // 棒銀ではない。交換済み（null）は**歩を取った結果**を見ているので歩では窓を閉じない
+  { name: '_飛車先2五以遠', ignores: ['P'], test: (f) => f.pawn[1] === null || f.pawn[1] <= 5 },
   { name: '_銀27', test: (f) => f.silverSquares.includes('27') },
   { name: '_銀36', test: (f) => f.silverSquares.includes('36') },
   { name: '_銀37', test: (f) => f.silverSquares.includes('37') },
@@ -257,9 +261,18 @@ export class Lens {
 
   /** 複数の内部ラベルが**同時に**真になる最小の手数 */
   co(...names: string[]): number | null {
+    return this.coFrom(1, ...names);
+  }
+
+  /**
+   * `from` 手目以降で、複数の内部ラベルが**同時に**真になる最小の手数。
+   * 「経路（`seq`）を通った**後の**局面でその形になっている」を言うのに使う
+   * （`co` は経路より前の局面でも当たってしまう）。
+   */
+  coFrom(from: number, ...names: string[]): number | null {
     const arrays = names.map((n) => this.arr(this.selfTl, n));
     const len = Math.min(this.limit, ...arrays.map((a) => a.length - 1));
-    for (let i = 1; i <= len; i++) if (arrays.every((a) => a[i])) return i;
+    for (let i = Math.max(1, from); i <= len; i++) if (arrays.every((a) => a[i])) return i;
     return null;
   }
 
@@ -520,8 +533,8 @@ export const PRIMARY: Primary[] = [
   // 経路は問わない。飛車は 2 筋の定位置（2八 / 2九）に据えたまま
   {
     name: '棒銀',
-    uses: [...SILVER_USES, '_銀26', '_飛車2筋定位置'],
-    test: (v) => silverGuard(v, v.co('_銀26', '_飛車2筋定位置')),
+    uses: [...SILVER_USES, '_銀26', '_飛車2筋定位置', '_飛車先2五以遠'],
+    test: (v) => silverGuard(v, v.co('_銀26', '_飛車2筋定位置', '_飛車先2五以遠')),
   },
   // 早繰り銀 = 右銀を 3七 → 4六 と繰り出す（Wikipedia「早繰り銀」: 右銀を 3七〜4六 に活用する作戦の総称）
   {
@@ -535,32 +548,36 @@ export const PRIMARY: Primary[] = [
   {
     name: '腰掛け銀',
     uses: [...SILVER_USES, '_銀47', '_銀56', '_歩57'],
-    test: (v) => (v.seq('_銀47', '_銀56') === null ? null : silverGuard(v, v.co('_銀56', '_歩57'))),
+    test: (v) => {
+      // 4七 を経由して 5六 に来た**後の**局面で 5七 の歩がそのままか（`coFrom`）
+      const via = v.seq('_銀47', '_銀56');
+      return via === null ? null : silverGuard(v, v.coFrom(via, '_銀56', '_歩57'));
+    },
   },
   // UFO銀 = 相掛かりで**引き飛車にして**、棒銀の経路（2七）から 2六 ではなく 3六 へ銀を出す
   // （Wikipedia「UFO銀」: 相掛かり戦先手側が引き飛車にして、銀を繰り出す。通常の原始棒銀と異なり 3六 に）。
-  // 引き飛車 = 飛車先の歩を交換してから 2 筋の定位置へ引いた形
+  // 引き飛車 = 飛車先の歩を交換してから 2 筋の定位置へ引いた形。2七 を通った後の局面で
+  // 「銀 3六・飛車 2 筋の定位置・飛車先の歩が交換済み」が同時に成り立つこと
   {
     name: 'UFO銀',
     uses: [...SILVER_USES, '_銀27', '_銀36', '_飛車2筋定位置', '_飛車先歩交換'],
     test: (v) => {
-      if (v.seq('_銀27', '_銀36') === null) return null;
-      if (v.seq('_飛車先歩交換', '_銀36') === null) return null;
-      return silverGuard(v, v.co('_銀36', '_飛車2筋定位置'));
+      const s27 = v.first('_銀27');
+      if (s27 === null) return null;
+      return silverGuard(v, v.coFrom(s27, '_銀36', '_飛車2筋定位置', '_飛車先歩交換'));
     },
   },
   // 超速3七銀 = ゴキゲン中飛車に対し、**玉を 6八 のまま**右銀を 3七 → 4六 と繰り出す急戦
   // （Wikipedia「超速3七銀」）。早繰り銀と同じ経路なので**両方立つ**（排他にしない）。
-  // 成立手数は早繰り銀の成立以降に取る（`Math.max`）。こうしておくと「超速3七銀が立てば
-  // 早繰り銀も必ず立つ」が判定条件どうしの含意になる（`IMPLIES`。窓も `uses` の除外集合が同じ）
+  // 3七 を通った後の局面で形を見るので、成立手数は早繰り銀（3七 の後の最初の 4六）以降になり、
+  // 「超速3七銀が立てば早繰り銀も必ず立つ」が判定条件どうしの含意になる（`IMPLIES`。窓も `uses` の除外集合が同じ）
   {
     name: '超速3七銀',
     uses: [...SILVER_USES, '_銀37', '_銀46', '_玉68', '_相手飛車58'],
     test: (v) => {
-      const hayakuri = v.seq('_銀37', '_銀46');
-      const chousoku = v.co('_銀46', '_玉68', '_相手飛車58');
-      if (hayakuri === null || chousoku === null) return null;
-      return silverGuard(v, Math.max(hayakuri, chousoku));
+      const s37 = v.first('_銀37');
+      if (s37 === null) return null;
+      return silverGuard(v, v.coFrom(s37, '_銀46', '_玉68', '_相手飛車58'));
     },
   },
   // 筋違い角 = 交換した角を4五へ打つ。角交換はするが角換わりではない。

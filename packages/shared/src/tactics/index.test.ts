@@ -156,14 +156,23 @@ describe('detectTactics', () => {
       expect(names(ls)).not.toContain('sente:右玉');
     });
 
-    it('右玉は居飛車を含意しない（2六歩を突かない右玉が実在する）', () => {
+    it('2六歩を突かない右玉でも居飛車が立ち、表示では右玉が居飛車を隠す', () => {
       // `リッチブリッジ.kif` は bioshogi 自身が「堅陣が特徴なので攻めの手は指さない。
-      // つまり26歩としない」と書いている形。飛車先を突かないので `居飛車` の証拠が揃わない
+      // つまり26歩としない」と書いている形。**右玉の形そのものを居飛車の証拠にした**ので
+      // 飛車先を突かなくても `居飛車` が立つ（`IMPLIES` の 右玉 ⟹ 居飛車）
       const ls = detectTactics(['7g7f', '3c3d', '5i4h', '8c8d', '4h3h']);
       expect(names(ls)).toContain('sente:右玉');
-      expect(names(ls)).not.toContain('sente:居飛車');
-      // 表示の抑制でも畳まれない（`IMPLIES` に入れていない）
+      expect(names(ls)).toContain('sente:居飛車');
+      // 居飛車の成立手数は最初の証拠（ここでは右玉の形が成り立った 3 手目）
+      expect(ls.find((l) => l.side === 'sente' && l.label === '居飛車')?.turn).toBe(3);
       expect(names(suppressForDisplay(ls))).toContain('sente:右玉');
+      expect(names(suppressForDisplay(ls))).not.toContain('sente:居飛車');
+    });
+
+    it('⚠ 振ってから 2 筋へ戻した飛車で玉が右へ来ても右玉ではない（右玉 ⟹ 居飛車 を保つ）', () => {
+      // ▲6八飛（振る）→ ▲2八飛（戻す）→ ▲4八玉
+      const ls = detectTactics(['7g7f', '3c3d', '2h6h', '8c8d', '6h2h', '8d8e', '5i4h']);
+      expect(names(ls)).not.toContain('sente:右玉');
     });
   });
 

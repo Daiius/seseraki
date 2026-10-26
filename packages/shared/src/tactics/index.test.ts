@@ -328,6 +328,25 @@ describe('detectTactics', () => {
       expect(turnOf(ls, '腰掛け銀')).toBe(9);
     });
 
+    it('銀の戦法が立てば表示では居飛車を隠す（居飛車を判定条件に含むので含意が成り立つ）', () => {
+      const ls = detectTactics([
+        '2g2f', '8c8d', '4g4f', '8d8e', '3i4h', '4a3b', '4h4g', '7a7b', '4g5f',
+      ]);
+      expect(names(ls)).toContain('sente:居飛車');
+      expect(names(suppressForDisplay(ls))).toContain('sente:腰掛け銀');
+      expect(names(suppressForDisplay(ls))).not.toContain('sente:居飛車');
+    });
+
+    it('腰掛け銀: 筋違い角に歩を取られた後でも立つ（角の歩取りは開戦に数えない）', () => {
+      // ▲2二角成 △同銀 ▲4五角 … ▲3四角（歩を取る）のあと △6三銀 → △5四銀
+      const ls = detectTactics([
+        '7g7f', '8c8d', '2g2f', '3c3d', '8h2b+', '3a2b', 'B*4e', '7a6b',
+        '4e3d', '6c6d', '3i4h', '6b6c', '4h3g', '6c5d',
+      ]);
+      expect(names(ls)).toContain('gote:腰掛け銀');
+      expect(turnOf(ls, '腰掛け銀')).toBe(14);
+    });
+
     it('⚠ 腰掛け銀: 左銀の 6七 → 5六 は腰掛け銀ではない（雁木・ひねり飛車の駒組み）', () => {
       // ▲6六歩 ▲6八銀 ▲6七銀 ▲5六銀
       const ls = detectTactics([

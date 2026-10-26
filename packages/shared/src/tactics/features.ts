@@ -50,6 +50,20 @@ export type Feat = {
   oppBishopInHand: boolean;
   oppBishopSquare: string | null;
   oppPawn: (number | null)[];
+  /**
+   * **この手で、飛車先（2・8 筋）以外の筋の歩が角（馬）以外の駒に取られた / どの筋でも歩が成った**（どちらの歩でも）。
+   * 局面ではなく**事象**（直前の局面との差）。銀の戦法のガード（開戦の後の銀の移動を落とす）が使う。
+   * 角に歩を取られたのを数えないのは「角交換は開戦ではない」と同じ趣旨（筋違い角・角打ちの歩取りの後も
+   * 駒組みは続く）。直前の局面が無い（初手）なら false
+   */
+  pawnClash: boolean;
+  /**
+   * **この手で自分の銀が動いた経路**（`"47-56"` のように移動元-移動先）。動いていなければ null。
+   * 局面ではなく**事象**（直前の局面との差）。「4七 に銀・5六 に銀」を別々の局面述語で見ると、
+   * 右銀が 4七 に居るまま左銀が 6七→5六 と来ても「4七→5六」を満たしてしまうので、
+   * **同じ銀が通った**ことはこの値で見る。成り・打ち・取られた手は経路にしない
+   */
+  silverMove: string | null;
 };
 
 function pawnRanks(board: Square[][]): (number | null)[] {
@@ -71,7 +85,62 @@ function pawnRanks(board: Square[][]): (number | null)[] {
 
 const at = (b: Square[][], file: number, rank: number): Square => b[rank - 1][9 - file];
 
-export function features(state: BoardState, flipped: boolean, turn: number): Feat {
+/**
+ * 直前の局面から、歩が「飛車先以外の筋で角・馬以外の駒に取られた」か「（どの筋でも）成った」かを見る
+ * （`Feat.pawnClash`）。盤は先手基準へ正規化済みのものを渡す。歩が元のマスから消えたとき、そのマスに
+ * 相手の駒が居れば取られた、1 つ前（進む向き）のマスに同じ側の と が居れば成った。前へ進んだだけなら衝突ではない。
+ * ⚠ **歩が成るのは飛車先でも開戦**（▲2四歩 ▲2三歩成 は歩交換ではない）。状態で見ていた頃の
+ * 「飛車先の歩が盤上に無い」は成った歩も「交換済み」に数えてしまっていた
+ */
+function pawnClashOf(prev: Square[][], board: Square[][]): boolean {
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const file = 9 - c;
+      // 飛車先（2・8 筋）は**取り合いを数えない**（飛車先の歩交換は駒組み）。成るのは数える
+      const rookFile = file === 2 || file === 8;
+      const p = prev[r][c];
+      if (!p || p.kind !== 'P') continue;
+      const now = board[r][c];
+      if (now && now.side === p.side && now.kind === 'P') continue;
+      if (now && now.side !== p.side) {
+        if (rookFile) continue;
+        if (now.kind === 'B' || now.kind === '+B') continue;
+        return true;
+      }
+      const ahead = p.side === 'sente' ? r - 1 : r + 1;
+      const a = ahead >= 0 && ahead < 9 ? board[ahead][c] : null;
+      if (a && a.side === p.side && a.kind === '+P') return true;
+    }
+  }
+  return false;
+}
+
+/** 直前の局面から、自分の銀が 1 枚だけ動いた手の「移動元-移動先」（`Feat.silverMove`）。盤は正規化済み */
+function silverMoveOf(prev: Square[][], board: Square[][]): string | null {
+  const squares = (b: Square[][]) => {
+    const out = new Set<string>();
+    for (let r = 0; r < 9; r++) {
+      for (let c = 0; c < 9; c++) {
+        const sq = b[r][c];
+        if (sq && sq.side === 'sente' && sq.kind === 'S') out.add(`${9 - c}${r + 1}`);
+      }
+    }
+    return out;
+  };
+  const a = squares(prev);
+  const b = squares(board);
+  const gone = [...a].filter((x) => !b.has(x));
+  const came = [...b].filter((x) => !a.has(x));
+  return gone.length === 1 && came.length === 1 ? `${gone[0]}-${came[0]}` : null;
+}
+
+export function features(
+  state: BoardState,
+  flipped: boolean,
+  turn: number,
+  /** 直前の局面（`pawnClash` の計算用）。初手なら undefined */
+  prev: BoardState | undefined,
+): Feat {
   const board = flipped ? flipBoard(state.board) : state.board;
   const oppBoard = flipped ? state.board : flipBoard(state.board);
   const hand = flipped ? state.hand.gote : state.hand.sente;
@@ -142,5 +211,7 @@ export function features(state: BoardState, flipped: boolean, turn: number): Fea
     oppBishopInHand: !!oppHand.B,
     oppBishopSquare,
     oppPawn: pawnRanks(oppBoard),
+    pawnClash: prev ? pawnClashOf(flipped ? flipBoard(prev.board) : prev.board, board) : false,
+    silverMove: prev ? silverMoveOf(flipped ? flipBoard(prev.board) : prev.board, board) : null,
   };
 }

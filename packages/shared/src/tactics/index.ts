@@ -154,6 +154,19 @@ export const IMPLIES: Record<string, string[]> = {
   袖飛車: ['居飛車'],
   // `_双方飛車先2五` ⟹ `_飛車先2六`。かつ成立時点で振っていないことを定義が要求する
   相掛かり: ['居飛車'],
+  // `居飛車` は右玉の形を証拠に含み、`右玉` は成立時点で振っていないことを要求する（窓も同じ）。
+  // よって**右玉が立てば居飛車の条件は必ず満たされる**（2026-10-26。以前は 2六歩を突かない右玉で 89%）
+  右玉: ['居飛車'],
+  // 銀の戦法は**その側に `居飛車` が立っていることを判定条件に含む**二次ラベル（`silverGuard`）。
+  // 含意は構成上成り立つ
+  棒銀: ['居飛車'],
+  早繰り銀: ['居飛車'],
+  腰掛け銀: ['居飛車'],
+  UFO銀: ['居飛車'],
+  // 超速3七銀 = 早繰り銀の経路（3七 → 4六）を通った後の形 + 玉 6八 + 相手が中飛車。
+  // ガード（居飛車・振っていない・開戦前）も窓も共通なので、**超速3七銀が立てば早繰り銀は必ず立つ**
+  // （推移的に `居飛車` も隠れる）
+  超速3七銀: ['早繰り銀'],
 };
 
 /** `IMPLIES` を推移的に辿る（`石田流` → `三間飛車` → `振り飛車`） */
@@ -323,7 +336,7 @@ export function detectTactics(usiMoves: string[]): TacticLabel[] {
   for (const side of ['sente', 'gote'] as Side[]) {
     const featCache: (Feat | undefined)[] = [];
     const featAt = (i: number): Feat =>
-      (featCache[i] ??= features(positions[i], side === 'gote', i));
+      (featCache[i] ??= features(positions[i], side === 'gote', i, positions[i - 1]));
     for (const d of INTERNAL) {
       const tl: boolean[] = new Array(total + 1).fill(false);
       for (let i = 1; i <= total; i++) tl[i] = d.test(featAt(i));

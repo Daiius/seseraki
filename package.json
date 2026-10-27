@@ -1,7 +1,7 @@
 {
   "name": "seseraki",
   "private": true,
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@12.15.0",
   "scripts": {
     "dev": "docker compose up --build --watch",
     "dev:remote": "docker compose --env-file .env.remote up --build --watch",

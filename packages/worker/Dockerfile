@@ -14,7 +14,7 @@ RUN make clean YANEURAOU_EDITION=${EDITION} && \
 
 FROM node:24-slim
 WORKDIR /workspace
-RUN corepack enable && corepack prepare pnpm@10.32.1 --activate
+RUN corepack enable && corepack prepare pnpm@12.15.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/

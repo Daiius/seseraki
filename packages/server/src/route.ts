@@ -22,7 +22,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import { zValidator as zv } from '@hono/zod-validator';
+import { zv } from './zod-validator.js';
 import { z } from 'zod';
 import { asc, eq } from 'drizzle-orm';
 import { isUniqueViolation } from './db/errors.js';
@@ -118,7 +118,7 @@ export type { SourceTzChoice } from './kifu-queries.js';
  * ⚠ 整数でない・正でない・列（`integer`）に収まらない値は 400
  * （`z.coerce.number()` だけだと `1.5` や `NaN` が素通りし、範囲外は DB で 500 になる）
  */
-const kifuNo = z.coerce.number().int().positive().max(2_147_483_647);
+const kifuNo = z.coerce.number<number>().int().positive().max(2_147_483_647);
 const kifuNoParam = z.object({ no: kifuNo });
 
 /**
@@ -127,7 +127,7 @@ const kifuNoParam = z.object({ no: kifuNo });
  */
 const drillRefParam = z.object({
   kifuNo,
-  moveNumber: z.coerce.number().int().min(0).max(10_000),
+  moveNumber: z.coerce.number<number>().int().min(0).max(10_000),
   kind: z.enum(['mate', 'best']),
 });
 
@@ -141,11 +141,12 @@ const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
  * 同じトランザクションの再導出で `subjectSide` が NULL に落ちる**——成績からも
  * 自分視点の表示からも**静かに脱落する**。個々の値が日付として正しいだけでは足りない。
  */
-const periodRefine = <T extends { validFrom?: string | null; validTo?: string | null }>(
-  schema: z.ZodType<T>,
+// ⚠ zod 4 の `z.ZodType<T>` は入力の型が `unknown` になり RPC の入力の型が消えるので、スキーマの型ごと受ける
+const periodRefine = <S extends z.ZodType<{ validFrom?: string | null; validTo?: string | null }>>(
+  schema: S,
 ) =>
   schema.refine((v) => !v.validFrom || !v.validTo || v.validFrom <= v.validTo, {
-    message: '期間が逆転している（validTo は validFrom 以降）',
+    error: '期間が逆転している（validTo は validFrom 以降）',
     path: ['validTo'],
   });
 
@@ -409,7 +410,7 @@ const route = app
   .patch(
     '/users/me/aliases/:id',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', z.object({ id: z.coerce.number<number>() })),
     zv('json', aliasPeriodSchema),
     async (c) => {
       const { id } = c.req.valid('param');
@@ -427,7 +428,7 @@ const route = app
   .delete(
     '/users/me/aliases/:id',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', z.object({ id: z.coerce.number<number>() })),
     async (c) => {
       // ⚠ **旧名を消すと、その名前で指した過去の棋譜が「自分の対局」でなくなる**
       // （prd/11 §2.2）。画面側で警告してから呼ぶ
@@ -495,8 +496,8 @@ const route = app
       z.object({
         pos: z.string().min(1).max(200),
         /** 手数帯の幅（基準の手数 ± これ）。粗い絞り込みで、読み出す行数を決める */
-        window: z.coerce.number().int().min(0).max(20).default(4),
-        limit: z.coerce.number().int().min(1).max(50).default(20),
+        window: z.coerce.number<number>().int().min(0).max(20).default(4),
+        limit: z.coerce.number<number>().int().min(1).max(50).default(20),
       }),
     ),
     async (c) => {
@@ -1060,7 +1061,7 @@ const route = app
   .get(
     '/analysis/pending',
     sessionRequired,
-    zv('query', z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) })),
+    zv('query', z.object({ limit: z.coerce.number<number>().int().min(1).max(50).default(20) })),
     async (c) =>
       c.json({
         kifuNos: await pendingBrowserKifuNos(c.get('tx'), c.get('userId'), c.req.valid('query').limit),

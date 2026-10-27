@@ -35,7 +35,7 @@ export const calendarDay = z
     // ⚠ `Date.parse` は `2026-02-31` を 3/3 へ**正規化して受理する**ので、
     // 往復させて入力どおりの暦日かを確かめる（NaN 判定だけでは足りない）
     return !Number.isNaN(at) && new Date(at).toISOString().startsWith(v);
-  }, { message: '実在しない日付' });
+  }, { error: '実在しない日付' });
 
 /** 一覧の基準日時。表示・並びとも `coalesce(playedAt, createdAt)`（prd/04 §6.1） */
 export const playedOrCreatedAt = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`;
@@ -64,7 +64,7 @@ export function escapeLike(s: string): string {
 }
 
 export const kifuListQuerySchema = z.object({
-  page: z.coerce.number().min(1).default(1),
+  page: z.coerce.number<number>().min(1).default(1),
   /** タイトル・対局者名の部分一致 */
   q: z.string().trim().max(100).optional(),
   /** 解析状態。一覧のバッジ（失敗 / 済 / 未）と同じ区分 */
@@ -79,7 +79,7 @@ export const kifuListQuerySchema = z.object({
   tacticSide: z.enum(['self', 'opponent', 'any']).default('any'),
   // 詰み手数の上限。指定時は「その手数以下の詰みを逃して**落とした**局」に絞る。
   // ⚠ **負け条件を内包する**ので `outcome=loss` を別途付ける必要はない（prd/09 §3.1）
-  missedMate: z.coerce.number().int().min(1).optional(),
+  missedMate: z.coerce.number<number>().int().min(1).optional(),
   /** 期間の下限・上限（`YYYY-MM-DD`・両端を含む）。基準は `playedOrCreatedAt` */
   from: calendarDay.optional(),
   to: calendarDay.optional(),

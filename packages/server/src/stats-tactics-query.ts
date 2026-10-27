@@ -24,7 +24,7 @@ export const statsTacticsQuerySchema = z.object({
   // ⭐ **名前候補はもう受け取らない。** 「自分」は server が持ち（prd/11）、
   // 主体側は `kifus.subjectSide` に導出済み。集計はその列を読むだけでよい
   /** 取りこぼしと見なす詰み手数の上限（prd/09 §3.1）。既定 10 */
-  mateMax: z.coerce.number().int().min(1).max(99).default(10),
+  mateMax: z.coerce.number<number>().int().min(1).max(99).default(10),
   /** 期間の下限・上限（`YYYY-MM-DD`・両端を含む）。基準は一覧と同じ `playedOrCreatedAt` */
   from: calendarDay.optional(),
   to: calendarDay.optional(),

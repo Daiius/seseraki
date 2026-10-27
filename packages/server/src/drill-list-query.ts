@@ -12,7 +12,7 @@ export const DRILL_PAGE_SIZE = 50;
 export const drillPlayedAt = sql`coalesce(${kifus.playedAt}, ${kifus.createdAt})`;
 
 export const drillListQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number<number>().int().min(1).default(1),
   kind: z.enum(['mate', 'best']).optional(),
   /**
    * 状態（prd/13 §7.7）。`wrong` / `correct` は**最後の記録の判定**で読む（§6.4「間違えた問題」）。

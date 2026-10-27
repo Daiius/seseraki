@@ -154,7 +154,7 @@ export const drillNamedEvaluationSchema = z
   })
   // 読み筋の先頭は名指しした手（`searchmoves` の結果の形）。違えば別の手の評価
   .refine((v) => v.candidate === null || v.candidate.pv[0] === v.move, {
-    message: '読み筋の先頭が名指しした手と違う',
+    error: '読み筋の先頭が名指しした手と違う',
     path: ['candidate', 'pv'],
   });
 export type DrillNamedEvaluation = z.infer<typeof drillNamedEvaluationSchema>;

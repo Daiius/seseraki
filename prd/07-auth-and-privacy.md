@@ -33,7 +33,7 @@ worker・動画解析の取り込みは **API_KEY** の別系統で、人のロ�
 - セッションの確認は `auth.api.getSession({ headers: c.req.raw.headers })`。`sessionRequired` をこれで作り直す（§5）
 - 🔒 **Better Auth には既存の `db`（`packages/server/src/db/index.ts`）を渡す。** 別の接続を作らせない——
   接続の設定（server ロール。[15](./15-postgres.md) §2）を 1 か所に保つ。アダプタは `drizzleAdapter(db, { provider: 'pg', schema })`
-- `drizzleAdapter` は drizzle 1.0 rc.3（relations v2 の `db`）に渡して動く（§9）。Better Auth は **1.7 系**（`~1.7.14`）。
+- `drizzleAdapter` は drizzle 1.0 rc.3（relations v2 の `db`）に渡して動く（§9）。Better Auth は **1.7 系**（`~1.7.13`。1.7.14 は pnpm の公開後の待機期間（既定 1 日）で dev のビルドが弾いたので見送った）。
   1.7 の peer は drizzle `>=1.0.0-rc.1` を受け入れるので peer の警告は出ない（2026-10-27 に 1.6 系から更新。
   1.7.3 以降は core の表のスキーマが 1.6 と同じで、マイグレーションは要らない）
 - ⚠ **1.7.3 以降、起動時にアダプタへ渡した `schema` と Better Auth の期待する列を照合する**（既定で有効。§9）。
@@ -421,7 +421,7 @@ cookie は `Path=/` 固定（web は origin 直下、API は origin 直下の `/
 - **起動時のスキーマ照合（1.7.3 以降）**: drizzle のアダプタは、渡した `schema`（`users`・`session`・`account`・`verification`）の
   列と、この設定で Better Auth が書く列を照合する（`advanced.database.validateSchema`。既定で有効・本番でも）。
   食い違うと認証の要求を拒否する。今の `schema.ts` と `authOptions` では development・production の設定とも食い違いが 0 件であることを、
-  アダプタの照合関数を直接呼んで確かめた（2026-10-27。1.6 → 1.7.14 の更新時）。⚠ 照合は `schema` の定義どうしで、実 DB は見ない
+  アダプタの照合関数を直接呼んで確かめた（2026-10-27。1.6 → 1.7 系の更新時）。⚠ 照合は `schema` の定義どうしで、実 DB は見ない
 - **`drizzleAdapter` と drizzle 1.0**: アダプタは `db.query` を**結合（joins。1.7 で `experimental.joins` から `advanced.database.joins` へ移った）を有効にしたときだけ**使い、
   既定では素のクエリビルダ（`select` / `insert` …）で動く。relations v2 の `db` を渡して型も通る。
   ⚠ DB を通した実動作は dev での確認に委ねた（unit テストはメモリのアダプタ）

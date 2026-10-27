@@ -9,7 +9,7 @@
  * `db-import-boundary.test.ts` が import を検査する。リクエスト用のプール（server ロール）とは接続の単位で分ける。
  */
 import { Hono } from 'hono';
-import { zValidator as zv } from '@hono/zod-validator';
+import { zv } from './zod-validator.js';
 import { z } from 'zod';
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { systemDb } from './db/system.js';
@@ -171,7 +171,7 @@ export const workerRoutes = new Hono()
   .post(
     '/worker/kifus/:id/error',
     apiKeyRequired,
-    zv('param', z.object({ id: z.coerce.number() })),
+    zv('param', z.object({ id: z.coerce.number<number>() })),
     zv('json', z.object({ error: z.string(), revision: z.number() })),
     async (c) => {
       const { id } = c.req.valid('param');

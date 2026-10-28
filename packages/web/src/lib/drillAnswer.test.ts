@@ -10,6 +10,7 @@ import {
   missText,
   practiceNote,
   resultBadge,
+  retriesAfterEngineReady,
 } from './drillAnswer';
 
 const SETTINGS = {
@@ -157,5 +158,25 @@ describe('読めない旨の申告と、evaluate を受けたときにするこ�
     expect(onEvaluate(body)).toBe('read');
     expect(onEvaluate(answerBodyUnavailable(body))).toBe('give-up');
     expect(onEvaluate({ ...body, evaluation: {} as never })).toBe('give-up');
+  });
+});
+
+describe('エンジンの準備ができたら同じ手で判定し直す（prd/13 §7.1・2026-10-29）', () => {
+  it('同意の前・止まっていた・起動の途中から、使える状態へ移ったら true', () => {
+    expect(retriesAfterEngineReady('needs-consent', 'loading')).toBe(true);
+    expect(retriesAfterEngineReady('needs-consent', 'idle')).toBe(true);
+    expect(retriesAfterEngineReady('error', 'analyzing')).toBe(true);
+    expect(retriesAfterEngineReady('off', 'idle')).toBe(true);
+  });
+
+  it('まだ使えない間は false', () => {
+    expect(retriesAfterEngineReady('needs-consent', 'needs-consent')).toBe(false);
+    expect(retriesAfterEngineReady('needs-consent', 'off')).toBe(false);
+    expect(retriesAfterEngineReady('unsupported', 'unsupported')).toBe(false);
+  });
+
+  it('🔒 使える状態のまま採点できなかったなら、状態が動いても判定し直さない（回り続けない）', () => {
+    expect(retriesAfterEngineReady('idle', 'analyzing')).toBe(false);
+    expect(retriesAfterEngineReady('analyzing', 'idle')).toBe(false);
   });
 });

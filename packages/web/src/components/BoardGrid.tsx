@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import type { BoardState, HandPieceKind, PieceKind, SquareRef } from 'shared';
+import type { BoardState, HandPieceKind, PieceKind, Side, SquareRef } from 'shared';
 import { PlusIcon } from './icons';
 
 /**
@@ -148,6 +148,22 @@ export function HandDisplay({
   );
 }
 
+/**
+ * 盤の上に重ねる「成」「不成」の選択（出題。prd/13 §7.1・2026-10-29）。
+ * 成った駒と成らない駒の 2 つを、行き先のマスの上に並べて出す（多くの将棋アプリと同じ形）。
+ */
+export interface PromotionChoice {
+  /** 行き先のマス（`board` の添字。反転していても盤の向きで渡す） */
+  square: SquareRef;
+  /** 動かした駒の側（駒の向きを盤と揃える） */
+  side: Side;
+  /** 成らない形の駒 */
+  piece: PieceKind;
+  onChoose: (promote: boolean) => void;
+  /** 選択肢の外（盤のほかのマス・筋段のラベル）を叩いた */
+  onCancel: () => void;
+}
+
 export function BoardGrid({
   state,
   lastMoveTo,
@@ -155,6 +171,7 @@ export function BoardGrid({
   onSquareClick,
   selected,
   destinations,
+  promotionChoice,
 }: {
   state: BoardState;
   lastMoveTo: [number, number] | null;
@@ -173,6 +190,11 @@ export function BoardGrid({
    * 🔒 **盤の見た目の助けであって、合否の判定には使わない**（判定は server。prd/13 §5）。
    */
   destinations?: SquareRef[] | null;
+  /**
+   * 成 / 不成の選択を盤の上に重ねる（出題。prd/13 §7.1）。**渡さなければ何も変わらない**。
+   * 出している間は盤全体を覆い、選択肢の外を叩くと `onCancel` を呼ぶ（マスの `onSquareClick` は呼ばない）
+   */
+  promotionChoice?: PromotionChoice | null;
 }) {
   const colLabels = flipped ? [...COL_LABELS].reverse() : COL_LABELS;
   const rowLabels = flipped ? [...ROW_LABELS].reverse() : ROW_LABELS;
@@ -180,7 +202,7 @@ export function BoardGrid({
   const colOrder = flipped ? [8, 7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7, 8];
 
   return (
-    <div className="shogi-board">
+    <div className={clsx('shogi-board', promotionChoice && 'relative')}>
       {/* 筋番号（1行目） */}
       {colLabels.map((col) => (
         <div
@@ -244,6 +266,61 @@ export function BoardGrid({
           {rowLabels[ri]}
         </div>,
       ])}
+      {promotionChoice && <PromotionPicker choice={promotionChoice} flipped={flipped} />}
+    </div>
+  );
+}
+
+/**
+ * 成 / 不成の選択（{@link PromotionChoice}）。盤全体を薄く覆う「取り消し」の面の上に、2 つの駒を横に並べる。
+ *
+ * 🔒 **選択肢は行き先のマスを中心に置き、盤の外へはみ出す分だけ内側へ寄せる**（端の筋・段でも全体が盤に収まる）。
+ * 位置は盤の見た目の向き（反転を解いた後）の行・列から、`--sq` の倍数で決める。
+ * 🔒 **選択肢の 1 つは 44px を下回らない**（`.shogi-promotion-pick`。`lib/touchTargets.ts` の基準）——
+ * 盤のマスはモバイルで 40px 以下になるので、マスの寸法に合わせると押し分けにくい。
+ */
+function PromotionPicker({ choice, flipped }: { choice: PromotionChoice; flipped: boolean }) {
+  // 見た目の行・列（反転中は上下左右が逆）。中心は筋番号の行（0.5 マス）の下から数える
+  const visualRow = flipped ? 8 - choice.square.row : choice.square.row;
+  const visualCol = flipped ? 8 - choice.square.col : choice.square.col;
+  const style = {
+    left: `clamp(0px, calc(var(--sq) * ${visualCol + 0.5} - var(--pick)), calc(var(--sq) * 9 - var(--pick) * 2))`,
+    top: `clamp(calc(var(--sq) * 0.5), calc(var(--sq) * ${visualRow + 1} - var(--pick) / 2), calc(var(--sq) * 9.5 - var(--pick)))`,
+  };
+  // 盤の駒と同じ規則: 相手側（反転中は先手側）の駒を 180 度回して赤くする
+  const rotate = flipped ? choice.side === 'sente' : choice.side === 'gote';
+  const options = [
+    { promote: true, kind: `+${choice.piece}` as PieceKind, label: '成る' },
+    { promote: false, kind: choice.piece, label: '成らない' },
+  ];
+  return (
+    <div className="shogi-promotion absolute inset-0 z-10">
+      <button
+        type="button"
+        className="absolute inset-0 bg-base-content/20 cursor-default"
+        aria-label="指した手を取り消す"
+        onClick={choice.onCancel}
+      />
+      <div
+        role="group"
+        aria-label="成りますか"
+        className="absolute flex rounded shadow-lg ring-2 ring-secondary bg-base-100"
+        style={style}
+      >
+        {options.map(({ promote, kind, label }) => (
+          <button
+            type="button"
+            key={label}
+            className="shogi-promotion-pick flex items-center justify-center font-bold hover:bg-secondary/30"
+            aria-label={`${label}（${PIECE_DISPLAY[kind]}）`}
+            onClick={() => choice.onChoose(promote)}
+          >
+            <span className={clsx('inline-block', rotate && 'rotate-180 text-error')}>
+              {PIECE_DISPLAY[kind]}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

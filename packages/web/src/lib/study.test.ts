@@ -23,6 +23,7 @@ import {
   lastMove,
   lastMoveGradeTarget,
   positionEvalTarget,
+  promotionNeedOf,
   redo,
   redoAll,
   resetStudy,
@@ -37,6 +38,7 @@ import {
   usiDropOf,
   usiMoveOf,
   usiSquare,
+  withPromotion,
 } from './study';
 
 /**
@@ -675,6 +677,56 @@ describe('ルールどおりのモード（出題。prd/13 §7.1）', () => {
   it('塗りは選択中の駒の行き先', () => {
     expect(selectionDestinations(tapSquare(rules(), sq('7g')))).toEqual([sq('7f')]);
     expect(selectionDestinations(rules())).toBeNull();
+  });
+});
+
+describe('指した直後の成り方（出題。prd/13 §7.1・2026-10-29）', () => {
+  // 先手: 1四の歩・2四の香・3四の桂・4四の銀・6九の龍と持ち駒の歩
+  const pos = parseSfen('4k4/9/9/5SNLP/9/9/9/9/3+RK4 b P 1')!;
+  const played = (move: string) => {
+    const session = applyStudyMoves(pos, [move], 'rules');
+    // 手が盤で指せたことまで確かめる（指せないと起点のままで、どれも none になる）
+    expect(lastMove(session)).toBe(move);
+    return session;
+  };
+
+  it('任意成りは choose（成りの領域に入る・領域の中で動く）', () => {
+    expect(promotionNeedOf(played('1d1c'))).toBe('choose');
+    expect(promotionNeedOf(played('4d4c'))).toBe('choose');
+    expect(promotionNeedOf(played('2d2b'))).toBe('choose'); // 香の 2 段目は不成で指せる
+  });
+
+  it('不成だと行き所のない駒になる手は must（香の 1 段目・桂の 2 段目）', () => {
+    expect(promotionNeedOf(played('2d2a'))).toBe('must');
+    expect(promotionNeedOf(played('3d2b'))).toBe('must');
+  });
+
+  it('成れない手は none（領域に出入りしない・打つ・玉・成駒・まだ指していない）', () => {
+    expect(promotionNeedOf(played('4d5e'))).toBe('none');
+    expect(promotionNeedOf(played('P*5e'))).toBe('none');
+    expect(promotionNeedOf(played('5i5h'))).toBe('none');
+    expect(promotionNeedOf(played('6i6a'))).toBe('none'); // 龍は成れない
+    expect(promotionNeedOf(createStudySession(pos, 'rules'))).toBe('none');
+  });
+
+  it('🔒 見るのは盤上の移動で、今の形は問わない（成らせた後も choose のまま）', () => {
+    expect(promotionNeedOf(togglePromotion(played('1d1c')))).toBe('choose');
+  });
+
+  it('withPromotion は指定した形にする（その形なら同じオブジェクト）', () => {
+    const plain = played('1d1c');
+    expect(withPromotion(plain, false)).toBe(plain);
+    const promoted = withPromotion(plain, true);
+    expect(lastMove(promoted)).toBe('1d1c+');
+    expect(pieceAt(currentState(promoted), sq('1c'))).toEqual({ side: 'sente', kind: '+P' });
+    expect(lastMove(withPromotion(promoted, false))).toBe('1d1c');
+    // 成らなければいけない手を成らせる
+    expect(lastMove(withPromotion(played('2d2a'), true))).toBe('2d2a+');
+  });
+
+  it('成れない手は withPromotion でも変わらない', () => {
+    const dropped = played('P*5e');
+    expect(withPromotion(dropped, true)).toBe(dropped);
   });
 });
 

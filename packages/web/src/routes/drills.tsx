@@ -433,6 +433,11 @@ function RoundBar({ solve }: { solve?: SolveActions }) {
 type SolveActions = {
   kifuNo: number;
   moveNumber: number;
+  /**
+   * 採点中（判定の応答待ち）。🔴 **やり直す・自明だったを押させない**（レビュー `OCL-D7C87C9C`）——
+   * 進行中の採点の応答が、やり直した後の盤に古い手順や結果を書き戻してしまう
+   */
+  judging: boolean;
   onRestart: () => void;
   onExclude: () => void;
 };
@@ -490,6 +495,7 @@ function SolveMenu({ solve }: { solve?: SolveActions }) {
               <button
                 type="button"
                 className={MENU_ITEM}
+                disabled={solve.judging}
                 onClick={() => {
                   closeMenu();
                   solve.onRestart();
@@ -504,6 +510,7 @@ function SolveMenu({ solve }: { solve?: SolveActions }) {
               <button
                 type="button"
                 className={MENU_ITEM}
+                disabled={solve.judging}
                 onClick={() => {
                   closeMenu();
                   solve.onExclude();
@@ -830,7 +837,9 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
 
   return (
     <div className="space-y-2">
-      <RoundBar solve={{ kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, onRestart: restart, onExclude: exclude }} />
+      <RoundBar
+        solve={{ kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, judging, onRestart: restart, onExclude: exclude }}
+      />
       <div className="flex items-center gap-2 flex-wrap">
         <h1 className="text-lg font-bold">
           {drill.kind === 'mate' ? '詰ませてください' : 'ここで何を指すべきでしたか'}

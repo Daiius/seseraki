@@ -70,6 +70,15 @@ import {
   type DrillsSearch,
 } from '../lib/drillSearch';
 import { drillRound, roundText } from '../lib/drillRound';
+import {
+  ArrowRestartIcon,
+  BookOpenIcon,
+  ChevronDownIcon,
+  DrillModeIcon,
+  EyeSlashIcon,
+  HomeIcon,
+} from '../components/icons';
+import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 
 /**
  * 出題（prd/13）。溜め込んだ棋譜と解析から作った問題を解く。
@@ -233,9 +242,11 @@ function DrillsPage() {
       {data.screen === 'list' && <DrillListScreen list={data.list} error={data.error} search={search} />}
       {data.screen === 'solve' && (
         <>
-          <RoundBar />
           {data.exhausted ? (
-            <Exhausted mode={search.mode ?? 'recommend'} />
+            <>
+              <RoundBar />
+              <Exhausted mode={search.mode ?? 'recommend'} />
+            </>
           ) : (
             // 🔴 **読み込むたびに中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。
             // 盤・手順・判定を state に持って進める画面なので、loader だけ走らせると前の問題が残る。
@@ -403,15 +414,115 @@ function DrillListScreen({
   );
 }
 
-/** 解く画面の上部: 「この回 N 問中 M 問正解」と「ホーム」（prd/13 §7.6） */
-function RoundBar() {
+/**
+ * 解く画面の上部: 「この回 N 問中 M 問正解」と、右端のケバブ（prd/13 §7.6）。
+ * ケバブにはホーム・元の対局・やり直す・自明だったをアイコン付きで入れる（問題が無い画面ではホームだけ）
+ */
+function RoundBar({ solve }: { solve?: SolveActions }) {
   const round = useSyncExternalStore(drillRound.subscribe, drillRound.get, () => null);
   return (
     <div className="flex items-center gap-2">
       <span className="text-sm text-base-content/70">{roundText(round)}</span>
-      <Link to="/drills" className="btn btn-sm btn-ghost ms-auto">
-        ホーム
-      </Link>
+      <div className="ms-auto">
+        <SolveMenu solve={solve} />
+      </div>
+    </div>
+  );
+}
+
+type SolveActions = {
+  kifuNo: number;
+  moveNumber: number;
+  /**
+   * 採点中（判定の応答待ち）。🔴 **やり直す・自明だったを押させない**（レビュー `OCL-D7C87C9C`）——
+   * 進行中の採点の応答が、やり直した後の盤に古い手順や結果を書き戻してしまう
+   */
+  judging: boolean;
+  onRestart: () => void;
+  onExclude: () => void;
+};
+
+/**
+ * 解く画面のケバブ。元の対局・やり直す・自明だったは**解く前から押せる**（2026-10-29 決定）。
+ * ⚠ 解く前の「元の対局」は答えが見えている画面へ移る（§7.1 で伏せている棋譜を自分で開く）。記録は付かない
+ */
+function SolveMenu({ solve }: { solve?: SolveActions }) {
+  // daisyUI の dropdown はフォーカスで開閉するので、項目を押したらフォーカスを外して閉じる（kifus/$id と同じ）
+  const closeMenu = () => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  };
+  return (
+    <div className="dropdown dropdown-end">
+      <button tabIndex={0} className={ICON_BTN} aria-label="メニュー">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={2}
+          stroke="currentColor"
+          className="size-5"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
+        </svg>
+      </button>
+      <ul tabIndex={0} className={`${MENU_LIST} w-40`}>
+        <li>
+          <Link to="/drills" className={MENU_ITEM}>
+            <HomeIcon />
+            ホーム
+          </Link>
+        </li>
+        {solve && (
+          <>
+            <li>
+              {/*
+                元の対局。出題局面の**次の手**（＝この問題の手）まで進めた状態で開く。
+                `moveNumber` は 0 始まりの指し手番号なので、盤の手数（初期局面からの手数）は +1。
+                こうすると開いた瞬間にその手の評価値・候補手が出る（prd/13 §7.1）
+              */}
+              <Link
+                to="/kifus/$id"
+                params={{ id: String(solve.kifuNo) }}
+                search={{ ply: solve.moveNumber + 1 }}
+                className={MENU_ITEM}
+              >
+                <BookOpenIcon />
+                元の対局
+              </Link>
+            </li>
+            <li>
+              {/* やり直す（§7.1 の「最初から」。解答後なら以後は練習で記録しない） */}
+              <button
+                type="button"
+                className={MENU_ITEM}
+                disabled={solve.judging}
+                onClick={() => {
+                  closeMenu();
+                  solve.onRestart();
+                }}
+              >
+                <ArrowRestartIcon />
+                やり直す
+              </button>
+            </li>
+            <li>
+              {/* 🔒 自動判定は作らない（「取り返し」の定義から詰まる。prd/13 §4.2） */}
+              <button
+                type="button"
+                className={MENU_ITEM}
+                disabled={solve.judging}
+                onClick={() => {
+                  closeMenu();
+                  solve.onExclude();
+                }}
+              >
+                <EyeSlashIcon />
+                自明だった
+              </button>
+            </li>
+          </>
+        )}
+      </ul>
     </div>
   );
 }
@@ -708,14 +819,27 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
   }
 
   if (error && !drill) {
-    return <p className="text-error p-2">{error}</p>;
+    return (
+      <>
+        <RoundBar />
+        <p className="text-error p-2">{error}</p>
+      </>
+    );
   }
   if (!drill || !state) {
-    return <p className="text-base-content/70 p-2">この問題を表示できません。</p>;
+    return (
+      <>
+        <RoundBar />
+        <p className="text-base-content/70 p-2">この問題を表示できません。</p>
+      </>
+    );
   }
 
   return (
     <div className="space-y-2">
+      <RoundBar
+        solve={{ kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, judging, onRestart: restart, onExclude: exclude }}
+      />
       <div className="flex items-center gap-2 flex-wrap">
         <h1 className="text-lg font-bold">
           {drill.kind === 'mate' ? '詰ませてください' : 'ここで何を指すべきでしたか'}
@@ -861,8 +985,6 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
           answered={state}
           mode={mode}
           onNext={onNext}
-          onExclude={exclude}
-          onRestart={restart}
         />
       )}
     </div>
@@ -877,8 +999,6 @@ function Result({
   answered,
   mode,
   onNext,
-  onExclude,
-  onRestart,
 }: {
   reveal: Shown;
   drill: Drill;
@@ -889,12 +1009,19 @@ function Result({
   mode: DrillMode | null;
   /** 大きいボタン（入口の次の問題 / 一覧に戻る） */
   onNext: () => void;
-  onExclude: () => void;
-  /** 最初から解き直す（練習。記録しない） */
-  onRestart: () => void;
 }) {
   const verdict = resultBadge(drill.kind, reveal.verdict, reveal.practice);
   const note = practiceNote(reveal.practice, reveal.recorded);
+  // 大きいボタンは「次の問題」＋今の入口のアイコン（読み上げは aria-label で入口名まで）
+  const nextLabel = mode ? (
+    <>
+      次の問題
+      <DrillModeIcon mode={mode} />
+    </>
+  ) : (
+    '一覧に戻る'
+  );
+  const otherModes = (['recommend', 'mate', 'best', 'wrong'] as const).filter((other) => other !== mode);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -929,45 +1056,40 @@ function Result({
         </p>
       )}
 
-      {/* 解いた後のボタン（prd/13 §7.6）。上から: 入口の続き（大）→ 入口の切り替え → その他 */}
-      <button type="button" className="btn btn-primary btn-block" onClick={onNext}>
-        {mode ? `次の問題（${MODE_LABEL[mode]}）` : '一覧に戻る'}
-      </button>
-      <div className="flex items-center gap-2 flex-wrap">
-        {/* 今の入口と同じになるものは出さない */}
-        {(['mate', 'best'] as const)
-          .filter((other) => other !== mode)
-          .map((other) => (
-            <Link key={other} to="/drills" search={modeSearch(other)} replace className="btn btn-sm flex-1">
-              次は{MODE_LABEL[other]}
-            </Link>
-          ))}
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        {/*
-          元の対局。出題局面の**次の手**（＝この問題の手）まで進めた状態で開く。
-          `moveNumber` は 0 始まりの指し手番号なので、盤の手数（初期局面からの手数）は +1。
-          こうすると開いた瞬間にその手の評価値・候補手が出る（prd/13 §7.1）
-        */}
-        <Link
-          to="/kifus/$id"
-          params={{ id: String(reveal.kifuNo) }}
-          search={{ ply: reveal.moveNumber + 1 }}
-          className="btn btn-sm btn-ghost"
+      {/*
+        解いた後のボタン（prd/13 §7.6）。入口の続き（大）と、ほかの入口へのドロップダウンを join で 1 本につなぐ。
+        元の対局・やり直す・自明だったは上の行のケバブ（`SolveMenu`）
+      */}
+      <div className="join w-full">
+        <button
+          type="button"
+          className="btn btn-primary join-item flex-1 px-2"
+          onClick={onNext}
+          aria-label={mode ? `次の問題（${MODE_LABEL[mode]}）` : undefined}
         >
-          元の対局
-        </Link>
-        {/* やり直す（§7.1 の解答後の「最初から」。以後は練習で記録しない） */}
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onRestart}>
-          やり直す
+          {nextLabel}
         </button>
-        {/* 🔒 自動判定は作らない（「取り返し」の定義から詰まる。prd/13 §4.2） */}
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onExclude}>
-          自明だった
-        </button>
-        <Link to="/drills" className="btn btn-sm btn-ghost">
-          ホーム
-        </Link>
+        <div className="dropdown dropdown-end join-item">
+          <div
+            tabIndex={0}
+            role="button"
+            className="btn btn-primary join-item w-16 px-0 border-0 border-l border-l-primary-content/40"
+            aria-label="ほかの入口"
+          >
+            <ChevronDownIcon className="size-5" />
+          </div>
+          <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-10 mt-1 w-44 p-2 shadow">
+            {/* 今の入口と同じになるものは出さない */}
+            {otherModes.map((other) => (
+              <li key={other}>
+                <Link to="/drills" search={modeSearch(other)} replace className="text-base">
+                  <DrillModeIcon mode={other} />
+                  {MODE_LABEL[other]}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
 
       <AttemptsOf drill={drill} />

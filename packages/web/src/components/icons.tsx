@@ -15,6 +15,8 @@
  * 済むこの形を採った（既定寸法をクラスへ前置する案は、`size-4` を渡している既存の呼び出しと
  * `size-*` 同士で衝突して CSS 順序次第になるため見送った）。
  */
+import { useId } from 'react';
+
 type IconProps = { className?: string };
 
 /** コピー（clipboard-document） */
@@ -423,4 +425,159 @@ export function ArrowsRightLeftIcon({ className = 'size-5' }: IconProps) {
       <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
     </svg>
   );
+}
+
+/** ホーム（home） */
+export function HomeIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
+    </svg>
+  );
+}
+
+/** 元の対局（棋譜を開く。book-open） */
+export function BookOpenIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+    </svg>
+  );
+}
+
+/** やり直す（回転矢印 1 本。自作——1 手戻すの arrow-uturn-left と紛れないように） */
+export function ArrowRestartIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9M4.5 4.5V9H9" />
+    </svg>
+  );
+}
+
+/** 自明だった＝以後出さない（eye-slash） */
+export function EyeSlashIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
+    </svg>
+  );
+}
+
+/**
+ * 出題の入口のアイコン（prd/13 §7.6）。駒の形に 1 文字（詰・次・誤）、おすすめは詰と次の駒を 2 枚重ねる。
+ * ⚠ heroicons ではなく自作。文字は SVG の text ではなく HTML の文字で重ねる——**ボタンのラベルと同じ書体・大きさ・太さを継ぐ**
+ * （SVG の text だと駒の寸法に連れて縮み、ラベルと揃わなかった）。おすすめの重ねた駒だけは SVG の text（2 枚を 1 つの絵として描くため）
+ */
+const PIECE_PATH = 'M12 1.25 18.75 4.5 21.25 22.75H2.75L5.25 4.5Z';
+
+function PieceKanjiIcon({ kanji, className = 'size-5' }: { kanji: string; className?: string }) {
+  return (
+    <span className={`relative inline-flex items-center justify-center ${className}`} aria-hidden="true">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        width="24"
+        height="24"
+        strokeWidth={2}
+        stroke="currentColor"
+        strokeLinejoin="round"
+        className="absolute inset-0 size-full"
+      >
+        <path d={PIECE_PATH} />
+      </svg>
+      <span className="relative translate-y-[0.15em]">{kanji}</span>
+    </span>
+  );
+}
+
+/** 2 枚の駒を重ねる（後ろの駒は前の駒の形で mask する——どの背景の上でも重なりが透ける） */
+function StackedPiecesIcon({ back, front, className = 'h-5' }: { back: string; front: string; className?: string }) {
+  const id = useId();
+  const dx = 11;
+  const dy = 3;
+  const w = dx + 24;
+  const h = dy + 24;
+  const frontAt = `translate(${dx} ${dy})`;
+  const label = (k: string) => (
+    <text x="12" y="17.6" textAnchor="middle" fontSize="10" fontWeight="700" fill="currentColor" stroke="none">
+      {k}
+    </text>
+  );
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox={`0 0 ${w} ${h}`}
+      width={w}
+      height={h}
+      strokeWidth={2}
+      stroke="currentColor"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`${className} w-auto`}
+    >
+      <defs>
+        <mask id={id}>
+          <rect width={w} height={h} fill="white" />
+          <path transform={frontAt} d={PIECE_PATH} fill="black" stroke="black" strokeWidth={5} />
+        </mask>
+      </defs>
+      <g mask={`url(#${id})`}>
+        <path d={PIECE_PATH} />
+        {label(back)}
+      </g>
+      <g transform={frontAt}>
+        <path d={PIECE_PATH} />
+        {label(front)}
+      </g>
+    </svg>
+  );
+}
+
+/** 出題の入口（おすすめ・詰将棋・次の一手・間違えた問題）のアイコン。`size` は高さの Tailwind の数値（例 `7` で 28px） */
+export function DrillModeIcon({ mode, size = 7 }: { mode: 'recommend' | 'mate' | 'best' | 'wrong'; size?: 5 | 7 }) {
+  const box = size === 7 ? 'size-7' : 'size-5';
+  if (mode === 'recommend') return <StackedPiecesIcon back="詰" front="次" className={size === 7 ? 'h-7' : 'h-5'} />;
+  return <PieceKanjiIcon kanji={{ mate: '詰', best: '次', wrong: '誤' }[mode]} className={box} />;
 }

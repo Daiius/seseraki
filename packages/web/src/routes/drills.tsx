@@ -291,19 +291,32 @@ function DrillHome({ counts, error }: { counts: Counts | null; error: string | n
               key={mode}
               to="/drills"
               search={modeSearch(mode)}
-              className="card card-border bg-base-100 hover:bg-base-200 p-4"
+              className="card card-border bg-base-100 hover:bg-base-200 p-4 flex-row items-center gap-3"
             >
-              <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
-              <span className="text-sm text-base-content/70">{detail}</span>
+              {/* 入口のアイコン（解いた後のボタン・ドロップダウンと同じ。prd/13 §7.5） */}
+              {/* 幅を揃える（おすすめの重ねた駒は横に広い）——名前の書き出しが入口ごとにずれないように */}
+              <span className="font-bold text-base w-9 shrink-0 flex justify-center">
+                <DrillModeIcon mode={mode} />
+              </span>
+              <span className="flex flex-col">
+                <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
+                <span className="text-sm text-base-content/70">{detail}</span>
+              </span>
             </Link>
           ) : (
             <div
               key={mode}
               aria-disabled="true"
-              className="card card-border bg-base-200/50 p-4 text-base-content/50"
+              className="card card-border bg-base-200/50 p-4 text-base-content/50 flex-row items-center gap-3"
             >
-              <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
-              <span className="text-sm">{mode === 'recommend' ? 'いま出せる問題はありません' : detail}</span>
+              {/* 幅を揃える（おすすめの重ねた駒は横に広い）——名前の書き出しが入口ごとにずれないように */}
+              <span className="font-bold text-base w-9 shrink-0 flex justify-center">
+                <DrillModeIcon mode={mode} />
+              </span>
+              <span className="flex flex-col">
+                <span className="font-bold text-base">{MODE_LABEL[mode]}</span>
+                <span className="text-sm">{mode === 'recommend' ? 'いま出せる問題はありません' : detail}</span>
+              </span>
             </div>
           ),
         )}

@@ -72,8 +72,8 @@ export function drillReveal(drill: AnswerDrill, line: string[]) {
   };
 }
 
-/** エンジンに回すときの入力（tx・要求者は `deps.resolveWithEngine` の側が足す） */
-export type EngineRequest = Omit<ResolveInput, 'tx' | 'userId'>;
+/** エンジンに回すときの入力（tx・要求者・コミット後の処理は `deps.resolveWithEngine` の側が足す） */
+export type EngineRequest = Omit<ResolveInput, 'tx' | 'userId' | 'afterCommit'>;
 
 /**
  * エンジンの採点結果を HTTP へ写す。**待ちは 202、キュー満杯は 503**（prd/12 §2.4 と同じ流儀）。
@@ -122,8 +122,13 @@ export interface AnswerRequest {
 export interface AnswerDeps {
   /** 覚えた別解の手順（無ければ null。`drill-lines.ts`） */
   recallLine(drillId: number): string[] | null;
-  /** 解き終えた問題の手順を忘れる。🔒 **コミットの後**に回す（呼び出し側の責務） */
+  /** 解き終えた問題の手順を忘れる（`drill-lines.ts`）。🔒 `afterCommit` 経由で呼ぶ */
   forgetLine(drillId: number): void;
+  /**
+   * コミットの後に回す処理を登録する（`sessionRequired` の `afterCommit`）。メモリ上の手順の記憶はここから変える——
+   * コミット前に変えると、解答の記録が戻ったときに記憶だけが先に進む
+   */
+  afterCommit(fn: () => void): void;
   /** 解答を 1 件記録する（`drill-query.ts` の `recordAttempt`）。練習のときは呼ばない */
   recordAttempt(attempt: {
     drillId: number;
@@ -228,7 +233,7 @@ export async function gradeAnswer(drill: AnswerDrill, request: AnswerRequest, de
         return { body: { status: 'continue' as const, reply: mateMatch.reply }, status: 200 as const };
       }
       await record('correct', null);
-      deps.forgetLine(id);
+      deps.afterCommit(() => deps.forgetLine(id));
       // ⚠ `lossCp` は必ず載せる（mate では常に null）。応答の形を分岐で変えない
       return {
         body: { status: 'done' as const, verdict: 'correct' as const, lossCp: null, ...reveal },

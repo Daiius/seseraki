@@ -134,6 +134,11 @@ export interface ResolveInput {
   tx: Tx;
   /** 要求者（🔒 セッションから取った ID）。評価ジョブの持ち主・再利用する棋譜の所有者 */
   userId: string;
+  /**
+   * コミットの後に回す処理を登録する（`sessionRequired` の `afterCommit`）。別解の手順の記憶（メモリ）はここで書く——
+   * コミット前に書くと、解答の記録が戻ったときに記憶だけが残る
+   */
+  afterCommit: (fn: () => void) => void;
   /** 要求者の解析の担当（prd/14 §5.7）。読めなかった（null）ら `browser` と同じ扱い——手元 worker を使わせない */
   assignee: AnalysisAssignee | null;
   /**
@@ -267,14 +272,15 @@ export function judgeNamedEvaluation(
   return done(scored.verdict, scored.lossCp, scored.verdict === 'wrong' ? best.pv.slice(1) : undefined);
 }
 
-/** 判定を反映する（解答の記録・別解の手順の記憶）。副作用はここに寄せる */
+/** 判定を反映する（解答の記録・別解の手順の記憶）。副作用はここに寄せる。記憶はコミットの後に書く */
 async function settle(input: ResolveInput, best: NamedCandidate | undefined): Promise<EngineAnswer> {
   const { tx, drill, move, line } = input;
   const judged = judgeNamedEvaluation(input, best);
   if (judged.attempt && !input.practice) {
     await recordAttempt(tx, { drillId: drill.id, ownerId: drill.ownerId, move, line, ...judged.attempt });
   }
-  if (judged.remember) rememberLine(drill.id, judged.remember);
+  const { remember } = judged;
+  if (remember) input.afterCommit(() => rememberLine(drill.id, remember));
   return judged.answer;
 }
 

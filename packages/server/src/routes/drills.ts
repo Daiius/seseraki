@@ -107,7 +107,8 @@ export const drillRoutes = new Hono()
         lossCp: null,
         excluded: true,
       });
-      forgetLine(id);
+      // 手順の記憶（メモリ）はコミットの後に忘れる（記録が戻ったときに記憶だけ消えないように）
+      c.get('afterCommit')(() => forgetLine(id));
       return c.json({ ok: true } as const);
     },
   )
@@ -146,7 +147,8 @@ export const drillRoutes = new Hono()
           lossCp: null,
         });
       }
-      forgetLine(id);
+      // 手順の記憶（メモリ）はコミットの後に忘れる（記録が戻ったときに記憶だけ消えないように）
+      c.get('afterCommit')(() => forgetLine(id));
       return c.json({
         status: 'done' as const,
         verdict: 'wrong' as const,
@@ -193,15 +195,17 @@ export const drillRoutes = new Hono()
     async (c) => {
       const tx = c.get('tx');
       const userId = c.get('userId');
+      const afterCommit = c.get('afterCommit');
       const drill = await loadDrill(tx, userId, c.req.valid('param'));
       if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       // 流れの本体は `drill-answer-flow.ts`。DB・手順の記憶・エンジンはここで渡す
       const graded = await gradeAnswer(drill, c.req.valid('json'), {
         recallLine,
         forgetLine,
+        afterCommit,
         recordAttempt: (attempt) => recordAttempt(tx, attempt),
         analysisAssignee: () => analysisAssigneeOf(tx, userId),
-        resolveWithEngine: (input) => resolveWithEngine({ ...input, tx, userId }),
+        resolveWithEngine: (input) => resolveWithEngine({ ...input, tx, userId, afterCommit }),
       });
       return c.json(graded.body, graded.status);
     },

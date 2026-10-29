@@ -52,8 +52,16 @@ const MATE: AnswerDrill = {
 
 function makeDeps(answer: EngineAnswer = { status: 'pending', jobId: 'job-1' }, recalled: string[] | null = null) {
   const calls: string[] = [];
-  const deps: AnswerDeps & { engineInputs: EngineRequest[] } = {
+  const pending: (() => void)[] = [];
+  const deps: AnswerDeps & { engineInputs: EngineRequest[]; commit(): void } = {
     engineInputs: [],
+    afterCommit: vi.fn((fn: () => void) => {
+      calls.push('after-commit');
+      pending.push(fn);
+    }),
+    commit() {
+      for (const fn of pending.splice(0)) fn();
+    },
     recallLine: vi.fn(() => {
       calls.push('recall');
       return recalled;
@@ -218,12 +226,15 @@ describe('gradeAnswer: 詰将棋', () => {
     expect(deps.forgetLine).not.toHaveBeenCalled();
   });
 
-  it('詰み上がりは done（答えを載せる）。記録してから手順を忘れる', async () => {
+  it('詰み上がりは done（答えを載せる）。記録し、手順はコミットの後に忘れる', async () => {
     const { deps, calls } = makeDeps();
     const res = await gradeAnswer({ ...MATE, answerPv: ['8h3c'] }, { line: ['8h3c'] }, deps);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ status: 'done', verdict: 'correct', lossCp: null, plies: 1, answerPlies: 1 });
-    expect(calls).toEqual(['recall', 'record', 'forget']);
+    // 🔒 コミット前には忘れない（記録が戻ったときに記憶だけが消えないように）
+    expect(calls).toEqual(['recall', 'record', 'after-commit']);
+    deps.commit();
+    expect(calls).toEqual(['recall', 'record', 'after-commit', 'forget']);
   });
 
   it('覚えた別解の手順でも受ける', async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalyzeHooks, KifuOutcome } from './runner';
 import {
+  anySignal,
   COOLDOWN_MS,
   createScheduler,
   pendingStatusKind,
@@ -543,5 +544,27 @@ describe('createScheduler — 取り下げた読みの依頼（runPriority の s
     stop();
     await done;
     await expect(scheduler.runPriority(async () => 1)).rejects.toBeInstanceOf(SchedulerStoppedError);
+  });
+});
+
+describe('anySignal', () => {
+  it('どちらかが中断されたら中断される・release の後は伝えない', () => {
+    const a = new AbortController();
+    const b = new AbortController();
+    const first = anySignal(a.signal, b.signal);
+    b.abort();
+    expect(first.signal.aborted).toBe(true);
+
+    const c = new AbortController();
+    a.abort();
+    // 中断済みの signal を合わせたら、はじめから中断されている
+    expect(anySignal(a.signal, c.signal).signal.aborted).toBe(true);
+
+    const d = new AbortController();
+    const e = new AbortController();
+    const third = anySignal(d.signal, e.signal);
+    third.release();
+    d.abort();
+    expect(third.signal.aborted).toBe(false);
   });
 });

@@ -99,6 +99,28 @@ export class PriorityAbortedError extends Error {
   }
 }
 
+/**
+ * どちらかが中断されたら中断される signal（`AbortSignal.any` 相当）。`release` で聞き手を外す。
+ * ⚠ `AbortSignal.any` を持たないブラウザ（Safari 17.4 より前）もあるので、自前で合わせる
+ */
+export function anySignal(a: AbortSignal, b: AbortSignal): { signal: AbortSignal; release(): void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (a.aborted || b.aborted) {
+    controller.abort();
+    return { signal: controller.signal, release: () => {} };
+  }
+  a.addEventListener('abort', onAbort);
+  b.addEventListener('abort', onAbort);
+  return {
+    signal: controller.signal,
+    release: () => {
+      a.removeEventListener('abort', onAbort);
+      b.removeEventListener('abort', onAbort);
+    },
+  };
+}
+
 /** 解析が一区切りした棋譜を、次に試すまで空ける時間 */
 export const COOLDOWN_MS = {
   /** 完了。画面のデータが古いまま同じ棋譜を指し続けても、開始の口を叩き続けない */
@@ -219,13 +241,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue;
       }
       // ロックを待つ間の取り下げも受ける（常駐の停止と合わせる）
-      const lockSignal = task.signal ? AbortSignal.any([signal, task.signal]) : signal;
+      const lock = task.signal ? anySignal(signal, task.signal) : { signal, release: () => {} };
       try {
-        await deps.withPriorityLock(lockSignal, () => task.run());
+        await deps.withPriorityLock(lock.signal, () => task.run());
       } catch {
         // ロックを待つ間の中断。常駐の停止なら止まったと、取り下げなら取り下げと返す
         if (!signal.aborted && task.signal?.aborted) task.abort();
         else task.cancel();
+      } finally {
+        lock.release();
       }
     }
   };

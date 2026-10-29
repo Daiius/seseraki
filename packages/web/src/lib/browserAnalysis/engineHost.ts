@@ -219,6 +219,28 @@ export function analysisThreads(
 }
 
 /**
+ * エンジンのスレッド数（prd/14 §5.5・§5.10・prd/13 §5.5）。作るとき（{@link engineOptions}）と、動いているエンジンの
+ * 数を合わせるとき（`setThreads`）で同じ決め方をする。
+ *
+ * - `fixed` があればその数（詰将棋の判定の固定のスレッド数。server の上限と論理コア数では絞らない——server が決めた数をそのまま使う）
+ * - 無ければ負荷の設定で決まる数（{@link analysisThreads}）。上限は `cap`（段ごとの上限。full は 4）と、
+ *   エンジンを作ったときの `maxThreads` の小さいほう。`cap` が無ければ作ったときの段の上限（`stageMaxThreadsOf`）
+ */
+export function threadsFor(params: {
+  fixed?: number | null;
+  cap?: number;
+  createdSettings: Pick<ServerAnalysisSettings, 'maxThreads' | 'stageMaxThreads'>;
+  hardwareConcurrency: number | undefined;
+  load: AnalysisLoad;
+}): number {
+  const { fixed, cap, createdSettings, hardwareConcurrency, load } = params;
+  if (fixed !== undefined && fixed !== null) return fixed;
+  const limit =
+    cap === undefined ? stageMaxThreadsOf(createdSettings) : Math.min(cap, createdSettings.maxThreads);
+  return analysisThreads(hardwareConcurrency, limit, load);
+}
+
+/**
  * エンジンのオプション（prd/14 §5.5）。
  *
  * - 評価関数は仮想 FS の `/eval/nn.bin`・`/eval/progress.bin` に置いてある（ホスト）ので、`EvalDir /eval` / `EvalFile nn.bin`。
@@ -226,9 +248,8 @@ export function analysisThreads(
  *   `.` だと見つからず `isready` で黙って終了する（絶対パスはそのまま使われる）
  * - `FV_SCALE` は選んだエントリの値（16。手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない。
  *   作者の推奨 24 を書いた `eval_options.txt` は置いていないので、setoption の値が効く）
- * - スレッド数は負荷の設定で決まる（{@link analysisThreads}。上限はその段の上限 `stageMaxThreadsOf`——full は 4。prd/14 §5.5）。
- *   `threads` を渡せばその数（詰将棋の判定の固定のスレッド数。
- *   prd/13 §5.5。server の上限と論理コア数では絞らない——server が決めた数をそのまま使う）
+ * - スレッド数は {@link threadsFor}（負荷の設定で決まる数。上限はその段の上限——full は 4。prd/14 §5.5）。
+ *   `fixedThreads` を渡せばその数（詰将棋の判定の固定のスレッド数。prd/13 §5.5）
  * - 定跡は使わない（`BookFile no_book`）
  * - `ConsiderationMode true` は手元 worker と同じ（探索を打ち切ったときの読み筋を置換表から延ばす）
  */
@@ -239,10 +260,16 @@ export function engineOptions(
   load: AnalysisLoad,
   fixedThreads?: number,
 ): EngineOptions {
-  const threads =
-    fixedThreads !== undefined && Number.isInteger(fixedThreads) && fixedThreads >= 1
-      ? fixedThreads
-      : analysisThreads(hardwareConcurrency, stageMaxThreadsOf(settings), load);
+  const threads = threadsFor({
+    // 数として使えない値は負荷の設定で決める
+    fixed:
+      fixedThreads !== undefined && Number.isInteger(fixedThreads) && fixedThreads >= 1
+        ? fixedThreads
+        : null,
+    createdSettings: settings,
+    hardwareConcurrency,
+    load,
+  });
   const hashMb = Math.max(1, Math.floor(settings.hashMb));
   return {
     threads,

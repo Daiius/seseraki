@@ -10,6 +10,7 @@ import {
   analysisThreads,
   engineOptions,
   initRequest,
+  threadsFor,
   type HostRequest,
   type HostWorkerLike,
 } from './engineHost';
@@ -193,6 +194,30 @@ describe('analysisThreads（負荷の設定。prd/14 §5.10）', () => {
     expect(analysisThreads(0, 8, 'max')).toBe(1);
     expect(analysisThreads(Number.NaN, 8, 'max')).toBe(1);
     expect(analysisThreads(undefined, 8, 'gentle')).toBe(1);
+  });
+});
+
+describe('threadsFor（作るとき・合わせるときのスレッド数）', () => {
+  const created = { maxThreads: 8, stageMaxThreads: 4 };
+  const base = { createdSettings: created, hardwareConcurrency: 16, load: 'max' as const };
+
+  it('固定のスレッド数があればその数（段の上限・負荷・論理コア数によらない）', () => {
+    expect(threadsFor({ ...base, fixed: 2 })).toBe(2);
+    expect(threadsFor({ ...base, fixed: 2, cap: 8, load: 'gentle' })).toBe(2);
+  });
+
+  it('無ければ負荷の設定の数。上限は段の上限（cap）と、作ったときの maxThreads の小さいほう', () => {
+    expect(threadsFor({ ...base, fixed: null, cap: 4 })).toBe(4);
+    expect(threadsFor({ ...base, fixed: null, cap: 8 })).toBe(8);
+    expect(threadsFor({ ...base, fixed: null, cap: 16 })).toBe(8);
+    expect(threadsFor({ ...base, fixed: null, cap: 4, load: 'gentle' })).toBe(2);
+    expect(threadsFor({ ...base, fixed: null, cap: 8, hardwareConcurrency: 2 })).toBe(2);
+  });
+
+  it('cap が無ければ作ったときの段の上限（無ければ maxThreads）', () => {
+    expect(threadsFor({ ...base })).toBe(4);
+    expect(threadsFor({ ...base, createdSettings: { maxThreads: 8 } })).toBe(8);
+    expect(threadsFor({ ...base, createdSettings: { maxThreads: 8 }, load: 'gentle' })).toBe(4);
   });
 });
 

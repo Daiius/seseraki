@@ -17,7 +17,7 @@ const USI_DEFAULT_MULTI_PV = '1';
  *
  * 🔴 **局面評価は MultiPV を自分で設定してから探索する**（prd/12 §2.2）。全局面解析は MultiPV 1 で回るので、
  * エンジンの設定に乗るだけでは候補手が 1 本になる。戻すので、割り込まれた全局面解析の候補手数は変わらない
- * （手元 worker の `position-eval.ts` の `withMultiPv` と同じ考え方）。
+ * 手元 worker の局面評価（`position-eval.ts`）とブラウザで共用。
  * 元の値はエンジンが覚えている値（`getOption` が無い・覚えていなければ USI の既定の 1）。同じ値なら `setoption` を送らない。
  */
 export async function withMultiPv<T>(

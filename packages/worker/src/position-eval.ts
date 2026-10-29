@@ -18,16 +18,16 @@
 import {
   extractMultiPvResults,
   namedEvaluationOf,
+  searchmovesGoCommand,
+  sfenPositionCommand,
   withAllLegalMoves,
+  withMultiPv,
   type UsiCandidate,
 } from "shared";
 import type { UsiEngine } from "./usi/engine.js";
 
 /** `evaluateJob` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る） */
 export type EvalEngine = Pick<UsiEngine, "analyze" | "setOption" | "getOption">;
-
-/** USI の MultiPV 既定値。`setOption` を送っていないエンジンはこの値で動いている */
-const USI_DEFAULT_MULTI_PV = "1";
 
 /** 局面評価の既定の候補手数（prd/12 §2.2） */
 export const DEFAULT_EVAL_MULTI_PV = 3;
@@ -89,43 +89,9 @@ export interface DrainOptions {
 }
 
 /**
- * MultiPV を一時的に `multiPv` にして `run` を実行し、**終わったら元の値へ戻す**。
- * 元の値はエンジンが覚えている（`setOption` を送っていなければ USI 既定の 1）。
- * 既に同じ値なら `setoption` を 1 度も送らない——棋譜解析の割り込み（既に 3）で
- * 余計なコマンドを挟まないため。
- */
-async function withMultiPv<T>(
-  engine: EvalEngine,
-  multiPv: number,
-  run: () => Promise<T>,
-): Promise<T> {
-  const desired = String(multiPv);
-  const previous = engine.getOption("MultiPV") ?? USI_DEFAULT_MULTI_PV;
-  if (previous === desired) return run();
-
-  engine.setOption("MultiPV", desired);
-  try {
-    return await run();
-  } finally {
-    engine.setOption("MultiPV", previous);
-  }
-}
-
-/**
- * 局面キー（3 フィールド）を USI の `position` コマンドにする。
- * USI は手数を含む 4 フィールドを要求するので、無ければ 1 を補う
- * （検討局面は棋譜から切り離された「その形」でしかなく、探索は手数に依存しない）。
- */
-function positionCommand(sfen: string): string {
-  const fields = sfen.trim().split(/\s+/);
-  const withPly = fields.length >= 4 ? sfen.trim() : `${sfen.trim()} 1`;
-  return `position sfen ${withPly}`;
-}
-
-/**
  * 評価ジョブを 1 件処理する。
  *
- * - 局面評価: `go`（MultiPV を `multiPv` にしてから探索し、終わったら戻す）→ 候補手とスコア
+ * - 局面評価: `go`（MultiPV を `multiPv` にしてから探索し、終わったら戻す。shared の `withMultiPv`）→ 候補手とスコア
  * - 名指し評価: `go … searchmoves <手>` → **その手の**スコアと読み筋（相手の咎め筋）。
  *   その手 1 本しか返さないので MultiPV は触らない。結果の解釈はブラウザの採点と同じ shared の `namedEvaluationOf`
  *
@@ -138,7 +104,8 @@ export async function evaluateJob(
   goCommand: string,
   multiPv: number = DEFAULT_EVAL_MULTI_PV,
 ): Promise<PositionEvalOutcome> {
-  const position = positionCommand(job.sfen);
+  // 局面キー（3 フィールド）なら手数 1 を補う
+  const position = sfenPositionCommand(job.sfen);
 
   if (job.move === null) {
     const result = await withMultiPv(engine, multiPv, () =>
@@ -152,7 +119,7 @@ export async function evaluateJob(
   // `searchmoves` に渡しても通常の探索に落ちる。shared の `withAllLegalMoves`。prd/12 §2.2）。棋譜解析の探索には効かせない
   const move = job.move;
   const result = await withAllLegalMoves(engine, () =>
-    engine.analyze(position, `${goCommand} searchmoves ${move}`),
+    engine.analyze(position, searchmovesGoCommand(goCommand, move)),
   );
   const named = namedEvaluationOf(result, move);
   if (named.kind === "mismatch") {

@@ -136,6 +136,20 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
+- **版の確かめ方**（2026-10-30）: 本番の web と server がどのコミットから作られたかを、外から確かめられるようにする。
+  値はどちらも `{ commit, builtAt, dirty }`（SHA は 40 桁・日時は ISO 8601 の UTC・`dirty` は追跡しているファイルに
+  未コミットの変更がある状態でビルドしたか）。分からない値は `unknown` にし、ビルドは止めない。
+  - **web**: ビルドのときに Vite のプラグイン（`packages/web/build-version`）が git から取り、`dist/version.json` と
+    アプリ内（`__BUILD_VERSION__`）に埋め込む。git が無い・失敗したら `unknown`。dev は `/version.json` を同じ形で返す。
+    `version.json` は名前が固定のトップレベルのファイルなので、`deploy:web` が `index.html` と一緒に送る（世代管理には載らない）。
+    `deploy:web` は `version.json` が無ければ止まり、送る版を計画と一緒に表示する。
+    ⚠ **配信の側で `version.json` は `index.html` と同じく no-cache にする**（キャッシュされると古い版が見える）。
+  - **server**: `GET /api/version`（認証なし・DB に触れない）。値はイメージのビルド引数を `Dockerfile.prod` の最終ステージで
+    `ENV` に入れたもの（`.dockerignore` が `.git` を除くので、イメージの中では git から取れない）。
+    **server のイメージは `--build-arg GIT_COMMIT=$(git rev-parse HEAD)` などを付けてビルドする**
+    （ほかに `BUILD_TIME`（`date -u +%Y-%m-%dT%H:%M:%SZ`）・`GIT_DIRTY`（`true` / `false`））。付けなければ `unknown`。
+    dev の Dockerfile と compose は渡さない（`unknown`）。
+  - 設定ページの隅に、web と server の版（短い SHA・ビルド日時。dirty なら `*`）を小さく出す。
 - **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドと web への同梱は実装済み・本番の配信の設定も済み（2026-10-15）**。[14](./14-multi-user.md) §5.5）:
   - エンジン（WASM）は `packages/engine-wasm` でビルドする（`pnpm engine:build`。`packages/engine-wasm/dist/engine/` に
     配信物の形で揃う）。**成果物はコミットせず**、ビルドして配信先へ置く。

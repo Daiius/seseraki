@@ -6,5 +6,5 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "engine-plugin"]
+  "include": ["src", "engine-plugin", "build-version"]
 }

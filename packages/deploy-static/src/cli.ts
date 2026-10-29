@@ -7,13 +7,20 @@
 //
 // パスフレーズの入力を 1 回で済ませるため ssh の ControlMaster を使い、終了時（失敗・中断でも）に閉じる。
 
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deploy, StepFailedError } from './deploy.js';
 import { closeMasterArgv, normalizeConfig, type DeployConfig } from './plan.js';
 import { runQuietly, spawnRunner } from './runner.js';
+import { describeBuildVersion } from './version.js';
 
 const USAGE = `usage: tsx src/cli.ts [--apply]
   既定は dry-run（計画の表示のみ）。--apply で実際に書き込む。
@@ -29,6 +36,10 @@ function requireEnv(name: string): string {
 function listLocalAssets(distDir: string): string[] {
   if (!existsSync(join(distDir, 'index.html'))) {
     throw new Error(`${distDir}/index.html が無い。先に web をビルドする`);
+  }
+  // 版（prd/02 §5）。web のビルドが必ず出すので、無ければ古いビルドの取り違えを疑う
+  if (!existsSync(join(distDir, 'version.json'))) {
+    throw new Error(`${distDir}/version.json が無い。先に web をビルドし直す`);
   }
   const entries = readdirSync(join(distDir, 'assets'), { withFileTypes: true });
   const dirs = entries.filter((e) => !e.isFile());
@@ -54,6 +65,10 @@ async function main(argv: string[]): Promise<number> {
   const defaultDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
   const distDir = resolve(process.env.DEPLOY_STATIC_DIST || defaultDist);
   const localAssets = listLocalAssets(distDir);
+  // 一時ディレクトリを作る前に読む（読めずに投げても後片付けが要らないように）
+  const versionLine = describeBuildVersion(
+    readFileSync(join(distDir, 'version.json'), 'utf8'),
+  );
 
   const checked = normalizeConfig({
     host: requireEnv('DEPLOY_STATIC_HOST'),
@@ -85,6 +100,7 @@ async function main(argv: string[]): Promise<number> {
   console.log(
     `${apply ? 'apply' : 'dry-run'}: ${distDir} → ${cfg.host}:${cfg.root}`,
   );
+  console.log(versionLine);
   try {
     await deploy({
       cfg,

@@ -43,6 +43,7 @@ import {
   switchAnalysisAssignee,
 } from './analysis-report.js';
 import { originRequired } from './middlewares.js';
+import { buildVersionFromEnv } from './build-version.js';
 import {
   EvaluationQueueFullError,
   getEvaluationResult,
@@ -269,7 +270,13 @@ async function answerWithEngine(input: ResolveInput, reveal: Record<string, unkn
       return { body: { ...answer, ...reveal }, status: 200 as const };
   }
 }
+/** この server のビルドの版（prd/02 §5）。イメージの ENV は起動後に変わらないので、読み込み時に 1 回だけ読む */
+const buildVersion = buildVersionFromEnv(process.env);
+
 const route = app
+  // --- 版（prd/02 §5「版の確かめ方」）---
+  // 本番の server がどのコミットから作られたかを外から確かめる口。認証は要らない（SHA とビルド日時だけ・DB に触れない）
+  .get('/version', (c) => c.json(buildVersion))
   // --- 認証 ---
   // ログイン中の自分（prd/07 §5.3）。未ログインは 401・所有者以外は 403（所有者ゲート。§5.1）。
   // web のルートガードがこれを叩く。⚠ /auth/* の外に置く（/auth/* は Better Auth が丸ごと受ける）。

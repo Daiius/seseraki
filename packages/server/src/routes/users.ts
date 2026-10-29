@@ -51,6 +51,7 @@ export const userRoutes = new Hono()
   // 🔒 名前候補を変えたら、**同じトランザクションで主体側を引き直す**（prd/11 §4.2）。
   // 手動の再導出に頼ると、変えた直後に画面の数字が古いまま残り、
   // しかも間違っていることが画面から分からない。
+  // 応答の `rederived` は主体側が変わった棋譜の数（`rebuildSubjectSides`）。
   .get('/users/me', sessionRequired, async (c) =>
     c.json(await selfProfile(c.get('tx'), c.get('userId'))),
   )

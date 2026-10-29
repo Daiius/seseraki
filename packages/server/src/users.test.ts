@@ -5,8 +5,10 @@ import {
   localDay,
   overlaps,
   subjectSideFromNames,
+  subjectSideChanges,
   subjectSideFromVideo,
   type Alias,
+  type SubjectRow,
 } from './users';
 
 const alias = (name: string, from?: string, to?: string): Alias => ({
@@ -188,5 +190,39 @@ describe('overlaps', () => {
     expect(
       overlaps(alias('a', undefined, '2026-07-01'), alias('b', '2026-07-01')),
     ).toBe(true);
+  });
+});
+
+describe('subjectSideChanges（名前候補を変えたときに書き直す局）', () => {
+  const row = (id: number, sente: string, gote: string, current: SubjectRow['current']) => ({
+    id,
+    source: 'manual' as const,
+    sente,
+    gote,
+    playedAt: null,
+    sourceTz: null,
+    bottomIsSente: null,
+    current,
+  });
+
+  it('主体側が変わる局だけを ID の順に返す（変わらない局は書かない）', () => {
+    const rows = [
+      row(30, 'me', 'x', null), // null → sente
+      row(10, 'x', 'me', 'gote'), // 変わらない
+      row(20, 'x', 'y', 'sente'), // sente → null
+    ];
+    expect(subjectSideChanges(rows, [alias('me')])).toEqual([
+      { id: 20, side: null },
+      { id: 30, side: 'sente' },
+    ]);
+  });
+
+  it('動画解析の局は名前候補によらない', () => {
+    const video = { ...row(1, 'me', 'x', 'gote'), source: 'video' as const, bottomIsSente: false };
+    expect(subjectSideChanges([video], [alias('me')])).toEqual([]);
+  });
+
+  it('局が無ければ空', () => {
+    expect(subjectSideChanges([], [alias('me')])).toEqual([]);
   });
 });

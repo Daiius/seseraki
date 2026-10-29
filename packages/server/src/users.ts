@@ -149,26 +149,56 @@ export function computeSubjectSide(
   );
 }
 
+/** 導出に要る値の列（1 局ぶんでも所有者の全局でも同じ形で読む） */
+const subjectInputColumns = {
+  source: kifus.source,
+  sente: kifus.sente,
+  gote: kifus.gote,
+  playedAt: kifus.playedAt,
+  sourceTz: kifus.sourceTz,
+  bottomIsSente: videoKifuSources.bottomIsSente,
+  // 出題の追随に使う（下記 replaceSubjectSide）。導出そのものには使わない
+  current: kifus.subjectSide,
+};
+
 /** 導出に要る値を 1 局ぶん読む */
 export async function subjectInputOf(
   tx: Tx | Db,
   kifuId: number,
 ): Promise<SubjectRow | null> {
   const [row] = await tx
-    .select({
-      source: kifus.source,
-      sente: kifus.sente,
-      gote: kifus.gote,
-      playedAt: kifus.playedAt,
-      sourceTz: kifus.sourceTz,
-      bottomIsSente: videoKifuSources.bottomIsSente,
-      // 出題の追随に使う（下記 replaceSubjectSide）。導出そのものには使わない
-      current: kifus.subjectSide,
-    })
+    .select(subjectInputColumns)
     .from(kifus)
     .leftJoin(videoKifuSources, eq(videoKifuSources.kifuId, kifus.id))
     .where(eq(kifus.id, kifuId));
   return row ?? null;
+}
+
+/**
+ * 主体側が変わる局だけを、棋譜の ID の順に返す（**書き込まない純関数**）。
+ * 名前候補を変えたときに、変わった局だけを書き直すため（{@link rebuildSubjectSides}）
+ */
+export function subjectSideChanges(
+  rows: (SubjectRow & { id: number })[],
+  aliases: Alias[],
+): { id: number; side: SubjectSide | null }[] {
+  return rows
+    .map((row) => ({ id: row.id, side: computeSubjectSide(row, aliases), current: row.current }))
+    .filter(({ side, current }) => side !== current)
+    .sort((a, b) => a.id - b.id)
+    .map(({ id, side }) => ({ id, side }));
+}
+
+/**
+ * 主体側を書き込み、出題を引き直す。
+ * 🔴 **主体側が変わったら出題も引き直す**（レビュー `OCL-20A343B8`）。出題は
+ * 「自分の手番の局面」だけを拾う（prd/13 §4.1）ので、名前候補をいじって主体側が
+ * 動くと**相手側の局面が問題として残る**。主体側が null になった棋譜の問題も消える。
+ * 🔒 **変わったときだけ呼ぶ**——毎回呼ぶと解析結果の読み直しが棋譜数ぶん走る
+ */
+async function writeSubjectSide(tx: Tx, kifuId: number, side: SubjectSide | null): Promise<void> {
+  await tx.update(kifus).set({ subjectSide: side }).where(eq(kifus.id, kifuId));
+  await syncDrills(tx, kifuId, drillConfigFromEnv());
 }
 
 /**
@@ -184,14 +214,7 @@ export async function replaceSubjectSide(
   const row = await subjectInputOf(tx, kifuId);
   if (!row) return null;
   const side = computeSubjectSide(row, aliases);
-  if (side === row.current) return side;
-  await tx.update(kifus).set({ subjectSide: side }).where(eq(kifus.id, kifuId));
-  // 🔴 **主体側が変わったら出題も引き直す**（レビュー `OCL-20A343B8`）。出題は
-  // 「自分の手番の局面」だけを拾う（prd/13 §4.1）ので、名前候補をいじって主体側が
-  // 動くと**相手側の局面が問題として残る**。主体側が null になった棋譜の問題も消える。
-  // 🔒 **変わったときだけ呼ぶ**——名前候補の変更は所有者の全棋譜を舐めるため、
-  // 毎回呼ぶと解析結果の読み直しが棋譜数ぶん走る
-  await syncDrills(tx, kifuId, drillConfigFromEnv());
+  if (side !== row.current) await writeSubjectSide(tx, kifuId, side);
   return side;
 }
 
@@ -219,18 +242,23 @@ export async function refreshSubjectSide(
  * 🔒 **名前候補を変えたら同じトランザクションで呼ぶ。** 手動の再導出に頼ると、
  * 変えた直後に画面の数字が古いまま残り、**間違っていることが画面から分からない**。
  *
- * @returns 更新した棋譜数
+ * 導出の材料は所有者の全局ぶんを 1 回で読み、**主体側が変わる局だけ**を ID の順に書き直して出題を引き直す
+ * （ID の順にするのは、行ロックを取る順を一定にするため）。
+ *
+ * @returns 主体側が変わった棋譜数
  */
 export async function rebuildSubjectSides(tx: Tx, userId: string): Promise<number> {
   const aliases = await aliasesOf(tx, userId);
   const rows = await tx
-    .select({ id: kifus.id })
+    .select({ id: kifus.id, ...subjectInputColumns })
     .from(kifus)
+    .leftJoin(videoKifuSources, eq(videoKifuSources.kifuId, kifus.id))
     .where(eq(kifus.ownerId, userId));
-  for (const { id } of rows) {
-    await replaceSubjectSide(tx, id, aliases);
+  const changes = subjectSideChanges(rows, aliases);
+  for (const { id, side } of changes) {
+    await writeSubjectSide(tx, id, side);
   }
-  return rows.length;
+  return changes.length;
 }
 
 /**

@@ -17,9 +17,9 @@
  */
 import {
   extractMultiPvResults,
+  namedEvaluationOf,
   withAllLegalMoves,
   type UsiCandidate,
-  type UsiScore,
 } from "shared";
 import type { UsiEngine } from "./usi/engine.js";
 
@@ -43,9 +43,10 @@ export interface PositionEvalJob {
 
 export interface PositionEvalResult {
   candidates: UsiCandidate[];
-  /** `searchmoves` ではなく符号反転のフォールバックで求めたか（prd/12 §2.2） */
-  fallback: boolean;
 }
+
+/** 評価ジョブ 1 件の結果。`error` は**そのジョブの失敗**（名指しが効かなかった）で、エンジンは正常 */
+export type PositionEvalOutcome = PositionEvalResult | { error: string };
 
 /** server とのやり取り（テストではスタブを渡す） */
 export interface PositionJobSource {
@@ -54,7 +55,7 @@ export interface PositionJobSource {
   /** 結果 or 失敗を報告する。**失敗も完了**（要求側が取りに来る結果になる） */
   report(
     id: string,
-    report: PositionEvalResult | { error: string },
+    report: PositionEvalOutcome,
   ): Promise<void>;
 }
 
@@ -111,51 +112,32 @@ async function withMultiPv<T>(
 }
 
 /**
- * やねうら王が `go searchmoves` を解釈したか。
- *
- * ⚠ **実機で確かめるまで分からない**ので、まず送ってみて**指した手が名指しした手か**で判定する
- * （無視するエンジンは自分の最善手を返す）。一度「非対応」と分かったら以降は
- * フォールバックへ直行する（毎回 1 回ぶん無駄に探索しない）。
- * プロセスの生存期間だけ覚える揮発的な判定で、再起動すればまた試す。
- */
-let searchmovesSupported: boolean | null = null;
-
-/** テスト用。`searchmoves` 対応の判定を忘れる */
-export function resetSearchmovesSupport(): void {
-  searchmovesSupported = null;
-}
-
-/** 手番から見た評価値の符号を反転する（相手番の局面の値を自分の値に読み替える） */
-function negate(score: UsiScore): UsiScore {
-  return { type: score.type, value: -score.value };
-}
-
-/**
  * 局面キー（3 フィールド）を USI の `position` コマンドにする。
  * USI は手数を含む 4 フィールドを要求するので、無ければ 1 を補う
  * （検討局面は棋譜から切り離された「その形」でしかなく、探索は手数に依存しない）。
  */
-function positionCommand(sfen: string, moves: string[] = []): string {
+function positionCommand(sfen: string): string {
   const fields = sfen.trim().split(/\s+/);
   const withPly = fields.length >= 4 ? sfen.trim() : `${sfen.trim()} 1`;
-  const suffix = moves.length > 0 ? ` moves ${moves.join(" ")}` : "";
-  return `position sfen ${withPly}${suffix}`;
+  return `position sfen ${withPly}`;
 }
 
 /**
  * 評価ジョブを 1 件処理する。
  *
  * - 局面評価: `go`（MultiPV を `multiPv` にしてから探索し、終わったら戻す）→ 候補手とスコア
- * - 名指し評価: `go searchmoves <手>` → **その手の**スコアと読み筋（相手の咎め筋）
- *   非対応なら「手を適用した局面を評価して符号反転」のフォールバックで**同じ契約**を守る。
- *   どちらも**その手 1 本**しか返さないので MultiPV は触らない
+ * - 名指し評価: `go … searchmoves <手>` → **その手の**スコアと読み筋（相手の咎め筋）。
+ *   その手 1 本しか返さないので MultiPV は触らない。結果の解釈はブラウザの採点と同じ shared の `namedEvaluationOf`
+ *
+ * 🔒 名指しした手と違う手が返った（`searchmoves` が効かなかった）ら、**そのジョブの失敗**（`{ error }`）として返す。
+ * 数字は作らない。エンジンは正常なので投げない（再起動しない）。次のジョブもまた `searchmoves` で読む
  */
 export async function evaluateJob(
   engine: EvalEngine,
   job: PositionEvalJob,
   goCommand: string,
   multiPv: number = DEFAULT_EVAL_MULTI_PV,
-): Promise<PositionEvalResult> {
+): Promise<PositionEvalOutcome> {
   const position = positionCommand(job.sfen);
 
   if (job.move === null) {
@@ -163,68 +145,36 @@ export async function evaluateJob(
       engine.analyze(position, goCommand),
     );
     // 定跡の列挙が MultiPV を超えて候補を出すので、要求した本数に切り詰める（issue #67）
-    return { candidates: extractMultiPvResults(result.infoLines, { multiPv }), fallback: false };
+    return { candidates: extractMultiPvResults(result.infoLines, { multiPv }) };
   }
 
   // 🔴 名指しの間だけ GenerateAllLegalMoves を有効にする（やねうら王は既定で歩・角・飛の不成を合法手に含めず、
   // `searchmoves` に渡しても通常の探索に落ちる。shared の `withAllLegalMoves`。prd/12 §2.2）。棋譜解析の探索には効かせない
   const move = job.move;
-  return withAllLegalMoves(engine, () => evaluateNamedMove(engine, job.sfen, move, goCommand));
-}
-
-/** 名指し評価（`searchmoves`、効かなければ符号反転のフォールバック） */
-async function evaluateNamedMove(
-  engine: EvalEngine,
-  sfen: string,
-  move: string,
-  goCommand: string,
-): Promise<PositionEvalResult> {
-  const job = { sfen, move };
-  const position = positionCommand(sfen);
-  if (searchmovesSupported !== false) {
-    const result = await engine.analyze(
-      position,
-      `${goCommand} searchmoves ${job.move}`,
-    );
-    const candidates = extractMultiPvResults(result.infoLines);
-    const named = candidates.find((c) => c.move === job.move);
-    if (named) {
-      searchmovesSupported = true;
-      return { candidates: [{ ...named, rank: 1 }], fallback: false };
-    }
-    // 名指ししていない手が返った = searchmoves が無視された
-    console.warn(
-      `[PositionEval] searchmoves が効いていないためフォールバックします（要求 ${job.move} / 応答 ${candidates[0]?.move ?? "なし"}）`,
-    );
-    searchmovesSupported = false;
-  }
-
-  // フォールバック: 手を適用した局面（＝相手番）を評価し、符号を反転して自分視点に戻す。
-  // 読み筋の先頭に名指しした手を足すと、`searchmoves` と同じ形（自分の手 → 咎め筋）になる
-  const result = await engine.analyze(
-    positionCommand(job.sfen, [job.move]),
-    goCommand,
+  const result = await withAllLegalMoves(engine, () =>
+    engine.analyze(position, `${goCommand} searchmoves ${move}`),
   );
-  const [best] = extractMultiPvResults(result.infoLines);
-  if (!best) {
-    // 相手に指す手が無い（詰み/入玉図など）ときは候補が空になる。
-    // 数字を捏造せず、候補なしとして返す（server はそのまま結果として保持する）
-    return { candidates: [], fallback: true };
+  const named = namedEvaluationOf(result, move);
+  if (named.kind === "mismatch") {
+    const returned = named.returned || "none";
+    console.warn(`[PositionEval] Named move was not searched (requested ${move}, returned ${returned})`);
+    return { error: `Named move was not searched (requested ${move}, returned ${returned})` };
   }
+  const { candidate } = named;
+  // 評価を出さずにその手を指した（候補なし）。数字を作らず、候補なしとして返す
+  if (candidate === null) return { candidates: [] };
   return {
     candidates: [
       {
         rank: 1,
-        move: job.move,
-        score: negate(best.score),
-        pv: [job.move, ...best.pv],
-        depth: best.depth,
+        move,
+        score: { type: candidate.scoreType, value: candidate.scoreValue },
+        pv: candidate.pv,
+        depth: candidate.depth,
       },
     ],
-    fallback: true,
   };
 }
-
 /**
  * 待っている評価ジョブを処理しきる（**棋譜解析の局面境界で呼ぶ**）。
  *
@@ -256,7 +206,7 @@ export async function drainEvaluationJobs(
     }
     if (!job) return processed;
 
-    let result: PositionEvalResult;
+    let result: PositionEvalOutcome;
     try {
       result = await evaluateJob(engine, job, goCommand, DEFAULT_EVAL_MULTI_PV);
     } catch (err) {

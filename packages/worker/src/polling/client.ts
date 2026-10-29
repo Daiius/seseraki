@@ -6,7 +6,7 @@ import {
   toReportCandidates,
   type UsiMoveAnalysis,
 } from "shared";
-import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
+import type { PositionEvalJob, PositionEvalOutcome } from "../position-eval.js";
 
 /** 解析の段階（prd/05 §1.1d）。server の `AnalysisProfile` と同じ 2 値 */
 export type AnalysisProfile = "quick" | "full";
@@ -128,13 +128,13 @@ export function createClient(baseUrl: string, apiKey: string) {
      */
     async reportPositionResult(
       id: string,
-      report: PositionEvalResult | { error: string },
+      report: PositionEvalOutcome,
     ) {
       const json =
         "error" in report
           ? { error: report.error }
           : {
-              fallback: report.fallback,
+              // 🔒 `fallback`（符号反転で求めた値）は送らない（server の既定 false）。worker は `searchmoves` でしか読まない
               candidates: report.candidates.map((c) => ({
                 rank: c.rank,
                 move: c.move,

@@ -152,14 +152,19 @@ export function createEngineCache(deps: EngineCacheDeps): EngineCache {
     // 止めた後はエンジンを作らない（作ってすぐ捨てる読み込み・Worker の起動をしない）
     if (disposed) throw new Error(STOPPED_DETAIL);
     const load = deps.currentLoad();
-    const sizing =
-      options.followCurrentSizing && engine && createdSettings ? createdSettings : settings;
-    const key = engineKey(choice, sizing, load);
+    // 🔒 キーに使う大きさと、作り直すときに渡す大きさを同じものにする（レビュー OCL-20FAB760）。
+    // 大きさを今のエンジンに合わせるときは、評価関数・負荷の変更で作り直すときもその大きさで作る
+    // ——キーと実物が食い違うと、次の読みで要らない作り直しをしたり、違う大きさのエンジンを使い回したりする
+    const effective: EngineSettings =
+      options.followCurrentSizing && engine && createdSettings
+        ? { ...settings, maxThreads: createdSettings.maxThreads, hashMb: createdSettings.hashMb }
+        : settings;
+    const key = engineKey(choice, effective, load);
     if (!engine || currentKey !== key) {
       if (engine) deps.log.info(`recreating the engine (${currentKey} -> ${key})`);
       discard();
       // 作るときは求めるスレッド数で作る（起動の経路と同じ。setoption での切り替えに頼らない）
-      const created = await deps.createEngine(settings, load, choice, threads);
+      const created = await deps.createEngine(effective, load, choice, threads);
       if (disposed) {
         // 読み込んでいる間に止められた。使わずに捨てる
         created.dispose();
@@ -167,7 +172,7 @@ export function createEngineCache(deps: EngineCacheDeps): EngineCache {
       }
       engine = created;
       currentKey = key;
-      createdSettings = settings;
+      createdSettings = effective;
     }
     // 🔒 **詰将棋の判定の固定のスレッド数は、作り直さずに切り替える**（`setoption Threads` → `isready`）。
     // 上流は `setoption Threads` でその場でスレッドを作り直し（`resize_threads`）、`isready` でもう一度揃える。

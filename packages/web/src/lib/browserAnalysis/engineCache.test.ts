@@ -119,6 +119,24 @@ describe('createEngineCache', () => {
     expect(h.created).toHaveLength(3);
   });
 
+  it('🔒 followCurrentSizing で評価関数・負荷が変わって作り直すときも、今の大きさで作る（キーと実物を食い違わせない）', async () => {
+    const { h, cache } = cacheHarness();
+    const study = { maxThreads: 4, stageMaxThreads: 4, hashMb: 16 };
+    const server = { maxThreads: 8, stageMaxThreads: 4, hashMb: 128 };
+    await cache.acquire(server, MINI);
+    // 負荷が変わった後の局面評価: 作り直すが、大きさは今のエンジン（server の値）のまま
+    h.load = 'gentle';
+    const recreated = await cache.acquire(study, MINI, undefined, { followCurrentSizing: true });
+    expect(h.created).toHaveLength(2);
+    expect(h.created[1].settings).toMatchObject({ maxThreads: 8, hashMb: 128 });
+    // 次の局面評価も、続く全局面解析（server の値）も、作り直さずに使い回す
+    expect(await cache.acquire(study, MINI, undefined, { followCurrentSizing: true })).toBe(recreated);
+    expect(await cache.acquire(server, MINI)).toBe(recreated);
+    expect(h.created).toHaveLength(2);
+    // 段の上限は求めた側の値で合わせる
+    expect(h.setThreads.at(-2)).toEqual({ threads: null, cap: 4 });
+  });
+
   it('止めた後は作らずに投げ、読み込み中に止められたエンジンは捨てる', async () => {
     const { h, cache } = cacheHarness();
     const loading = cache.acquire(FULL, MINI);

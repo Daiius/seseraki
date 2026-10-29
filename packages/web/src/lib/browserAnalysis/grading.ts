@@ -40,6 +40,9 @@ export type GradingResult =
   | NamedEvalOutcome
   | { kind: 'unavailable'; reason: GradingUnavailableReason };
 
+/** 出題の採点の読みを頼んだ結果（{@link requestBrowserGrading}）。`aborted` は頼んだ側が取り下げた */
+export type GradingRequestResult = GradingResult | { kind: 'aborted' };
+
 /** 検討盤の局面評価の結果（{@link requestBrowserPositionEval}） */
 export type PositionReadingResult =
   | PositionEvalOutcome
@@ -47,8 +50,8 @@ export type PositionReadingResult =
 
 /** 常駐の解析が受け持つ読み（どちらも全局面解析より先に、同じエンジンで読む） */
 export interface BrowserReader {
-  /** 出題の採点の名指しの読み */
-  named(request: NamedEvalRequest): Promise<NamedEvalOutcome>;
+  /** 出題の採点の名指しの読み。`signal` が中断されたら、順番を待っている読みを取り下げる（読み始めた読みは読み終える） */
+  named(request: NamedEvalRequest, signal?: AbortSignal): Promise<NamedEvalOutcome>;
   /** 検討盤の局面評価。`signal` が中断されたら読まない・読みを打ち切る */
   position(request: PositionEvalRequest, signal: AbortSignal): Promise<PositionEvalOutcome>;
 }
@@ -106,15 +109,16 @@ export interface GradingDeps {
 /**
  * 採点の読みを頼む。受け持ち手（常駐の解析）がいればすぐ頼み、起動の途中なら {@link GRADER_WAIT_MS} まで待つ。
  * 端末の状態で頼めないとき・待っても受け持ち手が付かないときは `unavailable`。
- * 常駐が読み終える前に止まった（設定の変更で起動し直したなど）ら、もう一度受け持ち手を待って頼み直す
+ * 常駐が読み終える前に止まった（設定の変更で起動し直したなど）ら、もう一度受け持ち手を待って頼み直す。
+ * `signal` が中断されたら（解いている画面を離れた）、受け持ち手・同意・順番を待つのをやめて `aborted` を返す
  */
 export async function requestBrowserGrading(
   request: NamedEvalRequest,
   deps: GradingDeps,
-): Promise<GradingResult> {
-  const result = await requestWith((reader) => reader.named(request), deps);
-  // 取り下げの合図（signal）を渡していないので aborted は返らない（型を閉じるだけ）
-  return result.kind === 'aborted' ? { kind: 'unavailable', reason: 'off' } : result;
+  signal?: AbortSignal,
+): Promise<GradingRequestResult> {
+  if (signal?.aborted) return { kind: 'aborted' };
+  return requestWith((reader) => reader.named(request, signal), deps, signal);
 }
 
 /**

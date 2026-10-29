@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseSfen, type HandPieceKind, type SquareRef } from 'shared';
 import { client } from '../lib/honoClient';
@@ -86,6 +86,23 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
    * 答えた手は盤に残し、エンジンが使えるようになったら同じ手で判定し直す（prd/13 §7.1・2026-10-29）
    */
   const [ungradableAt, setUngradableAt] = useState<BrowserAnalysisPhase | null>(null);
+
+  /**
+   * この画面の通信・判定の取り下げ。🔴 **画面を離れたら（ホーム・戻る・元の対局・次の問題）進行中の判定を打ち切る**——
+   * 判定はポーリングやこのブラウザでの読みを含んで最長 240 秒ほど走る。離れた後に古い応答が届くと、ホームの loader が
+   * 終えた「この回」を `drillRound.record` が 1 問だけの回として作り直す（保守性レビュー）。
+   * ⚠ 作るのは effect の中（StrictMode の dev は mount → 後片付け → mount と回るので、初期値で作ると 2 回目が中断済みになる）
+   */
+  const abortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    abortRef.current = controller;
+    return () => controller.abort();
+  }, []);
+  /** 今の取り下げの合図。操作は mount の後にしか起きないので、effect が作った後に読む */
+  function screenSignal(): AbortSignal {
+    return abortRef.current!.signal;
+  }
 
   /**
    * 解いた後の大きいボタン。🔒 **次の問題も loader に選ばせる**（prd/13 §7.8）——問題の指定を落として replace で
@@ -212,7 +229,9 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     setJudging(true);
     setError(null);
     // 確定した手順だけ送る（確定前の手は捨てる）
-    const step = await requestGiveUp(drill, line, practice);
+    const step = await requestGiveUp(drill, line, practice, screenSignal());
+    // 画面を離れた。状態も「この回」の記録も触らない
+    if (step.kind === 'aborted') return;
     setJudging(false);
     if (step.kind !== 'done') {
       setError(step.text);
@@ -242,8 +261,12 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
       drill,
       { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) },
       assignee,
+      screenSignal(),
     );
     switch (outcome.kind) {
+      case 'aborted':
+        // 画面を離れた。状態も「この回」の記録（`noteRecorded`）も触らない
+        return;
       case 'fail':
         // 判定できなかった。**その手は盤から戻す**（指し直せるように）。ただしエンジンの準備（同意・ダウンロード）を
         // 待つときだけ盤に残し、準備ができたら同じ手で判定し直す（下の effect）
@@ -288,11 +311,29 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     void answer(pending, session);
   }, [ungradableAt, enginePhase, pending, session, judging]);
 
+  /**
+   * 自明だった（除外）。🔴 **応答を確かめてから次へ移る**（一覧の「除外を取り消す」と同じ形）——失敗を黙って飲んで
+   * 次の問題へ進むと、除外できていないのに除外したと読める。失敗したらその場に留まってエラーを出す
+   */
   async function exclude() {
     if (!drill) return;
-    await client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({
-      param: refParam(drill),
-    });
+    const signal = screenSignal();
+    setError(null);
+    try {
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({
+        param: refParam(drill),
+      });
+      // 待っている間に画面を離れた。離れた先から勝手に移らない
+      if (signal.aborted) return;
+      if (!res.ok) {
+        setError(`自明だった問題として記録できませんでした (${res.status})`);
+        return;
+      }
+    } catch {
+      if (signal.aborted) return;
+      setError('サーバーに接続できません');
+      return;
+    }
     onNext();
   }
 

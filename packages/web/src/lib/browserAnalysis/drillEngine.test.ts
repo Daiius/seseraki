@@ -34,4 +34,31 @@ describe('詰将棋の判定のためのエンジンの段取り（担当がサ�
     expect(await askDrillEngineConsent()).toBe(false);
     expect(getDrillEngineState()).toMatchObject({ asking: false, declined: true });
   });
+
+  it('取り下げたら待つのをやめて false。断ったことにはせず、ほかに待つ呼び出しが無ければ案内を閉じる', async () => {
+    const controller = new AbortController();
+    const asked = askDrillEngineConsent(controller.signal);
+    expect(getDrillEngineState().asking).toBe(true);
+    controller.abort();
+    expect(await asked).toBe(false);
+    expect(getDrillEngineState()).toMatchObject({ asking: false, declined: false });
+  });
+
+  it('取り下げても、ほかに待つ呼び出しがあれば案内は閉じない（その呼び出しは答えを受け取る）', async () => {
+    const controller = new AbortController();
+    const withdrawn = askDrillEngineConsent(controller.signal);
+    const other = askDrillEngineConsent();
+    controller.abort();
+    expect(await withdrawn).toBe(false);
+    expect(getDrillEngineState().asking).toBe(true);
+    answerDrillEngineConsent(true, null);
+    expect(await other).toBe(true);
+  });
+
+  it('取り下げ済みなら聞かない', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(await askDrillEngineConsent(controller.signal)).toBe(false);
+    expect(getDrillEngineState().asking).toBe(false);
+  });
 });

@@ -21,6 +21,7 @@ import {
   useBrowserAnalysisState,
 } from '../lib/browserAnalysis/store';
 import { unsupportedMessage } from '../lib/browserAnalysis/support';
+import { megabytes } from '../lib/browserAnalysis/format';
 import {
   answerDrillEngineConsent,
   askDrillEngineConsent,
@@ -256,12 +257,6 @@ function unconsentedSelection(
 ): string | null {
   const entry = engineEntryOf(manifest, settings.evalId);
   return hasConsented(settings, entry.nn.sha256) ? null : entry.nn.sha256;
-}
-
-/** バイト数を「約 8.7MB」の形にする（10MB 未満は小数 1 桁） */
-export function megabytes(bytes: number): string {
-  const mb = bytes / 1_000_000;
-  return mb < 10 ? `${mb.toFixed(1)}MB` : `${Math.round(mb)}MB`;
 }
 
 /**

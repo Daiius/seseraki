@@ -20,9 +20,11 @@ import {
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
 import { isAnalysisPending } from '../lib/analysisPending';
+import { subjectOutcomeOf } from '../lib/kifuResult';
 import { useAnalysisAssignee } from '../lib/useMe';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
-import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
+import { TacticTags, TacticLegend } from '../components/TacticTags';
+import { legendModesOf } from '../lib/tacticLegend';
 
 // 一覧の絞り込み・並べ替えの許可値・検索パラメータの解釈・条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）
 
@@ -155,13 +157,10 @@ function KifuListPage() {
   const canFilterByTacticSide = tacticSideApplies(tactic) && canFilterByOutcome;
 
   // 見出しの凡例は**このページで実際に使われている色分け**から組む。
-  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
-  const legendModes = kifus
-    .map((k) => legendModeOf(k.tactics, k.subjectSide ?? null))
-    .reduce(
-      (acc, mode) => (mode === null ? acc : { ...acc, [mode]: true }),
-      { self: false, unresolved: false },
-    );
+  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModesOf` が決める。
+  const legendModes = legendModesOf(
+    kifus.map((k) => ({ tactics: k.tactics, userSide: k.subjectSide ?? null })),
+  );
 
   return (
     <div>
@@ -383,13 +382,9 @@ function KifuListPage() {
               </thead>
               <tbody>
                 {kifus.map((kifu) => {
-                  const r = kifu.result;
                   const userSide = kifu.subjectSide ?? null;
-                  const isSente = userSide === 'sente';
-                  const isGote = userSide === 'gote';
-                  const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));
-                  const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
-                  const showResultBadge = isSente || isGote;
+                  // 主体側が決まらなければ null（バッジを出さない）
+                  const outcome = subjectOutcomeOf(kifu.result, userSide);
                   const analyzing =
                     progress && progress.kifuNo === kifu.no ? progress : null;
                   return (
@@ -415,9 +410,9 @@ function KifuListPage() {
                       </td>
                       <td>
                         <div className="flex gap-1 items-center">
-                          {showResultBadge && (
-                            won ? <span className="badge badge-soft badge-success badge-sm">勝</span>
-                            : lost ? <span className="badge badge-soft badge-error badge-sm">負</span>
+                          {outcome !== null && (
+                            outcome === 'win' ? <span className="badge badge-soft badge-success badge-sm">勝</span>
+                            : outcome === 'loss' ? <span className="badge badge-soft badge-error badge-sm">負</span>
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
                           {analyzing ? (

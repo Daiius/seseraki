@@ -12,7 +12,8 @@ import {
 } from '../lib/browserAnalysis/settings';
 import { useBrowserAnalysisState } from '../lib/browserAnalysis/store';
 import { engineAssetUrl, engineOriginOf } from '../lib/browserAnalysis/enginePaths';
-import { BrowserAnalysisNotice, megabytes } from './BrowserAnalysis';
+import { BrowserAnalysisNotice } from './BrowserAnalysis';
+import { megabytes } from '../lib/browserAnalysis/format';
 
 const ASSIGNEE_OPTIONS: { value: AnalysisAssignee; label: string; hint: string }[] = [
   {

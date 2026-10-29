@@ -23,6 +23,9 @@ export function mateLineOf(
   return classifyMateLine(state, pv, scoreValue);
 }
 
+/** 表示用の評価値の上下限（cp）。詰みはこの値に張り付く */
+export const EVAL_CLAMP = 3000;
+
 /**
  * 保存値（手番視点）を先手視点へ正規化し、±3000 にクランプする。
  * **表示用途に限る**——悪手判定（CPL）は同一局面内で最善手と実手を比べるため
@@ -30,8 +33,8 @@ export function mateLineOf(
  */
 export function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
   const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
-  if (scoreType === 'mate') return v > 0 ? 3000 : -3000;
-  return Math.max(-3000, Math.min(3000, v));
+  if (scoreType === 'mate') return v > 0 ? EVAL_CLAMP : -EVAL_CLAMP;
+  return Math.max(-EVAL_CLAMP, Math.min(EVAL_CLAMP, v));
 }
 
 const COL_MAP: Record<string, string> = {

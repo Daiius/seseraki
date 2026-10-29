@@ -37,6 +37,7 @@
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。`structuredClone` などは使わない。
  */
 import {
+  canPromote,
   PROMOTE_MAP,
   UNPROMOTE_MAP,
   withHand,
@@ -91,10 +92,9 @@ export function unpromoted(kind: PieceKind): PieceKind {
   return UNPROMOTE_MAP[kind] ?? kind;
 }
 
-/** その駒種は成れるか（金と玉は成れない） */
-export function canPromote(kind: PieceKind): boolean {
-  return PROMOTE_MAP[kind] !== undefined;
-}
+// 「成れる駒」の判定（`canPromote`）は `board.ts` にある（定義を 1 か所にする）。
+// これまでどおり盤面編集の口からも使えるよう、ここから再 export する
+export { canPromote };
 
 /** 成り状態を指定した駒種（`promote` 省略時は元のまま。成れない駒種は変わらない） */
 function withPromotion(kind: PieceKind, promote?: boolean): PieceKind {

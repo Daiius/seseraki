@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import type { BoardState, HandPieceKind, PieceKind, Side, SquareRef } from 'shared';
+import { promotionChoiceOf, type StudySelection, type StudySession } from '../lib/study';
 import { PlusIcon } from './icons';
 
 /**
@@ -22,6 +23,19 @@ export const PIECE_DISPLAY: Record<PieceKind, string> = {
 };
 
 export const HAND_ORDER: HandPieceKind[] = ['R', 'B', 'G', 'S', 'N', 'L', 'P'];
+
+/** 盤の上側・下側に座る側（反転していなければ後手が上、反転中は先手が上） */
+export function handSidesOf(flipped: boolean): { top: Side; bottom: Side } {
+  return flipped ? { top: 'sente', bottom: 'gote' } : { top: 'gote', bottom: 'sente' };
+}
+
+/**
+ * 駒を 180 度回して赤くするか。盤の駒・持ち駒・成 / 不成の選択肢のすべてがこれを使う。
+ * 🔒 **上側に座る側の駒を回す**（{@link handSidesOf} と同じ割り当てから導く）
+ */
+export function isUpsideDown(side: Side, flipped: boolean): boolean {
+  return handSidesOf(flipped).top === side;
+}
 
 const COL_LABELS = [9, 8, 7, 6, 5, 4, 3, 2, 1];
 const ROW_LABELS = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
@@ -65,7 +79,7 @@ export function HandDisplay({
   const symbol = side === 'sente' ? '☗' : '☖';
   const label = name ?? (side === 'sente' ? '先手' : '後手');
   // 盤の駒と同じ規則: 相手側（反転中は先手側）の駒を 180 度回して赤くする
-  const rotate = flipped ? side === 'sente' : side === 'gote';
+  const rotate = isUpsideDown(side, flipped);
 
   /*
     🔒 **行の高さは中身によらず 1 マスぶん**（`.shogi-hand-row`）。受け皿の「+」は
@@ -149,7 +163,7 @@ export function HandDisplay({
 }
 
 /**
- * 盤の上に重ねる「成」「不成」の選択（出題。prd/13 §7.1・2026-10-29）。
+ * 盤の上に重ねる「成」「不成」の選択（出題 prd/13 §7.1・2026-10-29。検討盤も 2026-10-30 から。prd/12 §3.2）。
  * 成った駒と成らない駒の 2 つを、行き先のマスの上に並べて出す（多くの将棋アプリと同じ形）。
  */
 export interface PromotionChoice {
@@ -162,6 +176,19 @@ export interface PromotionChoice {
   onChoose: (promote: boolean) => void;
   /** 選択肢の外（盤のほかのマス・筋段のラベル）を叩いた */
   onCancel: () => void;
+}
+
+/**
+ * セッションの成 / 不成の選択待ち（`lib/study.ts` の `promotionChoiceOf`）を、盤に重ねる選択肢にする。
+ * 選択待ちでなければ null（検討盤と出題が同じ口で使う）
+ */
+export function pickerOf(
+  session: StudySession | null,
+  onChoose: (promote: boolean) => void,
+  onCancel: () => void,
+): PromotionChoice | null {
+  const choice = session ? promotionChoiceOf(session) : null;
+  return choice ? { ...choice, onChoose, onCancel } : null;
 }
 
 export function BoardGrid({
@@ -191,7 +218,7 @@ export function BoardGrid({
    */
   destinations?: SquareRef[] | null;
   /**
-   * 成 / 不成の選択を盤の上に重ねる（出題。prd/13 §7.1）。**渡さなければ何も変わらない**。
+   * 成 / 不成の選択を盤の上に重ねる（出題・検討盤。prd/13 §7.1）。**渡さなければ何も変わらない**。
    * 出している間は盤全体を覆い、選択肢の外を叩くと `onCancel` を呼ぶ（マスの `onSquareClick` は呼ばない）
    */
   promotionChoice?: PromotionChoice | null;
@@ -233,7 +260,7 @@ export function BoardGrid({
             <span
               className={clsx(
                 'inline-block',
-                (flipped ? sq.side === 'sente' : sq.side === 'gote') && 'rotate-180 text-error',
+                isUpsideDown(sq.side, flipped) && 'rotate-180 text-error',
               )}
             >
               {PIECE_DISPLAY[sq.kind]}
@@ -272,6 +299,79 @@ export function BoardGrid({
 }
 
 /**
+ * 盤と上下の駒台（検討盤・出題の解く画面。prd/12 §3.2・prd/13 §7.1）。
+ *
+ * 🔒 **駒台の上下（どちらの持ち駒をどちらに置くか）は {@link handSidesOf} の 1 か所で決める**——
+ * 呼び出し側ごとに反転の割り当てを書くと、片方だけ逆になる。
+ * ⚠ 器（`className`）を渡さなければ 3 つの要素をそのまま並べる（呼び出し側の並べ方に任せる）。
+ */
+export function BoardWithHands({
+  state,
+  flipped,
+  lastMoveTo = null,
+  names,
+  selection,
+  onSquareClick,
+  destinations,
+  promotionChoice,
+  onHandPieceClick,
+  onTrayClick,
+  className,
+  boardClassName,
+}: {
+  state: BoardState;
+  flipped: boolean;
+  lastMoveTo?: [number, number] | null;
+  /** 駒台に出す対局者名（省けば「先手」「後手」） */
+  names?: { sente?: string | null; gote?: string | null };
+  /** 選択中のマス・持ち駒（`lib/study.ts` のタップ 2 段）。持ち駒は持ち主の駒台でだけ強調する */
+  selection?: StudySelection | null;
+  onSquareClick?: (square: SquareRef) => void;
+  destinations?: SquareRef[] | null;
+  promotionChoice?: PromotionChoice | null;
+  /** その側の持ち駒を叩く口。**undefined を返した側は表示専用**（駒はボタンにならない） */
+  onHandPieceClick?: (side: Side) => ((kind: HandPieceKind) => void) | undefined;
+  /** その側の駒台の受け皿（「+」）。undefined を返した側には出ない（{@link HandDisplay} の `onTrayClick`） */
+  onTrayClick?: (side: Side) => (() => void) | undefined;
+  /** 3 つを包む器のクラス。省けば包まない */
+  className?: string;
+  /** 盤だけを包む器のクラス。省けば包まない */
+  boardClassName?: string;
+}) {
+  const { top, bottom } = handSidesOf(flipped);
+  const hand = (side: Side) => (
+    <HandDisplay
+      hand={state.hand[side]}
+      side={side}
+      name={names?.[side]}
+      flipped={flipped}
+      onPieceClick={onHandPieceClick?.(side)}
+      selected={selection?.kind === 'hand' && selection.side === side ? selection.piece : null}
+      onTrayClick={onTrayClick?.(side)}
+    />
+  );
+  const grid = (
+    <BoardGrid
+      state={state}
+      lastMoveTo={lastMoveTo}
+      flipped={flipped}
+      onSquareClick={onSquareClick}
+      selected={selection?.kind === 'square' ? selection.square : null}
+      destinations={destinations}
+      promotionChoice={promotionChoice}
+    />
+  );
+  const content = (
+    <>
+      {hand(top)}
+      {boardClassName ? <div className={boardClassName}>{grid}</div> : grid}
+      {hand(bottom)}
+    </>
+  );
+  return className ? <div className={className}>{content}</div> : content;
+}
+
+/**
  * 成 / 不成の選択（{@link PromotionChoice}）。盤全体を薄く覆う「取り消し」の面の上に、2 つの駒を横に並べる。
  *
  * 🔒 **選択肢は行き先のマスを中心に置き、盤の外へはみ出す分だけ内側へ寄せる**（端の筋・段でも全体が盤に収まる）。
@@ -288,7 +388,7 @@ function PromotionPicker({ choice, flipped }: { choice: PromotionChoice; flipped
     top: `clamp(calc(var(--sq) * 0.5), calc(var(--sq) * ${visualRow + 1} - var(--pick) / 2), calc(var(--sq) * 9.5 - var(--pick)))`,
   };
   // 盤の駒と同じ規則: 相手側（反転中は先手側）の駒を 180 度回して赤くする
-  const rotate = flipped ? choice.side === 'sente' : choice.side === 'gote';
+  const rotate = isUpsideDown(choice.side, flipped);
   const options = [
     { promote: true, kind: `+${choice.piece}` as PieceKind, label: '成る' },
     { promote: false, kind: choice.piece, label: '成らない' },

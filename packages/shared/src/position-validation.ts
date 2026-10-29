@@ -15,7 +15,7 @@
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
-import { applyMove, type BoardState, type PieceKind, type Side, type Square } from './board';
+import { applyMove, canPromote, type BoardState, type PieceKind, type Side, type Square } from './board';
 
 /** 違反の種別。文言に依らず機械的に扱えるようにコードで持つ */
 export type PositionViolationCode =
@@ -364,11 +364,6 @@ export function validatePositionForEngine(state: BoardState): PositionValidation
   return violations.length === 0 ? { ok: true } : { ok: false, violations };
 }
 
-/** 成れる駒（玉・金・既に成った駒は成れない） */
-const PROMOTABLE: Partial<Record<PieceKind, true>> = {
-  P: true, L: true, N: true, S: true, B: true, R: true,
-};
-
 /** 敵陣（自分から見て奥の 3 段）か。成れるのは移動元・移動先のどちらかが敵陣のとき */
 function inPromotionZone(row: number, side: Side): boolean {
   return side === 'sente' ? row <= 2 : row >= 6;
@@ -389,7 +384,7 @@ export function canPromoteMove(state: BoardState, move: string): boolean {
   const [fromRow, fromCol] = usiToIndex(match[1]);
   const [toRow] = usiToIndex(match[2]);
   const piece = state.board[fromRow]?.[fromCol];
-  if (!piece || !PROMOTABLE[piece.kind]) return false;
+  if (!piece || !canPromote(piece.kind)) return false;
   return inPromotionZone(fromRow, piece.side) || inPromotionZone(toRow, piece.side);
 }
 
@@ -489,7 +484,7 @@ export function validateMoveOnPosition(
       });
     }
     if (promote && moving && moving.side === side) {
-      if (!PROMOTABLE[moving.kind]) {
+      if (!canPromote(moving.kind)) {
         violations.push({
           code: 'illegal_promotion',
           message: `${PIECE_NAME[moving.kind]}は成れません`,

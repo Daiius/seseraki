@@ -3,7 +3,7 @@
  *
  * 🔒 **画面で完結させる。** 結果は server に送らず、保存もしない（server に新しい口は作らない。
  * `POST /api/positions/evaluate` は担当 `browser` に 403 のまま）。返すのは server の口と同じ `EvalResult` で、
- * 検討盤（`StudyBoard.tsx` の `run()`）は出所を気にせず同じ表示・同じ直前の手の採点（`gradeLastMove`）に流す。
+ * 検討盤（`useStudyEval.ts` の `run()`）は出所を気にせず同じ表示・同じ直前の手の採点（`gradeLastMove`）に流す。
  *
  * - **棋譜解析の再利用はしない**（prd/12 §2.6 は server の判定）。ブラウザの全局面解析は MultiPV 1 なので、
  *   候補手 3 本を返す局面評価の再利用にはもともと当たらない。毎回その場で読み、出所は `engine`

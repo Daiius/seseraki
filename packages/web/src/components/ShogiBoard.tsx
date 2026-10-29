@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, type Ref } from 'react';
+import { useRef, useState, type Ref } from 'react';
 import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 import {
@@ -20,12 +20,13 @@ import {
   formatScoreShort,
   mateLineOf,
   moveDestination,
+  pvTexts,
   toSenteEval,
 } from '../lib/usi';
 import { StudyBoard } from './StudyBoard';
 import type { StudySession } from '../lib/study';
 import { BoardControls } from './BoardControls';
-import { ChevronLeftIcon, ChevronRightIcon } from './icons';
+import { CandidateLine } from './CandidateLine';
 import { EvalGraph } from './EvalGraph';
 import type { AnalysisProfile } from '../lib/analysisProgress';
 
@@ -526,105 +527,54 @@ function CandidateList({
           const prevState = positions[moveIndex > 0 ? moveIndex - 1 : 0];
           const isActiveBranch = branchRank === c.rank && branchDepth > 0;
           const pvLen = c.pv?.length ?? 0;
-          const hasPv = pvLen > 0;
           return (
-            <details
+            <CandidateLine
               name="candidates"
               key={c.rank}
               className={clsx(
-                'group rounded-lg p-2 text-sm',
+                'text-sm',
                 isPlayed && 'bg-base-200',
                 isNotBest && isSevere && 'border border-error/30',
                 isNotBest && label === 'dubious' && 'border border-warning/30',
                 isActiveBranch && 'border-l-4 border-l-primary pl-3',
               )}
-            >
-              <summary className="flex items-center gap-2 list-none cursor-pointer md:cursor-default [&::-webkit-details-marker]:hidden">
-                <span className="font-mono text-base-content/50">
-                  {c.rank}
-                </span>
-                <span className="font-bold">
-                  {turnSymbol(evalMoveNumber)}
-                  {usiToJapaneseWithPiece(prevState, c.move)}
-                </span>
-                <span className="text-base-content/70">
-                  {formatScore(
-                    c.scoreType,
-                    c.scoreValue,
-                    evalMoveNumber,
-                    mateLineOf(prevState, c.scoreType, c.scoreValue, c.pv),
-                  )}
-                </span>
-                <span className="text-xs text-base-content/40">
-                  d{c.depth}
-                </span>
-                {isPlayed && (
-                  <span className="text-xs text-success">実手</span>
-                )}
-                {isNotBest && label === 'mate' && (
-                  <span className="text-xs text-error">×</span>
-                )}
-                {isNotBest && label === 'blunder' && (
-                  <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
-                )}
-                {isNotBest && label === 'dubious' && (
-                  <span className="text-xs text-warning">※</span>
-                )}
-                {hasPv && (
-                  <span className="ml-auto text-xs text-base-content/40 md:hidden">
-                    PV{pvLen} <span className="inline-block transition-transform group-open:rotate-180">▼</span>
-                  </span>
-                )}
-              </summary>
-              {hasPv && c.pv && (
-                <>
-                  <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
-                    {(() => {
-                      let st = prevState;
-                      const activeIdx = isActiveBranch ? branchDepth - 1 : -1;
-                      const nodes: ReactNode[] = [];
-                      for (let j = 0; j < c.pv.length; j++) {
-                        const turn = turnSymbol(evalMoveNumber + j);
-                        const text = `${turn}${usiToJapaneseWithPiece(st, c.pv[j])}`;
-                        if (j > 0) nodes.push(' ');
-                        if (j === activeIdx) {
-                          nodes.push(
-                            <strong key={j} className="text-base-content font-bold">
-                              {text}
-                            </strong>,
-                          );
-                        } else {
-                          nodes.push(<span key={j}>{text}</span>);
-                        }
-                        st = applyMove(st, c.pv[j]);
-                      }
-                      return nodes;
-                    })()}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2 pl-5 no-tap-select">
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => onBranchBack(c.rank)}
-                      disabled={!isActiveBranch}
-                      title="分岐を戻る"
-                    >
-                      <ChevronLeftIcon />
-                    </button>
-                    <span className="text-sm font-mono text-base-content/60 w-12 text-center">
-                      {isActiveBranch ? branchDepth : 0}/{pvLen}
-                    </span>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => onBranchForward(c.rank, c.pv!)}
-                      disabled={isActiveBranch && branchDepth >= pvLen}
-                      title="分岐を進む"
-                    >
-                      <ChevronRightIcon />
-                    </button>
-                  </div>
-                </>
+              rank={c.rank}
+              moveText={`${turnSymbol(evalMoveNumber)}${usiToJapaneseWithPiece(prevState, c.move)}`}
+              scoreText={formatScore(
+                c.scoreType,
+                c.scoreValue,
+                evalMoveNumber,
+                mateLineOf(prevState, c.scoreType, c.scoreValue, c.pv),
               )}
-            </details>
+              depth={c.depth}
+              marks={
+                <>
+                  {isPlayed && (
+                    <span className="text-xs text-success">実手</span>
+                  )}
+                  {isNotBest && label === 'mate' && (
+                    <span className="text-xs text-error">×</span>
+                  )}
+                  {isNotBest && label === 'blunder' && (
+                    <span className="text-xs text-error">{turnSymbol(evalMoveNumber)}</span>
+                  )}
+                  {isNotBest && label === 'dubious' && (
+                    <span className="text-xs text-warning">※</span>
+                  )}
+                </>
+              }
+              pv={pvTexts(prevState, c.pv ?? [], (j) => turnSymbol(evalMoveNumber + j))}
+              replay={{
+                position: isActiveBranch ? branchDepth : 0,
+                onBack: () => onBranchBack(c.rank),
+                onForward: () => onBranchForward(c.rank, c.pv ?? []),
+                backDisabled: !isActiveBranch,
+                forwardDisabled: isActiveBranch && branchDepth >= pvLen,
+                buttonClassName: 'btn btn-sm',
+                labels: { back: '分岐を戻る', forward: '分岐を進む' },
+                titled: true,
+              }}
+            />
           );
         })}
       </div>

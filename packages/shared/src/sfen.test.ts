@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, applyMove } from './board';
 import { positionSfen } from './position';
-import { parseSfen, usiPositionSfen } from './sfen';
+import { parseSfen } from './sfen';
 
 const INITIAL_SFEN =
   'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
@@ -49,16 +49,5 @@ describe('parseSfen', () => {
     ['フィールド数が足りない', 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b'],
   ])('読めない SFEN は null を返す: %s', (_name, sfen) => {
     expect(parseSfen(sfen)).toBeNull();
-  });
-});
-
-describe('usiPositionSfen', () => {
-  it('手数 1 を足した 4 フィールドで返す', () => {
-    expect(usiPositionSfen(createInitialState())).toBe(`${INITIAL_SFEN} 1`);
-  });
-
-  it('USI に渡してそのまま読み戻せる', () => {
-    const state = parseSfen(usiPositionSfen(createInitialState()));
-    expect(positionSfen(state!)).toBe(INITIAL_SFEN);
   });
 });

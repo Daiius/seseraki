@@ -13,8 +13,9 @@
  * **元の state は決して書き換えない**（undo スタックが壊れるため）。
  *
  * 🔒 **駒箱は状態として持たない。** 盤上にも持ち駒にも無い駒が駒箱にある、という
- * **導出値**として扱う（`pieceBox`）。状態として持つと「盤 + 持ち駒 + 駒箱」の 3 つを
- * 常に整合させ続ける必要があり、フル編集ではそれが破れる。
+ * 導出値でしかない。状態として持つと「盤 + 持ち駒 + 駒箱」の 3 つを常に整合させ続ける
+ * 必要があり、フル編集ではそれが破れる。web の検討盤は駒箱を UI に出さない（prd/12 §3.2・決定 2026-08-28）。
+ * 内訳を数える `pieceBox` はテストが駒の総数を確かめるのに使うだけなので `test-fixtures/` に置いた。
  *
  * 🔒 **不正な入力では state をそのまま返す**（例外を投げない）。UI は駒の無いマスや
  * 盤外を指してきうるし、投げると M2b が全操作を try/catch で包むことになる。
@@ -32,7 +33,7 @@
  * | 持ち駒を盤へ打つ | `dropFromHand` |
  * | 駒箱から盤へ置く | `placePiece` |
  * | 持ち駒の増減 | `addToHand` / `setHandCount` |
- * | 手番の切り替え | `toggleSideToMove` / `setSideToMove` |
+ * | 手番の切り替え | `toggleSideToMove` |
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。`structuredClone` などは使わない。
  */
@@ -41,23 +42,16 @@ import {
   withHand,
   withSquares,
   type BoardState,
-  type Hand,
 } from './board';
 import {
-  BASE_PIECE_KINDS,
-  PIECE_TOTALS,
   unpromoted,
   withPromotion,
-  type BasePieceKind,
   type HandPieceKind,
   type Piece,
   type PieceKind,
   type Side,
 } from './pieces';
 import { isOnBoard, type SquareRef } from './usi-move';
-
-/** 駒箱の内訳（`pieceBox` の返り値） */
-export type PieceBox = Record<BasePieceKind, number>;
 
 /** 指定マスの駒（空きマス・盤外は null） */
 export function pieceAt(state: BoardState, square: SquareRef): Piece | null {
@@ -216,79 +210,7 @@ export function setPromoted(
   return placePiece(state, square, { kind, side: piece.side });
 }
 
-/** 盤上の駒の側を入れ替える（自分の駒 ↔ 相手の駒）。成り状態は保つ */
-export function flipPieceSide(
-  state: BoardState,
-  square: SquareRef,
-): BoardState {
-  const piece = pieceAt(state, square);
-  if (!piece) return state;
-  return placePiece(state, square, {
-    kind: piece.kind,
-    side: piece.side === 'sente' ? 'gote' : 'sente',
-  });
-}
-
-/** 手番を指定する */
-export function setSideToMove(state: BoardState, side: Side): BoardState {
-  return state.sideToMove === side ? state : { ...state, sideToMove: side };
-}
-
 /** 手番を入れ替える（prd/12 §2.3。手番を問わず評価できる） */
 export function toggleSideToMove(state: BoardState): BoardState {
-  return setSideToMove(state, state.sideToMove === 'sente' ? 'gote' : 'sente');
-}
-
-function countHand(
-  hand: Hand,
-  side: Side,
-  used: Record<BasePieceKind, number>,
-): void {
-  for (const [kind, count] of Object.entries(hand[side])) {
-    if (!count) continue;
-    used[unpromoted(kind as PieceKind)] += count;
-  }
-}
-
-/**
- * 駒箱（盤上にも持ち駒にも無い余り駒）の内訳。
- *
- * 総数（歩 18・香桂銀金各 4・角飛玉各 2）から盤上と双方の持ち駒を引く。
- * **成駒は生駒として数える**（と金は歩 1 枚）。
- *
- * ⚠ **0 で下限を打つ。** 駒が多すぎる局面（歩 19 枚など）は「箱の中がマイナス」ではなく
- * `validatePositionForEngine` の `piece_count_exceeded` が見る違反で、駒箱の責務ではない。
- *
- * ⚠ **web の検討盤はもう使わない**（prd/12 §3.2・決定 2026-08-28）。駒台が盤から抜いた駒の
- * 受け皿を兼ねるようになり、駒箱を UI に出す理由が無くなったため。ここに残してあるのは
- * 環境非依存の純関数で、server / MCP（prd/12 §4）が局面の内訳を説明するのに使えるから。
- */
-export function pieceBox(state: BoardState): PieceBox {
-  const used: Record<BasePieceKind, number> = {
-    P: 0, L: 0, N: 0, S: 0, G: 0, B: 0, R: 0, K: 0,
-  };
-  for (const row of state.board) {
-    for (const square of row) {
-      if (square) used[unpromoted(square.kind)]++;
-    }
-  }
-  countHand(state.hand, 'sente', used);
-  countHand(state.hand, 'gote', used);
-
-  const box = {} as PieceBox;
-  for (const kind of BASE_PIECE_KINDS) {
-    box[kind] = Math.max(0, PIECE_TOTALS[kind] - used[kind]);
-  }
-  return box;
-}
-
-/** 空の盤（全部が駒箱に入っている状態）。編集の出発点として使える */
-export function createEmptyState(): BoardState {
-  return {
-    board: Array.from({ length: 9 }, () =>
-      Array.from({ length: 9 }, (): null => null),
-    ),
-    hand: { sente: {}, gote: {} },
-    sideToMove: 'sente',
-  };
+  return { ...state, sideToMove: state.sideToMove === 'sente' ? 'gote' : 'sente' };
 }

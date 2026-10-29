@@ -24,8 +24,7 @@ export const drillListQuerySchema = z.object({
 export type DrillListQuery = z.infer<typeof drillListQuerySchema>;
 
 /** 入口（prd/13 §6.4・§7.5） */
-export const DRILL_MODES = ['recommend', 'mate', 'best', 'wrong'] as const;
-export type DrillMode = (typeof DRILL_MODES)[number];
+const DRILL_MODES = ['recommend', 'mate', 'best', 'wrong'] as const;
 
 export const drillNextQuerySchema = z.object({
   mode: z.enum(DRILL_MODES).default('recommend'),
@@ -71,13 +70,13 @@ export const LAST_VERDICT = sql<
  */
 export const IS_WRONG = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} <> 'correct')`;
 /** 正解（最後の判定が正解） */
-export const IS_CORRECT = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} = 'correct')`;
+const IS_CORRECT = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} = 'correct')`;
 /** 間違えてから 1 日経っていない（おすすめに出さない。prd/13 §6.4）。「1 日」は最後の解答からの 24 時間 */
 export const IS_RECENT_WRONG = sql`(${IS_WRONG} and ${LAST_ANSWERED_AT} > now() - interval '1 day')`;
 /** 未解答 */
 export const IS_UNANSWERED = sql`(${ANSWER_COUNT} = 0)`;
 /** 除外していない */
-export const NOT_EXCLUDED = sql`(${EXCLUDED_COUNT} = 0)`;
+const NOT_EXCLUDED = sql`(${EXCLUDED_COUNT} = 0)`;
 
 /** 状態（prd/13 §7.7）。除外は別の印（`excluded`）で持つ */
 export function drillStatusOf(

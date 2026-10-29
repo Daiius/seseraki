@@ -77,8 +77,3 @@ export function positionHash(key: string): Uint8Array {
   out[7] = lo & 0xff;
   return out;
 }
-
-/** ハッシュを 16 進 16 桁で書く（テスト・調査用） */
-export function positionHashHex(key: string): string {
-  return [...positionHash(key)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}

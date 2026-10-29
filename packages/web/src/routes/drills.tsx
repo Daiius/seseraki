@@ -9,7 +9,7 @@ import {
   type SquareRef,
 } from 'shared';
 import { client } from '../lib/honoClient';
-import { BoardGrid, HandDisplay, type PromotionChoice } from '../components/BoardGrid';
+import { BoardWithHands, handSidesOf, type PromotionChoice } from '../components/BoardGrid';
 import {
   applyStudyMoves,
   currentState,
@@ -653,6 +653,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
   const state = session ? currentState(session) : base;
   // ⚠ **解いている側を下に置く**（自分の手番の局面しか出題されない。prd/13 §4.1）
   const flipped = base?.sideToMove === 'gote';
+  const bottomSide = handSidesOf(flipped).bottom;
   /**
    * 確定前の 1 手（盤で動かしたが、まだ判定が済んでいない手）。判定中・成 / 不成を選んでいる間と、
    * エンジンの準備を待つ間（`ungradableAt`）にだけある
@@ -952,26 +953,15 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         )}
       </div>
 
-      <HandDisplay
-        hand={state.hand[flipped ? 'sente' : 'gote']}
-        side={flipped ? 'sente' : 'gote'}
-        flipped={flipped}
-      />
-      <BoardGrid
+      <BoardWithHands
         state={state}
-        lastMoveTo={null}
         flipped={flipped}
+        selection={session?.selection}
         onSquareClick={reveal ? undefined : onSquare}
-        selected={session?.selection?.kind === 'square' ? session.selection.square : null}
         destinations={selectionDestinations(session)}
         promotionChoice={choosing && pending ? promotionChoiceOf(state, pending, choose, cancelChoice) : null}
-      />
-      <HandDisplay
-        hand={state.hand[flipped ? 'gote' : 'sente']}
-        side={flipped ? 'gote' : 'sente'}
-        flipped={flipped}
-        onPieceClick={reveal || judging ? undefined : onHand}
-        selected={session?.selection?.kind === 'hand' ? session.selection.piece : null}
+        // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
+        onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
       />
 
       {error && <p className="text-error text-sm">{error}</p>}

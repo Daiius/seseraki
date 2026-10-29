@@ -13,7 +13,7 @@ import {
   type SquareRef,
   type Thresholds,
 } from 'shared';
-import { BoardGrid, HandDisplay } from './BoardGrid';
+import { BoardWithHands } from './BoardGrid';
 import {
   ArrowUturnLeftIcon,
   ArrowsRightLeftIcon,
@@ -535,14 +535,6 @@ export function StudyBoard({
   const onSquareClick = (square: SquareRef) => edit(tapSquare(shown, square));
 
   /**
-   * 持ち駒を叩く口（prd/12 §3.2）。**盤上の駒と同じ 2 段選択**に揃える——
-   * 持ち駒を選んでから盤のマスを叩けば打てる（`tapSquare` が `dropFromHand` を通す）。
-   * 先手・後手どちらの持ち駒からも打てる（フル編集）が、**手番側の駒を打ったときだけ
-   * 手番が進む**（盤上の駒を動かしたときと同じ規則。`study.ts` の `advanceTurn`）。
-   *
-   * ⚠ 再生中も渡す（触れば確定する）。盤のマスと同じ扱い。
-   */
-  /**
    * コントローラー行（◀ ▶ ≪ ≫）へ渡す検討の操作（prd/12 §3.1・決定 2026-08-28）。
    *
    * 🔴 **咎め筋の再生中は無効のまま**（確定の引き金にしない。prd/12 §3.2・決定 2026-09-01）。
@@ -613,11 +605,16 @@ export function StudyBoard({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [controls, keyboardNav]);
 
+  /**
+   * 持ち駒を叩く口（prd/12 §3.2）。**盤上の駒と同じ 2 段選択**に揃える——
+   * 持ち駒を選んでから盤のマスを叩けば打てる（`tapSquare` が `dropFromHand` を通す）。
+   * 先手・後手どちらの持ち駒からも打てる（フル編集）が、**手番側の駒を打ったときだけ
+   * 手番が進む**（盤上の駒を動かしたときと同じ規則。`study.ts` の `advanceTurn`）。
+   *
+   * ⚠ 再生中も渡す（触れば確定する）。盤のマスと同じ扱い。
+   */
   const handClick = (side: Side) => (kind: HandPieceKind) =>
     edit(tapHand(shown, side, kind));
-  /** その側の持ち駒のうち選択中のもの（盤の選択マスと同じ見せ方で強調する） */
-  const handSelection = (side: Side) =>
-    selection?.kind === 'hand' && selection.side === side ? selection.piece : null;
 
   /**
    * 駒台の受け皿（「+」ボタン）。**盤の駒を選んでいる間だけ**渡す（prd/12 §3.2）。
@@ -635,9 +632,6 @@ export function StudyBoard({
   const trayClick = (side: Side) =>
     canPutSelectionOnHand(shown) ? () => edit(tapHand(shown, side)) : undefined;
 
-  const topSide: Side = flipped ? 'sente' : 'gote';
-  const bottomSide: Side = flipped ? 'gote' : 'sente';
-
   /*
     盤 + 情報行 / コントローラー行（`children`）+ 操作パネル。**この 3 つで 1 グループ**で、
     呼び出し側は `groupClassName` で `sticky` にする。`footer` はこのグループの外（下）に出る
@@ -645,35 +639,18 @@ export function StudyBoard({
   */
   const group = (
     <>
-      <div className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0">
-        <HandDisplay
-          hand={state.hand[topSide]}
-          side={topSide}
-          name={topSide === 'sente' ? sente : gote}
-          flipped={flipped}
-          onPieceClick={handClick(topSide)}
-          selected={handSelection(topSide)}
-          onTrayClick={trayClick(topSide)}
-        />
-        <div className="w-fit no-tap-select">
-          <BoardGrid
-            state={state}
-            lastMoveTo={displayLastMoveTo}
-            flipped={flipped}
-            onSquareClick={onSquareClick}
-            selected={selection?.kind === 'square' ? selection.square : null}
-          />
-        </div>
-        <HandDisplay
-          hand={state.hand[bottomSide]}
-          side={bottomSide}
-          name={bottomSide === 'sente' ? sente : gote}
-          flipped={flipped}
-          onPieceClick={handClick(bottomSide)}
-          selected={handSelection(bottomSide)}
-          onTrayClick={trayClick(bottomSide)}
-        />
-      </div>
+      <BoardWithHands
+        className="flex flex-col gap-1 max-w-fit mx-auto md:mx-0"
+        boardClassName="w-fit no-tap-select"
+        state={state}
+        flipped={flipped}
+        lastMoveTo={displayLastMoveTo}
+        names={{ sente, gote }}
+        selection={selection}
+        onSquareClick={onSquareClick}
+        onHandPieceClick={handClick}
+        onTrayClick={trayClick}
+      />
 
       {children?.(controls)}
 

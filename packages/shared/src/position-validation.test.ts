@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { canPromote, createInitialState, type PieceKind } from './board';
+import { createInitialState } from './board';
+import { canPromote, type PieceKind } from './pieces';
 import { parseSfen } from './sfen';
 import {
   canPromoteMove,
@@ -302,7 +303,7 @@ describe('canPromoteMove（出題の盤で「成」を出すか。prd/13 §3）'
   });
 });
 
-describe('「成れる駒」の定義は 1 か所（board.ts の canPromote）', () => {
+describe('「成れる駒」の定義は 1 か所（pieces.ts の canPromote）', () => {
   const kinds: PieceKind[] = [
     'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
     '+P', '+L', '+N', '+S', '+B', '+R',

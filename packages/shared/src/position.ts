@@ -16,7 +16,8 @@
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。ハッシュも node の `crypto` / Web Crypto を
  * 使わず純粋な演算で書いている。
  */
-import type { BoardState, PieceKind, Side, Square } from './board';
+import type { BoardState, Square } from './board';
+import type { PieceKind, Side } from './pieces';
 
 /** SFEN の駒文字（先手は大文字・後手は小文字。成りは `+` を前置） */
 const SFEN_CHAR: Record<PieceKind, string> = {

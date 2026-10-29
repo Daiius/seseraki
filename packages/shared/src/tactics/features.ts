@@ -4,7 +4,8 @@
  * **常に先手基準へ正規化する。** 後手の判定は盤面を反転してから同じ述語に掛けるので、
  * 内部ラベルの定義は先手の座標だけで書ける（prd/01 §6.1）。
  */
-import type { BoardState, Square, Side } from '../board';
+import type { BoardState, Square } from '../board';
+import type { Side } from '../pieces';
 
 /** 窓を閉じる判定に使う駒種（成りは元の駒種に畳む。持ち駒に増えた種類を見る） */
 export type CaptureKind = 'P' | 'L' | 'N' | 'S' | 'G' | 'B' | 'R';

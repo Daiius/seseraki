@@ -37,41 +37,26 @@
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。`structuredClone` などは使わない。
  */
 import {
-  canPromote,
-  PROMOTE_MAP,
-  UNPROMOTE_MAP,
   withHand,
   withSquares,
   type BoardState,
   type Hand,
+} from './board';
+import {
+  BASE_PIECE_KINDS,
+  PIECE_TOTALS,
+  unpromoted,
+  withPromotion,
+  type BasePieceKind,
+  type HandPieceKind,
   type Piece,
   type PieceKind,
   type Side,
-} from './board';
-
-/** 盤上のマス。`state.board[row][col]` の添字そのもの（row 0 = 一段目 / col 0 = 9 筋） */
-export interface SquareRef {
-  row: number;
-  col: number;
-}
-
-/** 持ち駒に置ける駒種（玉と成駒は入らない） */
-export type HandPieceKind = 'P' | 'L' | 'N' | 'S' | 'G' | 'B' | 'R';
-
-/** 駒箱に入りうる駒種（= 生駒。玉を含む） */
-export type BasePieceKind = HandPieceKind | 'K';
-
-/** 駒種ごとの総数（盤上 + 双方の持ち駒 + 駒箱）。成駒は生駒として数える */
-export const PIECE_TOTALS: Record<BasePieceKind, number> = {
-  P: 18, L: 4, N: 4, S: 4, G: 4, B: 2, R: 2, K: 2,
-};
+} from './pieces';
+import type { SquareRef } from './usi-move';
 
 /** 駒箱の内訳（`pieceBox` の返り値） */
 export type PieceBox = Record<BasePieceKind, number>;
-
-const BASE_KINDS: readonly BasePieceKind[] = [
-  'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
-];
 
 /**
  * 盤内のマスか。
@@ -85,21 +70,6 @@ function inBoard(square: SquareRef): boolean {
     Number.isInteger(col) &&
     row >= 0 && row < 9 && col >= 0 && col < 9
   );
-}
-
-/** 成駒なら生駒に戻す。生駒はそのまま */
-export function unpromoted(kind: PieceKind): PieceKind {
-  return UNPROMOTE_MAP[kind] ?? kind;
-}
-
-// 「成れる駒」の判定（`canPromote`）は `board.ts` にある（定義を 1 か所にする）。
-// これまでどおり盤面編集の口からも使えるよう、ここから再 export する
-export { canPromote };
-
-/** 成り状態を指定した駒種（`promote` 省略時は元のまま。成れない駒種は変わらない） */
-function withPromotion(kind: PieceKind, promote?: boolean): PieceKind {
-  if (promote === undefined) return kind;
-  return promote ? (PROMOTE_MAP[kind] ?? kind) : unpromoted(kind);
 }
 
 /** 指定マスの駒（空きマス・盤外は null） */
@@ -303,7 +273,7 @@ function countHand(
 ): void {
   for (const [kind, count] of Object.entries(hand[side])) {
     if (!count) continue;
-    used[unpromoted(kind as PieceKind) as BasePieceKind] += count;
+    used[unpromoted(kind as PieceKind)] += count;
   }
 }
 
@@ -326,14 +296,14 @@ export function pieceBox(state: BoardState): PieceBox {
   };
   for (const row of state.board) {
     for (const square of row) {
-      if (square) used[unpromoted(square.kind) as BasePieceKind]++;
+      if (square) used[unpromoted(square.kind)]++;
     }
   }
   countHand(state.hand, 'sente', used);
   countHand(state.hand, 'gote', used);
 
   const box = {} as PieceBox;
-  for (const kind of BASE_KINDS) {
+  for (const kind of BASE_PIECE_KINDS) {
     box[kind] = Math.max(0, PIECE_TOTALS[kind] - used[kind]);
   }
   return box;

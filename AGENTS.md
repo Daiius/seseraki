@@ -68,6 +68,8 @@
 | `packages/mcp` | REST をツール定義に翻訳する薄い stdio MCP サーバ（[prd/12](./prd/12-position-lab.md) §4） |
 
 > ※ `shared` は **`board.ts` まで移した**（盤面追跡 + 盤面を要する USI→日本語表記）。
+> **駒の定義（駒種・成り・総数）は `pieces.ts`、USI の座標・指し手の書式と解釈は `usi-move.ts` の 1 か所**に置く
+> （駒名の表記だけは KIF の `杏` と説明文の `成香` を意図的に分けている）。
 > 詰み筋の分類（`mate-line.ts` の `classifyMateLine`。[prd/05](./prd/05-analysis.md) §2.2）と
 > **悪手判定（`cpl.ts` の `computeMoveLosses` / `labelOf`）** も `shared` にある。
 > **USI の解釈・セッション・解析のループ（`usi/`。`createUsiSession` / `analyzeKifu`）も `shared` にある**

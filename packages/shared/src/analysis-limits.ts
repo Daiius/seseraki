@@ -5,6 +5,7 @@
 // 長すぎる読み筋を server に拒否させると、その棋譜の解析が恒久的に失敗して見える。
 // 手元 worker の報告（API_KEY の内部経路）にはこの上限を掛けない（MultiPV 3・検証は server 側の別の zod）。
 import { z } from 'zod';
+import { isUsiMove, USI_MOVE_PATTERN } from './usi-move';
 
 /** ブラウザ解析の報告の上限 */
 export const BROWSER_ANALYSIS_LIMITS = {
@@ -26,9 +27,6 @@ export const BROWSER_ANALYSIS_LIMITS = {
   maxMoveNumber: 10_000,
 } as const;
 
-/** USI の指し手（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
-const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
-
 /**
  * 読み筋に現れる、指し手ではない語。
  * - `resign`: 詰まされた側の最善手。**詰みの分類が `pv[0] === 'resign'` を読む**（`mate-line.ts`）ので落とせない
@@ -39,7 +37,7 @@ const PV_SPECIAL = /^(?:resign|win|rep_(?:draw|win|lose|sup|inf))$/;
 
 /** 読み筋の 1 語として受けてよいか（USI の指し手か、上の特別な語） */
 export function isPvToken(token: string): boolean {
-  return USI_MOVE.test(token) || PV_SPECIAL.test(token);
+  return isUsiMove(token) || PV_SPECIAL.test(token);
 }
 
 const pvToken = z.string().refine(isPvToken, '読み筋に使えない語');
@@ -135,7 +133,7 @@ export type BrowserAnalysisError = z.infer<typeof browserAnalysisErrorSchema>;
  */
 export const drillNamedEvaluationSchema = z
   .object({
-    move: z.string().regex(USI_MOVE, '指し手の形が違う'),
+    move: z.string().regex(USI_MOVE_PATTERN, '指し手の形が違う'),
     candidate: z
       .object({
         scoreType: z.enum(['cp', 'mate']),

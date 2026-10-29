@@ -11,7 +11,8 @@
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
-import type { BoardState, Hand, PieceKind, Side, Square } from './board';
+import type { BoardState, Hand, Square } from './board';
+import type { PieceKind, Side } from './pieces';
 import { positionSfen } from './position';
 
 /** SFEN の駒文字（大文字）→ 駒種。成りは `+` を前置して表す */

@@ -3,23 +3,26 @@
  *
  * USI の手を順に適用して各マスの駒を追跡する。
  * USI 座標: 列は 1-9（右から左）、行は a-i（上から下）
- * 内部配列: board[row][col] で row=0 が一段目（上）、col=0 が9筋（右端）
+ * 内部配列: board[row][col] で row=0 が一段目（上）、col=0 が9筋（左端）
+ *
+ * 駒の定義は `pieces.ts`、USI の座標・指し手の書式は `usi-move.ts` にある。
  */
 
-// 駒の種類
-export type PieceKind =
-  | 'P' | 'L' | 'N' | 'S' | 'G' | 'B' | 'R' | 'K'   // 生駒
-  | '+P' | '+L' | '+N' | '+S' | '+B' | '+R';           // 成駒
-
-export type Side = 'sente' | 'gote';
-
-export interface Piece {
-  kind: PieceKind;
-  side: Side;
-}
+import {
+  PROMOTE_MAP,
+  UNPROMOTE_MAP,
+  type Piece,
+  type PieceKind,
+  type Side,
+} from './pieces';
+import { usiToIndex } from './usi-move';
 
 export type Square = Piece | null;
 
+/**
+ * KIF の指し手に使う駒名（成香・成桂・成銀は 1 文字の `杏` / `圭` / `全`）。
+ * ⚠ 局面の検証の説明文（`position-validation.ts`）は `成香` と書く。KIF の往復の都合なので統一しない。
+ */
 const PIECE_NAMES: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
   '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
@@ -29,39 +32,6 @@ const PIECE_NAMES: Record<PieceKind, string> = {
 const USI_DROP_PIECE: Record<string, PieceKind> = {
   P: 'P', L: 'L', N: 'N', S: 'S', G: 'G', B: 'B', R: 'R',
 };
-
-/**
- * 成り: 生駒 → 成駒。
- * 盤面編集（`position-edit.ts`）も同じ対応表を使うので export する。
- */
-export const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
-  P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
-};
-
-/**
- * その駒種は成れるか（金・玉・既に成った駒は成れない）。
- * 🔒 **「成れる駒」の定義はここ 1 か所**（`PROMOTE_MAP` から導く）。盤面編集・局面の検証・
- * 出題の「成れる手」の判定はすべてこれを使う。
- */
-export function canPromote(kind: PieceKind): boolean {
-  return PROMOTE_MAP[kind] !== undefined;
-}
-
-/** 成駒 → 生駒（持ち駒にするとき）。盤面編集からも使う */
-export const UNPROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
-  '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',
-};
-
-/**
- * USI 座標 (例: "7g") → [row, col] (0-indexed)
- * USI: 列 1-9 は右から左、行 a-i は上から下
- * 内部: col 0=9筋, col 8=1筋 / row 0=一段, row 8=九段
- */
-function usiToIndex(usi: string): [number, number] {
-  const col = 9 - Number(usi[0]); // "7" → col 2
-  const row = usi.charCodeAt(1) - 97; // "g" → row 6
-  return [row, col];
-}
 
 /**
  * 初期配置を生成

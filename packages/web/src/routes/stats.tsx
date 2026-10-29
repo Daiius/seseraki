@@ -28,7 +28,8 @@ import {
   type StatsSort,
   type StatsTreeRow,
 } from '../lib/statsTactics';
-import type { KifuListSearch } from './index';
+import type { KifuListSearch } from '../lib/kifuListFilter';
+import { dateParam } from '../lib/searchParams';
 
 /**
  * URL に持つのは**集計そのものを変える条件だけ**（期間と詰み手数）。
@@ -44,13 +45,6 @@ export interface StatsSearch {
   to?: string;
   /** 取りこぼしと見なす詰み手数の上限。未指定なら `/settings` の既定値（prd/09 §5） */
   mateMax?: number;
-}
-
-/** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
-function dateParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? raw
-    : undefined;
 }
 
 export const Route = createFileRoute('/stats')({

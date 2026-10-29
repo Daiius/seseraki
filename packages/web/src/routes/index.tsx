@@ -8,14 +8,11 @@ import {
   DEFAULT_TACTIC_SIDE,
   describeFilters,
   isFiltered,
-  ORDERS,
-  OUTCOMES,
-  SORTS,
-  STATUSES,
+  MAX_SEARCH_LENGTH,
   TACTIC_OPTIONS,
-  TACTIC_SIDES,
   tacticSideApplies,
-  type Order,
+  validateKifuListSearch,
+  type KifuListSearch,
   type Outcome,
   type Sort,
   type Status,
@@ -27,73 +24,10 @@ import { useAnalysisAssignee } from '../lib/useMe';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
 import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
 
-// 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
-// server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
-// 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
-const MAX_SEARCH_LENGTH = 100;
-
-// 生成される routeTree が `IndexRoute` の型でこれを参照するため export が要る
-export interface KifuListSearch {
-  page?: number;
-  q?: string;
-  status?: Status;
-  outcome?: Outcome;
-  tactic?: string;
-  tacticSide?: TacticSide;
-  /** 分析ページからの導線（prd/09 §7）。専用の入力 UI は持たず URL から受けるだけ */
-  missedMate?: number;
-  from?: string;
-  to?: string;
-  sort?: Sort;
-  order?: Order;
-}
-
-/** 許可値でなければ既定に落とす。既定値は `undefined` にして URL に載せない */
-function option<T extends string>(
-  values: readonly T[],
-  raw: unknown,
-  fallback: T,
-): T | undefined {
-  const value = values.find((v) => v === raw);
-  return value && value !== fallback ? value : undefined;
-}
-
-/** 判定が返しうるラベルだけを受ける（URL 直入力の未知の値は無視して全件に戻す） */
-function tacticParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && TACTIC_OPTIONS.includes(raw) ? raw : undefined;
-}
-
-/** 詰み手数の上限。1 以上の整数だけ受ける（server の zod と揃える） */
-function missedMateParam(raw: unknown): number | undefined {
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 ? n : undefined;
-}
-
-/** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
-function dateParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
-}
+// 一覧の絞り込み・並べ替えの許可値・検索パラメータの解釈・条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）
 
 export const Route = createFileRoute('/')({
-  validateSearch: (search: Record<string, unknown>): KifuListSearch => ({
-    page: Number(search.page) || undefined,
-    // 検索語は trim しない（入力中の末尾スペースが打鍵のたびに消えてしまうため）。
-    // 前後の空白は server 側の zod が落とす。長すぎる URL 直入力は捨てずに切り詰める
-    // （拒否して一覧全体をエラーにするより、頭 100 字で検索した方が扱いやすい）
-    q:
-      typeof search.q === 'string' && search.q !== ''
-        ? search.q.slice(0, MAX_SEARCH_LENGTH)
-        : undefined,
-    status: option(STATUSES, search.status, 'all'),
-    outcome: option(OUTCOMES, search.outcome, 'all'),
-    tactic: tacticParam(search.tactic),
-    tacticSide: option(TACTIC_SIDES, search.tacticSide, DEFAULT_TACTIC_SIDE),
-    missedMate: missedMateParam(search.missedMate),
-    from: dateParam(search.from),
-    to: dateParam(search.to),
-    sort: option(SORTS, search.sort, DEFAULT_SORT),
-    order: option(ORDERS, search.order, DEFAULT_ORDER),
-  }),
+  validateSearch: validateKifuListSearch,
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
     q: search.q,

@@ -6,6 +6,7 @@
  */
 
 import { NON_SIDE_ATTRIBUTED_LABELS, STORED_TACTIC_LABELS } from 'shared';
+import { dateParam, intParam, option, pageParam } from './searchParams';
 
 // 値は server 側の zod スキーマ（`GET /api/kifus`）と揃える
 export const STATUSES = ['all', 'analyzed', 'unanalyzed', 'failed'] as const;
@@ -79,6 +80,49 @@ export interface KifuListFilters {
   to?: string;
   sort?: Sort;
   order?: Order;
+}
+
+/** 一覧（`/`）の検索パラメータ。分析ページ（`/stats`）からの導線もこの形で組む */
+export interface KifuListSearch extends KifuListFilters {
+  page?: number;
+}
+
+/**
+ * 検索語の長さの上限。server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
+ * 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
+ */
+export const MAX_SEARCH_LENGTH = 100;
+
+/** 判定が返しうるラベルだけを受ける（URL 直入力の未知の値は無視して全件に戻す） */
+function tacticParam(raw: unknown): string | undefined {
+  return typeof raw === 'string' && TACTIC_OPTIONS.includes(raw) ? raw : undefined;
+}
+
+/**
+ * 一覧の検索パラメータを解釈する（ルートの `validateSearch`）。
+ * 許可値でなければ落とし、既定値は `undefined` にして URL に載せない
+ */
+export function validateKifuListSearch(search: Record<string, unknown>): KifuListSearch {
+  return {
+    page: pageParam(search.page),
+    // 検索語は trim しない（入力中の末尾スペースが打鍵のたびに消えてしまうため）。
+    // 前後の空白は server 側の zod が落とす。長すぎる URL 直入力は捨てずに切り詰める
+    // （拒否して一覧全体をエラーにするより、頭 100 字で検索した方が扱いやすい）
+    q:
+      typeof search.q === 'string' && search.q !== ''
+        ? search.q.slice(0, MAX_SEARCH_LENGTH)
+        : undefined,
+    status: option(STATUSES, search.status, 'all'),
+    outcome: option(OUTCOMES, search.outcome, 'all'),
+    tactic: tacticParam(search.tactic),
+    tacticSide: option(TACTIC_SIDES, search.tacticSide, DEFAULT_TACTIC_SIDE),
+    // 詰み手数の上限。1 以上の整数だけ受ける（server の zod と揃える）
+    missedMate: intParam(search.missedMate, 1),
+    from: dateParam(search.from),
+    to: dateParam(search.to),
+    sort: option(SORTS, search.sort, DEFAULT_SORT),
+    order: option(ORDERS, search.order, DEFAULT_ORDER),
+  };
 }
 
 /** 絞り込みが効いているか。並べ替えは件数を変えないので含めない */

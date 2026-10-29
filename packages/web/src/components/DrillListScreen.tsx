@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Link, useNavigate, useRouter } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 import { callApi } from '../lib/callApi';
-import { option, STATUSES, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
+import { STATUSES, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
+import { option } from '../lib/searchParams';
 import { refParam, type loadList } from '../lib/drillApi';
 import { DrillCardList } from './DrillCards';
 

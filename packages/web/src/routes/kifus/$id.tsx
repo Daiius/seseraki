@@ -8,6 +8,7 @@ import {
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
 import { callApi } from '../../lib/callApi';
+import { intParam } from '../../lib/searchParams';
 import { buildPositions } from 'shared';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { isAnalysisPending } from '../../lib/analysisPending';
@@ -48,19 +49,14 @@ export interface KifuDetailSearch {
   ply?: number;
 }
 
-/** `ply` は 0（初期局面）以上の整数だけ受ける。それ以外は指定なしと同じ扱い */
-function plyParam(raw: unknown): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
 /**
  * 棋譜詳細。🔒 **パスの `$id` は棋譜の番号**（所有者ごとの連番 `no`。prd/14 §4.4）で、内部の主キーではない。
  * 同じ URL でもログインしている人ごとに別の棋譜を指す
  */
 export const Route = createFileRoute('/kifus/$id')({
+  // `ply` は 0（初期局面）以上の整数だけ受ける。それ以外は指定なしと同じ扱い
   validateSearch: (search: Record<string, unknown>): KifuDetailSearch => ({
-    ply: plyParam(search.ply),
+    ply: intParam(search.ply, 0),
   }),
   loader: async ({ params }) => {
     const res = await client.api.kifus[':no'].$get({

@@ -14,6 +14,7 @@
  */
 import type { BoardState, PositionViolation } from 'shared';
 import { validateMoveOnPosition, validatePositionForEngine } from 'shared';
+import { abortableSleep } from './abortableSleep';
 import { client } from './honoClient';
 import type { EvalTarget } from './study';
 
@@ -407,19 +408,6 @@ async function sendEval(
   }
 }
 
-/** 中断できる待ち（abort されたら即座に起きる） */
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener('abort', done, { once: true });
-  });
-}
-
 /**
  * 評価を要求して結果を取りに行く。**例外は投げない**（すべて `EvalResult` に畳む）。
  *
@@ -453,7 +441,7 @@ export async function requestPositionEvalWith(
   const totalBudgetMs = options.totalBudgetMs ?? EVAL_TOTAL_BUDGET_MS;
   const requestTimeoutMs = options.requestTimeoutMs ?? EVAL_REQUEST_TIMEOUT_MS;
   const now = options.now ?? (() => Date.now());
-  const sleep = options.sleep ?? delay;
+  const sleep = options.sleep ?? abortableSleep;
   const startedAt = now();
 
   /** null の間は POST（受け付けてもらう）、決まったら GET（取りに行く） */

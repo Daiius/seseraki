@@ -1,5 +1,5 @@
 /**
- * ブラウザ解析の常駐が使う、ブラウザの実物の依存（コンソール・タイマー・ページの可視・Web Locks）。
+ * ブラウザ解析の常駐が使う、ブラウザの実物の依存（コンソール・ページの可視・Web Locks。待ちは `../abortableSleep.ts`）。
  * runner と scheduler には注入する形で渡す（`controller.ts`）。判断はここに書かない。
  *
  * コンソールに `[browser-analysis]` の接頭辞で経過を出す（実機での確認用）。
@@ -23,19 +23,6 @@ export function debugEnabled(): boolean {
     return false;
   }
 }
-
-/** `ms` 待つ。中断されたら待たずに解決する */
-export const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener('abort', done);
-  });
 
 /** ページの可視（スマホはバックグラウンドで凍結する。その間の失敗を数えないために見る）。`signal` で聞き手を外す */
 export function createVisibility(signal: AbortSignal): Visibility {

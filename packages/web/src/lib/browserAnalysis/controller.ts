@@ -11,12 +11,12 @@ import {
   type EngineManifest,
   type EngineManifestEntry,
 } from 'shared';
+import { abortableSleep as sleep } from '../abortableSleep';
 import { fetchPendingKifuNos, runnerApi } from './api';
 import {
   createVisibility,
   log,
   priorityWaiting,
-  sleep,
   withAnalysisLock,
   withPriorityLock,
 } from './browserDeps';

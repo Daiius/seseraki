@@ -1,4 +1,5 @@
 import { client } from './honoClient';
+import { abortableSleep } from './abortableSleep';
 import type { AnalysisAssignee } from './auth';
 import type { DrillMode, DrillRef, DrillsSearch } from './drillSearch';
 import {
@@ -121,26 +122,10 @@ export interface Reveal {
 const POLL_INTERVAL_MS = 1500;
 const POLL_BUDGET_MS = 240_000;
 
-/**
- * `ms` だけ待つ。`signal` が中断されたら待たずに戻る（戻った後に呼び出し側が `signal.aborted` を見る）
- */
-export function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) return resolve();
-    const done = () => {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    };
-    const timer = setTimeout(done, ms);
-    signal.addEventListener('abort', done, { once: true });
-  });
-}
-
 /** 判定が出るまで待つ。**ポーリングは呼び出し側から見えない**（prd/12 §2.4）。中断されたら待つのをやめる */
 async function waitForEvaluation(jobId: string, deadline: number, signal: AbortSignal): Promise<void> {
   while (Date.now() < deadline) {
-    await pause(POLL_INTERVAL_MS, signal);
+    await abortableSleep(POLL_INTERVAL_MS, signal);
     if (signal.aborted) return;
     const res = await client.api.positions.evaluate[':jobId'].$get({ param: { jobId } }, { init: { signal } });
     // 404 は TTL 切れ / server 再起動。**同じ body を投げ直せばよい**ので待ちを抜ける

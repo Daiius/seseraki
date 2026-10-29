@@ -10,6 +10,8 @@
  * 🔒 **判定は server**。ここは応答の振り分けと、送り直しの本文の組み立てだけ。
  */
 import type { DrillNamedEvaluation, NamedEvalSettings } from 'shared';
+import type { GradingResult } from './browserAnalysis/grading';
+import type { BrowserAnalysisPhase } from './browserAnalysis/store';
 
 /** 解答の本文（送り直しても `line` と線引きは変えない） */
 export interface AnswerBody {
@@ -122,6 +124,31 @@ export function answerBodyUnavailable(body: AnswerBody): AnswerBody {
  */
 export function onEvaluate(body: AnswerBody): 'read' | 'give-up' {
   return body.evaluation || body.browserUnavailable ? 'give-up' : 'read';
+}
+
+/** エンジンが使える（か、読み込み中でじきに使える）状態 */
+const ENGINE_USABLE: ReadonlySet<BrowserAnalysisPhase> = new Set(['idle', 'loading', 'analyzing']);
+
+/**
+ * この端末のエンジンで採点できなかった手を、**同じ手で判定し直してよいか**（prd/13 §7.1・2026-10-29）。
+ * 採点できなかったときの状態（同意の前・止まっていた・起動の途中）から、使える状態へ移ったときだけ true。
+ * 🔒 **使える状態のまま採点できなかったなら判定し直さない**——解析の状態が動くたびに送り直して回り続けるため
+ */
+export function retriesAfterEngineReady(failedAt: BrowserAnalysisPhase, now: BrowserAnalysisPhase): boolean {
+  return !ENGINE_USABLE.has(failedAt) && ENGINE_USABLE.has(now);
+}
+
+/**
+ * 採点できなかった結果から、エンジンの準備を待って判定し直すときの**基準の状態**（{@link retriesAfterEngineReady} の `failedAt`）。
+ * エンジンを使えない（`unavailable`）ときだけ、その結果が返った時点の状態を返す。それ以外（読みの失敗・噛み合わない）は待たない（null）。
+ * 🔴 **画面が判定を諦めた時点の状態ではなく、この時点の状態を基準にする**（レビュー `OCL-239BA9E5`）——詰将棋は読めない旨を申告して
+ * server に送り直すので、その応答を待つ間に同意されると、諦めた時点ではもう使える状態（`loading` など）になっていて二度と判定し直さない
+ */
+export function engineWaitFromOf(
+  result: Exclude<GradingResult, { kind: 'ok' }>,
+  phaseAtResult: BrowserAnalysisPhase,
+): BrowserAnalysisPhase | null {
+  return result.kind === 'unavailable' ? phaseAtResult : null;
 }
 
 /** 間違えた手の案内（prd/13 §7.1）。🔒 内部の用語を出さない */

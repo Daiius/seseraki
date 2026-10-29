@@ -3,6 +3,7 @@ import { createInitialState } from './board';
 import { parseSfen } from './sfen';
 import {
   canPromoteMove,
+  mustPromoteMove,
   dropDestinations,
   isAttackedBy,
   isInCheck,
@@ -298,5 +299,26 @@ describe('canPromoteMove（出題の盤で「成」を出すか。prd/13 §3）'
     expect(canPromoteMove(state, 'P*5c')).toBe(false);
     expect(canPromoteMove(state, '1a1b')).toBe(false);
     expect(canPromoteMove(state, '5i5h')).toBe(false); // 玉は成れない
+  });
+});
+
+describe('mustPromoteMove（成らなければいけない手。prd/13 §7.1）', () => {
+  // 先手: 1四の歩・2四の香・3四の桂・4四の銀。後手: 9六の歩・8七の桂（駒の動き方は見ない。行き先の段で決まる）
+  const state = parseSfen('4k4/9/9/5SNLP/9/p8/1n7/9/4K4 b - 1')!;
+
+  it('歩・香は最奥の段、桂は奥 2 段へ行くなら true', () => {
+    expect(mustPromoteMove(state, '2d2a')).toBe(true); // 香が 1 段目
+    expect(mustPromoteMove(state, '2d2b')).toBe(false); // 香の 2 段目は不成で指せる
+    expect(mustPromoteMove(state, '3d2b')).toBe(true); // 桂の 2 段目
+    expect(mustPromoteMove(state, '3d4b')).toBe(true);
+    expect(mustPromoteMove(state, '9f9g')).toBe(false); // 後手の歩の 7 段目
+    expect(mustPromoteMove(state, '8g9i')).toBe(true); // 後手の桂の 9 段目
+  });
+
+  it('成れない手・銀は false', () => {
+    expect(mustPromoteMove(state, '4d4c')).toBe(false); // 銀は行き所が無くならない
+    expect(mustPromoteMove(state, '1d1c')).toBe(false); // 歩の 3 段目は任意
+    expect(mustPromoteMove(state, 'P*1a')).toBe(false);
+    expect(mustPromoteMove(state, '5i5h')).toBe(false);
   });
 });

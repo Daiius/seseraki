@@ -140,6 +140,22 @@
   height: calc(var(--sq) * 0.5);
 }
 
+/*
+  盤の上に重ねる成 / 不成の選択（出題。prd/13 §7.1）。
+  🔒 **選択肢 1 つの寸法は 44px（2.75rem）を下回らない**（`lib/touchTargets.ts` の基準）。
+  盤のマスはモバイルで 40px 以下なので、マスより大きくなる側だけ 44px に揃え、大きい盤ではマスと同じにする。
+  `--pick` は位置の計算（`BoardGrid.tsx` の `PromotionPicker`）でも使う。
+*/
+.shogi-promotion {
+  --pick: max(var(--sq), 2.75rem);
+}
+
+.shogi-promotion-pick {
+  width: var(--pick);
+  height: var(--pick);
+  font-size: calc(var(--pick) * 0.5);
+}
+
 /* 枚数は駒の右上に上付きで重ねる（1 枚のときは出さない） */
 .shogi-hand-count {
   font-size: calc(var(--sq) * 0.3);

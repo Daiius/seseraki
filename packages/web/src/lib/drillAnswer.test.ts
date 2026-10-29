@@ -10,6 +10,8 @@ import {
   missText,
   practiceNote,
   resultBadge,
+  engineWaitFromOf,
+  retriesAfterEngineReady,
 } from './drillAnswer';
 
 const SETTINGS = {
@@ -157,5 +159,45 @@ describe('読めない旨の申告と、evaluate を受けたときにするこ�
     expect(onEvaluate(body)).toBe('read');
     expect(onEvaluate(answerBodyUnavailable(body))).toBe('give-up');
     expect(onEvaluate({ ...body, evaluation: {} as never })).toBe('give-up');
+  });
+});
+
+describe('エンジンの準備ができたら同じ手で判定し直す（prd/13 §7.1・2026-10-29）', () => {
+  it('同意の前・止まっていた・起動の途中から、使える状態へ移ったら true', () => {
+    expect(retriesAfterEngineReady('needs-consent', 'loading')).toBe(true);
+    expect(retriesAfterEngineReady('needs-consent', 'idle')).toBe(true);
+    expect(retriesAfterEngineReady('error', 'analyzing')).toBe(true);
+    expect(retriesAfterEngineReady('off', 'idle')).toBe(true);
+  });
+
+  it('まだ使えない間は false', () => {
+    expect(retriesAfterEngineReady('needs-consent', 'needs-consent')).toBe(false);
+    expect(retriesAfterEngineReady('needs-consent', 'off')).toBe(false);
+    expect(retriesAfterEngineReady('unsupported', 'unsupported')).toBe(false);
+  });
+
+  it('🔒 使える状態のまま採点できなかったなら、状態が動いても判定し直さない（回り続けない）', () => {
+    expect(retriesAfterEngineReady('idle', 'analyzing')).toBe(false);
+    expect(retriesAfterEngineReady('analyzing', 'idle')).toBe(false);
+  });
+});
+
+describe('engineWaitFromOf（判定し直しの基準の状態。レビュー OCL-239BA9E5）', () => {
+  it('エンジンを使えないときは、その結果が返った時点の状態を基準にする', () => {
+    expect(engineWaitFromOf({ kind: 'unavailable', reason: 'needs-consent' }, 'needs-consent')).toBe('needs-consent');
+  });
+
+  it('読みの失敗・噛み合わないときは待たない', () => {
+    expect(engineWaitFromOf({ kind: 'failed', detail: 'x' }, 'idle')).toBeNull();
+    expect(engineWaitFromOf({ kind: 'mismatch', returned: '7g7f' }, 'idle')).toBeNull();
+  });
+
+  it('🔴 申告して送り直す間に同意されても、読めなかった時点の状態を基準に一度だけ判定し直せる', () => {
+    // 同意の前に読めず（needs-consent）、server の応答を待つ間に同意してダウンロードが始まった（loading）
+    const from = engineWaitFromOf({ kind: 'unavailable', reason: 'needs-consent' }, 'needs-consent');
+    expect(from).not.toBeNull();
+    expect(retriesAfterEngineReady(from!, 'loading')).toBe(true);
+    // 諦めた時点の状態（loading）を基準にすると、その後ずっと判定し直さない（直す前の振る舞い）
+    expect(retriesAfterEngineReady('loading', 'idle')).toBe(false);
   });
 });

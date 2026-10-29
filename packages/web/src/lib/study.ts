@@ -39,6 +39,7 @@
  *   - 行き先は `shared` の `moveDestinations` / `dropDestinations` の中だけ（外を叩いても無視）
  *   - 🔴 **盤の駒を選択中に駒台の駒を叩いたら、その持ち駒の選択に切り替える**（駒台へ移さない）
  *   - 成 / 不成の指し直しは**成れる手だけ**（`shared` の `canPromoteMove`。server の検証と同じ出所）
+ *   - 指した直後に、成を選ばせるか・黙って成らせるか・そのまま答えるかを {@link promotionNeedOf} で決める
  *   🔒 **合法手生成器ではない**（王手放置・打ち歩詰めは見ない。prd/13 §3）。
  */
 import {
@@ -51,6 +52,7 @@ import {
   moveDestinations,
   movePiece,
   moveToHand,
+  mustPromoteMove,
   pieceAt,
   positionSfen,
   setPromoted,
@@ -466,6 +468,37 @@ export function isLastMovePromoted(session: StudySession): boolean {
     return piece !== null && unpromoted(piece.kind) !== piece.kind;
   }
   return move.endsWith('+');
+}
+
+/** {@link promotionNeedOf} の答え */
+export type PromotionNeed = 'choose' | 'must' | 'none';
+
+/**
+ * 直前の手の成り方の決まり方（出題。prd/13 §7.1・2026-10-29 決定）。
+ * - `choose`: 成も不成も指せる（任意成り）。盤の上で選ばせる
+ * - `must`: 不成だと行き所のない駒になる。選ばせずに成らせる
+ * - `none`: 成れない手（打つ手・成りの領域に出入りしない・成れない駒・成駒を動かした）。そのまま答える
+ *
+ * 🔒 **規則は server の検証と同じ出所**（`shared` の `canPromoteMove` / `mustPromoteMove`）。
+ * ⚠ 見るのは**直前の手の盤上の移動**で、今の成り / 不成の形は問わない（`7g7f` と `7g7f+` は同じ答え）。
+ * 直前が手でない（起点・編集の段）なら `none`。
+ */
+export function promotionNeedOf(session: StudySession): PromotionNeed {
+  if (session.cursor < 1) return 'none';
+  const move = lastMove(session);
+  if (!move) return 'none';
+  const before = session.steps[session.cursor - 1].state;
+  if (!canPromoteMove(before, move)) return 'none';
+  return mustPromoteMove(before, move) ? 'must' : 'choose';
+}
+
+/**
+ * 直前の手を成 / 不成の**指定した形**にする（今その形なら同じオブジェクトを返す）。
+ * 盤の上の「成」「不成」の選択と、成らなければいけない手を成らせるのに使う。
+ * 切り替えられない手（{@link canTogglePromotion} が false）はそのまま返す
+ */
+export function withPromotion(session: StudySession, promote: boolean): StudySession {
+  return isLastMovePromoted(session) === promote ? session : togglePromotion(session);
 }
 
 function promotionRetry(

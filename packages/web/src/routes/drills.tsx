@@ -2,24 +2,24 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
   parseSfen,
+  pieceAt,
   usiToJapaneseWithPiece,
   type BoardState,
   type HandPieceKind,
   type SquareRef,
 } from 'shared';
 import { client } from '../lib/honoClient';
-import { BoardGrid, HandDisplay } from '../components/BoardGrid';
+import { BoardGrid, HandDisplay, type PromotionChoice } from '../components/BoardGrid';
 import {
   applyStudyMoves,
-  canTogglePromotion,
   currentState,
-  isLastMovePromoted,
   lastMove,
+  promotionNeedOf,
   selectionDestinations,
+  squareOfUsi,
   tapHand,
   tapSquare,
-  togglePromotion,
-  undo,
+  withPromotion,
   type StudySession,
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
@@ -39,6 +39,8 @@ import {
   missText,
   practiceNote,
   resultBadge,
+  engineWaitFromOf,
+  retriesAfterEngineReady,
   type AnswerBody,
   type MissReason,
 } from '../lib/drillAnswer';
@@ -51,6 +53,7 @@ import {
   getBrowserAnalysisState,
   subscribeBrowserAnalysisState,
   useBrowserAnalysisState,
+  type BrowserAnalysisPhase,
 } from '../lib/browserAnalysis/store';
 import { askDrillEngineConsent, requestDrillEngine } from '../lib/browserAnalysis/drillEngine';
 import { useAnalysisAssignee } from '../lib/useMe';
@@ -600,7 +603,8 @@ const POLL_BUDGET_MS = 240_000;
 function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSearch }) {
   const { scoring } = useDrillScoring();
   const assignee = useAnalysisAssignee();
-  const engineLoading = useBrowserAnalysisState().phase === 'loading';
+  const enginePhase = useBrowserAnalysisState().phase;
+  const engineLoading = enginePhase === 'loading';
   const navigate = useNavigate({ from: '/drills' });
   /** 入ってきた入口。一覧から名指しで開いた問題は null（大きいボタンが「一覧に戻る」になる。prd/13 §7.6） */
   const mode = search.mode ?? null;
@@ -622,8 +626,13 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
   const [recorded, setRecorded] = useState<Reveal['verdict'] | null>(null);
   /** 「答えを見る」の 1 段目を押した（画面内の 2 段の確認。`confirm()` は使わない） */
   const [confirmGiveUp, setConfirmGiveUp] = useState(false);
-  /** この端末のエンジンで採点できなかった（同意の前・解析できない環境など）。案内（同意のボタンなど）も並べて出す */
-  const [ungradable, setUngradable] = useState(false);
+  /**
+   * この端末のエンジンで採点できなかった（同意の前・解析できない環境など）ときの、エンジンの状態。案内（同意のボタンなど）も並べて出す。
+   * 答えた手は盤に残し、エンジンが使えるようになったら同じ手で判定し直す（prd/13 §7.1・2026-10-29）
+   */
+  const [ungradableAt, setUngradableAt] = useState<BrowserAnalysisPhase | null>(null);
+  /** 任意成りの手を指して、盤の上で成 / 不成を選んでいる（prd/13 §7.1・2026-10-29） */
+  const [choosing, setChoosing] = useState(false);
 
   /**
    * 解いた後の大きいボタン。🔒 **次の問題も loader に選ばせる**（prd/13 §7.8）——問題の指定を落として replace で
@@ -644,9 +653,11 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
   const state = session ? currentState(session) : base;
   // ⚠ **解いている側を下に置く**（自分の手番の局面しか出題されない。prd/13 §4.1）
   const flipped = base?.sideToMove === 'gote';
-  /** 確定前の 1 手（盤で動かしたが、まだ答えていない手） */
+  /**
+   * 確定前の 1 手（盤で動かしたが、まだ判定が済んでいない手）。判定中・成 / 不成を選んでいる間と、
+   * エンジンの準備を待つ間（`ungradableAt`）にだけある
+   */
   const pending = session && session.steps.length > line.length + 1 ? lastMove(session) : null;
-
 
   /**
    * 盤を叩く。🔒 **盤操作は「ルールどおり」のモード**（`lib/study.ts`）——手番側の駒だけ選べ、
@@ -654,15 +665,67 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
    * 駒の動き方を見ないので、塗るだけだと歩を横に動かす手がエンジンまで届く）。
    * 盤の駒を選択中に駒台を叩いても駒台へは移らず、持ち駒の選択に切り替わる（prd/13 §7.1）。
    * ⚠ 検討盤は自由編集のまま——**出題だけの規則**。
+   *
+   * 🔒 **指したら確定のボタンを待たずに判定する**（prd/13 §7.1・2026-10-29。旧仕様の「この手で答える」は廃止）。
+   * 任意成りだけ盤の上で成 / 不成を選ばせ、成らなければいけない手は黙って成らせる（`promotionNeedOf`）。
    */
   function onSquare(square: SquareRef) {
-    if (!session || reveal || judging || pending) return;
-    setSession(tapSquare(session, square));
+    if (!session || reveal || judging) return;
+    if (choosing) return cancelChoice();
+    played(tapSquare(settledSession(), square));
   }
 
   function onHand(kind: HandPieceKind) {
-    if (!session || reveal || judging || pending) return;
-    setSession(tapHand(session, currentState(session).sideToMove, kind));
+    if (!session || reveal || judging) return;
+    // 成 / 不成を選んでいる間に駒台を叩いたら、選択肢の外を叩いたのと同じく取り消す
+    if (choosing) return cancelChoice();
+    const from = settledSession();
+    setSession(tapHand(from, currentState(from).sideToMove, kind));
+  }
+
+  /**
+   * 盤を叩く前のセッション。エンジンの準備を待って盤に残っている手は、**盤を叩いたら捨てる**（指し直す。自動の判定し直しも止まる）
+   */
+  function settledSession(): StudySession {
+    if (!pending) return session!;
+    setUngradableAt(null);
+    setError(null);
+    return sessionOf(drill, line)!;
+  }
+
+  /** 叩いた結果。手が 1 つ増えていれば、成り方を決めて判定へ回す */
+  function played(next: StudySession) {
+    const move = next.steps.length > line.length + 1 ? lastMove(next) : null;
+    if (!move) {
+      setSession(next);
+      return;
+    }
+    const need = promotionNeedOf(next);
+    if (need === 'choose') {
+      setSession(next);
+      setChoosing(true);
+      return;
+    }
+    submit(need === 'must' ? withPromotion(next, true) : next);
+  }
+
+  /** 盤の上の成 / 不成を選んだ */
+  function choose(promote: boolean) {
+    if (!session) return;
+    setChoosing(false);
+    submit(withPromotion(session, promote));
+  }
+
+  /** 選択肢の外を叩いた。**その手を取り消す**（指す前の局面へ） */
+  function cancelChoice() {
+    setChoosing(false);
+    setSession(sessionOf(drill, line));
+  }
+
+  /** 盤の最後の手で答える */
+  function submit(next: StudySession) {
+    setSession(next);
+    void answer(lastMove(next)!, next);
   }
 
   /** 確定した手順まで盤を戻す（間違えた手・確定前の手を捨てる） */
@@ -671,7 +734,8 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     setSession(sessionOf(drill, next));
     setMiss(null);
     setError(null);
-    setUngradable(false);
+    setUngradableAt(null);
+    setChoosing(false);
     setConfirmGiveUp(false);
   }
 
@@ -692,6 +756,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     if (!drill) return;
     const practice = recorded !== null;
     setConfirmGiveUp(false);
+    setChoosing(false);
     setJudging(true);
     setError(null);
     try {
@@ -717,22 +782,38 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     }
   }
 
-  async function answer(move: string) {
-    if (!drill || !session) return;
+  /** 判定に回す。`at` は答えた手を指した後のセッション（state の反映を待たずに読むので引数で受ける） */
+  async function answer(move: string, at: StudySession) {
+    if (!drill) return;
     // 🔒 初めて詰将棋の 1 手を指したら、判定のためのエンジンを用意する（同意の前なら同意を求める。prd/13 §5.5）
     if (drill.kind === 'mate') requestDrillEngine();
     setJudging(true);
     setError(null);
-    setUngradable(false);
+    setUngradableAt(null);
     setMiss(null);
     setConfirmGiveUp(false);
     const practice = recorded !== null;
     /** 答えた手を指した後の局面（咎め筋はここから読む） */
-    const answered = currentState(session);
+    const answered = currentState(at);
+    /**
+     * 判定できなかった。**その手は盤から戻す**（指し直せるように）。ただしエンジンの準備（同意・ダウンロード）を
+     * 待つときだけ盤に残し、準備ができたら同じ手で判定し直す（上の effect）
+     */
+    const fail = (text: string, waitEngineFrom: BrowserAnalysisPhase | null) => {
+      setError(text);
+      if (waitEngineFrom !== null) setUngradableAt(waitEngineFrom);
+      else setSession(sessionOf(drill, line));
+      setJudging(false);
+    };
     let body: AnswerBody = { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) };
     let deadline = Date.now() + POLL_BUDGET_MS;
     /** このブラウザで読めなかった理由（読めない旨を申告した後、サーバーでも判定されなかったときに出す） */
     let unreadable: Exclude<GradingResult, { kind: 'ok' }> | null = null;
+    /**
+     * 読めなかった時点のエンジンの状態（判定し直しの基準）。🔴 送り直しの応答を待つ間に同意されても、
+     * この値で判定し直す（諦めた時点の状態を使うと、もう使える状態なので二度と判定し直さない。レビュー `OCL-239BA9E5`）
+     */
+    let unreadableFrom: BrowserAnalysisPhase | null = null;
     try {
       while (Date.now() < deadline) {
         const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
@@ -750,9 +831,10 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
             // 🔒 読んだ結果を付けて送り直したのに、また読んでと返る ＝ 噛み合っていない。回り続けない。
             // 読めないと申告してまた返る ＝ サーバーでも判定できない（ブラウザで解析する利用者）。読めなかった理由を出す
             if (onEvaluate(body) === 'give-up') {
-              setError(unreadable ? gradingFailureMessage(unreadable) : '判定できませんでした。もう一度お試しください');
-              setUngradable(unreadable?.kind === 'unavailable');
-              setJudging(false);
+              fail(
+                unreadable ? gradingFailureMessage(unreadable) : '判定できませんでした。もう一度お試しください',
+                unreadableFrom,
+              );
               return;
             }
             // このブラウザのエンジンで名指しで読む（全局面解析より先に。prd/14 §5.10）。
@@ -764,17 +846,18 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
               clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
               ...(assignee === 'worker' && drill.kind === 'mate' ? { askConsent: askDrillEngineConsent } : {}),
             });
+            const gradedFrom =
+              graded.kind === 'ok' ? null : engineWaitFromOf(graded, getBrowserAnalysisState().phase);
             if (graded.kind !== 'ok' && drill.kind === 'mate') {
               // 詰将棋は「この端末では読めない」と申告して送り直す（サーバーで解析する利用者はサーバーで判定される）
               unreadable = graded;
+              unreadableFrom = gradedFrom;
               body = answerBodyUnavailable(body);
               deadline = Date.now() + POLL_BUDGET_MS;
               continue;
             }
             if (graded.kind !== 'ok') {
-              setError(gradingFailureMessage(graded));
-              setUngradable(graded.kind === 'unavailable');
-              setJudging(false);
+              fail(gradingFailureMessage(graded), gradedFrom);
               return;
             }
             body = answerBodyWithEvaluation(body, graded.evaluation);
@@ -783,8 +866,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
             continue;
           }
           case 'error':
-            setError(step.text);
-            setJudging(false);
+            fail(step.text, null);
             return;
           case 'continue': {
             // 詰みの指し継ぎ。受方の応手まで進めて次の手を待つ（prd/13 §5.2）
@@ -815,13 +897,18 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
           }
         }
       }
-      setError('判定が終わりませんでした。もう一度お試しください');
-      setJudging(false);
+      fail('判定が終わりませんでした。もう一度お試しください', null);
     } catch {
-      setError('サーバーに接続できません');
-      setJudging(false);
+      fail('サーバーに接続できません', null);
     }
   }
+
+  // エンジンの同意・ダウンロード・やり直しが済んだら、盤に残した手で判定し直す（prd/13 §7.1・2026-10-29）
+  useEffect(() => {
+    if (ungradableAt === null || !pending || !session || judging) return;
+    if (!retriesAfterEngineReady(ungradableAt, enginePhase)) return;
+    void answer(pending, session);
+  }, [ungradableAt, enginePhase, pending, session, judging]);
 
   async function exclude() {
     if (!drill) return;
@@ -877,6 +964,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         onSquareClick={reveal ? undefined : onSquare}
         selected={session?.selection?.kind === 'square' ? session.selection.square : null}
         destinations={selectionDestinations(session)}
+        promotionChoice={choosing && pending ? promotionChoiceOf(state, pending, choose, cancelChoice) : null}
       />
       <HandDisplay
         hand={state.hand[flipped ? 'gote' : 'sente']}
@@ -892,7 +980,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         サーバーで解析する利用者では何も出ない
       */}
       {assignee === 'browser' ? (
-        (judging || ungradable) && <BrowserAnalysisNotice />
+        (judging || ungradableAt !== null) && <BrowserAnalysisNotice />
       ) : (
         // サーバーで解析する利用者: 詰将棋の判定のための同意と、エンジンの準備の進捗だけ（解析の案内は出さない）
         <>
@@ -915,36 +1003,8 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         </div>
       )}
 
-      {pending && !reveal && !judging && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm">
-            {usiToJapaneseWithPiece(session!.steps[session!.cursor - 1].state, pending)}
-          </span>
-          {/*
-            🔒 **成れる手のときだけ「成」を出す。** 自由編集の `canTogglePromotion` は打った駒まで
-            成らせるため、そのままだと**押せるのに server が 400（illegal_promotion）を返すボタン**ができる。
-            「ルールどおり」のモードは `shared` の `canPromoteMove`（server の検証と同じ出所）で絞る（`lib/study.ts`）。
-          */}
-          {canTogglePromotion(session!) && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setSession(togglePromotion(session!))}
-              >
-                {isLastMovePromoted(session!) ? '不成' : '成'}
-              </button>
-            )}
-          <button type="button" className="btn btn-sm" onClick={() => setSession(undo(session!))}>
-            戻す
-          </button>
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => answer(pending)}>
-            この手で答える
-          </button>
-        </div>
-      )}
-
       {!reveal && !judging && (
-        // 🔒 「この手で答える」から離して控えめに置く（prd/13 §7.1）
+        // 盤から離して控えめに置く（prd/13 §7.1）
         <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-base-300">
           {drill.kind === 'mate' && (
             <>
@@ -1146,6 +1206,21 @@ function AttemptsOf({ drill }: { drill: Drill }) {
       </div>
     </details>
   );
+}
+
+/**
+ * 盤の上に重ねる成 / 不成の選択（`BoardGrid`）。`move` は指したばかりの手（不成の形）で、`state` はそれを指した後の局面。
+ * 選ぶ前の盤は不成の形で駒が乗っているので、行き先の駒をそのまま「成らない形」として出す
+ */
+function promotionChoiceOf(
+  state: BoardState,
+  move: string,
+  onChoose: (promote: boolean) => void,
+  onCancel: () => void,
+): PromotionChoice | null {
+  const square = squareOfUsi(move.slice(2, 4));
+  const piece = pieceAt(state, square);
+  return piece ? { square, side: piece.side, piece: piece.kind, onChoose, onCancel } : null;
 }
 
 /** 出題局面 + 確定した手順からセッションを作る */

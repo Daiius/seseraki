@@ -393,6 +393,21 @@ export function canPromoteMove(state: BoardState, move: string): boolean {
   return inPromotionZone(fromRow, piece.side) || inPromotionZone(toRow, piece.side);
 }
 
+/**
+ * その手が**成らなければいけない手か**（成らずに指すと行き所のない駒になる移動）。
+ *
+ * 出題の盤（prd/13 §7.1）で「成 / 不成」を聞かずに成らせるかの判定に使う。
+ * 🔒 **規則は局面の検証の「行き所のない駒」（`isStuck`）と同じ出所にする**——不成で送ると server が弾く手を、
+ * 選ばせないため。
+ */
+export function mustPromoteMove(state: BoardState, move: string): boolean {
+  if (!canPromoteMove(state, move)) return false;
+  const [fromRow, fromCol] = usiToIndex(move.slice(0, 2));
+  const [toRow] = usiToIndex(move.slice(2, 4));
+  const piece = state.board[fromRow][fromCol]!;
+  return isStuck(piece, toRow);
+}
+
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
 const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
 

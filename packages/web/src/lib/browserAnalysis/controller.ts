@@ -12,6 +12,7 @@ import {
   createUsiSession,
   engineEntryDownloadBytes,
   engineEntryOf,
+  stageMaxThreadsOf,
   type BrowserAnalysisSettings as ServerAnalysisSettings,
   type EngineManifest,
   type EngineManifestEntry,
@@ -202,12 +203,9 @@ async function createEngine(
     log.info(
       `readyok name="${name ?? ''}" eval=${entry.id} threads=${options.threads} hash=${options.hashMb}MB fvScale=${entry.fvScale}`,
     );
-    /** 負荷の設定で決まる数（`setThreads(null)` で戻す数） */
-    const loadThreads = analysisThreads(
-      navigator.hardwareConcurrency,
-      settings.maxThreads,
-      load,
-    );
+    /** 負荷の設定で決まる数（`setThreads(null)` で戻す数）。上限は段ごと（prd/14 §5.5）。省略時は作ったときの段の上限 */
+    const loadThreads = (cap: number = stageMaxThreadsOf(settings)) =>
+      analysisThreads(navigator.hardwareConcurrency, cap, load);
     let threads = options.threads;
     return {
       session,
@@ -216,10 +214,11 @@ async function createEngine(
         return threads;
       },
       hashMb: options.hashMb,
-      // 詰将棋の判定の固定のスレッド数（prd/13 §5.5）。上流は setoption Threads でその場でスレッドを作り直す
-      // （resize_threads。置換表も確保し直す）。isready で揃うのを待つ。評価関数は読み直さない
-      setThreads: async (next) => {
-        const want = next ?? loadThreads;
+      // 詰将棋の判定の固定のスレッド数（prd/13 §5.5）と、段ごとの上限（prd/14 §5.5。full は 4）。上流は setoption Threads で
+      // その場でスレッドを作り直す（resize_threads。置換表も確保し直す）。isready で揃うのを待つ。評価関数は読み直さない
+      setThreads: async (next, cap) => {
+        // 上限はエンジンを作ったときの maxThreads を超えない
+        const want = next ?? loadThreads(cap === undefined ? undefined : Math.min(cap, settings.maxThreads));
         if (want === threads) return;
         const started = Date.now();
         session.setOption('Threads', String(want));

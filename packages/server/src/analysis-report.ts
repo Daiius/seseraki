@@ -49,6 +49,22 @@ export const BROWSER_ANALYSIS_MOVETIME_MS: Record<AnalysisProfile, number> = {
 };
 
 /**
+ * ブラウザ解析の段ごとのスレッド数の上限（prd/14 §5.5。2026-10-29 決定）。開始の口の `settings.stageMaxThreads`。
+ * ブラウザは論理コア数とこれの小さいほうを使う（負荷「控えめ」はその半分）。
+ * - full は 4: つようら王11mini の実測で、600ms の 8 スレッドと 4 スレッドは区別できない（最善手の一致・評価値の差・深さとも同じ水準）。
+ *   端末の発熱を抑える
+ * - quick は `maxThreads` のまま（8）
+ *
+ * 🔒 **`maxThreads`（エンジンの上限）とは別の欄にする。** web はエンジンを `maxThreads` で作り、段の開始で
+ * `setoption Threads` でこの数に合わせる（段が変わるたびに評価関数を読み直さない）。この欄を知らない web は
+ * これまでどおり `maxThreads` で回る（壊れない）
+ */
+export const BROWSER_ANALYSIS_STAGE_MAX_THREADS: Record<AnalysisProfile, number> = {
+  quick: 8,
+  full: 4,
+};
+
+/**
  * ブラウザ解析の設定のうち、段で共通のもの（開始の口が返す。prd/14 §5.2・§5.5・§5.8）。
  * web に焼き込まず server の定数にしておく——値を調整するときに web の再デプロイを要さない。
  */
@@ -70,9 +86,14 @@ export const BROWSER_ANALYSIS_SETTINGS = {
  * 開始の口が返す、ある段の設定。
  * 🔒 **`movetimeMs` は「その段の思考時間」**——1 段のまま `settings.movetimeMs` を読んで回す web
  * （2 段化の前のコード）でも、開始のたびに server が決めた段の時間で回る（quick → full の順に）
+ * - `stageMaxThreads` は「その段のスレッド数の上限」（{@link BROWSER_ANALYSIS_STAGE_MAX_THREADS}）
  */
 export function browserAnalysisSettingsFor(profile: AnalysisProfile) {
-  return { ...BROWSER_ANALYSIS_SETTINGS, movetimeMs: BROWSER_ANALYSIS_MOVETIME_MS[profile] };
+  return {
+    ...BROWSER_ANALYSIS_SETTINGS,
+    movetimeMs: BROWSER_ANALYSIS_MOVETIME_MS[profile],
+    stageMaxThreads: BROWSER_ANALYSIS_STAGE_MAX_THREADS[profile],
+  };
 }
 
 /** 開始の口が返す設定の形 */

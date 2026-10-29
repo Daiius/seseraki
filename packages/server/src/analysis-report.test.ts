@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BROWSER_ANALYSIS_MOVETIME_MS,
   BROWSER_ANALYSIS_SETTINGS,
+  BROWSER_ANALYSIS_STAGE_MAX_THREADS,
   browserAnalysisSettingsFor,
   browserClaimedProfile,
   browserStageOf,
@@ -83,8 +84,26 @@ describe('BROWSER_ANALYSIS_SETTINGS（開始の口が返す設定）', () => {
   });
 
   it('🔒 開始の口の settings.movetimeMs は「その段の思考時間」（1 段のままの web がそれで回す）。ほかの値は段で共通', () => {
-    expect(browserAnalysisSettingsFor('quick')).toEqual({ ...BROWSER_ANALYSIS_SETTINGS, movetimeMs: 100 });
-    expect(browserAnalysisSettingsFor('full')).toEqual({ ...BROWSER_ANALYSIS_SETTINGS, movetimeMs: 600 });
+    expect(browserAnalysisSettingsFor('quick')).toEqual({
+      ...BROWSER_ANALYSIS_SETTINGS,
+      movetimeMs: 100,
+      stageMaxThreads: 8,
+    });
+    expect(browserAnalysisSettingsFor('full')).toEqual({
+      ...BROWSER_ANALYSIS_SETTINGS,
+      movetimeMs: 600,
+      stageMaxThreads: 4,
+    });
+  });
+
+  it('段ごとのスレッド数の上限は full だけ 4（prd/14 §5.5。2026-10-29）。エンジンの上限 maxThreads は段で共通の 8', () => {
+    expect(BROWSER_ANALYSIS_STAGE_MAX_THREADS).toEqual({ quick: 8, full: 4 });
+    // 🔒 maxThreads は段で変えない——web はこれでエンジンを作るので、変えると段が変わるたびに作り直しになる
+    expect(browserAnalysisSettingsFor('quick').maxThreads).toBe(8);
+    expect(browserAnalysisSettingsFor('full').maxThreads).toBe(8);
+    for (const profile of ['quick', 'full'] as const) {
+      expect(browserAnalysisSettingsFor(profile).stageMaxThreads).toBeLessThanOrEqual(BROWSER_ANALYSIS_SETTINGS.maxThreads);
+    }
   });
 });
 

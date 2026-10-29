@@ -25,14 +25,36 @@ export interface BrowserAnalysisSettings {
   multiPv: number;
   /** 置換表（`USI_Hash`） */
   hashMb: number;
-  /** スレッド数の上限。ブラウザは論理コア数とこれの小さいほうを使う */
+  /**
+   * エンジンのスレッド数の上限（段で共通）。ブラウザはエンジンをこの値で作る（変わったら作り直す）
+   */
   maxThreads: number;
+  /**
+   * この段のスレッド数の上限（prd/14 §5.5。2026-10-29 に足した欄。full は 4）。ブラウザは論理コア数とこれの小さいほうを使い、
+   * 段の開始で動いているエンジンのスレッド数を合わせる（作り直さない）。
+   * 🔒 **任意**: 足す前の server は返さない。無ければ `maxThreads`（{@link stageMaxThreadsOf}）
+   */
+  stageMaxThreads?: number;
   /** チャンクを送る間隔の目安 */
   chunkIntervalMs: number;
   /** 1 チャンクの局面数の上限 */
   chunkMaxPositions: number;
   /** 読み筋の長さの上限（これで切ってから送る） */
   pvMaxPlies: number;
+}
+
+/**
+ * その段で使ってよいスレッド数の上限（prd/14 §5.5）。`stageMaxThreads` が無い・読めない（足す前の server）なら `maxThreads`。
+ * `maxThreads` を超えない（エンジンの上限）
+ */
+export function stageMaxThreadsOf(
+  settings: Pick<BrowserAnalysisSettings, 'maxThreads' | 'stageMaxThreads'>,
+): number {
+  const stage = settings.stageMaxThreads;
+  if (typeof stage !== 'number' || !Number.isFinite(stage) || stage < 1) {
+    return settings.maxThreads;
+  }
+  return Math.min(settings.maxThreads, Math.floor(stage));
 }
 
 /** 開始の口の「解析する」応答（`status: 'run'` のときの中身） */

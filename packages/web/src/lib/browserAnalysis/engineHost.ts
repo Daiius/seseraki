@@ -7,7 +7,7 @@
  * ——呼び出し側は Worker ごと作り直す（遅れて届く行を次の探索に混ぜない）。
  */
 import type { EngineManifestEntry, UsiTransport } from 'shared';
-import type { BrowserAnalysisSettings as ServerAnalysisSettings } from 'shared';
+import { stageMaxThreadsOf, type BrowserAnalysisSettings as ServerAnalysisSettings } from 'shared';
 import type { EngineUrls } from './enginePaths';
 import type { AnalysisLoad } from './settings';
 
@@ -226,14 +226,15 @@ export function analysisThreads(
  *   `.` だと見つからず `isready` で黙って終了する（絶対パスはそのまま使われる）
  * - `FV_SCALE` は選んだエントリの値（16。手元 worker と同じ尺度にする。違うと悪手判定の閾値が合わない。
  *   作者の推奨 24 を書いた `eval_options.txt` は置いていないので、setoption の値が効く）
- * - スレッド数は負荷の設定で決まる（{@link analysisThreads}）。`threads` を渡せばその数（詰将棋の判定の固定のスレッド数。
+ * - スレッド数は負荷の設定で決まる（{@link analysisThreads}。上限はその段の上限 `stageMaxThreadsOf`——full は 4。prd/14 §5.5）。
+ *   `threads` を渡せばその数（詰将棋の判定の固定のスレッド数。
  *   prd/13 §5.5。server の上限と論理コア数では絞らない——server が決めた数をそのまま使う）
  * - 定跡は使わない（`BookFile no_book`）
  * - `ConsiderationMode true` は手元 worker と同じ（探索を打ち切ったときの読み筋を置換表から延ばす）
  */
 export function engineOptions(
   entry: Pick<EngineManifestEntry, 'fvScale'>,
-  settings: Pick<ServerAnalysisSettings, 'maxThreads' | 'hashMb'>,
+  settings: Pick<ServerAnalysisSettings, 'maxThreads' | 'stageMaxThreads' | 'hashMb'>,
   hardwareConcurrency: number | undefined,
   load: AnalysisLoad,
   fixedThreads?: number,
@@ -241,7 +242,7 @@ export function engineOptions(
   const threads =
     fixedThreads !== undefined && Number.isInteger(fixedThreads) && fixedThreads >= 1
       ? fixedThreads
-      : analysisThreads(hardwareConcurrency, settings.maxThreads, load);
+      : analysisThreads(hardwareConcurrency, stageMaxThreadsOf(settings), load);
   const hashMb = Math.max(1, Math.floor(settings.hashMb));
   return {
     threads,

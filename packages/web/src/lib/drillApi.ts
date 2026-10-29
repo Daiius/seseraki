@@ -14,7 +14,7 @@ import {
   gradingFailureMessage,
   requestBrowserGrading,
   type GradingResult,
-} from './browserAnalysis/grading';
+} from './browserAnalysis/drillGrading';
 import {
   getBrowserAnalysisState,
   subscribeBrowserAnalysisState,

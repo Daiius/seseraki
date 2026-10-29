@@ -7,7 +7,7 @@
  *
  * - **棋譜解析の再利用はしない**（prd/12 §2.6 は server の判定）。ブラウザの全局面解析は MultiPV 1 なので、
  *   候補手 3 本を返す局面評価の再利用にはもともと当たらない。毎回その場で読み、出所は `engine`
- * - 読むのは常駐の解析（`controller.ts`）が持つエンジン。全局面解析より先に読む（出題の採点の読みと同じ割り込み。`grading.ts`）
+ * - 読むのは常駐の解析（`controller.ts`）が持つエンジン。全局面解析より先に読む（出題の採点の読みと同じ割り込み。`readerRegistry.ts`）
  * - 🔒 **ダウンロードに同意していなければ、押した時点で同意を求める**（{@link askStudyEvalConsent}。出題の詰将棋の判定と同じ導線）。
  *   断っても覚えない（次に押したらまた聞く）——押すこと自体が「評価したい」という明示の操作なので
  *
@@ -18,8 +18,13 @@ import { BROWSER_ANALYSIS_LIMITS } from 'shared';
 import type { EvalResult } from '../positionEval';
 import { validateEvalTarget } from '../positionEval';
 import type { EvalTarget } from '../study';
-import { requestBrowserPositionEval, type GradingUnavailableReason } from './grading';
-import type { PositionEvalSettings } from './engineReads';
+import type { PositionEvalOutcome, PositionEvalRequest, PositionEvalSettings } from './engineReads';
+import {
+  requestWith,
+  type ReaderDeps,
+  type ReaderUnavailable,
+  type ReaderUnavailableReason,
+} from './readerRegistry';
 import { getBrowserAnalysisSettings, setBrowserAnalysisSettings, withConsent } from './settings';
 import { getBrowserAnalysisState, subscribeBrowserAnalysisState } from './store';
 
@@ -40,6 +45,23 @@ export const STUDY_EVAL_SETTINGS: PositionEvalSettings = {
   hashMb: 64,
   pvMaxPlies: BROWSER_ANALYSIS_LIMITS.pvMaxPlies,
 };
+
+/** 検討盤の局面評価の結果（{@link requestBrowserPositionEval}） */
+export type PositionReadingResult = PositionEvalOutcome | ReaderUnavailable;
+
+/**
+ * 検討盤の局面評価を頼む（prd/12 §2.4。担当 `browser` の利用者）。受け持ち手の待ち方・頼めない理由・頼み直しは
+ * 出題の採点の読みと同じ（`readerRegistry.ts` の {@link requestWith}）。`signal` が中断されたら（局面が変わった）、待つのをやめて `aborted` を返す
+ */
+export async function requestBrowserPositionEval(
+  request: PositionEvalRequest,
+  signal: AbortSignal,
+  deps: ReaderDeps,
+): Promise<PositionReadingResult> {
+  if (signal.aborted) return { kind: 'aborted' };
+  return requestWith((reader) => reader.position(request, signal), deps, signal);
+}
+
 
 /**
  * 局面評価をこのブラウザで読み、検討盤の `EvalResult` にする。**例外は投げない**（`requestPositionEval` と同じ）。
@@ -96,7 +118,7 @@ export async function requestBrowserStudyEval(
 }
 
 /** このブラウザで評価できない理由の文（画面に出す）。🔒 内部の用語（担当・MultiPV）は出さない */
-export function studyEvalUnavailableMessage(reason: GradingUnavailableReason): string {
+export function studyEvalUnavailableMessage(reason: ReaderUnavailableReason): string {
   switch (reason) {
     case 'needs-consent':
     case 'declined':

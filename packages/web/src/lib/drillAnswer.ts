@@ -15,7 +15,7 @@ import {
   type DrillNamedEvaluation,
   type NamedEvalSettings,
 } from 'shared';
-import type { GradingResult } from './browserAnalysis/grading';
+import type { GradingResult } from './browserAnalysis/drillGrading';
 import { applyStudyMoves } from './study';
 import type { BrowserAnalysisPhase } from './browserAnalysis/store';
 

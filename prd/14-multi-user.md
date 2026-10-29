@@ -810,12 +810,12 @@ CSA 直接貼り付けの再利用に備えて残す。
 **検討盤の局面評価**（2026-10-29 決定・実装。[12](./12-position-lab.md) §2.4）:
 
 - 🔒 **採点の読みと同じ割り込みを使う**（下の「採点の読みで実装時に決めたこと」）。常駐（`controller.ts`）が採点の読みと局面評価の両方を受け持ち
-  （`grading.ts` の `setBrowserReader`）、`scheduler.runPriority` の下で全局面解析より先に読む。ほかのタブへの印のロックも同じ
+  （`readerRegistry.ts` の `setBrowserReader`）、`scheduler.runPriority` の下で全局面解析より先に読む。ほかのタブへの印のロックも同じ
 - スレッド数は負荷の設定の数で、上限は full の段と同じ 4（控えめは 2）。動いているエンジンには `setoption Threads` で合わせ、作り直さない（§5.5）
 - 同意の前なら、押した時点で同意を求める（評価結果の枠に案内を出す）。同意すれば全局面解析にも効く（同意は 1 つ）
 - 頼んだ側が取り下げたら（局面が変わった）、順番を待つ間なら読まず、読みの途中なら `stop` で打ち切る
 
-**採点の読みで実装時に決めたこと**（2026-10-16。`grading.ts`・`scheduler.ts` の `runPriority`・`engineReads.ts` の `evaluateNamed`）:
+**採点の読みで実装時に決めたこと**（2026-10-16。`drillGrading.ts`・`readerRegistry.ts`・`scheduler.ts` の `runPriority`・`engineReads.ts` の `evaluateNamed`）:
 
 - **出題の画面から常駐の解析へ頼む**（`requestBrowserGrading`）。常駐（`controller.ts`）が受け持ち手を登録し、全局面解析と**同じエンジン**
   （棋譜をまたいで使い回すもの）で読む。負荷の設定と、設定が変わったときの作り直しも全局面解析と同じ規則

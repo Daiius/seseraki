@@ -35,7 +35,7 @@ import {
   type RunnerDeps,
 } from './runner';
 import { createScheduler, PriorityAbortedError } from './scheduler';
-import { setBrowserReader, type BrowserReader } from './grading';
+import { setBrowserReader, type BrowserReader } from './readerRegistry';
 import {
   getBrowserAnalysisSettings,
   hasConsented,

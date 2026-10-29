@@ -37,6 +37,7 @@
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。`structuredClone` などは使わない。
  */
 import {
+  relocate,
   withHand,
   withSquares,
   type BoardState,
@@ -53,28 +54,14 @@ import {
   type PieceKind,
   type Side,
 } from './pieces';
-import type { SquareRef } from './usi-move';
+import { isOnBoard, type SquareRef } from './usi-move';
 
 /** 駒箱の内訳（`pieceBox` の返り値） */
 export type PieceBox = Record<BasePieceKind, number>;
 
-/**
- * 盤内のマスか。
- * ⚠ `Number.isInteger` が **`NaN` / `Infinity` / 小数を弾く**ので、マスを受け取る関数は
- * ここを通すだけで非有限値から守られる（持ち駒の枚数は `setHandCount` が自前で見る）。
- */
-function inBoard(square: SquareRef): boolean {
-  const { row, col } = square;
-  return (
-    Number.isInteger(row) &&
-    Number.isInteger(col) &&
-    row >= 0 && row < 9 && col >= 0 && col < 9
-  );
-}
-
 /** 指定マスの駒（空きマス・盤外は null） */
 export function pieceAt(state: BoardState, square: SquareRef): Piece | null {
-  return inBoard(square) ? state.board[square.row][square.col] : null;
+  return isOnBoard(square) ? state.board[square.row][square.col] : null;
 }
 
 /** 持ち駒の枚数（持っていなければ 0） */
@@ -147,7 +134,7 @@ export function placePiece(
   square: SquareRef,
   piece: Piece,
 ): BoardState {
-  if (!inBoard(square)) return state;
+  if (!isOnBoard(square)) return state;
   return {
     ...state,
     board: withSquares(state.board, [[square.row, square.col, piece]]),
@@ -177,8 +164,10 @@ export function moveToHand(
  * 持ち駒を盤へ打つ。持ち駒を 1 枚減らして置く。
  *
  * - 持っていない駒種なら **state をそのまま返す**（駒を増やさない）
- * - 置き先に駒があれば `placePiece` と同じく駒箱へ戻る
+ * - 置き先に駒があれば、`movePiece` と同じく**打った側の持ち駒**へ入る（成駒は生駒に戻す。玉は駒箱へ）
  * - 生駒のまま置く（成った駒を打った形は `setPromoted` で作れる）
+ *
+ * 中身は `applyMove` と共用の `relocate`（`board.ts`）。
  */
 export function dropFromHand(
   state: BoardState,
@@ -186,9 +175,7 @@ export function dropFromHand(
   kind: HandPieceKind,
   square: SquareRef,
 ): BoardState {
-  if (!inBoard(square)) return state;
-  if (handCount(state, side, kind) <= 0) return state;
-  return placePiece(addToHand(state, side, kind, -1), square, { kind, side });
+  return relocate(state, { hand: kind, side }, square) ?? state;
 }
 
 /**
@@ -201,6 +188,8 @@ export function dropFromHand(
  * - `promote` を渡すと移動後の成り状態を指定する（`true` = 成る / `false` = 成らない）。
  *   省略すると元の駒のまま動く。成れない駒種に `true` を渡しても成らない。
  * - 移動元が空・盤外、または移動元と移動先が同じなら state をそのまま返す。
+ *
+ * 中身は `applyMove` と共用の `relocate`（`board.ts`）。手番は触らない。
  */
 export function movePiece(
   state: BoardState,
@@ -208,23 +197,7 @@ export function movePiece(
   to: SquareRef,
   options: { promote?: boolean } = {},
 ): BoardState {
-  const piece = pieceAt(state, from);
-  if (!piece || !inBoard(to)) return state;
-  if (from.row === to.row && from.col === to.col) return state;
-
-  // どけた駒を先に処理する（盤から消し、動かした側の持ち駒へ入れる）
-  const next = state.board[to.row][to.col]
-    ? moveToHand(state, to, piece.side)
-    : state;
-
-  const kind = withPromotion(piece.kind, options.promote);
-  return {
-    ...next,
-    board: withSquares(next.board, [
-      [to.row, to.col, { kind, side: piece.side }],
-      [from.row, from.col, null],
-    ]),
-  };
+  return relocate(state, { square: from }, to, options.promote) ?? state;
 }
 
 /**

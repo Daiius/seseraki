@@ -17,6 +17,20 @@ export interface SquareRef {
   col: number;
 }
 
+/**
+ * 盤内のマスか。
+ * ⚠ `Number.isInteger` が **`NaN` / `Infinity` / 小数を弾く**ので、マスを受け取る関数は
+ * ここを通すだけで非有限値から守られる。
+ */
+export function isOnBoard(square: SquareRef): boolean {
+  const { row, col } = square;
+  return (
+    Number.isInteger(row) &&
+    Number.isInteger(col) &&
+    row >= 0 && row < 9 && col >= 0 && col < 9
+  );
+}
+
 /** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
 export const USI_MOVE_PATTERN = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
 

@@ -199,6 +199,12 @@ describe('手列との往復', () => {
     expect(verifyMove(positions[0].board, '2g2f', 'sente', positions[1].board)).toBe(false);
   });
 
+  it('verifyMove は打ちも通す（盤の配置だけを見る。持ち駒は渡さなくてよい）', () => {
+    const positions = buildPositions(moves);
+    expect(verifyMove(positions[4].board, 'B*4e', 'sente', positions[5].board)).toBe(true);
+    expect(verifyMove(positions[4].board, 'B*5e', 'sente', positions[5].board)).toBe(false);
+  });
+
   it('verifyMove は applyMove が読み飛ばす不正な手も落とす', () => {
     // 駒のないマスからの移動。applyMove は例外を投げず、盤面を変えないまま手番だけ進める。
     // だから「呼べたこと」を成功と見なしてはいけない。実際の配置変化と突き合わせて初めて落とせる。

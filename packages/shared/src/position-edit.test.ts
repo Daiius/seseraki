@@ -264,6 +264,21 @@ describe('dropFromHand', () => {
     const state = addToHand(createEmptyState(), 'sente', 'P', 1);
     expect(dropFromHand(state, 'sente', 'P', { row: 9, col: 0 })).toBe(state);
   });
+
+  it('置き先の駒は movePiece と同じく打った側の持ち駒へ入る（駒の総数を変えない）', () => {
+    const state = addToHand(createInitialState(), 'sente', 'G', 1);
+    const next = dropFromHand(state, 'sente', 'G', sq('3c'));
+    expect(pieceAt(next, sq('3c'))).toEqual({ kind: 'G', side: 'sente' });
+    expect(handCount(next, 'sente', 'G')).toBe(0);
+    expect(handCount(next, 'sente', 'P')).toBe(1);
+  });
+
+  it('置き先が玉なら玉は駒箱へ（持ち駒にしない）', () => {
+    const state = addToHand(createInitialState(), 'sente', 'G', 1);
+    const next = dropFromHand(state, 'sente', 'G', sq('5a'));
+    expect(next.hand.sente).toEqual({});
+    expect(pieceBox(next).K).toBe(1);
+  });
 });
 
 describe('setHandCount / addToHand', () => {

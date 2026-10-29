@@ -9,13 +9,14 @@
  */
 
 import {
-  PROMOTE_MAP,
-  UNPROMOTE_MAP,
+  unpromoted,
+  withPromotion,
+  type HandPieceKind,
   type Piece,
   type PieceKind,
   type Side,
 } from './pieces';
-import { usiToIndex } from './usi-move';
+import { isOnBoard, usiToIndex, type SquareRef } from './usi-move';
 
 export type Square = Piece | null;
 
@@ -26,11 +27,6 @@ export type Square = Piece | null;
 const PIECE_NAMES: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
   '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
-};
-
-// USI 駒文字 → PieceKind（駒打ち用）
-const USI_DROP_PIECE: Record<string, PieceKind> = {
-  P: 'P', L: 'L', N: 'N', S: 'S', G: 'G', B: 'B', R: 'R',
 };
 
 /**
@@ -120,76 +116,112 @@ export function withHand(
     : { sente: hand.sente, gote: pieces };
 }
 
+/** 駒をどこから動かすか: 盤上のマス、または `side` の持ち駒 */
+export type Origin =
+  | { square: SquareRef }
+  | { hand: HandPieceKind; side: Side };
+
+/**
+ * 駒を動かす・取る・打つ**中核**。新しい盤面を返し、元の盤面は変更しない。
+ *
+ * 🔒 **USI の再生（`applyMove`）と盤面編集（`movePiece` / `dropFromHand`）はどちらもここを通す。**
+ * 別々に持っていたころは、玉を取る・自分の駒の上・同じマスへの移動・持っていない駒の打ちで
+ * 挙動が食い違っていた。
+ *
+ * **手番は触らない。規則（手番・駒の動き方・成れるか）も見ない**——それは呼び出し側の仕事。
+ *
+ * - 盤上から動かす: 移動元が空・移動元と移動先が同じなら `null`
+ * - 持ち駒から打つ: その駒を持っていなければ `null`。**生駒のまま置く**（`promote` は見ない）
+ * - 移動先が盤外なら `null`
+ * - 移動先に駒があれば、**動かした側の持ち駒へ入る**（成駒は生駒に戻す）。自分の駒でも同じ
+ *   （編集では「どけて置き換える」で、どけた駒の行き先を 1 つに決めておく）。
+ *   ⚠ **玉は持ち駒にならない**——盤から消える（盤面編集の言葉では駒箱へ戻る）
+ * - `promote` は移動後の成り状態（`withPromotion`。省略で元のまま・`true` で成る・`false` で生駒に戻す）
+ *
+ * 変化した行と、動かした側の持ち駒だけを差し替え、残りは元の state と共有する（`BoardState` の不変契約）。
+ */
+export function relocate(
+  state: BoardState,
+  origin: Origin,
+  to: SquareRef,
+  promote?: boolean,
+): BoardState | null {
+  if (!isOnBoard(to)) return null;
+
+  let piece: Piece;
+  const updates: [row: number, col: number, square: Square][] = [];
+  if ('square' in origin) {
+    const from = origin.square;
+    if (!isOnBoard(from)) return null;
+    if (from.row === to.row && from.col === to.col) return null;
+    const moving = state.board[from.row][from.col];
+    if (!moving) return null;
+    piece = { kind: withPromotion(moving.kind, promote), side: moving.side };
+    // 移動先 → 移動元の順（移動元と移動先が同じ手は上で弾いているので順序に意味は無い）
+    updates.push([to.row, to.col, piece], [from.row, from.col, null]);
+  } else {
+    if ((state.hand[origin.side][origin.hand] ?? 0) <= 0) return null;
+    piece = { kind: origin.hand, side: origin.side };
+    updates.push([to.row, to.col, piece]);
+  }
+
+  // 動かした側の持ち駒（打った駒を減らし、どけた駒を足す）。変わらなければ元の参照のまま
+  const side = piece.side;
+  let pieces = state.hand[side];
+  const bump = (kind: PieceKind, delta: number) => {
+    if (pieces === state.hand[side]) pieces = { ...pieces };
+    const n = (pieces[kind] ?? 0) + delta;
+    if (n <= 0) delete pieces[kind];
+    else pieces[kind] = n;
+  };
+  if ('hand' in origin) bump(origin.hand, -1);
+  const displaced = state.board[to.row][to.col];
+  if (displaced && displaced.kind !== 'K') bump(unpromoted(displaced.kind), 1);
+
+  return {
+    board: withSquares(state.board, updates),
+    hand: pieces === state.hand[side] ? state.hand : withHand(state.hand, side, pieces),
+    sideToMove: state.sideToMove,
+  };
+}
+
 /**
  * USI の手を適用して新しい盤面を返す（元の盤面は変更しない）
  *
  * 変化したマス（移動元・移動先）と手番側の持ち駒だけを差分コピーし、
  * 残りは元の state と共有する（`BoardState` の不変契約が前提）。
+ * 駒を動かす中身は `relocate`（盤面編集と共用）。
  */
 export function applyMove(state: BoardState, usiMove: string): BoardState {
   const side = state.sideToMove;
   const nextSide: Side = side === 'sente' ? 'gote' : 'sente';
 
+  let next: BoardState | null = null;
   // 駒打ち: "B*5c"
   const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d[a-i])$/);
-  if (dropMatch) {
-    const [, piece, to] = dropMatch;
-    const [toR, toC] = usiToIndex(to);
-    const kind = USI_DROP_PIECE[piece];
-    const h = { ...state.hand[side] };
-    h[kind] = (h[kind] ?? 0) - 1;
-    if (h[kind]! <= 0) delete h[kind];
-    return {
-      board: withSquares(state.board, [[toR, toC, { kind, side }]]),
-      hand: withHand(state.hand, side, h),
-      sideToMove: nextSide,
-    };
-  }
-
   // 通常の移動: "7g7f" or "7g7f+"
   const moveMatch = usiMove.match(/^(\d[a-i])(\d[a-i])(\+?)$/);
-  if (moveMatch) {
+  if (dropMatch) {
+    const [toR, toC] = usiToIndex(dropMatch[2]);
+    next = relocate(
+      state,
+      { hand: dropMatch[1] as HandPieceKind, side },
+      { row: toR, col: toC },
+    );
+  } else if (moveMatch) {
     const [, from, to, promote] = moveMatch;
     const [fromR, fromC] = usiToIndex(from);
     const [toR, toC] = usiToIndex(to);
-
-    const piece = state.board[fromR][fromC];
-    if (!piece) {
-      // 不正な手だが壊さないようにスキップ
-      return { ...state, sideToMove: nextSide };
-    }
-
-    // 取った駒を持ち駒に
-    const captured = state.board[toR][toC];
-    let hand = state.hand;
-    if (captured) {
-      let capturedKind = captured.kind;
-      if (UNPROMOTE_MAP[capturedKind]) {
-        capturedKind = UNPROMOTE_MAP[capturedKind]!;
-      }
-      const h = { ...state.hand[side] };
-      h[capturedKind] = (h[capturedKind] ?? 0) + 1;
-      hand = withHand(state.hand, side, h);
-    }
-
-    // 移動
-    let kind = piece.kind;
-    if (promote && PROMOTE_MAP[kind]) {
-      kind = PROMOTE_MAP[kind]!;
-    }
-    // 移動先 → 移動元の順（移動元 == 移動先の不正な手でも空マスになる旧挙動を保つ）
-    return {
-      board: withSquares(state.board, [
-        [toR, toC, { kind, side }],
-        [fromR, fromC, null],
-      ]),
-      hand,
-      sideToMove: nextSide,
-    };
+    next = relocate(
+      state,
+      { square: { row: fromR, col: fromC } },
+      { row: toR, col: toC },
+      promote ? true : undefined,
+    );
   }
 
-  // パース不能な手はスキップ
-  return { ...state, sideToMove: nextSide };
+  // パース不能な手・指せない手は盤面を変えずに手番だけ進める
+  return next ? { ...next, sideToMove: nextSide } : { ...state, sideToMove: nextSide };
 }
 
 /**

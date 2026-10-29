@@ -37,6 +37,11 @@ export interface UsiTimers {
   clearTimeout(handle: unknown): void;
 }
 
+/** 時計（経過時間の計測に使う。node / ブラウザの `Date.now` を渡す。テストでは進め方を決めた時計を渡す） */
+export interface UsiClock {
+  now(): number;
+}
+
 /** ログの出力先（node / ブラウザの `console` を包んで渡す） */
 export interface UsiLog {
   info(message: string): void;

@@ -5,7 +5,7 @@
  * 各局面の候補手・評価値・読み筋を記録する
  */
 import { BROWSER_ANALYSIS_LIMITS } from "../analysis-limits";
-import type { UsiLog } from "./session";
+import type { UsiClock, UsiLog } from "./session";
 import type { UsiAnalyzeOptions, UsiInfo, UsiScore, UsiSearchResult } from "./types";
 
 /**
@@ -58,48 +58,6 @@ export interface KifuAnalysisSummary {
    * 未送信のチャンクは**中断の前に送る**ので `moveNumber` に穴は空かない。
    */
   interrupted: boolean;
-}
-
-/**
- * チャンク submit の失敗（インフラ起因の一時失敗）。
- * `onChunk` がこれを投げると解析は中断され、次の poll で続きから再開する（prd/05 §1.1a）。
- */
-export class ChunkSubmitError extends Error {
-  constructor(cause: unknown) {
-    super(
-      `Failed to submit analysis chunk: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    );
-    this.name = "ChunkSubmitError";
-  }
-}
-
-/**
- * チャンク submit を server が**入力の誤りとして拒否した**（4xx。prd/05 §1.1a・prd/16 §4.1）。
- *
- * 🔴 **恒久失敗として扱う。** 同じ棋譜を解析し直しても同じ結果を送るので、一時失敗（{@link ChunkSubmitError}）
- * と同じく次の poll へ回すと、**同じ棋譜を解析しては拒否される堂々巡り**になり後続が進まない。
- * 呼び出し側は `analysisError` を記録して poll から外す。
- */
-export class SubmitRejectedError extends Error {
-  constructor(readonly status: number) {
-    super(`Analysis chunk rejected by server: ${status}`);
-    this.name = "SubmitRejectedError";
-  }
-}
-
-/**
- * submit の HTTP ステータスが**恒久失敗**（入力の誤り）か。
- *
- * - 4xx は恒久（範囲外・連続でない・rank の欠番など。送り直しても変わらない）
- * - ⚠ ただし **401 / 403（API_KEY の誤り）・408 / 429（混雑）は除く**——棋譜ではなく構成や
- *   一時的な状況の問題で、恒久扱いにすると**全棋譜が失敗として記録される**
- * - 5xx・通信エラーは一時失敗（今どおり次の poll で続きから再開）
- * - 世代の不一致は 201（`applied: false`）で返るので、ここには来ない
- */
-export function isPermanentSubmitStatus(status: number): boolean {
-  if (status < 400 || status >= 500) return false;
-  return ![401, 403, 408, 429].includes(status);
 }
 
 /**
@@ -257,6 +215,9 @@ export function extractMultiPvResults(
 
 const RESIGN = "resign";
 
+/** 既定の時計（`Date` は esnext の lib にあるので環境に依存しない） */
+const SYSTEM_CLOCK: UsiClock = { now: () => Date.now() };
+
 /**
  * 定跡にヒットしたか（ログ用）。やねうら王は定跡を採用すると、最後に採用手の確定行
  * （`depth 0`・pv は指し手＋ponder）を出して `bestmove` を返す。
@@ -302,6 +263,7 @@ function extractHashfull(infoLines: UsiInfo[]): number | undefined {
  * @param options.chunkMaxPositions - チャンクを区切る局面数。**時間の区切りに加えて**、未送信がこの数に
  *   達したら送る（受け側に 1 チャンクの局面数の上限があるとき用。prd/14 §5.8）。省略時は局面数では切らない
  * @param options.log - ログの出力先（`shared` は出力の手段を持たないので注入する。省略時は出さない）
+ * @param options.clock - 時計（チャンクの区切りと所要時間のログに使う。省略時は `Date.now`。テストで差し替える）
  * @param options.onProgress - 1 局面解析するたびに呼ばれる (解析済み局面数, 全局面数)
  * @param options.onChunk - チャンクの送信。**完了を待ち**、投げれば解析を中断する
  *   （進捗報告と違い、握りつぶすと `moveNumber` に穴が空いて再開位置が決まらなくなる）
@@ -322,6 +284,7 @@ export async function analyzeKifu(
     chunkIntervalMs?: number;
     chunkMaxPositions?: number;
     log?: UsiLog;
+    clock?: UsiClock;
     onProgress?: (analyzed: number, total: number) => void;
     onChunk?: (analyses: UsiMoveAnalysis[]) => Promise<void>;
     onPositionBoundary?: () => Promise<boolean | void>;
@@ -335,6 +298,7 @@ export async function analyzeKifu(
     chunkIntervalMs = CHUNK_INTERVAL_MS,
     chunkMaxPositions,
     log,
+    clock = SYSTEM_CLOCK,
     onProgress,
     onChunk,
     onPositionBoundary,
@@ -351,7 +315,7 @@ export async function analyzeKifu(
 
   // 未送信のチャンク
   let pending: UsiMoveAnalysis[] = [];
-  let lastChunkAt = Date.now();
+  let lastChunkAt = clock.now();
   let analyzed = 0;
   // 置換表は局面をまたいで残る（usinewgame も Clear Hash も送らない）ため、hashfull は
   // 1 局を通して積み上がる。1 局面ぶんではなく**この実行の最大値**が USI_Hash の判断材料になる
@@ -386,7 +350,7 @@ export async function analyzeKifu(
         ? "position startpos"
         : `position startpos moves ${movesPlayed.join(" ")}`;
 
-    const t0 = Date.now();
+    const t0 = clock.now();
     let result;
     try {
       result = await engine.analyze(position, goCommand, { timeoutMs });
@@ -396,7 +360,7 @@ export async function analyzeKifu(
       );
       throw err;
     }
-    const elapsed = Date.now() - t0;
+    const elapsed = clock.now() - t0;
     // server の受理条件（rank が 1..n の連番。prd/16 §4.1）に合わせ、欠番以降は捨てる。
     // 🔒 終局局面の投了（`info depth 0 score mate -1 pv resign`）は残す——詰み筋の分類（`gameover`）が読む
     const candidates = leadingContiguousCandidates(
@@ -425,10 +389,10 @@ export async function analyzeKifu(
     // 時間でも局面数でも切る（局面数は受け側の上限に合わせるためで、指定が無ければ時間だけ）
     const chunkFull =
       chunkMaxPositions !== undefined && pending.length >= chunkMaxPositions;
-    if (chunkFull || Date.now() - lastChunkAt >= chunkIntervalMs) {
+    if (chunkFull || clock.now() - lastChunkAt >= chunkIntervalMs) {
       await onChunk?.(pending);
       pending = [];
-      lastChunkAt = Date.now();
+      lastChunkAt = clock.now();
     }
   }
 

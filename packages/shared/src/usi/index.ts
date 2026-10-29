@@ -4,6 +4,7 @@ export * from './types';
 export * from './parser';
 export * from './session';
 export * from './kifu-analysis';
+export * from './analysis-submit';
 export * from './browser-analysis';
 export * from './named-evaluation';
 export * from './position-evaluation';

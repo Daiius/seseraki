@@ -15,7 +15,7 @@ import type {
   PositionEvalOutcome,
   PositionEvalRequest,
 } from './runner';
-import { SchedulerStoppedError } from './scheduler';
+import { PriorityAbortedError, SchedulerStoppedError } from './scheduler';
 import type { BrowserAnalysisPhase } from './store';
 
 const REQUEST: NamedEvalRequest = {
@@ -195,6 +195,76 @@ describe('requestBrowserGrading', () => {
     expect(calls).toBe(1);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('requestBrowserGrading の取り下げ（解いている画面を離れた）', () => {
+  it('受け持ち手に取り下げの合図を渡す', async () => {
+    const controller = new AbortController();
+    let seen: AbortSignal | undefined;
+    offs.push(
+      setBrowserGrader(async (_request, signal) => {
+        seen = signal;
+        return OK;
+      }),
+    );
+    expect(await requestBrowserGrading(REQUEST, deps('idle').d, controller.signal)).toEqual(OK);
+    expect(seen).toBe(controller.signal);
+  });
+
+  it('取り下げ済みなら頼まない', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    offs.push(setBrowserGrader(async () => (calls++, OK)));
+    expect(await requestBrowserGrading(REQUEST, deps('idle').d, controller.signal)).toEqual({ kind: 'aborted' });
+    expect(calls).toBe(0);
+  });
+
+  it('受け持ち手を待つ間に取り下げられたら、待つのをやめて aborted', async () => {
+    const controller = new AbortController();
+    const pending = requestBrowserGrading(REQUEST, deps('off').d, controller.signal);
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'aborted' });
+  });
+
+  it('順番を待つ間に取り下げられて断られたら aborted（失敗として警告しない）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const controller = new AbortController();
+    offs.push(
+      setBrowserGrader(
+        (_request, signal) =>
+          new Promise((_resolve, reject) =>
+            signal?.addEventListener('abort', () => reject(new PriorityAbortedError())),
+          ),
+      ),
+    );
+    const pending = requestBrowserGrading(REQUEST, deps('idle').d, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'aborted' });
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('同意を待つ間に取り下げられたら、同意を求める手立てにも合図が届き aborted', async () => {
+    const controller = new AbortController();
+    let consentSignal: AbortSignal | undefined;
+    const pending = requestBrowserGrading(
+      REQUEST,
+      {
+        ...deps('needs-consent').d,
+        askConsent: (signal) => {
+          consentSignal = signal;
+          return new Promise(() => {});
+        },
+      },
+      controller.signal,
+    );
+    await Promise.resolve();
+    expect(consentSignal).toBe(controller.signal);
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'aborted' });
   });
 });
 

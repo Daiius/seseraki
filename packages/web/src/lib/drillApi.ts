@@ -121,11 +121,28 @@ export interface Reveal {
 const POLL_INTERVAL_MS = 1500;
 const POLL_BUDGET_MS = 240_000;
 
-/** 判定が出るまで待つ。**ポーリングは呼び出し側から見えない**（prd/12 §2.4） */
-async function waitForEvaluation(jobId: string, deadline: number): Promise<void> {
+/**
+ * `ms` だけ待つ。`signal` が中断されたら待たずに戻る（戻った後に呼び出し側が `signal.aborted` を見る）
+ */
+export function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/** 判定が出るまで待つ。**ポーリングは呼び出し側から見えない**（prd/12 §2.4）。中断されたら待つのをやめる */
+async function waitForEvaluation(jobId: string, deadline: number, signal: AbortSignal): Promise<void> {
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    const res = await client.api.positions.evaluate[':jobId'].$get({ param: { jobId } });
+    await pause(POLL_INTERVAL_MS, signal);
+    if (signal.aborted) return;
+    const res = await client.api.positions.evaluate[':jobId'].$get({ param: { jobId } }, { init: { signal } });
     // 404 は TTL 切れ / server 再起動。**同じ body を投げ直せばよい**ので待ちを抜ける
     if (res.status === 404) return;
     if (!res.ok) return;
@@ -145,17 +162,26 @@ export type AnswerOutcome =
   | { kind: 'continue'; reply: string }
   /** 詰将棋で間違えた手（prd/13 §5.3） */
   | { kind: 'miss'; reason: MissReason; refutation: string[] }
-  | { kind: 'done'; result: Reveal };
+  | { kind: 'done'; result: Reveal }
+  /**
+   * 呼び出し側が取り下げた（解いている画面を離れた）。🔒 **画面は何もしない**——状態も「この回」の記録（`drillRound`）も触らない。
+   * 離れた後に古い応答で記録すると、ホームで終えた回が 1 問だけの回として作り直される
+   */
+  | { kind: 'aborted' };
+
+const ABORTED = { kind: 'aborted' } as const;
 
 /**
  * 解答を送り、判定が出るまで往復する（prd/13 §5.3）。ジョブの待ち（ポーリング）と、
  * 「この局面のこの手を名指しで読んで」へのこのブラウザのエンジンでの応答もここで済ませる。
  * 🔒 **画面の状態には触らない**——結末（{@link AnswerOutcome}）だけを返す。
+ * `signal` が中断されたら、通信・ポーリング・このブラウザでの読み（の順番待ち）を打ち切って `aborted` を返す。
  */
 export async function requestAnswer(
   drill: Drill,
   answerBody: AnswerBody,
   assignee: AnalysisAssignee,
+  signal: AbortSignal,
 ): Promise<AnswerOutcome> {
   let body = answerBody;
   let deadline = Date.now() + POLL_BUDGET_MS;
@@ -168,16 +194,18 @@ export async function requestAnswer(
   let unreadableFrom: BrowserAnalysisPhase | null = null;
   try {
     while (Date.now() < deadline) {
-      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
-        param: refParam(drill),
-        json: body,
-      });
+      if (signal.aborted) return ABORTED;
+      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post(
+        { param: refParam(drill), json: body },
+        { init: { signal } },
+      );
       // ⚠ **本文のパースはステータス判定より後**（前段が返す HTML で落ちると、
       // 通信断でもないのに「接続できません」と出る。prd/12 §2.4）
       const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
+      if (signal.aborted) return ABORTED;
       switch (step.kind) {
         case 'wait-job':
-          await waitForEvaluation(step.jobId, deadline);
+          await waitForEvaluation(step.jobId, deadline, signal);
           continue;
         case 'evaluate': {
           // 🔒 読んだ結果を付けて送り直したのに、また読んでと返る ＝ 噛み合っていない。回り続けない。
@@ -191,13 +219,18 @@ export async function requestAnswer(
           }
           // このブラウザのエンジンで名指しで読む（全局面解析より先に。prd/14 §5.10）。
           // サーバーで解析する利用者の詰将棋は、同意の前ならここで同意を待つ（断ったらサーバーで判定する。prd/13 §5.5）
-          const graded = await requestBrowserGrading(step.request, {
-            getPhase: () => getBrowserAnalysisState().phase,
-            subscribe: subscribeBrowserAnalysisState,
-            setTimeout: (callback, ms) => setTimeout(callback, ms),
-            clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-            ...(assignee === 'worker' && drill.kind === 'mate' ? { askConsent: askDrillEngineConsent } : {}),
-          });
+          const graded = await requestBrowserGrading(
+            step.request,
+            {
+              getPhase: () => getBrowserAnalysisState().phase,
+              subscribe: subscribeBrowserAnalysisState,
+              setTimeout: (callback, ms) => setTimeout(callback, ms),
+              clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+              ...(assignee === 'worker' && drill.kind === 'mate' ? { askConsent: askDrillEngineConsent } : {}),
+            },
+            signal,
+          );
+          if (graded.kind === 'aborted' || signal.aborted) return ABORTED;
           const gradedFrom =
             graded.kind === 'ok' ? null : engineWaitFromOf(graded, getBrowserAnalysisState().phase);
           if (graded.kind !== 'ok' && drill.kind === 'mate') {
@@ -226,27 +259,37 @@ export async function requestAnswer(
           return { kind: 'done', result: step.result };
       }
     }
+    if (signal.aborted) return ABORTED;
     return { kind: 'fail', text: '判定が終わりませんでした。もう一度お試しください', waitEngineFrom: null };
   } catch {
+    // 取り下げで fetch が中断された（AbortError）のは通信断ではない
+    if (signal.aborted) return ABORTED;
     return { kind: 'fail', text: 'サーバーに接続できません', waitEngineFrom: null };
   }
 }
 
-/** 答えを見る（諦め。prd/13 §5.3）。**確定した手順だけ**を送る（確定前の手は捨てる） */
+/**
+ * 答えを見る（諦め。prd/13 §5.3）。**確定した手順だけ**を送る（確定前の手は捨てる）。
+ * `signal` が中断されたら `aborted`（{@link AnswerOutcome} の `aborted` と同じく、画面は何もしない）
+ */
 export async function requestGiveUp(
   drill: Drill,
   line: string[],
   practice: boolean,
-): Promise<{ kind: 'done'; result: Reveal } | { kind: 'error'; text: string }> {
+  signal: AbortSignal,
+): Promise<{ kind: 'done'; result: Reveal } | { kind: 'error'; text: string } | { kind: 'aborted' }> {
   try {
-    const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind']['give-up'].$post({
-      param: refParam(drill),
-      json: { line, practice },
-    });
+    if (signal.aborted) return ABORTED;
+    const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind']['give-up'].$post(
+      { param: refParam(drill), json: { line, practice } },
+      { init: { signal } },
+    );
     const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
+    if (signal.aborted) return ABORTED;
     if (step.kind === 'done') return step;
     return { kind: 'error', text: step.kind === 'error' ? step.text : `サーバーエラー (${res.status})` };
   } catch {
+    if (signal.aborted) return ABORTED;
     return { kind: 'error', text: 'サーバーに接続できません' };
   }
 }

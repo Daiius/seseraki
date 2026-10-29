@@ -38,7 +38,7 @@ import {
   type RunnerDeps,
   type RunnerLog,
 } from './runner';
-import { createScheduler } from './scheduler';
+import { createScheduler, PriorityAbortedError } from './scheduler';
 import { setBrowserReader } from './grading';
 import {
   getBrowserAnalysisSettings,
@@ -473,8 +473,8 @@ async function main(
   // 出題の採点の読み（prd/13 §5.3・§5.5）と検討盤の局面評価（prd/12 §2.4）。全局面解析より先に、同じエンジンで読む。
   // 詰将棋の判定は固定のスレッド数に切り替えて読み、全局面解析に戻るときに負荷の設定の数へ戻す（runner の ensureEngine）
   const offGrader = setBrowserReader({
-    // ⚠ 名指しの読み（出題の採点）には取り下げが無い（`BrowserReader.named` は signal を受けない）
-    named: (request) => scheduler.runPriority(() => gradeWithLog(runner, request)),
+    // 名指しの読み（出題の採点）も頼んだ側の取り下げ（解いている画面を離れた）を渡す。順番を待っている間に取り下げられたら読まない
+    named: (request, signal) => scheduler.runPriority(() => gradeWithLog(runner, request), signal),
     // 局面評価は頼んだ側の取り下げを渡す。取り下げた要求で全局面解析を止めたり、ほかのタブを譲らせたりしない
     position: (request, signal) =>
       scheduler.runPriority(() => evaluatePositionWithLog(runner, request, signal), signal),
@@ -521,7 +521,12 @@ async function drillOnlyMain(signal: AbortSignal): Promise<void> {
   };
   // 局面評価も受けるが、担当 `worker` の検討盤は server の口を使うので、ここに頼まれることは無い
   const offGrader = setBrowserReader({
-    named: (request) => enqueue(() => gradeWithLog(runner, request)),
+    // 順番が来たときに取り下げられていれば読まない（runPriority と同じ扱い）
+    named: (request, signal) =>
+      enqueue(() => {
+        if (signal?.aborted) return Promise.reject(new PriorityAbortedError());
+        return gradeWithLog(runner, request);
+      }),
     position: (request, signal) => enqueue(() => evaluatePositionWithLog(runner, request, signal)),
   });
   try {

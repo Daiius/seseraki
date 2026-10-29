@@ -53,12 +53,25 @@ export function requestDrillEngine(): void {
 }
 
 /**
- * 同意を求め、答えを待つ。既に求めていればその答えを待つ。このタブで断っていれば聞かずに false
+ * 同意を求め、答えを待つ。既に求めていればその答えを待つ。このタブで断っていれば聞かずに false。
+ * `signal` が中断されたら（解いている画面を離れた）待つのをやめて false を返す——断ったことにはしない。
+ * ほかに待つ呼び出しが無ければ案内も閉じる（次に開いた画面に、頼まれていない同意の案内が残らないように）
  */
-export function askDrillEngineConsent(): Promise<boolean> {
-  if (state.declined) return Promise.resolve(false);
+export function askDrillEngineConsent(signal?: AbortSignal): Promise<boolean> {
+  if (state.declined || signal?.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
-    waiters.push(resolve);
+    const waiter = (agreed: boolean) => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(agreed);
+    };
+    const onAbort = () => {
+      if (!waiters.includes(waiter)) return;
+      waiters = waiters.filter((w) => w !== waiter);
+      if (waiters.length === 0 && state.asking) patch({ asking: false });
+      resolve(false);
+    };
+    waiters.push(waiter);
+    signal?.addEventListener('abort', onAbort, { once: true });
     if (!state.asking) patch({ asking: true });
   });
 }

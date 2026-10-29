@@ -156,6 +156,8 @@ async function createEngine(
   patch: typeof patchBrowserAnalysisState,
   fixedThreads?: number,
 ): Promise<AnalysisEngine> {
+  // 止めた後に頼まれたら、Worker を起動しない（読み込みの表示も出さない）
+  if (signal.aborted) throw new Error('解析は停止済みです');
   log.info(
     `loading engine eval=${entry.id} build=${entry.engine.buildId} nn=${entry.nn.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
   );
@@ -163,22 +165,26 @@ async function createEngine(
     phase: 'loading',
     download: { loaded: 0, total: engineEntryDownloadBytes(entry) },
   });
-  // 🔒 classic の Worker（`type: 'module'` を付けない）。ホストは importScripts でエンジンのグルーを読む
-  const worker = new Worker(engineHostUrl, { name: 'seseraki-engine' });
-  const connection = connectEngineHost(
-    worker as unknown as HostWorkerLike,
-    initRequest(entry, engineUrls(origin, entry)),
-    {
-      onDownload: (loaded, total) => patch({ download: { loaded, total } }),
-    },
-  );
-  const onAbort = () => connection.dispose();
-  signal.addEventListener('abort', onAbort);
+  let worker: Worker | null = null;
+  let connection: ReturnType<typeof connectEngineHost> | null = null;
+  const onAbort = () => connection?.dispose();
   try {
-    await connection.ready;
+    // 🔒 classic の Worker（`type: 'module'` を付けない）。ホストは importScripts でエンジンのグルーを読む
+    // ⚠ 起動とつなぐところも try の中に置く（失敗したら Worker を残さない。下の catch）
+    worker = new Worker(engineHostUrl, { name: 'seseraki-engine' });
+    const connected = connectEngineHost(
+      worker as unknown as HostWorkerLike,
+      initRequest(entry, engineUrls(origin, entry)),
+      {
+        onDownload: (loaded, total) => patch({ download: { loaded, total } }),
+      },
+    );
+    connection = connected;
+    signal.addEventListener('abort', onAbort);
+    await connected.ready;
     log.info('engine instantiated and eval loaded');
     const debug = debugEnabled();
-    const session = createUsiSession(connection.transport, {
+    const session = createUsiSession(connected.transport, {
       timers: {
         setTimeout: (callback, ms) => setTimeout(callback, ms),
         clearTimeout: (handle) =>
@@ -230,11 +236,13 @@ async function createEngine(
       },
       dispose: () => {
         log.info('engine disposed');
-        connection.dispose();
+        connected.dispose();
       },
     };
   } catch (error) {
-    connection.dispose();
+    // つないだ後なら dispose（quit を送ってから止める）、つなぐ前に落ちたら Worker を直に止める
+    if (connection) connection.dispose();
+    else worker?.terminate();
     throw error;
   } finally {
     signal.removeEventListener('abort', onAbort);
@@ -465,9 +473,11 @@ async function main(
   // 出題の採点の読み（prd/13 §5.3・§5.5）と検討盤の局面評価（prd/12 §2.4）。全局面解析より先に、同じエンジンで読む。
   // 詰将棋の判定は固定のスレッド数に切り替えて読み、全局面解析に戻るときに負荷の設定の数へ戻す（runner の ensureEngine）
   const offGrader = setBrowserReader({
+    // ⚠ 名指しの読み（出題の採点）には取り下げが無い（`BrowserReader.named` は signal を受けない）
     named: (request) => scheduler.runPriority(() => gradeWithLog(runner, request)),
+    // 局面評価は頼んだ側の取り下げを渡す。取り下げた要求で全局面解析を止めたり、ほかのタブを譲らせたりしない
     position: (request, signal) =>
-      scheduler.runPriority(() => evaluatePositionWithLog(runner, request, signal)),
+      scheduler.runPriority(() => evaluatePositionWithLog(runner, request, signal), signal),
   });
   const offFocus = onAnalysisFocusChange(scheduler.setFocus);
   const offPoke = onBrowserAnalysisPoke(scheduler.poke);

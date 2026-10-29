@@ -138,18 +138,22 @@ function getSnapshot(): BrowserAnalysisSettings {
   return cached.value;
 }
 
+/**
+ * ほかのタブでの変更（同意・範囲・評価関数）に追随する。🔒 **聞き手はモジュールで 1 つ常設する**——
+ * React の購読者がいないとき（常駐の解析だけが `getBrowserAnalysisSettings` で読む）も、キャッシュを捨てないと
+ * 古い設定のまま読み続ける
+ */
+function onStorage(event: StorageEvent): void {
+  if (event.key !== null && event.key !== STORAGE_KEY) return;
+  cached = null;
+  for (const listener of [...listeners]) listener();
+}
+if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  // ほかのタブでの変更（同意・範囲）にも追随する
-  const onStorage = (event: StorageEvent) => {
-    if (event.key !== null && event.key !== STORAGE_KEY) return;
-    cached = null;
-    listener();
-  };
-  window.addEventListener('storage', onStorage);
   return () => {
     listeners.delete(listener);
-    window.removeEventListener('storage', onStorage);
   };
 }
 

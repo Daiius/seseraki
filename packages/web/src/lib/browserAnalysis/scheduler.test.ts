@@ -4,6 +4,8 @@ import {
   COOLDOWN_MS,
   createScheduler,
   pendingStatusKind,
+  PriorityAbortedError,
+  SchedulerStoppedError,
   type Scheduler,
   type SchedulerDeps,
 } from './scheduler';
@@ -100,7 +102,7 @@ function setup(mode: AnalysisMode, pendingList: number[] = []) {
   const scheduler: Scheduler = createScheduler(deps);
   const controller = new AbortController();
   const done = scheduler.run(controller.signal);
-  return { state, scheduler, stop: () => controller.abort(), done };
+  return { state, deps, scheduler, stop: () => controller.abort(), done };
 }
 
 describe('createScheduler — 詳細ページだけ', () => {
@@ -463,5 +465,83 @@ describe('createScheduler — 採点の読み（prd/14 §5.10）', () => {
     stop();
     await done;
     await expect(scheduler.runPriority(async () => 1)).rejects.toThrow();
+  });
+});
+
+describe('createScheduler — 取り下げた読みの依頼（runPriority の signal）', () => {
+  it('取り下げ済みの依頼は積まない（解析を止めず、ロックも取らない）', async () => {
+    const { state, scheduler, stop, done } = setup('always', [7]);
+    await flush();
+    const first = state.running!;
+    const request = new AbortController();
+    request.abort();
+    let called = false;
+    await expect(
+      scheduler.runPriority(async () => {
+        called = true;
+      }, request.signal),
+    ).rejects.toBeInstanceOf(PriorityAbortedError);
+    await flush();
+    expect(called).toBe(false);
+    expect(first.signal.aborted).toBe(false);
+    expect(state.priorityLocks).toBe(0);
+    stop();
+    await done;
+  });
+
+  it('待っている間に取り下げられたら、順番を待たずに拒否し、ロックを取らない', async () => {
+    const { state, scheduler, stop, done } = setup('always', [7]);
+    await flush();
+    const request = new AbortController();
+    let called = false;
+    const graded = scheduler.runPriority(async () => {
+      called = true;
+    }, request.signal);
+    // 積んだ直後（解析が局面の境目で止まる前）に取り下げる
+    request.abort();
+    await expect(graded).rejects.toBeInstanceOf(PriorityAbortedError);
+    await flush();
+    expect(called).toBe(false);
+    expect(state.priorityLocks).toBe(0);
+    stop();
+    await done;
+  });
+
+  it('ロックを待っている間に取り下げられたら、読まずに拒否する（常駐の停止とは分ける）', async () => {
+    const { state, deps, scheduler, stop, done } = setup('detail');
+    await flush();
+    let lockSignal: AbortSignal | null = null;
+    // ほかのタブがロックを持っている: 中断されるまで待つ
+    deps.withPriorityLock = (signal) => {
+      state.priorityLocks++;
+      lockSignal = signal;
+      return new Promise((_, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    };
+    const request = new AbortController();
+    let called = false;
+    const graded = scheduler.runPriority(async () => {
+      called = true;
+    }, request.signal);
+    await flush();
+    expect(state.priorityLocks).toBe(1);
+    expect(lockSignal!.aborted).toBe(false);
+    request.abort();
+    await expect(graded).rejects.toBeInstanceOf(PriorityAbortedError);
+    expect(lockSignal!.aborted).toBe(true);
+    expect(called).toBe(false);
+    stop();
+    await done;
+  });
+
+  it('取り下げの無い依頼は今までどおり（常駐が止まったら SchedulerStoppedError）', async () => {
+    const { scheduler, stop, done } = setup('detail');
+    await flush();
+    const request = new AbortController();
+    await expect(scheduler.runPriority(async () => 2, request.signal)).resolves.toBe(2);
+    stop();
+    await done;
+    await expect(scheduler.runPriority(async () => 1)).rejects.toBeInstanceOf(SchedulerStoppedError);
   });
 });

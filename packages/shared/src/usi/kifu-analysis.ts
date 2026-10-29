@@ -4,6 +4,7 @@
  * USI 指し手列を受け取り、一手ごとに MultiPV で解析して
  * 各局面の候補手・評価値・読み筋を記録する
  */
+import { BROWSER_ANALYSIS_LIMITS } from "../analysis-limits";
 import type { UsiLog } from "./session";
 import type { UsiAnalyzeOptions, UsiInfo, UsiScore, UsiSearchResult } from "./types";
 
@@ -116,6 +117,31 @@ export function leadingContiguousCandidates(candidates: UsiCandidate[]): UsiCand
     result.push(c);
   }
   return result;
+}
+
+/** 報告に載せる評価値の絶対値の上限（cp も mate の手数も）。ブラウザ解析の上限と同じ値 */
+const REPORT_SCORE_ABS_MAX = BROWSER_ANALYSIS_LIMITS.maxScoreAbs;
+
+/**
+ * 手元 worker が送る前に候補手を検査する（ブラウザの経路の `toBrowserReportCandidate` 相当）。
+ *
+ * - 評価値・深さが数として読めない（NaN・Infinity）候補は**捨てる**（数字を作らない）。
+ *   そのまま送ると JSON で `null` になって server に 400 で拒否され、棋譜が恒久的な失敗として記録される
+ * - 評価値は整数に丸めて ±{@link REPORT_SCORE_ABS_MAX} に、深さは 0 以上の整数に収める
+ * - 捨てた結果 rank に欠番ができたら、欠番より後も捨てる（{@link leadingContiguousCandidates}）
+ */
+export function toReportCandidates(candidates: UsiCandidate[]): UsiCandidate[] {
+  const finite = candidates
+    .filter((c) => Number.isFinite(c.score.value) && Number.isFinite(c.depth))
+    .map((c) => ({
+      ...c,
+      score: {
+        ...c.score,
+        value: Math.min(Math.max(Math.trunc(c.score.value), -REPORT_SCORE_ABS_MAX), REPORT_SCORE_ABS_MAX),
+      },
+      depth: Math.max(Math.trunc(c.depth), 0),
+    }));
+  return leadingContiguousCandidates(finite);
 }
 
 /**

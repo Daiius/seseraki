@@ -3,6 +3,7 @@ import type { AppType } from "server";
 import {
   isPermanentSubmitStatus,
   SubmitRejectedError,
+  toReportCandidates,
   type UsiMoveAnalysis,
 } from "shared";
 import type { PositionEvalJob, PositionEvalResult } from "../position-eval.js";
@@ -67,7 +68,8 @@ export function createClient(baseUrl: string, apiKey: string) {
           ...provenance,
           analyses: analyses.map((a) => ({
             moveNumber: a.moveNumber,
-            candidates: a.candidates.map((c) => ({
+            // NaN・範囲外の値を落としてから送る（JSON で null になると 400 で拒否され、棋譜が恒久的な失敗になる）
+            candidates: toReportCandidates(a.candidates).map((c) => ({
               rank: c.rank,
               move: c.move,
               scoreType: c.score.type,

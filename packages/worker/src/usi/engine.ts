@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
+import { createInterface, type Interface } from "node:readline";
 import {
   createUsiSession,
   type UsiLog,
@@ -35,6 +35,8 @@ export class UsiEngine {
   private process: ChildProcess | null = null;
   private session: UsiSession | null = null;
   private dead = false;
+  /** 今のプロセスの stdout / stderr の readline（後始末で閉じる） */
+  private lineReaders: Interface[] = [];
 
   constructor(
     private readonly enginePath: string,
@@ -62,6 +64,13 @@ export class UsiEngine {
       onDeath(err);
     };
 
+    // 🔴 stdin の `error` を受ける。エンジンが終了した直後の書き込みは EPIPE になり、聞き手が無いと
+    // **worker のプロセスごと落ちる**（未処理の 'error' イベント）。エンジンの死として扱う
+    proc.stdin!.on("error", (err) => {
+      console.error("[USI] Engine stdin error:", err.message);
+      die(new Error(`[USI] Engine stdin error: ${err.message}`));
+    });
+
     proc.on("error", (err) => {
       console.error("[USI] Engine process error:", err.message);
       die(new Error(`[USI] Engine process error: ${err.message}`));
@@ -83,9 +92,12 @@ export class UsiEngine {
     stderrRl.on("line", (line) => {
       console.error("[USI stderr]", line);
     });
+    this.lineReaders = [rl, stderrRl];
 
     const transport: UsiTransport = {
       send: (line) => {
+        // 死んだ後・閉じた後の stdin には書かない（書いても `error` で返るだけ）
+        if (!isCurrent() || this.dead || !proc.stdin!.writable) return;
         proc.stdin!.write(line + "\n");
       },
       onLine: (listener) => {
@@ -96,7 +108,29 @@ export class UsiEngine {
       },
     };
     this.session = createUsiSession(transport, { timers, log: consoleLog });
-    await this.session.start();
+    try {
+      await this.session.start();
+    } catch (err) {
+      // 起動に失敗したプロセス（usiok が来ない・すぐ死んだ）を残さない
+      this.killAndForget(proc);
+      throw err;
+    }
+  }
+
+  /** 起動に失敗したプロセスを片付ける（待たない）。以降このプロセスのイベントは無視する */
+  private killAndForget(proc: ChildProcess): void {
+    if (this.process === proc) {
+      this.process = null;
+      this.session = null;
+      this.dead = true;
+    }
+    this.closeLineReaders();
+    if (proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+  }
+
+  private closeLineReaders(): void {
+    for (const reader of this.lineReaders) reader.close();
+    this.lineReaders = [];
   }
 
   /** エンジンを再起動する（呼び出し側は setOption / ready() を再適用すること） */
@@ -145,21 +179,29 @@ export class UsiEngine {
   }
 
   async quit(): Promise<void> {
-    if (!this.process || this.dead) return;
-
     const proc = this.process;
-    return new Promise<void>((resolve) => {
-      proc.on("close", () => resolve());
-      this.active().send("quit");
+    if (!proc) return;
 
-      // Force kill after 5 seconds
-      setTimeout(() => {
-        if (!this.dead) {
-          proc.kill("SIGKILL");
-        }
-        resolve();
-      }, 5_000);
-    });
+    // 起動できなかった（pid が無い）・既に終わったプロセスは待たない
+    if (proc.pid !== undefined && proc.exitCode === null && proc.signalCode === null) {
+      await new Promise<void>((resolve) => {
+        // 終わらなければ SIGKILL し、**close まで待つ**（再起動で新旧のプロセスが並ばないように）。
+        // 死んだ扱い（stdin が壊れた）でプロセスが残っているときは quit を送れないので、すぐ SIGKILL する
+        const forceKill = setTimeout(
+          () => {
+            if (!this.dead) console.warn("[USI] Engine did not quit in 5s, sending SIGKILL");
+            proc.kill("SIGKILL");
+          },
+          this.dead ? 0 : 5_000,
+        );
+        proc.once("close", () => {
+          clearTimeout(forceKill);
+          resolve();
+        });
+        if (!this.dead) this.active().send("quit");
+      });
+    }
+    this.closeLineReaders();
   }
 
   /** 起動済みのセッション。起動前・起動に失敗した後は投げる */

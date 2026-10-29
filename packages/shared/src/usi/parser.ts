@@ -1,5 +1,19 @@
 import type { UsiBestmove, UsiInfo, UsiScore } from "./types";
 
+/**
+ * 手数の分からない詰み（`score mate +` / `score mate -`）を読む手数。符号は詰ます側（+ は手番側が詰ます）。
+ * USI では手数が分からないときに符号だけを送ってよい。`Number("+")` は NaN になり、報告で拒否されるので、
+ * **どの実際の手数よりも長い**値で置く（詰みの向きは保ち、手数の短さで選ぶ出題などには掛からない）
+ */
+export const MATE_UNKNOWN_PLIES = 9999;
+
+/** `score mate <n>` の値。`+` / `-` だけなら符号付きの {@link MATE_UNKNOWN_PLIES} */
+function parseMateValue(token: string | undefined): number {
+  if (token === "+") return MATE_UNKNOWN_PLIES;
+  if (token === "-") return -MATE_UNKNOWN_PLIES;
+  return Number(token);
+}
+
 export function parseInfoLine(line: string): UsiInfo {
   const tokens = line.split(/\s+/);
   const info: UsiInfo = {};
@@ -18,11 +32,17 @@ export function parseInfoLine(line: string): UsiInfo {
         break;
       case "score": {
         const scoreType = tokens[++i];
-        const scoreValue = Number(tokens[++i]);
-        if (scoreType === "cp" || scoreType === "mate") {
-          info.score = { type: scoreType, value: scoreValue } as UsiScore;
+        const raw = tokens[++i];
+        if (scoreType === "cp") {
+          info.score = { type: "cp", value: Number(raw) } satisfies UsiScore;
+        } else if (scoreType === "mate") {
+          info.score = { type: "mate", value: parseMateValue(raw) } satisfies UsiScore;
         }
         break;
+      }
+      case "string": {
+        // `info string <任意の文>`: 残りは文で、語を値として読まない（`info string depth 5 …` で depth を拾わない）
+        return info;
       }
       case "nodes":
         info.nodes = Number(tokens[++i]);

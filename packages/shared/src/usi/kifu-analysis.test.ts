@@ -5,6 +5,7 @@ import {
   extractMultiPvResults,
   isPermanentSubmitStatus,
   leadingContiguousCandidates,
+  toReportCandidates,
   type UsiAnalysisEngine,
   type UsiCandidate,
   type UsiMoveAnalysis,
@@ -745,5 +746,34 @@ describe("定跡ヒット局面・終局局面の候補手（issue #67）", () =
       "2g2f",
       "7g7f",
     ]);
+  });
+});
+
+describe("toReportCandidates", () => {
+  const c = (rank: number, value: number, depth = 10) => ({
+    rank,
+    move: "7g7f",
+    score: { type: "cp" as const, value },
+    pv: ["7g7f"],
+    depth,
+  });
+
+  it("正常な候補はそのまま", () => {
+    expect(toReportCandidates([c(1, 50), c(2, -20)])).toEqual([c(1, 50), c(2, -20)]);
+  });
+
+  it("評価値・深さが数でない候補は捨て、欠番より後も捨てる", () => {
+    expect(toReportCandidates([c(1, 50), c(2, Number.NaN), c(3, 10)]).map((x) => x.rank)).toEqual([1]);
+    expect(toReportCandidates([c(1, 50, Number.NaN)])).toEqual([]);
+    expect(toReportCandidates([c(1, Number.POSITIVE_INFINITY)])).toEqual([]);
+  });
+
+  it("評価値は整数にして上限に収め、深さは 0 以上の整数にする", () => {
+    const [a] = toReportCandidates([c(1, 5_000_000.7, -3.5)]);
+    expect(a.score.value).toBe(1_000_000);
+    expect(a.depth).toBe(0);
+    const [b] = toReportCandidates([c(1, -12.9, 7.9)]);
+    expect(b.score.value).toBe(-12);
+    expect(b.depth).toBe(7);
   });
 });

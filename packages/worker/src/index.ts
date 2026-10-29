@@ -102,19 +102,27 @@ async function main() {
       }
     };
 
-    const intervalId = setInterval(poll, config.pollIntervalMs);
-    await poll();
-
+    let inFlight: Promise<void> | null = null;
+    const tick = () => {
+      if (!running || analyzing) return inFlight ?? Promise.resolve();
+      inFlight = poll();
+      return inFlight;
+    };
+    const intervalId = setInterval(tick, config.pollIntervalMs);
     const shutdown = async () => {
+      if (!running) return;
       console.log("\n[Worker] Shutting down...");
       running = false;
       clearInterval(intervalId);
+      // 実行中の poll の終わりを待ってからエンジンを止める
+      await inFlight;
       await engine.quit();
       console.log("[Worker] Shutdown complete");
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    await tick();
   } else {
     // Real mode: fetch unanalyzed kifus from server, analyze full kifu
     const apiKey = process.env.API_KEY;
@@ -203,6 +211,8 @@ async function main() {
         // 棋譜より先に検討局面の評価を捌く（棋譜が無いときもここが処理の場になる）。
         // エンジンを作り直したときは、この poll では棋譜に進まない
         if (!(await drainPositionJobs())) return;
+        // 停止が始まったら次の棋譜を掴まない
+        if (!running) return;
 
         // fetch 失敗はインフラ起因（一時）。次の poll で再試行する
         const quickCapable = hasQuickProfile(config);
@@ -262,6 +272,9 @@ async function main() {
             // 1 局面ごとに検討局面の評価を差し込む（prd/12 §2.1）。
             // 最大待ちは「現局面の解析残り時間 + ポーリング間隔」に収まる
             onPositionBoundary: async () => {
+              // 停止中（SIGTERM）は局面境界で中断する（未送信のチャンクは送ってから抜ける。中断は失敗ではない）。
+              // shutdown はこの poll の終わりを待ってからエンジンを止める
+              if (!running) return true;
               // ⚠ ここでも MultiPV は渡さない（3 本固定・上の drainPositionJobs と同じ理由）
               await drainEvaluationJobs(engine, positionJobs, goCommand);
               // 🔴 full を解析中に quick 待ちが現れたら、局面境界で中断して quick を先に処理する
@@ -292,6 +305,12 @@ async function main() {
             },
           });
         } catch (err) {
+          // 🔒 停止中（SIGTERM・SIGINT）の失敗は棋譜の失敗にしない。エンジンが止められて解析が落ちただけ
+          // （Ctrl+C はエンジンにも届く）。記録すると、正常な棋譜が恒久的な失敗として残る
+          if (!running) {
+            console.log(`[Worker] Analysis of kifu ${kifu.id} stopped by shutdown`);
+            return;
+          }
           // --- インフラ起因（一時失敗）: submit 失敗は記録せず次の poll で続きから再開 ---
           if (err instanceof ChunkSubmitError) {
             console.error(`[Worker] Submit failed for kifu ${kifu.id}:`, err);
@@ -333,7 +352,9 @@ async function main() {
         // （quick が先に拾われ、full は行数から続きを再開する。prd/05 §1.1d）
         if (result.interrupted) {
           console.log(
-            `[Worker] Paused kifu ${kifu.id} (${profile}) after ${result.analyzed} positions: quick pending`,
+            `[Worker] Paused kifu ${kifu.id} (${profile}) after ${result.analyzed} positions: ${
+              running ? "quick pending" : "shutting down"
+            }`,
           );
           return;
         }
@@ -354,19 +375,30 @@ async function main() {
       }
     };
 
-    const intervalId = setInterval(poll, config.pollIntervalMs);
-    await poll();
-
+    // 実行中の poll（shutdown がその終わりを待つ）
+    let inFlight: Promise<void> | null = null;
+    const tick = () => {
+      // ⚠ 実行中は差し替えない（poll は同期的に analyzing を立てるので、ここで重ならない）
+      if (!running || analyzing) return inFlight ?? Promise.resolve();
+      inFlight = poll();
+      return inFlight;
+    };
+    const intervalId = setInterval(tick, config.pollIntervalMs);
     const shutdown = async () => {
+      if (!running) return;
       console.log("[Worker] Shutting down...");
       running = false;
       clearInterval(intervalId);
+      // 🔒 poll の終わりを待ってから quit する。解析中にエンジンを止めると、その失敗が棋譜の失敗として
+      // 報告されうる（解析は局面境界で中断する。上の onPositionBoundary）
+      await inFlight;
       await engine.quit();
       console.log("[Worker] Shutdown complete");
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
+    await tick();
   }
 }
 

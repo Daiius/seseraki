@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   createFileRoute,
   Link,
+  notFound,
   useNavigate,
   useRouter,
 } from '@tanstack/react-router';
@@ -58,12 +59,13 @@ export const Route = createFileRoute('/kifus/$id')({
   validateSearch: (search: Record<string, unknown>): KifuDetailSearch => ({
     ply: intParam(search.ply, 0),
   }),
+  // 無い棋譜（他人の棋譜も同じ 404）は「見つかりません」、それ以外の失敗は状態コードを含めて
+  // 「読み込めませんでした」（どちらもルートの既定の表示。`components/RouteFallbacks.tsx`）
   loader: async ({ params }) => {
-    const res = await client.api.kifus[':no'].$get({
-      param: { no: params.id },
-    });
-    if (!res.ok) throw new Error('Kifu not found');
-    return await res.json();
+    const result = await callApi(client.api.kifus[':no'].$get({ param: { no: params.id } }));
+    if (result.ok) return result.data;
+    if (result.status === 404) throw notFound();
+    throw new Error(`棋譜を読み込めませんでした: ${result.error}`);
   },
   component: KifuDetailPage,
 });

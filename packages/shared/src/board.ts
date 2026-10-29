@@ -38,6 +38,15 @@ export const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
   P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
 };
 
+/**
+ * その駒種は成れるか（金・玉・既に成った駒は成れない）。
+ * 🔒 **「成れる駒」の定義はここ 1 か所**（`PROMOTE_MAP` から導く）。盤面編集・局面の検証・
+ * 出題の「成れる手」の判定はすべてこれを使う。
+ */
+export function canPromote(kind: PieceKind): boolean {
+  return PROMOTE_MAP[kind] !== undefined;
+}
+
 /** 成駒 → 生駒（持ち駒にするとき）。盤面編集からも使う */
 export const UNPROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
   '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',

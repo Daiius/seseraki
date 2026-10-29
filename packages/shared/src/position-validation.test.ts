@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createInitialState } from './board';
+import { canPromote, createInitialState, type PieceKind } from './board';
 import { parseSfen } from './sfen';
 import {
   canPromoteMove,
@@ -299,6 +299,32 @@ describe('canPromoteMove（出題の盤で「成」を出すか。prd/13 §3）'
     expect(canPromoteMove(state, 'P*5c')).toBe(false);
     expect(canPromoteMove(state, '1a1b')).toBe(false);
     expect(canPromoteMove(state, '5i5h')).toBe(false); // 玉は成れない
+  });
+});
+
+describe('「成れる駒」の定義は 1 か所（board.ts の canPromote）', () => {
+  const kinds: PieceKind[] = [
+    'P', 'L', 'N', 'S', 'G', 'B', 'R', 'K',
+    '+P', '+L', '+N', '+S', '+B', '+R',
+  ];
+
+  it('生駒のうち金・玉以外だけが成れる', () => {
+    expect(kinds.filter(canPromote)).toEqual(['P', 'L', 'N', 'S', 'B', 'R']);
+  });
+
+  it('canPromoteMove と validateMoveOnPosition の成りの可否が canPromote と揃う', () => {
+    for (const kind of kinds) {
+      // 5四の先手の駒を 5三（敵陣）へ。玉は 1 九・後手玉は 9 一に置いて玉どうしを離す
+      const usi = kind.startsWith('+') ? `+${kind[1]}` : kind;
+      const state = parseSfen(`k8/9/9/4${usi}4/9/9/9/9/8K b - 1`)!;
+      expect(canPromoteMove(state, '5d5c'), kind).toBe(canPromote(kind));
+      const codes = (r: ReturnType<typeof validateMoveOnPosition>) =>
+        r.ok ? [] : r.violations.map((v) => v.code);
+      expect(
+        codes(validateMoveOnPosition(state, '5d5c+')).includes('illegal_promotion'),
+        kind,
+      ).toBe(!canPromote(kind));
+    }
   });
 });
 

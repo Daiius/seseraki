@@ -9,8 +9,14 @@
  *
  * 🔒 **判定は server**。ここは応答の振り分けと、送り直しの本文の組み立てだけ。
  */
-import type { DrillNamedEvaluation, NamedEvalSettings } from 'shared';
+import {
+  usiToJapaneseWithPiece,
+  type BoardState,
+  type DrillNamedEvaluation,
+  type NamedEvalSettings,
+} from 'shared';
 import type { GradingResult } from './browserAnalysis/grading';
+import { applyStudyMoves } from './study';
 import type { BrowserAnalysisPhase } from './browserAnalysis/store';
 
 /** 解答の本文（送り直しても `line` と線引きは変えない） */
@@ -212,3 +218,11 @@ const VERDICT_BADGE = {
   close: { label: '惜しい', className: 'badge-warning' },
   wrong: { label: '不正解', className: 'badge-error' },
 } as const;
+
+/** 読み筋を日本語にする（詰み手順・咎め筋。盤面を進めながら読むので `shared` の変換をそのまま使う） */
+export function movesText(base: BoardState, moves: string[]): string {
+  const session = applyStudyMoves(base, moves);
+  return moves
+    .map((move, i) => usiToJapaneseWithPiece(session.steps[i].state, move))
+    .join(' ');
+}

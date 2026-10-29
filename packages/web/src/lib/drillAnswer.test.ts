@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createInitialState } from 'shared';
 import {
   answerBodyUnavailable,
   answerBodyWithEvaluation,
@@ -8,6 +9,7 @@ import {
   lineAfterUndoTurn,
   matePliesText,
   missText,
+  movesText,
   practiceNote,
   resultBadge,
   engineWaitFromOf,
@@ -199,5 +201,11 @@ describe('engineWaitFromOf（判定し直しの基準の状態。レビュー OC
     expect(retriesAfterEngineReady(from!, 'loading')).toBe(true);
     // 諦めた時点の状態（loading）を基準にすると、その後ずっと判定し直さない（直す前の振る舞い）
     expect(retriesAfterEngineReady('loading', 'idle')).toBe(false);
+  });
+});
+
+describe('movesText（詰み手順・咎め筋の読み下し）', () => {
+  it('局面を進めながら読み、空白でつなぐ', () => {
+    expect(movesText(createInitialState(), ['7g7f', '3c3d', '8h2b+'])).toBe('７六歩(77) ３四歩(33) ２二角成(88)');
   });
 });

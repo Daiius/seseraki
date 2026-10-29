@@ -217,7 +217,7 @@
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。
 - **Docker 外で worker を動かす**場合は `packages/worker/.env.example` を `.env` にコピー。`USE_MOCK=true` で
-  エンジンなしのモック動作が可能（[05](./05-analysis.md)）。server はホスト公開しないため、接続先
+  server に繋がないモック動作が可能（🔒 既定は `false`。2026-10-30 に `true` から変えた——本番で書き忘れると黙って mock で動くため）（[05](./05-analysis.md)）。server はホスト公開しないため、接続先
   `SERVER_URL` は **web の公開口＝`/api` proxy**（`http://localhost:5173`。worker は `${SERVER_URL}/api/worker/...`
   を叩くので proxy 経由で server に届く）に向ける。
 

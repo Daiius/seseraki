@@ -5,12 +5,8 @@ export async function analyzeTask(
   engine: UsiEngine,
   task: AnalysisTask,
 ): Promise<AnalysisResult> {
-  const position =
-    task.position.startsWith("sfen") || task.position === "startpos"
-      ? `position ${task.position}`
-      : `position ${task.position}`;
-
-  const result = await engine.analyze(position, `go depth ${task.depth}`);
+  // `task.position` は `startpos …` / `sfen …`（USI の position の引数）
+  const result = await engine.analyze(`position ${task.position}`, `go depth ${task.depth}`);
 
   return {
     taskId: task.id,

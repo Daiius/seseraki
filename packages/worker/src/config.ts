@@ -47,6 +47,19 @@ export function parsePositiveInt(
 }
 
 /**
+ * 真偽の設定（`USE_MOCK`）。`true` / `false` だけを受ける。未設定・空なら `fallback`。
+ * 🔴 それ以外の値（`1`・`yes`・綴りの誤り）は起動時に落とす——黙って既定に倒すと、本番が mock で動いたり
+ * 手元の確認が本番の server を叩いたりする
+ */
+export function parseBoolean(name: string, raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = raw.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be "true" or "false": ${raw}`);
+}
+
+/**
  * `ENGINE_EVAL_SHA256`（任意。評価関数 `nn.bin` の sha256・小文字 16 進 64 桁）。来歴の `evalHash` に載せる
  * （prd/05 §1.2・prd/14 §5.9）。本番イメージが照合した値を渡す。未設定・空なら送らない。
  */
@@ -98,7 +111,9 @@ export function loadConfig() {
     engineBookDir: process.env.ENGINE_BOOK_DIR,
     serverUrl: optionalEnv("SERVER_URL", "http://localhost:4000"),
     pollIntervalMs: parsePositiveInt("POLL_INTERVAL_MS", process.env.POLL_INTERVAL_MS, 10_000),
-    useMock: optionalEnv("USE_MOCK", "true") === "true",
+    // 🔒 既定は false（server に繋ぐ本番の動き）。mock（固定の局面を読むだけ）は明示したときだけ。
+    // 既定が true だと、本番で書き忘れたときに黙って mock で動き、棋譜が 1 件も解析されない
+    useMock: parseBoolean("USE_MOCK", process.env.USE_MOCK, false),
   };
 }
 

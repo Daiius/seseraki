@@ -12,8 +12,9 @@
  * （`display-no.db.test.ts` が全エンドポイントの応答を検査する）。出題は棋譜の番号・手数・種類の組で指す。
  * worker の経路（API_KEY。`worker-routes.ts`）は内部経路なので内部 ID のまま。
  *
- * 🔒 **ブラウザ解析の受け口・担当の切り替え・出題の解答（prd/14 §5.7・§5.8・prd/13 §5.3）は、Origin の検査と本文の大きさの上限を付ける**
- * （`trustedOrigin` / `smallBody`）。ブラウザから届く解析結果は信用できない入力なので、検証と上限は
+ * 🔒 **GET 以外の口には Origin の検査を一括で掛ける**（`originRequiredForWrites`。prd/14 §5.8）。
+ * ブラウザ解析の受け口・担当の切り替え・出題の解答（prd/14 §5.7・§5.8・prd/13 §5.3）・メモには本文の大きさの上限を付ける
+ * （`smallBody`。取り込みは `kifuCreateBody`）。ブラウザから届く解析結果は信用できない入力なので、検証と上限は
  * `shared` の `analysis-limits.ts` の zod で掛ける。書き込みは他の口と同じく RLS の下の tx で行う。
  *
  * 全員ぶんを扱う経路（worker の報告・動画解析の取り込み。API_KEY）は `worker-routes.ts`。
@@ -42,7 +43,14 @@ import {
   submitAnalysisChunk,
   switchAnalysisAssignee,
 } from './analysis-report.js';
-import { originRequired } from './middlewares.js';
+import { originRequiredForWrites } from './middlewares.js';
+import { idParam, positiveInt4 } from './params.js';
+import {
+  KIF_TEXT_MAX,
+  KIFU_CREATE_BODY_MAX_BYTES,
+  KIFU_MEMO_MAX,
+  KIFU_TITLE_MAX,
+} from './kifu-input.js';
 import { buildVersionFromEnv } from './build-version.js';
 import {
   EvaluationQueueFullError,
@@ -119,7 +127,7 @@ export type { SourceTzChoice } from './kifu-queries.js';
  * ⚠ 整数でない・正でない・列（`integer`）に収まらない値は 400
  * （`z.coerce.number()` だけだと `1.5` や `NaN` が素通りし、範囲外は DB で 500 になる）
  */
-const kifuNo = z.coerce.number<number>().int().positive().max(2_147_483_647);
+const kifuNo = positiveInt4;
 const kifuNoParam = z.object({ no: kifuNo });
 
 /**
@@ -168,6 +176,19 @@ const aliasPeriodSchema = periodRefine(
 
 export const app = new Hono().basePath('/api');
 
+/**
+ * Origin の検査（`originRequiredForWrites`）から外すパスの接頭辞。
+ * - `/api/auth/`: Better Auth。自分で `Origin` を `trustedOrigins` と照合する
+ * - `/api/dev/`: dev ログイン（development だけに登録される。prd/07 §6.1）
+ * - `/api/worker/`・`/api/video-analysis/`: API_KEY の経路（`worker-routes.ts`）。cookie を使わない
+ */
+export const ORIGIN_EXEMPT_PREFIXES = [
+  '/api/auth/',
+  '/api/dev/',
+  '/api/worker/',
+  '/api/video-analysis/',
+] as const;
+
 const corsOrigins = (process.env.CORS_ORIGINS ?? '')
   .split(',')
   .map((s) => s.trim())
@@ -177,6 +198,17 @@ app.use('*', logger());
 if (corsOrigins.length > 0) {
   app.use('*', cors({ origin: corsOrigins, credentials: true }));
 }
+
+/**
+ * 🔒 **GET 以外のすべての口に Origin の検査を掛ける**（prd/14 §5.8・2026-10-30）。一覧は Better Auth の
+ * `trustedOrigins` と同じもの（`BETTER_AUTH_URL` のオリジンと `CORS_ORIGINS`。二重管理にしない）。
+ * セッションは cookie なので、別のサイトのページからも cookie 付きの書き込みは飛ばせる（CSRF）。
+ *
+ * 外すのは cookie を使わない口・自前で検査する口だけ（`ORIGIN_EXEMPT_PREFIXES`）:
+ * API_KEY の経路（worker・動画解析の取り込み）・Better Auth（自分で `Origin` を検査する）・dev ログイン。
+ * ⚠ ルートより前に登録する（後に登録すると、先に応答したハンドラの後に回って掛からない）
+ */
+app.use('*', originRequiredForWrites(authSettings.trustedOrigins, ORIGIN_EXEMPT_PREFIXES));
 
 // 人のログイン（Better Auth。prd/07 §2.1）。サインイン・コールバック・サインアウト・セッション取得を
 // 丸ごと受ける。⚠ **アプリの API を /auth/* の下に置かない**（このハンドラが先に受ける）
@@ -188,17 +220,15 @@ if (authSettings.isDev) {
   app.route('/dev', devLoginRoutes(auth));
 }
 
-/**
- * 書き込み口の Origin の検査（prd/14 §5.8）。🔒 一覧は Better Auth の `trustedOrigins` と同じもの
- * （`BETTER_AUTH_URL` のオリジンと `CORS_ORIGINS`。二重管理にしない）。
- * ⚠ 掛けているのはブラウザ解析の受け口・担当の切り替え・出題の解答（ブラウザの名指し評価を受ける）だけ
- * （ほかの既存の書き込み口へ広げるのは別の変更）
- */
-const trustedOrigin = originRequired(authSettings.trustedOrigins);
-
 /** 本文の大きさの上限（prd/14 §6.2）。超えたら 413（zod の検証より前に、読み切る前に断る） */
 const smallBody = bodyLimit({
   maxSize: BROWSER_ANALYSIS_LIMITS.bodyMaxBytes,
+  onError: (c) => c.json({ error: 'body too large' } as const, 413),
+});
+
+/** 棋譜の取り込みの本文の上限（KIF の本文を載せるので `smallBody` より大きい）。超えたら 413 */
+const kifuCreateBody = bodyLimit({
+  maxSize: KIFU_CREATE_BODY_MAX_BYTES,
   onError: (c) => c.json({ error: 'body too large' } as const, 413),
 });
 
@@ -310,12 +340,13 @@ const route = app
   )
   .post(
     '/kifus',
+    kifuCreateBody,
     sessionRequired,
     zv(
       'json',
       z.object({
-        title: z.string().optional(),
-        kifText: z.string(),
+        title: z.string().max(KIFU_TITLE_MAX).optional(),
+        kifText: z.string().max(KIF_TEXT_MAX),
         // 開始日時の解釈 TZ。省略/auto は KIF 署名から判定（既定 JST）
         sourceTz: z.enum(['auto', 'JST', 'UTC']).optional(),
       }),
@@ -373,7 +404,6 @@ const route = app
   // 同じ値を送っても何も起きない（`changed: false`）
   .put(
     '/users/me/analysis-assignee',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('json', z.object({ assignee: z.enum(['worker', 'browser']) })),
@@ -417,7 +447,7 @@ const route = app
   .patch(
     '/users/me/aliases/:id',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number<number>() })),
+    zv('param', idParam),
     zv('json', aliasPeriodSchema),
     async (c) => {
       const { id } = c.req.valid('param');
@@ -435,7 +465,7 @@ const route = app
   .delete(
     '/users/me/aliases/:id',
     sessionRequired,
-    zv('param', z.object({ id: z.coerce.number<number>() })),
+    zv('param', idParam),
     async (c) => {
       // ⚠ **旧名を消すと、その名前で指した過去の棋譜が「自分の対局」でなくなる**
       // （prd/11 §2.2）。画面側で警告してから呼ぶ
@@ -737,7 +767,6 @@ const route = app
   // `practice: true`（解答後のやり直し）は記録しない
   .post(
     '/drills/:kifuNo/:moveNumber/:kind/give-up',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('param', drillRefParam),
@@ -792,7 +821,6 @@ const route = app
   // `drillNamedEvaluationSchema`）を掛け、評価の手が解答の手と一致することも確かめる（prd/14 §5.8）
   .post(
     '/drills/:kifuNo/:moveNumber/:kind/answer',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('param', drillRefParam),
@@ -959,7 +987,6 @@ const route = app
   // `complete` は full の完了で返す。担当が `browser` でなければ 409
   .post(
     '/kifus/:no/analysis/start',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('param', kifuNoParam),
@@ -983,7 +1010,6 @@ const route = app
   // 届いた段の完了は `stageCompleted`、受けた段は `profile`
   .post(
     '/kifus/:no/analysis/chunks',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('param', kifuNoParam),
@@ -1045,7 +1071,6 @@ const route = app
   // （手元 worker と同じ）
   .post(
     '/kifus/:no/analysis/error',
-    trustedOrigin,
     smallBody,
     sessionRequired,
     zv('param', kifuNoParam),
@@ -1095,9 +1120,10 @@ const route = app
   .get('/analysis/progress', sessionUser, (c) => c.json(getProgressFor(c.get('userId'))))
   .patch(
     '/kifus/:no',
+    smallBody,
     sessionRequired,
     zv('param', kifuNoParam),
-    zv('json', z.object({ memo: z.string().nullable() })),
+    zv('json', z.object({ memo: z.string().max(KIFU_MEMO_MAX).nullable() })),
     async (c) => {
       const { no } = c.req.valid('param');
       const { memo } = c.req.valid('json');

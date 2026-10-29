@@ -176,6 +176,77 @@ describe('web 向けのエンドポイント', () => {
     expect(res.status).toBe(413);
   }, 20_000);
 
+  // 🔒 GET 以外のすべての口に Origin の検査（prd/14 §5.8・2026-10-30）。API_KEY の経路と Better Auth は外す
+  it('🔒 GET 以外の口は、外す経路を除いてすべて Origin が無ければ 403', async () => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    const { ORIGIN_EXEMPT_PREFIXES } = await import('./route.js');
+    const writes = app.routes.filter((r) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(r.method));
+    // 新しい書き込み口が増えても、この一覧から外れない（数が減ったら登録の仕方が変わった）
+    expect(writes.length).toBeGreaterThan(15);
+    const exempt = (path: string) => ORIGIN_EXEMPT_PREFIXES.some((p) => path.startsWith(p));
+    let guarded = 0;
+    for (const { method, path: pattern } of writes) {
+      const path = pattern.replace(/:[A-Za-z]+/g, '1').replace(/\*$/, 'sign-out');
+      const res = await app.request(path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      const body = await res.text();
+      if (exempt(path)) {
+        expect(body, `${method} ${path}`).not.toContain('origin not allowed');
+      } else {
+        guarded++;
+        expect(res.status, `${method} ${path}`).toBe(403);
+        expect(body, `${method} ${path}`).toContain('origin not allowed');
+      }
+    }
+    expect(guarded).toBeGreaterThan(10);
+  }, 20_000);
+
+  it('🔒 API_KEY の経路と Better Auth の口は Origin の検査から外れている', async () => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    // worker の経路（API_KEY）: Origin が無くても API_KEY の検査（401）まで届く
+    for (const path of [
+      '/api/worker/kifus/1/error',
+      '/api/worker/analyses',
+      '/api/worker/analyses/progress',
+      '/api/worker/position-jobs/abc/result',
+      '/api/video-analysis/kifus',
+    ]) {
+      const res = await app.request(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(res.status, path).toBe(401);
+    }
+    // Better Auth: 自前の検査に任せる（こちらの 403 の本文は返さない）
+    const res = await app.request('/api/auth/sign-out', { method: 'POST' });
+    expect(await res.text()).not.toContain('origin not allowed');
+  }, 20_000);
+
+  it('🔒 GET は Origin が無くても検査しない（未ログインの 401 まで進む）', async () => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    expect((await app.request('/api/kifus/1')).status).toBe(401);
+  }, 20_000);
+
+  it('🔒 棋譜の取り込みは本文が上限を超えたら 413（Origin の検査の後・セッションより前）', async () => {
+    const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
+    const res = await app.request('/api/kifus', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: JSON.stringify({ kifText: 'x'.repeat(2 * 1024 * 1024 + 1) }),
+    });
+    expect(res.status).toBe(413);
+    const memo = await app.request('/api/kifus/1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', origin: ORIGIN },
+      body: JSON.stringify({ memo: 'x'.repeat(64 * 1024) }),
+    });
+    expect(memo.status).toBe(413);
+  }, 20_000);
+
   it('旧ログインのエンドポイントは無い（prd/07 §8）', async () => {
     const app = await loadApp({ ...PROD_ENV, NODE_ENV: 'production' });
     const paths = app.routes.map((r) => r.path);

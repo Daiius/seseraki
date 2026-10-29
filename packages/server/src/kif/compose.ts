@@ -78,12 +78,28 @@ export function verifyRoundTrip(
 }
 
 /**
+ * 合成・往復検証に落ちた（＝入力の指し手列が棋譜として保存できない）。
+ * 取り込みの口はこれだけを 422 にし、ほかの例外は 500 のまま投げる
+ */
+export class ComposeVerificationError extends Error {
+  override name = 'ComposeVerificationError';
+}
+
+/**
  * 合成と検証をまとめて行う。取り込み経路はこれだけを呼ぶ。
- * @throws 往復しなかったとき
+ * @throws {ComposeVerificationError} 合成できない・往復しなかったとき
  */
 export function composeKifVerified(usiMoves: string[]): string {
-  const kifText = composeKif(usiMoves);
+  let kifText: string;
+  try {
+    kifText = composeKif(usiMoves);
+  } catch (e) {
+    // 盤面を辿れない指し手列（入力の不正）。合成の失敗も検証の失敗と同じく入力の問題として扱う
+    throw new ComposeVerificationError(
+      `KIF を合成できない: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
   const result = verifyRoundTrip(usiMoves, kifText);
-  if (!result.ok) throw new Error(result.reason);
+  if (!result.ok) throw new ComposeVerificationError(result.reason);
   return kifText;
 }

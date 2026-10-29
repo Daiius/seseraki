@@ -34,6 +34,12 @@ import {
   type StatsTacticsQuery,
 } from './stats-tactics-query.js';
 import { insertKifu } from './kifu-number.js';
+import {
+  KIFU_PLAYER_MAX,
+  KIFU_RESULT_MAX,
+  KIFU_TITLE_MAX,
+  truncateChars,
+} from './kifu-input.js';
 import { replaceTactics } from './tactics.js';
 import { refreshSubjectSide } from './users.js';
 import {
@@ -64,6 +70,7 @@ export interface KifIngestion {
 
 /**
  * KIF テキストを USI 指し手列 + 対局メタへ変換する（投入・再解析で共用）。
+ * 対局者名・結果は**列の長さで切り詰める**（`varchar` に収まらない値で取り込みが 500 にならないように）。
  * @param tz 開始日時の解釈 TZ。'auto'（既定）は JST。
  *   投入時にユーザーが選んだ値、再解析では保存済み sourceTz を渡す。
  */
@@ -77,21 +84,21 @@ export function convertKif(kifText: string, tz: SourceTzChoice = 'auto'): KifIng
   return {
     usiMoves,
     meta: {
-      sente: parsed.header.sente,
-      gote: parsed.header.gote,
+      sente: truncateChars(parsed.header.sente, KIFU_PLAYER_MAX),
+      gote: truncateChars(parsed.header.gote, KIFU_PLAYER_MAX),
       senteDan: parsed.header.senteDan,
       goteDan: parsed.header.goteDan,
-      result: parsed.header.result,
+      result: truncateChars(parsed.header.result, KIFU_RESULT_MAX),
       playedAt: parsed.header.playedAt,
       sourceTz: parsed.header.sourceTz,
     },
   };
 }
 
-/** タイトル未指定時に対局メタから自動生成する */
+/** タイトル未指定時に対局メタから自動生成する（`kifus.title` の長さで切り詰める） */
 export function autoTitle(meta: KifIngestion['meta']): string {
   if (meta.sente || meta.gote) {
-    return `${meta.sente ?? '?'} vs ${meta.gote ?? '?'}`;
+    return truncateChars(`${meta.sente ?? '?'} vs ${meta.gote ?? '?'}`, KIFU_TITLE_MAX);
   }
   if (meta.playedAt) {
     return meta.playedAt.toISOString().slice(0, 10);

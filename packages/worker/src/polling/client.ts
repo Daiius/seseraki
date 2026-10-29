@@ -27,12 +27,20 @@ export interface AnalysisProvenance {
   fvScale?: number;
 }
 
-export function createClient(baseUrl: string, apiKey: string) {
+/**
+ * @param options.fetch - HTTP の送り口（テストで差し替える。省略時は大域の `fetch`）
+ */
+export function createClient(
+  baseUrl: string,
+  apiKey: string,
+  options: { fetch?: typeof fetch } = {},
+) {
   // server は basePath('/api') 配下。worker は server を直叩きするので baseUrl は
   // SERVER_URL のまま、呼び出しで `client.api.worker.*` と basePath を明示する
   // （実 URL は `${SERVER_URL}/api/worker/...` になる）。
   const client = hc<AppType>(baseUrl, {
     headers: { Authorization: `Bearer ${apiKey}` },
+    ...(options.fetch ? { fetch: options.fetch } : {}),
   });
   return {
     /**

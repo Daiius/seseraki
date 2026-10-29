@@ -212,7 +212,7 @@
   そのまま使う。本番はイメージ同梱の `migrate.js` で流す（AGENTS.md）。dev DB には `.env.database` を読む `db:migrate:dev` を使う。
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:migrate:dev && pnpm db:seed`。dev のスキーマ変更も `pnpm db:migrate:dev`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
+  - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL。自分の名前候補は DB が正で env には持たない。[11](./11-users.md)）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。

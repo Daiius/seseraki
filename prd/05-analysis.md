@@ -53,7 +53,7 @@ worker（`packages/worker`）は server とは分離した実行環境で稼働�
 - ⚠ **進捗報告の失敗は握りつぶし、解析を継続する。** server が落ちている・遅いときに解析まで止まるのは
   本末転倒。worker は報告の完了を待たずに次の局面へ進む。
 - **進捗は server のメモリに持ち、DB に永続化しない**（`packages/server/src/analysis-progress.ts`。
-  `swars/job-store.ts` と同じモジュールスコープの状態。単一プロセス前提は [02](./02-architecture.md) §1 /
+  モジュールスコープの状態。単一プロセス前提は [02](./02-architecture.md) §1 /
   [07](./07-auth-and-privacy.md)）。理由: (1) チャンク submit が入れば `moveAnalyses` 件数から導出できる
   ようになるため、列を足すと捨てることになる（migration を 2 回打つ）、(2) 数十分の解析中に DB へ UPDATE を
   繰り返さない、(3) 完了すれば `analysisCompletedAt` が正になる揮発的な情報である。server 再起動で消えるが

@@ -26,6 +26,27 @@ export function parseFvScale(raw: string | undefined): number | undefined {
 }
 
 /**
+ * 正の整数の数値設定（`ENGINE_THREADS` / `ENGINE_DEPTH` / `ENGINE_MULTIPV` / `ENGINE_HASH` / `ENGINE_MOVETIME` /
+ * `POLL_INTERVAL_MS` など）。未設定・空なら `fallback`（任意の設定は undefined）。
+ * 🔴 誤った値（数でない・小数・0 以下）は起動時に落とす（`parseFvScale` と同じ形）——`Number()` のまま通すと
+ * `NaN` が `setoption` や `go` にそのまま渡り、エンジンの既定値で黙って動く・`setInterval(NaN)` で回り続ける
+ */
+export function parsePositiveInt(name: string, raw: string | undefined): number | undefined;
+export function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number;
+export function parsePositiveInt(
+  name: string,
+  raw: string | undefined,
+  fallback?: number,
+): number | undefined {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer: ${raw}`);
+  }
+  return value;
+}
+
+/**
  * `ENGINE_EVAL_SHA256`（任意。評価関数 `nn.bin` の sha256・小文字 16 進 64 桁）。来歴の `evalHash` に載せる
  * （prd/05 §1.2・prd/14 §5.9）。本番イメージが照合した値を渡す。未設定・空なら送らない。
  */
@@ -60,29 +81,23 @@ export function loadConfig() {
 
   return {
     enginePath,
-    engineThreads: Number(optionalEnv("ENGINE_THREADS", "1")),
-    engineDepth: Number(optionalEnv("ENGINE_DEPTH", "10")),
-    engineMovetime: process.env.ENGINE_MOVETIME
-      ? Number(process.env.ENGINE_MOVETIME)
-      : undefined,
+    engineThreads: parsePositiveInt("ENGINE_THREADS", process.env.ENGINE_THREADS, 1),
+    engineDepth: parsePositiveInt("ENGINE_DEPTH", process.env.ENGINE_DEPTH, 10),
+    engineMovetime: parsePositiveInt("ENGINE_MOVETIME", process.env.ENGINE_MOVETIME),
     // quick 段階の設定（prd/05 §1.1d）。**両方とも未設定なら quick は無効**で、
     // 現状どおり full のみの 1 段階で動く（後方互換）。MultiPV は両段階で共通——
     // 悪手判定と検討盤の再利用が候補手数に依存するため、quick でも本数は減らさない
-    engineQuickMovetime: process.env.ENGINE_QUICK_MOVETIME
-      ? Number(process.env.ENGINE_QUICK_MOVETIME)
-      : undefined,
-    engineQuickDepth: process.env.ENGINE_QUICK_DEPTH
-      ? Number(process.env.ENGINE_QUICK_DEPTH)
-      : undefined,
-    engineMultiPv: Number(optionalEnv("ENGINE_MULTIPV", "3")),
-    engineHash: Number(optionalEnv("ENGINE_HASH", "128")),
+    engineQuickMovetime: parsePositiveInt("ENGINE_QUICK_MOVETIME", process.env.ENGINE_QUICK_MOVETIME),
+    engineQuickDepth: parsePositiveInt("ENGINE_QUICK_DEPTH", process.env.ENGINE_QUICK_DEPTH),
+    engineMultiPv: parsePositiveInt("ENGINE_MULTIPV", process.env.ENGINE_MULTIPV, 3),
+    engineHash: parsePositiveInt("ENGINE_HASH", process.env.ENGINE_HASH, 128),
     engineEvalDir: process.env.ENGINE_EVAL_DIR,
     // 評価関数の尺度と識別（prd/05 §1.2・§1.3）。本番イメージ（Dockerfile.prod）が渡す
     engineFvScale: parseFvScale(process.env.ENGINE_FV_SCALE),
     engineEvalSha256: parseEvalSha256(process.env.ENGINE_EVAL_SHA256),
     engineBookDir: process.env.ENGINE_BOOK_DIR,
     serverUrl: optionalEnv("SERVER_URL", "http://localhost:4000"),
-    pollIntervalMs: Number(optionalEnv("POLL_INTERVAL_MS", "10000")),
+    pollIntervalMs: parsePositiveInt("POLL_INTERVAL_MS", process.env.POLL_INTERVAL_MS, 10_000),
     useMock: optionalEnv("USE_MOCK", "true") === "true",
   };
 }

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   GRADER_WAIT_MS,
   gradingFailureMessage,
@@ -15,6 +15,7 @@ import type {
   PositionEvalOutcome,
   PositionEvalRequest,
 } from './runner';
+import { SchedulerStoppedError } from './scheduler';
 import type { BrowserAnalysisPhase } from './store';
 
 const REQUEST: NamedEvalRequest = {
@@ -172,10 +173,28 @@ describe('requestBrowserGrading', () => {
       off();
       // 止まった後に起動し直した常駐が受け持つ
       offs.push(setBrowserGrader(async () => OK));
-      throw new Error('stopped');
+      throw new SchedulerStoppedError();
     });
     expect(await requestBrowserGrading(REQUEST, deps('idle').d)).toEqual(OK);
     expect(calls).toBe(1);
+  });
+
+  it('常駐の停止でない失敗は頼み直さず、警告を出して failed にする', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let calls = 0;
+    offs.push(
+      setBrowserGrader(async () => {
+        calls++;
+        throw new Error('unexpected');
+      }),
+    );
+    expect(await requestBrowserGrading(REQUEST, deps('idle').d)).toEqual({
+      kind: 'failed',
+      detail: 'unexpected',
+    });
+    expect(calls).toBe(1);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 

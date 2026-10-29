@@ -106,12 +106,10 @@ async function downloadEvalFiles(files) {
         '評価関数の大きさが manifest と違います (' + name + ' ' + loaded + ' / ' + file.bytes + ')',
       );
     }
-    // 来歴に記録するハッシュと、実際に使う評価関数を一致させる
-    if (self.crypto && self.crypto.subtle) {
-      var digest = toHex(await self.crypto.subtle.digest('SHA-256', bytes));
-      if (digest !== file.sha256) {
-        throw new Error('評価関数のハッシュが manifest と違います (' + name + ')');
-      }
+    // 来歴に記録するハッシュと、実際に使う評価関数を一致させる（crypto.subtle が無ければ init が先に止めている）
+    var digest = toHex(await self.crypto.subtle.digest('SHA-256', bytes));
+    if (digest !== file.sha256) {
+      throw new Error('評価関数のハッシュが manifest と違います (' + name + ')');
     }
     return bytes;
   };
@@ -136,6 +134,11 @@ async function init(message) {
     if (!/^\/eval\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(String(evalFiles[i].path))) {
       throw new Error('評価関数の置き場が不正です: ' + evalFiles[i].path);
     }
+  }
+  // 🔒 評価関数を照合できない環境（crypto.subtle が無い）では止める。照合を飛ばして読み込むと、
+  // 来歴のハッシュと実際に使った評価関数が食い違ったまま結果が保存されうる。ダウンロードの前に断る
+  if (!self.crypto || !self.crypto.subtle) {
+    throw new Error('この環境では評価関数を照合できません（crypto.subtle がありません）');
   }
   // 評価関数の受信は、エンジンの起動と並行に進める
   var evalPromise = downloadEvalFiles(evalFiles);

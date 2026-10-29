@@ -78,9 +78,11 @@ export interface Scheduler {
   poke(): void;
   /**
    * 採点の読み（`fn`）を全局面解析より先に実行する。このタブで解析中の棋譜は局面の境目で止め、`fn` の後に選び直す。
-   * 常駐が止まったら（止まっていたら）拒否する
+   * 常駐が止まったら（止まっていたら）拒否する（{@link SchedulerStoppedError}）。
+   * `signal` は頼んだ側の取り下げ。取り下げ済み・取り下げられたら、解析を止めずロックも取らずに拒否する
+   * （{@link PriorityAbortedError}。取り下げた要求のために、このタブの解析を止めたりほかのタブを譲らせたりしない）
    */
-  runPriority<T>(fn: () => Promise<T>): Promise<T>;
+  runPriority<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
 /** 常駐が止まっていて、採点の読みを実行できない */
@@ -88,6 +90,35 @@ export class SchedulerStoppedError extends Error {
   constructor() {
     super('解析の常駐が止まっています');
   }
+}
+
+/** 頼んだ側が採点の読み・局面評価を取り下げた（{@link Scheduler.runPriority} の `signal`） */
+export class PriorityAbortedError extends Error {
+  constructor() {
+    super('読みの依頼は取り下げられました');
+  }
+}
+
+/**
+ * どちらかが中断されたら中断される signal（`AbortSignal.any` 相当）。`release` で聞き手を外す。
+ * ⚠ `AbortSignal.any` を持たないブラウザ（Safari 17.4 より前）もあるので、自前で合わせる
+ */
+export function anySignal(a: AbortSignal, b: AbortSignal): { signal: AbortSignal; release(): void } {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (a.aborted || b.aborted) {
+    controller.abort();
+    return { signal: controller.signal, release: () => {} };
+  }
+  a.addEventListener('abort', onAbort);
+  b.addEventListener('abort', onAbort);
+  return {
+    signal: controller.signal,
+    release: () => {
+      a.removeEventListener('abort', onAbort);
+      b.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
 /** 解析が一区切りした棋譜を、次に試すまで空ける時間 */
@@ -117,7 +148,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   /** 棋譜の番号 → 次に試してよい時刻 */
   const cooldownUntil = new Map<number, number>();
   /** 頼まれた採点の読み（頼まれた順） */
-  const priority: { run(): Promise<void>; cancel(): void }[] = [];
+  const priority: {
+    run(): Promise<void>;
+    /** 常駐が止まった */
+    cancel(): void;
+    /** 頼んだ側が取り下げた */
+    abort(): void;
+    /** 頼んだ側の取り下げの合図（無ければ取り下げられない） */
+    signal?: AbortSignal;
+  }[] = [];
   let running = false;
 
   const eligible = (kifuNo: number) =>
@@ -196,11 +235,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   const drainPriority = async (signal: AbortSignal): Promise<void> => {
     while (priority.length > 0 && !signal.aborted) {
       const task = priority.shift()!;
+      // 取り出すときにも見る。待っている間に取り下げられた要求でロック（ほかのタブを譲らせる印）を取らない
+      if (task.signal?.aborted) {
+        task.abort();
+        continue;
+      }
+      // ロックを待つ間の取り下げも受ける（常駐の停止と合わせる）
+      const lock = task.signal ? anySignal(signal, task.signal) : { signal, release: () => {} };
       try {
-        await deps.withPriorityLock(signal, () => task.run());
+        await deps.withPriorityLock(lock.signal, () => task.run());
       } catch {
-        // ロックを待つ間の中断（常駐の停止）。頼んだ側には止まったと返す
-        task.cancel();
+        // ロックを待つ間の中断。常駐の停止なら止まったと、取り下げなら取り下げと返す
+        if (!signal.aborted && task.signal?.aborted) task.abort();
+        else task.cancel();
+      } finally {
+        lock.release();
       }
     }
   };
@@ -308,16 +357,41 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     notify();
   };
 
-  const runPriority = <T,>(fn: () => Promise<T>): Promise<T> =>
+  const runPriority = <T,>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> =>
     new Promise<T>((resolve, reject) => {
       if (!running) {
         reject(new SchedulerStoppedError());
         return;
       }
-      priority.push({
-        run: () => fn().then(resolve, reject),
-        cancel: () => reject(new SchedulerStoppedError()),
-      });
+      // 積むときに見る。取り下げ済みの要求のために解析を止めない
+      if (signal?.aborted) {
+        reject(new PriorityAbortedError());
+        return;
+      }
+      const task = {
+        run: () => {
+          signal?.removeEventListener('abort', onAbort);
+          return fn().then(resolve, reject);
+        },
+        cancel: () => {
+          signal?.removeEventListener('abort', onAbort);
+          reject(new SchedulerStoppedError());
+        },
+        abort: () => {
+          signal?.removeEventListener('abort', onAbort);
+          reject(new PriorityAbortedError());
+        },
+        signal,
+      };
+      // 待っている間に取り下げられたら、順番を待たずに外して返す
+      const onAbort = () => {
+        const index = priority.indexOf(task);
+        if (index === -1) return; // 取り出された後（ロック待ち・実行中）。ロックの signal と fn 側が受ける
+        priority.splice(index, 1);
+        task.abort();
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      priority.push(task);
       if (current) {
         // 局面の境目で止める（未送信のチャンクは送ってから止まる）。止めた棋譜は空け時間なしで選び直される
         log.info(`interrupting kifu #${current.kifuNo} for a drill answer`);

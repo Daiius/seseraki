@@ -15,6 +15,8 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { systemDb } from './db/system.js';
 import { kifus, kifuAnalyses, users } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
+import { idParam, INT4_MAX } from './params.js';
+import { ComposeVerificationError } from './kif/compose.js';
 import { formatDiff, importVideoKifu, videoKifuInputSchema } from './video-analysis.js';
 import { clearProgress, getClearToken, setProgress } from './analysis-progress.js';
 import { isStageComplete } from './analysis-submit.js';
@@ -56,10 +58,11 @@ export const workerRoutes = new Hono()
       try {
         result = await importVideoKifu(input);
       } catch (e) {
-        // 往復検証に落ちた棋譜は保存しない（prd/10 §4.2）
-        const reason = e instanceof Error ? e.message : String(e);
-        console.warn(`[VideoAnalysis] 取り込み中止 ${tag}: ${reason}`);
-        return c.json({ error: reason }, 422);
+        // 往復検証に落ちた棋譜は保存しない（prd/10 §4.2）。422 にするのは**合成・検証の失敗だけ**。
+        // それ以外（DB の失敗など）は投げ直して 500 にする（内部のエラー文を応答に載せない）
+        if (!(e instanceof ComposeVerificationError)) throw e;
+        console.warn(`[VideoAnalysis] 取り込み中止 ${tag}: ${e.message}`);
+        return c.json({ error: e.message }, 422);
       }
       if (result.created) {
         console.log(
@@ -171,8 +174,8 @@ export const workerRoutes = new Hono()
   .post(
     '/worker/kifus/:id/error',
     apiKeyRequired,
-    zv('param', z.object({ id: z.coerce.number<number>() })),
-    zv('json', z.object({ error: z.string(), revision: z.number() })),
+    zv('param', idParam),
+    zv('json', z.object({ error: z.string(), revision: z.number().int() })),
     async (c) => {
       const { id } = c.req.valid('param');
       const { error, revision } = c.req.valid('json');
@@ -193,8 +196,8 @@ export const workerRoutes = new Hono()
     zv(
       'json',
       z.object({
-        kifuId: z.number(),
-        revision: z.number(),
+        kifuId: z.number().int().positive().max(INT4_MAX),
+        revision: z.number().int(),
         profile: z.enum(['quick', 'full']),
         analyzed: z.number().min(0),
         total: z.number().min(1),
@@ -250,8 +253,8 @@ export const workerRoutes = new Hono()
     zv(
       'json',
       z.object({
-        kifuId: z.number(),
-        revision: z.number(),
+        kifuId: z.number().int().positive().max(INT4_MAX),
+        revision: z.number().int(),
         /** 実行した段階（`GET /api/worker/kifus` で指示されたもの。prd/05 §1.1d） */
         profile: z.enum(['quick', 'full']),
         // 来歴（prd/03 §3）。**記録するだけ**で、上書き・再開の条件には使わない
@@ -333,7 +336,8 @@ export const workerRoutes = new Hono()
   // worker は局面境界でここを既に叩いているので、**full の解析を中断して quick を先に処理する**
   // 判断を**通信を増やさずに**下せる。判定は軽い EXISTS 1 本（`analysisCompletedAt` に INDEX）
   .get('/worker/position-jobs', apiKeyRequired, async (c) => {
-    const job = claimEvaluationJob();
+    // ⚠ **DB の問い合わせを先に、claim は最後に**。claim の後に DB が落ちると、取り出したジョブが
+    // 誰にも渡らないまま宙に浮く（結果もエラーも出ず、待つ側は期限切れまで待たされる）
     const [pending] = await systemDb()
       .select({ id: kifus.id })
       .from(kifus)
@@ -348,6 +352,7 @@ export const workerRoutes = new Hono()
         ),
       )
       .limit(1);
+    const job = claimEvaluationJob();
     return c.json({ job, quickPending: pending !== undefined });
   })
   // 評価結果の報告。**失敗も完了**として扱う（結果もエラーも出ないまま宙に浮かせない。

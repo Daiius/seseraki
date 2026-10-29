@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { client } from '../../lib/honoClient';
 import { ClipboardIcon } from '../../components/icons';
+import { NETWORK_ERROR_MESSAGE, responseErrorMessage } from '../../lib/requestError';
 
 export const Route = createFileRoute('/kifus/new')({
   component: NewKifuPage,
@@ -13,6 +14,8 @@ function NewKifuPage() {
   const [kifText, setKifText] = useState('');
   const [sourceTz, setSourceTz] = useState<'auto' | 'JST' | 'UTC'>('auto');
   const [submitting, setSubmitting] = useState(false);
+  /** 登録の失敗（4xx の本文の error・通信の失敗）。次に送るときに消す */
+  const [error, setError] = useState<string | null>(null);
 
   // クリップボードの KIF を貼り付ける。空・失敗時は既存入力を壊さず知らせるだけ。
   const handlePaste = async () => {
@@ -28,11 +31,22 @@ function NewKifuPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
+    setError(null);
     try {
-      const res = await client.api.kifus.$post({
-        json: { title: title.trim() || undefined, kifText, sourceTz },
-      });
-      if (!res.ok) throw new Error('Failed to create kifu');
+      let res;
+      try {
+        res = await client.api.kifus.$post({
+          json: { title: title.trim() || undefined, kifText, sourceTz },
+        });
+      } catch {
+        setError(NETWORK_ERROR_MESSAGE);
+        return;
+      }
+      if (!res.ok) {
+        const body: unknown = await res.json().catch(() => null);
+        setError(`登録できませんでした: ${responseErrorMessage(res.status, body)}`);
+        return;
+      }
       // 返るのは棋譜の番号（所有者ごと。prd/14 §4.4）
       const { no } = await res.json();
       navigate({ to: '/kifus/$id', params: { id: String(no) } });
@@ -103,6 +117,11 @@ function NewKifuPage() {
             </span>
           </div>
         </label>
+        {error && (
+          <div role="alert" className="alert alert-error">
+            {error}
+          </div>
+        )}
         <button
           type="submit"
           className="btn btn-primary w-fit"

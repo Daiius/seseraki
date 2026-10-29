@@ -4,6 +4,7 @@ import {
   hasQuickProfile,
   parseEvalSha256,
   parseFvScale,
+  parsePositiveInt,
   profileSettings,
   type Config,
 } from "./config.js";
@@ -107,4 +108,27 @@ describe("evalProvenance", () => {
       fvScale: 16,
     });
   });
+});
+
+describe("parsePositiveInt", () => {
+  it("未設定・空は既定値（既定が無ければ undefined）", () => {
+    expect(parsePositiveInt("ENGINE_THREADS", undefined, 1)).toBe(1);
+    expect(parsePositiveInt("ENGINE_THREADS", "  ", 1)).toBe(1);
+    expect(parsePositiveInt("ENGINE_MOVETIME", undefined)).toBeUndefined();
+    expect(parsePositiveInt("ENGINE_MOVETIME", "")).toBeUndefined();
+  });
+
+  it("正の整数はその値", () => {
+    expect(parsePositiveInt("ENGINE_HASH", "1024", 128)).toBe(1024);
+    expect(parsePositiveInt("ENGINE_MOVETIME", "3000")).toBe(3000);
+  });
+
+  it.each(["abc", "1.5", "0", "-1", "NaN", "Infinity", "1e400"])(
+    "%s は起動時に落とす（変数名を添える）",
+    (raw) => {
+      expect(() => parsePositiveInt("POLL_INTERVAL_MS", raw, 10_000)).toThrow(
+        /POLL_INTERVAL_MS must be a positive integer/,
+      );
+    },
+  );
 });

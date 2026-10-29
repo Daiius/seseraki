@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeKif, composeKifVerified, verifyRoundTrip } from './compose';
+import { ComposeVerificationError, composeKif, composeKifVerified, verifyRoundTrip } from './compose';
 import { parseKif } from './parser';
 
 /** 合成 → parse で USI 列が戻ることを確かめる（このファイルの主張はほぼ全部これ） */
@@ -97,7 +97,11 @@ describe('verifyRoundTrip', () => {
 
   it('composeKifVerified は往復しない指し手列で例外を投げる', () => {
     // 盤上に無い駒を動かす手は日本語表記の駒名が空になり、KIF として読めない
-    expect(() => composeKifVerified(['5e5d'])).toThrow();
+    expect(() => composeKifVerified(['5e5d'])).toThrow(ComposeVerificationError);
+  });
+
+  it('composeKifVerified は合成できない指し手列も検証の失敗として投げる（取り込みの口で 422 にする）', () => {
+    expect(() => composeKifVerified(['not-a-move'])).toThrow(ComposeVerificationError);
   });
 });
 

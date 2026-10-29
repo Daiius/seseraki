@@ -488,6 +488,25 @@ describe('createKifuRunner', () => {
     expect(h.chunks).toEqual([]);
   });
 
+  it('読み込みの失敗は続けた回数で数える（一度読めたら数え直す）', async () => {
+    let loads = 0;
+    const h = harness({
+      // 1 回目と 3 回目の読み込みが失敗する（間に 1 回読めている）
+      createEngine: () => {
+        loads++;
+        if (loads === 1 || loads === 3) throw new Error('一時的に取得できません');
+      },
+      // 最初に読めたエンジンは局面 1 で落ちる（作り直しになる）
+      analyze: (engineNo, position) => {
+        if (engineNo === 0 && position === 1) throw new Error('engine died');
+      },
+    });
+    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    expect(outcome).toEqual({ kind: 'complete' });
+    expect(loads).toBe(4);
+    expect(h.errors).toEqual([]);
+  });
+
   it('中断されたら、局面の境目で未送信のチャンクを送ってから戻る', async () => {
     const controller = new AbortController();
     const h = harness({
@@ -534,6 +553,30 @@ describe('createKifuRunner', () => {
     runner = createKifuRunner(h.deps);
     expect(await runner.analyze(1, controller.signal)).toEqual({ kind: 'aborted' });
     expect(h.engines[0].disposed).toBe(true);
+  });
+
+  it('🔒 dispose の後はエンジンを作り直さない（解析・名指しの読み・局面評価のどれでも）', async () => {
+    const h = harness({});
+    const runner = createKifuRunner(h.deps);
+    runner.dispose();
+    expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'aborted' });
+    expect(
+      await runner.evaluateNamed({
+        sfen: 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1',
+        move: '2g2f',
+        settings: SETTINGS,
+      }),
+    ).toMatchObject({ kind: 'failed' });
+    expect(
+      await runner.evaluatePosition(
+        {
+          sfen: 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1',
+          settings: { ...SETTINGS, multiPv: 3 },
+        },
+        neverAborted,
+      ),
+    ).toMatchObject({ kind: 'failed' });
+    expect(h.engines).toHaveLength(0);
   });
 
   it('エンジンは棋譜をまたいで使い回し、dispose で止める', async () => {

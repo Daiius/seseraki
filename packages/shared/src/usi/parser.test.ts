@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseInfoLine } from "./parser";
+import { MATE_UNKNOWN_PLIES, parseInfoLine } from "./parser";
 
 describe("parseInfoLine", () => {
   it("確定した読み筋の行を読む", () => {
@@ -59,5 +59,26 @@ describe("parseInfoLine", () => {
 
     expect(info.depth).toBe(0);
     expect(info.pv).toEqual(["7g7f", "8c8d"]);
+  });
+
+  it("手数の分からない詰み（mate + / mate -）は符号付きの大きな手数で読む（NaN にしない）", () => {
+    expect(parseInfoLine("info depth 20 score mate + pv 7g7f").score).toEqual({
+      type: "mate",
+      value: MATE_UNKNOWN_PLIES,
+    });
+    expect(parseInfoLine("info depth 20 score mate - pv 7g7f").score).toEqual({
+      type: "mate",
+      value: -MATE_UNKNOWN_PLIES,
+    });
+    // 符号付きの手数はそのまま
+    expect(parseInfoLine("info score mate -3 pv resign").score).toEqual({ type: "mate", value: -3 });
+    expect(parseInfoLine("info score mate +5 pv 7g7f").score).toEqual({ type: "mate", value: 5 });
+  });
+
+  it("info string の残りは値として読まない", () => {
+    const info = parseInfoLine("info string depth 5 score cp 100 pv 7g7f");
+    expect(info).toEqual({});
+    // string より前の値は読む
+    expect(parseInfoLine("info depth 3 string Error! score cp 1")).toEqual({ depth: 3 });
   });
 });

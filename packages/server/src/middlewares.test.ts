@@ -1,7 +1,13 @@
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { apiKeyRequired, isTrustedOrigin, originRequired } from './middlewares.js';
+import {
+  apiKeyRequired,
+  isTrustedOrigin,
+  needsOriginCheck,
+  originRequired,
+  originRequiredForWrites,
+} from './middlewares.js';
 
 describe('isTrustedOrigin', () => {
   const trusted = ['https://app.example', 'http://localhost:5173'];
@@ -34,6 +40,42 @@ describe('originRequired', () => {
   it('別のオリジン・Origin なしは 403（ハンドラに届かない）', async () => {
     expect((await post('https://evil.test')).status).toBe(403);
     expect((await post()).status).toBe(403);
+  });
+});
+
+describe('needsOriginCheck・originRequiredForWrites', () => {
+  const exempt = ['/api/auth/', '/api/worker/'];
+
+  it('GET / HEAD / OPTIONS は検査しない', () => {
+    for (const m of ['GET', 'HEAD', 'OPTIONS', 'get']) {
+      expect(needsOriginCheck(m, '/api/kifus', exempt)).toBe(false);
+    }
+  });
+
+  it('それ以外のメソッドは外す接頭辞に当たらなければ検査する', () => {
+    for (const m of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      expect(needsOriginCheck(m, '/api/kifus/1', exempt)).toBe(true);
+      expect(needsOriginCheck(m, '/api/worker/analyses', exempt)).toBe(false);
+      expect(needsOriginCheck(m, '/api/auth/sign-out', exempt)).toBe(false);
+    }
+    // 接頭辞は `/` まで含めて比べる（`/api/workers` のような別の口を外さない）
+    expect(needsOriginCheck('POST', '/api/workers', exempt)).toBe(true);
+  });
+
+  const guarded = new Hono()
+    .use('*', originRequiredForWrites(['https://app.example'], exempt))
+    .get('/api/kifus', (c) => c.text('ok'))
+    .post('/api/kifus', (c) => c.text('ok'))
+    .post('/api/worker/analyses', (c) => c.text('ok'));
+
+  it('書き込みは Origin が無ければ 403・GET と外した経路は通す', async () => {
+    expect((await guarded.request('/api/kifus', { method: 'POST' })).status).toBe(403);
+    expect(
+      (await guarded.request('/api/kifus', { method: 'POST', headers: { Origin: 'https://app.example' } }))
+        .status,
+    ).toBe(200);
+    expect((await guarded.request('/api/kifus')).status).toBe(200);
+    expect((await guarded.request('/api/worker/analyses', { method: 'POST' })).status).toBe(200);
   });
 });
 

@@ -8,7 +8,8 @@
  * 🔒 **エンジンを使えない端末では読まない**（推測で判定しない）。同意の前・解析できない環境・エンジンが無い・止まっている、
  * のときは `unavailable` を返し、画面が「この端末では採点できない」旨を出す。
  *
- * ⚠ このモジュールは出題の画面からも読み込むので、エンジンや runner の実装を import しない（型だけ）。
+ * ⚠ このモジュールは出題の画面からも読み込むので、エンジンや runner の実装を import しない（型だけ。
+ * `scheduler` からはエラーの型だけを読む——scheduler は runner を型でしか読まない）。
  * 常駐の解析の本体は、動かすときにだけ読み込む（`components/BrowserAnalysis.tsx`）。
  */
 import type {
@@ -17,6 +18,7 @@ import type {
   PositionEvalOutcome,
   PositionEvalRequest,
 } from './runner';
+import { SchedulerStoppedError } from './scheduler';
 import type { BrowserAnalysisPhase } from './store';
 
 /** 採点の読みを頼めない理由（端末の状態） */
@@ -132,15 +134,27 @@ async function requestWith<T>(
   read: (reader: BrowserReader) => Promise<T>,
   deps: GradingDeps,
   signal?: AbortSignal,
-): Promise<T | { kind: 'unavailable'; reason: GradingUnavailableReason } | { kind: 'aborted' }> {
+): Promise<
+  | T
+  | { kind: 'unavailable'; reason: GradingUnavailableReason }
+  | { kind: 'aborted' }
+  | { kind: 'failed'; detail: string }
+> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const current = grader ?? (await waitForGrader(deps, signal));
     if (current === ABORTED) return { kind: 'aborted' };
     if (typeof current === 'string') return { kind: 'unavailable', reason: current };
     try {
       return await read(current);
-    } catch {
+    } catch (error) {
+      // 頼んだ側が取り下げた（待っている間に局面が変わった）
+      if (signal?.aborted) return { kind: 'aborted' };
       // 常駐が止まった（SchedulerStoppedError）。起動し直すのを待って頼み直す
+      if (error instanceof SchedulerStoppedError) continue;
+      // それ以外は想定外の失敗。頼み直しても同じなので、失敗として返す（黙って握りつぶさない）
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn('[browser-analysis]', 'reading failed:', error);
+      return { kind: 'failed', detail };
     }
   }
   return { kind: 'unavailable', reason: unavailableReasonOf(deps.getPhase()) ?? 'off' };

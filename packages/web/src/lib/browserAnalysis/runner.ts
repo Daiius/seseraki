@@ -372,6 +372,9 @@ export interface KifuRunner {
   dispose(): void;
 }
 
+/** runner を止めた（`dispose`）後に頼まれた */
+const STOPPED_DETAIL = '解析は停止済みです';
+
 export function createKifuRunner(deps: RunnerDeps): KifuRunner {
   const { api, log } = deps;
   /** 棋譜をまたいで使い回すエンジン。失敗したら捨てて作り直す */
@@ -392,6 +395,8 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     choice: EngineChoice,
     threads?: number,
   ): Promise<AnalysisEngine> => {
+    // 止めた後はエンジンを作らない（作ってすぐ捨てる読み込み・Worker の起動をしない）
+    if (disposed) throw new Error(STOPPED_DETAIL);
     // 評価関数の選択（端末の設定）・エンジンのスレッド数の上限（段で共通の maxThreads）・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
     // ⚠ 負荷の設定の変更は動いているエンジンに setoption で変えず、作り直す（prd/14 §5.10 の決定のまま）
     const load = deps.currentLoad();
@@ -404,7 +409,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
       if (disposed) {
         // 読み込んでいる間に止められた。使わずに捨てる
         created.dispose();
-        throw new Error('解析は停止済みです');
+        throw new Error(STOPPED_DETAIL);
       }
       engine = created;
       engineSettingsKey = key;
@@ -504,7 +509,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
 
     try {
       for (let round = 0; round < MAX_ROUNDS; round++) {
-        if (signal.aborted) return { kind: 'aborted' };
+        if (signal.aborted || disposed) return { kind: 'aborted' };
 
         // 評価関数の選択は段ごとに読む（開始の口・エンジン・報告で同じものを使う）
         const choice = deps.currentEngine();
@@ -551,9 +556,11 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
         let current: AnalysisEngine;
         try {
           current = await ensureEngine(run.settings, choice);
+          // 読み込めた。数えるのは続けて失敗した回数（一度読めたら、後の失敗は初めからまた数える）
+          engineLoadFailures = 0;
         } catch (error) {
           disposeEngine();
-          if (signal.aborted) return { kind: 'aborted' };
+          if (signal.aborted || disposed) return { kind: 'aborted' };
           if (deps.visibility.isHidden()) {
             // 隠れている間の読み込みの失敗（凍結・通信の切断）は数えない
             log.warn(`engine load failed while hidden: ${messageOf(error)}`);
@@ -780,6 +787,8 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     let detail = '';
     // エンジンが失敗したら 1 度だけ作り直して読み直す（全局面解析と同じく、端末の不調 1 回で諦めない）
     for (let attempt = 0; attempt < 2; attempt++) {
+      // 止めた後は読み直さない（エンジンを作り直さない）
+      if (disposed) return { kind: 'failed', detail: STOPPED_DETAIL };
       let current: AnalysisEngine;
       try {
         current = await ensureEngine(settings, choice, settings.threads);
@@ -839,6 +848,8 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     for (let attempt = 0; attempt < 2; attempt++) {
       // 頼んだ側が取り下げた（待っている間に局面が変わった）。エンジンを使わずに返す
       if (signal.aborted) return { kind: 'aborted' };
+      // 止めた後は読み直さない（エンジンを作り直さない）
+      if (disposed) return { kind: 'failed', detail: STOPPED_DETAIL };
       let current: AnalysisEngine;
       try {
         // 固定のスレッド数は無い——負荷の設定の数（上限は段の上限。全局面解析の full と同じ決め方）

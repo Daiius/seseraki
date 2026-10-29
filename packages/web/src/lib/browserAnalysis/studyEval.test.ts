@@ -25,6 +25,7 @@ afterEach(() => {
 const initial = createInitialState();
 const TARGET = { sfen: positionSfen(initial), move: null, from: initial };
 const never = new AbortController().signal;
+const SHA = 'e'.repeat(64);
 const UNUSED: NamedEvalOutcome = { kind: 'failed', detail: 'unused' };
 
 /** 局面評価だけを受け持つ常駐（頼まれた内容を記録する） */
@@ -201,7 +202,7 @@ describe('askStudyEvalConsent（押した時点の同意）', () => {
     const first = askStudyEvalConsent();
     const second = askStudyEvalConsent();
     expect(isAskingStudyEvalConsent()).toBe(true);
-    answerStudyEvalConsent(true, null);
+    answerStudyEvalConsent(true, SHA);
     expect(await first).toBe(true);
     expect(await second).toBe(true);
     expect(isAskingStudyEvalConsent()).toBe(false);
@@ -211,6 +212,13 @@ describe('askStudyEvalConsent（押した時点の同意）', () => {
     const controller = new AbortController();
     const asked = askStudyEvalConsent(controller.signal);
     controller.abort();
+    expect(await asked).toBe(false);
+    expect(isAskingStudyEvalConsent()).toBe(false);
+  });
+
+  it('🔒 評価関数が分からない（null）まま同意しても、同意として扱わない', async () => {
+    const asked = askStudyEvalConsent();
+    answerStudyEvalConsent(true, null);
     expect(await asked).toBe(false);
     expect(isAskingStudyEvalConsent()).toBe(false);
   });

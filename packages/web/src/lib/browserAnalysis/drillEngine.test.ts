@@ -6,6 +6,9 @@ import {
   requestDrillEngine,
   resetDrillEngineForTest,
 } from './drillEngine';
+import { getBrowserAnalysisSettings } from './settings';
+
+const SHA = 'd'.repeat(64);
 
 afterEach(() => resetDrillEngineForTest());
 
@@ -21,7 +24,7 @@ describe('詰将棋の判定のためのエンジンの段取り（担当がサ�
     const first = askDrillEngineConsent();
     const second = askDrillEngineConsent();
     expect(getDrillEngineState().asking).toBe(true);
-    answerDrillEngineConsent(true, null);
+    answerDrillEngineConsent(true, SHA);
     expect(await first).toBe(true);
     expect(await second).toBe(true);
     expect(getDrillEngineState()).toMatchObject({ asking: false, declined: false });
@@ -51,7 +54,7 @@ describe('詰将棋の判定のためのエンジンの段取り（担当がサ�
     controller.abort();
     expect(await withdrawn).toBe(false);
     expect(getDrillEngineState().asking).toBe(true);
-    answerDrillEngineConsent(true, null);
+    answerDrillEngineConsent(true, SHA);
     expect(await other).toBe(true);
   });
 
@@ -60,5 +63,21 @@ describe('詰将棋の判定のためのエンジンの段取り（担当がサ�
     controller.abort();
     expect(await askDrillEngineConsent(controller.signal)).toBe(false);
     expect(getDrillEngineState().asking).toBe(false);
+  });
+
+  it('同意したら評価関数の同意を端末の設定に足す', async () => {
+    const asked = askDrillEngineConsent();
+    answerDrillEngineConsent(true, SHA);
+    expect(await asked).toBe(true);
+    expect(getBrowserAnalysisSettings().consentedEvalSha256s).toContain(SHA);
+  });
+
+  it('🔒 評価関数が分からない（null）まま同意しても、同意として扱わない（断ったことになる）', async () => {
+    const before = getBrowserAnalysisSettings().consentedEvalSha256s;
+    const asked = askDrillEngineConsent();
+    answerDrillEngineConsent(true, null);
+    expect(await asked).toBe(false);
+    expect(getBrowserAnalysisSettings().consentedEvalSha256s).toEqual(before);
+    expect(getDrillEngineState()).toMatchObject({ asking: false, declined: true });
   });
 });

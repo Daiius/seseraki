@@ -25,7 +25,7 @@ import {
   type ReaderUnavailable,
   type ReaderUnavailableReason,
 } from './readerRegistry';
-import { getBrowserAnalysisSettings, setBrowserAnalysisSettings, withConsent } from './settings';
+import { createConsentPrompt } from './consentPrompt';
 import { getBrowserAnalysisState, subscribeBrowserAnalysisState } from './store';
 
 /**
@@ -136,43 +136,26 @@ export function studyEvalUnavailableMessage(reason: ReaderUnavailableReason): st
 
 // --- ダウンロードの同意（押した時点で求める）---
 
-let asking = false;
-const listeners = new Set<() => void>();
-/** 同意の答えを待っている呼び出し */
-let waiters: ((agreed: boolean) => void)[] = [];
-/** 案内を出している間だけ、常駐の解析の状態を聞く（{@link setAsking}） */
-let offPhase: (() => void) | null = null;
-
-function setAsking(next: boolean): void {
-  if (asking === next) return;
-  asking = next;
-  offPhase?.();
-  offPhase = null;
-  if (next) {
-    // ほかの案内（棋譜の詳細の「ダウンロードして解析する」・設定のページ）から同意された。常駐が起動し直して
-    // 同意の前の状態を抜けるので、同意したものとして答える（案内を閉じる）
-    offPhase = subscribeBrowserAnalysisState(() => {
-      if (getBrowserAnalysisState().phase !== 'needs-consent') resolveAll(true);
-    });
-  }
-  for (const listener of [...listeners]) listener();
-}
-
-function resolveAll(agreed: boolean): void {
-  const resolved = waiters;
-  waiters = [];
-  setAsking(false);
-  for (const resolve of resolved) resolve(agreed);
-}
+/**
+ * 断っても覚えない（押すこと自体が「評価したい」という明示の操作なので、次に押したらまた聞く）。
+ * 案内を出している間にほかの案内（棋譜の詳細の「ダウンロードして解析する」・設定のページ）から同意されたら、
+ * 常駐が起動し直して同意の前の状態を抜けるので、同意したものとして答える（案内を閉じる）
+ */
+const consent = createConsentPrompt({
+  rememberDecline: false,
+  settledElsewhere: {
+    subscribe: subscribeBrowserAnalysisState,
+    agreed: () => getBrowserAnalysisState().phase !== 'needs-consent',
+  },
+});
 
 /** 同意を求めているか（画面が案内を出す） */
 export function isAskingStudyEvalConsent(): boolean {
-  return asking;
+  return consent.getState().asking;
 }
 
 export function subscribeStudyEvalConsent(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  return consent.subscribe(listener);
 }
 
 export function useStudyEvalConsentAsking(): boolean {
@@ -184,41 +167,18 @@ export function useStudyEvalConsentAsking(): boolean {
  * `signal` が中断されたら（局面が変わった）false で返し、ほかに待つ呼び出しが無ければ案内を閉じる
  */
 export function askStudyEvalConsent(signal?: AbortSignal): Promise<boolean> {
-  if (signal?.aborted) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const waiter = (agreed: boolean) => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve(agreed);
-    };
-    const onAbort = () => {
-      waiters = waiters.filter((w) => w !== waiter);
-      if (waiters.length === 0) setAsking(false);
-      resolve(false);
-    };
-    waiters.push(waiter);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    setAsking(true);
-  });
+  return consent.ask(signal);
 }
 
 /**
  * 同意の答え（案内のボタン）。同意なら評価関数（`nn.bin` の sha256）の同意を端末の設定に足す——常駐の解析が
- * 起動し直してエンジンを読み込む（`BrowserAnalysisHost`。全局面解析の同意と同じもの）
+ * 起動し直してエンジンを読み込む（`BrowserAnalysisHost`。全局面解析の同意と同じもの）。sha256 が無ければ断ったものとして扱う
  */
 export function answerStudyEvalConsent(agreed: boolean, evalSha256: string | null): void {
-  if (agreed && evalSha256) {
-    setBrowserAnalysisSettings({
-      consentedEvalSha256s: withConsent(getBrowserAnalysisSettings().consentedEvalSha256s, evalSha256),
-    });
-  }
-  resolveAll(agreed);
+  consent.answer(agreed, evalSha256);
 }
 
 /** テスト用: 状態を最初に戻す */
 export function resetStudyEvalConsentForTest(): void {
-  offPhase?.();
-  offPhase = null;
-  asking = false;
-  waiters = [];
-  listeners.clear();
+  consent.reset();
 }

@@ -17,11 +17,10 @@ import {
   labelOf,
   type Thresholds,
 } from 'shared';
-import type { Db } from './db/index.js';
-import { drills, kifus } from './db/schema';
+import type { Db, Tx } from './db/index.js';
+import { drills, kifus } from './db/schema.js';
 import { decodeAll } from './kifu-analysis-detail.js';
 import { loadAnalysis } from './kifu-analysis-store.js';
-import type { Tx } from './tactics';
 
 /**
  * 抽出規則の版。**規則を変えたら上げる**（prd/13 §6.1）。

@@ -30,7 +30,7 @@ export const auth = betterAuth(
   ),
 );
 
-/** セッションだけを見る経路（`/me`）の context */
+/** セッションだけを見る経路（評価結果の取得・解析の進捗など、メモリだけを見る口）の context */
 export type SessionUserEnv = { Variables: { userId: string } };
 
 /**
@@ -58,7 +58,8 @@ async function sessionUserId(headers: Headers): Promise<string | 401 | 403> {
 }
 
 /**
- * セッションだけを見る（DB のトランザクションを開かない）。`/me` のようにユーザーの行に触れない口に使う。
+ * セッションだけを見る（DB のトランザクションを開かない）。DB に触れない口（`GET /positions/evaluate/:jobId`・
+ * `GET /analysis/progress`）に使う。⚠ `/me` は解析の担当を読むので `sessionRequired`。
  * 未ログインは 401、所有者以外のセッションは 403。
  */
 export const sessionUser = createMiddleware<SessionUserEnv>(async (c, next) => {

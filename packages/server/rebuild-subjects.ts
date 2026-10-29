@@ -12,14 +12,14 @@
  */
 import { eq } from 'drizzle-orm';
 // 🔒 全員ぶんを扱うので RLS を迂回する system ロールで繋ぐ（prd/14 §4・prd/15 §2）。未設定なら throw
-import { endSystemDb, systemDb } from './src/db/system';
-import { kifus, users } from './src/db/schema';
+import { endSystemDb, systemDb } from './src/db/system.js';
+import { kifus, users } from './src/db/schema.js';
 import {
   aliasesOf,
   computeSubjectSide,
   replaceSubjectSide,
   subjectInputOf,
-} from './src/users';
+} from './src/users.js';
 
 const db = systemDb();
 

@@ -97,7 +97,7 @@ describe('statsTacticsWhere', () => {
 
 describe('statsTacticsSummarySelect', () => {
   it('除外は 自分未確定 / 引き分け / 結果不明 の 3 つに分かれる', () => {
-    const select = statsTacticsSummarySelect(parse(SELF));
+    const select = statsTacticsSummarySelect();
     expect(Object.keys(select)).toEqual([
       'totalGames',
       'ambiguousSelf',
@@ -115,13 +115,13 @@ describe('statsTacticsSummarySelect', () => {
   });
 
   it('行が無くても 0 になる（sum は null を返す）', () => {
-    for (const fragment of Object.values(statsTacticsSummarySelect(parse(SELF)))) {
+    for (const fragment of Object.values(statsTacticsSummarySelect())) {
       expect(render(fragment).sql).toContain('coalesce(sum(');
     }
   });
 
   it('主体側が決まらない局は「自分未確定」に落ちる', () => {
-    const select = statsTacticsSummarySelect(parse());
+    const select = statsTacticsSummarySelect();
     // ⭐ どの列も subjectSide で絞る。名前候補は現れない（prd/11 §4）
     for (const fragment of Object.values(select)) {
       expect(render(fragment).sql).toContain('"kifus"."subject_side" = ?');
@@ -132,7 +132,7 @@ describe('statsTacticsSummarySelect', () => {
 
 describe('statsTacticsJoinOn', () => {
   it('手番固有ラベルは相手の側に立ったものを数える（主軸は「相手が何を採ったか」）', () => {
-    const { sql, params } = render(statsTacticsJoinOn(parse(SELF)));
+    const { sql, params } = render(statsTacticsJoinOn());
     expect(sql).toContain('"kifu_tactics"."kifu_id" = "kifus"."id"');
     expect(sql).toContain('"kifu_tactics"."side" =');
     // 自分が先手なら side=gote、自分が後手なら side=sente（相手の側）
@@ -142,7 +142,7 @@ describe('statsTacticsJoinOn', () => {
   });
 
   it('帰属が side でないラベルは side を見ずに 1 行として数える', () => {
-    const { sql, params } = render(statsTacticsJoinOn(parse(SELF)));
+    const { sql, params } = render(statsTacticsJoinOn());
     // 一覧の絞り込みと同じく shared の公開 export から取る（配列を書き直さない。prd/09 §6.1）
     expect(params.slice(4)).toEqual([...NON_SIDE_ATTRIBUTED_LABELS]);
     expect(params.slice(4)).toContain('角換わり');
@@ -152,7 +152,7 @@ describe('statsTacticsJoinOn', () => {
   });
 
   it('生ラベルで数える（含意ラベルを畳む条件を持ち込まない）', () => {
-    const { sql } = render(statsTacticsJoinOn(parse(SELF)));
+    const { sql } = render(statsTacticsJoinOn());
     // `suppressForDisplay` 相当（turn の最小・含意の除外）は集計に持ち込まない（prd/09 §2.1）。
     // 石田流の局は 石田流 / 三間飛車 / 振り飛車 の 3 行すべてに乗る
     expect(sql).not.toContain('"turn"');

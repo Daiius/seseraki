@@ -14,7 +14,7 @@ import {
   stateOfAnswer,
   verdictOf,
   type DrillAnswerKey,
-} from './drill-answer';
+} from './drill-answer.js';
 
 const KEY: DrillAnswerKey = {
   kind: 'best',

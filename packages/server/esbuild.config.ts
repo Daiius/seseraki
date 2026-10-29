@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { build } from "esbuild";
-import { finalStageIsProduction, missingEntryCopies } from "./src/dockerfile-check";
+import { finalStageIsProduction, missingEntryCopies } from "./src/dockerfile-check.js";
 
 // ⚠ **エントリは名前付きで渡す。** 配列で渡すと出力先が入力の共通ベースからの相対になり、
 // src/ と直下のスクリプトが別階層にあるため dist/src/index.js に落ちる。

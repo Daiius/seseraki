@@ -8,7 +8,10 @@ import {
 } from './position-kifu-reuse.js';
 import type { EvalCandidate } from './position-eval.js';
 // クエリの組み立て（`.toSQL()`）だけに使う。接続は張らない
-import { db } from './db/index.js';
+import { db, type Tx } from './db/index.js';
+
+/** クエリ関数は tx だけを受ける（ログインの経路）。組み立てだけなら `db` で同じ SQL になる */
+const q = db as unknown as Tx;
 
 const OWNER = 'owner-a';
 
@@ -285,7 +288,7 @@ describe('クエリの形（上限は絞り込みの後）', () => {
   }
 
   it('局面評価: 候補手 3 本揃いに絞ってから、解析日時の降順で上限をかける', () => {
-    const { sql, params } = render(positionEvalAnalysesQuery(db, OWNER, SFEN));
+    const { sql, params } = render(positionEvalAnalysesQuery(q, OWNER, SFEN));
     // 局面索引と解析を結合している（一致局面だけを先に切っていない）
     expect(sql).toContain('inner join "kifu_analyses"');
     // 3 本揃いの条件が where に入っている（局面の候補手配列の長さ）
@@ -301,7 +304,7 @@ describe('クエリの形（上限は絞り込みの後）', () => {
   });
 
   it('名指し評価 ①: その手を候補手に持つ局面に絞ってから上限をかける', () => {
-    const { sql, params } = render(namedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'));
+    const { sql, params } = render(namedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'));
     expect(sql).toContain('jsonb_array_elements(');
     expect(params).toContain('7g7f');
     // 候補手の本数は問わない（3 本揃いの条件を持ち込まない）
@@ -310,7 +313,7 @@ describe('クエリの形（上限は絞り込みの後）', () => {
   });
 
   it('名指し評価 ②: 次局面へ自己結合し、解析済みのものだけに絞ってから上限をかける', () => {
-    const { sql, params } = render(playedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'));
+    const { sql, params } = render(playedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'));
     // 局面索引の自己結合で「次の局面に至った手」を辿る
     expect(sql).toContain('"next_positions"');
     expect(sql).toContain('+ 1');
@@ -323,9 +326,9 @@ describe('クエリの形（上限は絞り込みの後）', () => {
 
   it('🔒 3 本とも局面をハッシュで引いて盤・持ち駒・手番で照合し、その後に上限をかける（prd/14 §6.3）', () => {
     for (const query of [
-      positionEvalAnalysesQuery(db, OWNER, SFEN),
-      namedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'),
-      playedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'),
+      positionEvalAnalysesQuery(q, OWNER, SFEN),
+      namedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'),
+      playedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'),
     ]) {
       const { sql } = render(query);
       expect(sql).toContain('"kifu_positions"."sfen_hash" = ?');
@@ -338,10 +341,10 @@ describe('クエリの形（上限は絞り込みの後）', () => {
 
   it('🔴 3 本とも要求者の局面索引・解析だけから引く（prd/14 §4）', () => {
     for (const [query, tables] of [
-      [positionEvalAnalysesQuery(db, OWNER, SFEN), ['kifu_positions', 'kifu_analyses']],
-      [namedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'), ['kifu_positions', 'kifu_analyses']],
+      [positionEvalAnalysesQuery(q, OWNER, SFEN), ['kifu_positions', 'kifu_analyses']],
+      [namedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'), ['kifu_positions', 'kifu_analyses']],
       [
-        playedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'),
+        playedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'),
         ['kifu_positions', 'kifu_analyses', 'next_positions'],
       ],
     ] as const) {
@@ -353,9 +356,9 @@ describe('クエリの形（上限は絞り込みの後）', () => {
 
   it('🔴 3 本とも full の局面だけに絞る（先頭 fullCount 局面。quick はエンジン評価へ回す）', () => {
     for (const [query, positions] of [
-      [positionEvalAnalysesQuery(db, OWNER, SFEN), 'kifu_positions'],
-      [namedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'), 'kifu_positions'],
-      [playedMoveAnalysesQuery(db, OWNER, SFEN, '7g7f'), 'next_positions'],
+      [positionEvalAnalysesQuery(q, OWNER, SFEN), 'kifu_positions'],
+      [namedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'), 'kifu_positions'],
+      [playedMoveAnalysesQuery(q, OWNER, SFEN, '7g7f'), 'next_positions'],
     ] as const) {
       const { sql } = render(query);
       expect(sql).toContain('"' + positions + '"."move_number" < "kifu_analyses"."full_count"');

@@ -14,8 +14,8 @@
  * 🔒 確認（対象がちょうど 1 行・"1" にその provider の account が無い）は**コードで強制する**。
  * ⚠ **dry-run の出力でメールが所有者のものか必ず目で確かめる。** 他人の X を付け替えると全データを渡す。
  */
-import { client, db } from './src/db';
-import { describeLink, linkOwnerAccount } from './src/owner-account';
+import { client, db } from './src/db/index.js';
+import { describeLink, linkOwnerAccount } from './src/owner-account.js';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);

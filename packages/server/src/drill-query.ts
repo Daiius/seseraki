@@ -15,8 +15,8 @@
  */
 import { and, count, eq, sql } from 'drizzle-orm';
 import { positionSfen, usiToJapaneseWithPiece } from 'shared';
-import type { Db, Tx } from './db/index.js';
-import { drillAttempts, drills, kifus } from './db/schema';
+import type { Tx } from './db/index.js';
+import { drillAttempts, drills, kifus } from './db/schema.js';
 import {
   ANSWER_COUNT,
   ATTEMPT_NO,
@@ -35,8 +35,8 @@ import {
   isoOf,
   type DrillListQuery,
   type DrillNextQuery,
-} from './drill-list-query';
-import { stateOfAnswer } from './drill-answer';
+} from './drill-list-query.js';
+import { stateOfAnswer } from './drill-answer.js';
 import { drillPosition } from './drill-answer-flow.js';
 
 /**
@@ -160,7 +160,7 @@ export async function loadDrill(tx: Tx, ownerId: string, ref: DrillRef) {
 
 /** 解答を 1 件記録する（prd/13 §6.2） */
 export async function recordAttempt(
-  tx: Tx | Db,
+  tx: Tx,
   attempt: {
     drillId: number;
     /** 出題（`drills.ownerId`）の所有者。食い違えば複合 FK が落とす（prd/14 §4.1） */

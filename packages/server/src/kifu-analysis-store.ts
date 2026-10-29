@@ -2,14 +2,14 @@
 // ここは行の取得と保存（`minMate*` の計算し直しを含む）だけを持つ。
 
 import { eq } from 'drizzle-orm';
-import type { Db } from './db/index.js';
+import type { Db, Tx } from './db/index.js';
 import { kifuAnalyses } from './db/schema.js';
 import {
   EMPTY_ANALYSIS,
   minMateBySide,
   type StoredAnalysis,
 } from './kifu-analysis-detail.js';
-import type { KifuRef, Tx } from './tactics.js';
+import type { KifuRef } from './tactics.js';
 
 /**
  * 1 棋譜ぶんを読む。行が無ければ（未解析）空。

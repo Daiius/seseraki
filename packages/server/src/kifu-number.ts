@@ -15,13 +15,11 @@
  * RLS を掛けていない（Better Auth の表）ので、どちらでも所有者の行を進められる。
  */
 import { eq, sql } from 'drizzle-orm';
-import type { Db, Tx } from './db/index.js';
+import type { Tx } from './db/index.js';
 import { kifus, users } from './db/schema.js';
 
-type Queryable = Tx | Db;
-
 /** 所有者の次の棋譜番号を振る（カウンタを 1 進める）。所有者の行が無ければ投げる */
-export async function allocateKifuNo(q: Queryable, ownerId: string): Promise<number> {
+export async function allocateKifuNo(q: Tx, ownerId: string): Promise<number> {
   const [row] = await q
     .update(users)
     .set({ lastKifuNo: sql`${users.lastKifuNo} + 1` })
@@ -38,7 +36,7 @@ export type NewKifu = Omit<typeof kifus.$inferInsert, 'id' | 'displayNo'>;
  * ⚠ 呼び出し側のトランザクションの中で呼ぶ（番号の割り当てと挿入を 1 つにする）
  */
 export async function insertKifu(
-  q: Queryable,
+  q: Tx,
   values: NewKifu,
 ): Promise<{ id: number; displayNo: number }> {
   const displayNo = await allocateKifuNo(q, values.ownerId);

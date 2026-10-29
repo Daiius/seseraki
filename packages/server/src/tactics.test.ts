@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { replaceTactics, type Tx } from './tactics';
+import type { Tx } from './db/index.js';
+import { replaceTactics } from './tactics.js';
 
 /** `tx.delete().where()` と `tx.insert().values()` の呼び出しだけを記録する薄いスタブ */
 function stubTx() {

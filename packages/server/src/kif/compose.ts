@@ -12,7 +12,7 @@
  * ⚠ 合成である以上、この `kifText` は「原文」ではない。`kifus.source = 'video'` で区別できる。
  */
 import { buildPositions, usiToJapaneseWithPiece } from 'shared';
-import { parseKif } from './parser';
+import { parseKif } from './parser.js';
 
 /** 合成 KIF の先頭に置く注記。`parseKif` は行頭が数字+空白でない行を読み飛ばす */
 const HEADER_LINES = [

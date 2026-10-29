@@ -4,8 +4,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildPositions } from 'shared';
-import { resolveWithEngine, type ResolveInput } from './drill-engine';
-import { recallLine, resetLines } from './drill-lines';
+import { resolveWithEngine, type ResolveInput } from './drill-engine.js';
+import { recallLine, resetLines } from './drill-lines.js';
 
 vi.mock('./position-kifu-reuse.js', () => ({ lookupKifuEvaluation: async () => null }));
 

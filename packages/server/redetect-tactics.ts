@@ -13,9 +13,9 @@
 import { eq, isNotNull } from 'drizzle-orm';
 import { detectTactics } from 'shared';
 // 🔒 全員ぶんを扱うので RLS を迂回する system ロールで繋ぐ（prd/14 §4・prd/15 §2）。未設定なら throw
-import { endSystemDb, systemDb } from './src/db/system';
-import { kifus } from './src/db/schema';
-import { replaceTactics } from './src/tactics';
+import { endSystemDb, systemDb } from './src/db/system.js';
+import { kifus } from './src/db/schema.js';
+import { replaceTactics } from './src/tactics.js';
 
 const db = systemDb();
 

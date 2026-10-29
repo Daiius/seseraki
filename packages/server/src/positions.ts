@@ -19,8 +19,9 @@ import {
   type PositionKey,
   type Side,
 } from 'shared';
-import { kifuPositions } from './db/schema';
-import type { KifuRef, Tx } from './tactics';
+import { kifuPositions } from './db/schema.js';
+import type { Tx } from './db/index.js';
+import type { KifuRef } from './tactics.js';
 
 /** 局面キー文字列 → 索引に入れる 8 バイト（drizzle の bytea 列は Buffer を受ける） */
 export function hashOf(key: string): Buffer {

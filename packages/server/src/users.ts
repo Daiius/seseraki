@@ -4,14 +4,13 @@
  * ⚠ **ロジックはここに置き、route.ts / スクリプトは薄い entry point にする**
  * （`tactics.ts` / `positions.ts` と同じ立場）。
  *
- * 認証は Google ログイン（prd/07）。所有者スコープ（prd/14 §4）が入るまでは所有者ゲート
- * （prd/07 §5.1）で**所有者（`OWNER_USER_ID`）以外のセッションを通さない**。
+ * 認証は Google ログイン（prd/07）。読み書きは所有者スコープ（prd/14 §4）の下で、ログインの経路の関数は
+ * ユーザーとして開いた tx と所有者（セッションのユーザー）を受け取る。
  */
 import { and, asc, count, eq, isNull } from 'drizzle-orm';
-import type { Db } from './db/index.js';
-import { kifus, userAliases, users, videoKifuSources } from './db/schema';
-import type { Tx } from './tactics';
-import { drillConfigFromEnv, syncDrills } from './drills';
+import type { Db, Tx } from './db/index.js';
+import { kifus, userAliases, users, videoKifuSources } from './db/schema.js';
+import { drillConfigFromEnv, syncDrills } from './drills.js';
 
 export type SubjectSide = 'sente' | 'gote';
 
@@ -267,7 +266,7 @@ export async function rebuildSubjectSides(tx: Tx, userId: string): Promise<numbe
  * 🔒 **黙って落とさない**（prd/10 §3.3）。結果が少ない理由が「似た局面が無い」のか
  * 「主体が決まらない棋譜を外した」のか、画面から区別できるようにする。
  */
-export async function countUnresolvedSubjects(tx: Tx | Db, userId: string): Promise<number> {
+export async function countUnresolvedSubjects(tx: Tx, userId: string): Promise<number> {
   const [row] = await tx
     .select({ n: count() })
     .from(kifus)

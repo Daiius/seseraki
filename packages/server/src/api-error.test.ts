@@ -5,7 +5,7 @@
  */
 import { Hono } from 'hono';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { apiError, errorBody, errorCodeOf } from './api-error';
+import { apiError, errorBody, errorCodeOf } from './api-error.js';
 
 const events: string[] = [];
 

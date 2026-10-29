@@ -1,5 +1,5 @@
 // 戦型別成績（`GET /api/stats/tactics`）の集計 SQL の組み立て（prd/09）。
-// 一覧（`kifu-list-query.ts`）と同じく DB 接続を持たない純粋な組み立てだけを置き、route.ts から使う。
+// 一覧（`kifu-list-query.ts`）と同じく DB 接続を持たない純粋な組み立てだけを置き、`kifu-queries.ts` の `statsTactics` から使う。
 //
 // ⚠ **自分の側の判定・取りこぼしの述語は一覧と共有する**（`kifu-list-query.ts` から import）。
 // 同じ意味論が 2 か所にあると片方だけ直る。
@@ -69,7 +69,7 @@ export function statsTacticsPeriodWhere(query: StatsTacticsQuery): SQL {
 
 /** 行の集計対象（期間 かつ 対象局）。名前候補が空なら `1 = 0` で 0 件になる */
 export function statsTacticsWhere(query: StatsTacticsQuery): SQL {
-    return and(
+  return and(
     ownGamesOnly(),
     ...periodConditions(query.from, query.to),
     targetGame(),
@@ -84,8 +84,8 @@ export function statsTacticsWhere(query: StatsTacticsQuery): SQL {
  * **名前候補が空なら期間内の全局が `ambiguousSelf` に落ちる**（自分が決まらなければ
  * 何も集計できない。一覧が 0 件にするのと同じ立場。prd/09 §6）。
  */
-export function statsTacticsSummarySelect(query: StatsTacticsQuery) {
-    const determined = selfDetermined();
+export function statsTacticsSummarySelect() {
+  const determined = selfDetermined();
   return {
     totalGames: countIf(targetGame()),
     ambiguousSelf: countIf(not(determined)),
@@ -107,8 +107,8 @@ export function statsTacticsSummarySelect(query: StatsTacticsQuery) {
  * 主キーが `(kifuId, side, label)` なので、この条件で拾える行は 1 局 1 ラベルにつき高々 1 行。
  * よって `count(*)` がそのまま局数になる。
  */
-export function statsTacticsJoinOn(query: StatsTacticsQuery): SQL {
-    return and(
+export function statsTacticsJoinOn(): SQL {
+  return and(
     eq(kifuTactics.kifuId, kifus.id),
     or(
       bySelfSide((s) => eq(kifuTactics.side, s.opponent)),
@@ -124,7 +124,7 @@ export function statsTacticsJoinOn(query: StatsTacticsQuery): SQL {
  * `analyzedLosses` / `missedMateLosses` は勝率とは分母が違う（解析済みの負け局）。
  */
 export function statsTacticsRowsSelect(query: StatsTacticsQuery) {
-    const analyzed = analyzedCondition();
+  const analyzed = analyzedCondition();
   return {
     label: kifuTactics.label,
     games: sql<number>`count(*)`.mapWith(Number),

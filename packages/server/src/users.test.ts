@@ -9,7 +9,7 @@ import {
   subjectSideFromVideo,
   type Alias,
   type SubjectRow,
-} from './users';
+} from './users.js';
 
 const alias = (name: string, from?: string, to?: string): Alias => ({
   name,

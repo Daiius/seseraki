@@ -4,7 +4,7 @@ import {
   formatDiff,
   videoKifuInputSchema,
   videoKifuTitle,
-} from './video-analysis';
+} from './video-analysis.js';
 
 describe('diffUsiMoves', () => {
   it('同じ指し手列なら差分なし（再取り込みは冪等）', () => {

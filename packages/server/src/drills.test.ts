@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_THRESHOLDS } from 'shared';
-import { drillConfigFromEnv, extractDrills, type DrillAnalysis } from './drills';
+import { drillConfigFromEnv, extractDrills, type DrillAnalysis } from './drills.js';
 
 const CONFIG = { thresholds: DEFAULT_THRESHOLDS, mateMaxPlies: 10 };
 

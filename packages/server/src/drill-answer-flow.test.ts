@@ -6,9 +6,9 @@ import {
   type AnswerDeps,
   type AnswerDrill,
   type EngineRequest,
-} from './drill-answer-flow';
-import type { EngineAnswer } from './drill-engine';
-import { drillSfen } from './drill-query';
+} from './drill-answer-flow.js';
+import type { EngineAnswer } from './drill-engine.js';
+import { drillSfen } from './drill-query.js';
 
 /** 次の一手: 初期局面（moveNumber 0）。候補手は 3 本 */
 const BEST: AnswerDrill = {

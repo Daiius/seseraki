@@ -7,14 +7,13 @@ import {
   isPermanentSubmitStatus,
   type BrowserAnalysisChunk,
   type BrowserAnalysisRun,
+  type BrowserAnalysisSettings,
 } from 'shared';
-
-/** 解析の段（prd/14 §5.7。server が決める） */
-export type AnalysisStage = 'quick' | 'full';
+import type { AnalysisProfile } from '../analysisProgress';
 
 /** 開始の口の応答を、次にすることで分けたもの */
 export type StartResult =
-  | { kind: 'run'; run: BrowserAnalysisRun; profile: AnalysisStage }
+  | { kind: 'run'; run: BrowserAnalysisRun; profile: AnalysisProfile }
   /** 解析しない（解析済み・失敗の記録あり・指し手列が無い・棋譜が無い） */
   | { kind: 'skip'; reason: SkipReason }
   /** 担当がブラウザでない（409） */
@@ -53,6 +52,90 @@ export function classifyFailureStatus(
   if (status === 401) return 'unauthorized';
   if (status === 403) return 'fatal';
   return isPermanentSubmitStatus(status) ? 'rejected' : 'retry';
+}
+
+/** 4xx / 5xx を、口に依らない結果にする（`what` は 403 の文に使う） */
+function failureOf(status: number, what: string): Exclude<ChunkResult, { kind: 'ok' }> {
+  const kind = classifyFailureStatus(status);
+  switch (kind) {
+    case 'unauthorized':
+      return { kind };
+    case 'fatal':
+      return { kind, detail: `${what}を送れません (${status})` };
+    case 'rejected':
+      return { kind, status };
+    case 'retry':
+      return { kind, detail: `status ${status}` };
+  }
+}
+
+const isSuccess = (status: number) => status >= 200 && status < 300;
+
+/** 本文に `status`（`kind`）を持たない応答（検証の失敗・エラーの本文）。届いたら想定外として再試行する */
+type NoStatusBody = { status?: never };
+
+/** 開始の口の 2xx の本文（server の `routes/browser-analysis.ts`） */
+export type StartResponseBody =
+  | {
+      status: 'run';
+      revision: number;
+      profile: AnalysisProfile;
+      startMoveNumber: number;
+      usiMoves: string[];
+      settings: BrowserAnalysisSettings;
+    }
+  | { status: 'complete' | 'failed' | 'unanalyzable' }
+  | NoStatusBody;
+
+/**
+ * 開始の口の応答を、次にすることで分ける。本文は 2xx のときだけ読む（それ以外は undefined でよい）。
+ * - 404 は棋譜が無い（skip）、409 は担当がブラウザでない
+ * - 🔒 **開始の拒否（400 など）は fatal**——開始の本文は manifest の値だけなので、拒否は配信物の不整合。続けても直らない
+ */
+export function startResultOf(status: number, body: StartResponseBody | undefined): StartResult {
+  if (status === 404) return { kind: 'skip', reason: 'not-found' };
+  if (status === 409) return { kind: 'wrong-assignee' };
+  if (!isSuccess(status)) {
+    const failed = failureOf(status, '解析の開始');
+    return failed.kind === 'rejected'
+      ? { kind: 'fatal', detail: `解析を開始できません (${failed.status})` }
+      : failed;
+  }
+  if (body === undefined || body.status === undefined) {
+    return { kind: 'retry', detail: 'unexpected response' };
+  }
+  if (body.status === 'run') {
+    return {
+      kind: 'run',
+      profile: body.profile,
+      run: {
+        revision: body.revision,
+        startMoveNumber: body.startMoveNumber,
+        usiMoves: body.usiMoves,
+        settings: body.settings,
+      },
+    };
+  }
+  return { kind: 'skip', reason: body.status };
+}
+
+/** チャンクの報告の 2xx の本文（破棄も 201 `applied: false`） */
+export type ChunkResponseBody =
+  | { applied: boolean; completed: boolean; stageCompleted: boolean }
+  | { applied?: never };
+
+/** チャンクの報告の応答を、次にすることで分ける。本文は 2xx のときだけ読む */
+export function chunkResultOf(status: number, body: ChunkResponseBody | undefined): ChunkResult {
+  if (!isSuccess(status)) return failureOf(status, '解析結果');
+  if (body === undefined || body.applied === undefined) {
+    return { kind: 'retry', detail: 'unexpected response' };
+  }
+  return {
+    kind: 'ok',
+    applied: body.applied,
+    completed: body.completed,
+    stageCompleted: body.stageCompleted,
+  };
 }
 
 export type ErrorReportResult = 'recorded' | 'discarded' | 'unsent';

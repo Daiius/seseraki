@@ -21,7 +21,8 @@
  * - **ページが隠れている間の失敗**（スマホの凍結で応答が時間切れになる）→ 数えない。見えるまで待ってやり直す
  */
 import { analyzeKifuForBrowser, BROWSER_ANALYSIS_LIMITS } from 'shared';
-import type { AnalysisStage, ErrorReportResult, RunnerApi, SkipReason } from './apiResult';
+import type { AnalysisProfile } from '../analysisProgress';
+import type { ErrorReportResult, RunnerApi, SkipReason } from './apiResult';
 import {
   NEEDS_CONSENT_DETAIL,
   type AnalysisEngine,
@@ -35,7 +36,7 @@ export interface LocalProgress {
   kifuNo: number;
   revision: number;
   /** いま回している段（円環の濃さに使う。quick は薄く出す——手元 worker の進捗と同じ見え方） */
-  profile: AnalysisStage;
+  profile: AnalysisProfile;
   /** 解析済みの局面数 */
   analyzed: number;
   /** 全局面数（指し手数 + 1） */
@@ -69,7 +70,7 @@ export interface KifuAnalysisDeps {
    * 棋譜の段が 1 つ揃った（quick の完了。full の完了は解析の結果 `complete` で返る）。
    * 画面のデータを取り直す合図——quick の結果を、full の完了を待たずに画面に出す
    */
-  onStageCompleted(kifuNo: number, profile: AnalysisStage): void;
+  onStageCompleted(kifuNo: number, profile: AnalysisProfile): void;
   log: RunnerLog;
 }
 

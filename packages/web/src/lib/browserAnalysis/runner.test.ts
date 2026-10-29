@@ -4,8 +4,8 @@ import type {
   BrowserAnalysisRun,
   UsiSearchResult,
 } from 'shared';
+import type { AnalysisProfile } from '../analysisProgress';
 import type {
-  AnalysisStage,
   ChunkResult,
   ErrorReportResult,
   StartResult,
@@ -42,7 +42,7 @@ const ENGINE_INFO = {
 
 const runOf = (
   overrides: Partial<BrowserAnalysisRun> = {},
-  profile: AnalysisStage = 'full',
+  profile: AnalysisProfile = 'full',
 ): StartResult => ({
   kind: 'run',
   profile,
@@ -89,7 +89,7 @@ interface Harness {
   choice: EngineChoice | null;
   /** エンジンを作ったときの評価関数の id */
   engineChoices: string[];
-  stageCompleted: { kifuNo: number; profile: AnalysisStage }[];
+  stageCompleted: { kifuNo: number; profile: AnalysisProfile }[];
   /** 時計（`now` が返す） */
   time: number;
 }

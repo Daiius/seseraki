@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 import { callApi } from '../lib/callApi';
@@ -30,6 +30,7 @@ import {
 } from '../lib/statsTactics';
 import type { KifuListSearch } from '../lib/kifuListFilter';
 import { dateParam } from '../lib/searchParams';
+import { useDebouncedDraft } from '../lib/useDebouncedDraft';
 
 /**
  * URL に持つのは**集計そのものを変える条件だけ**（期間と詰み手数）。
@@ -130,24 +131,19 @@ function StatsPage() {
 
   // 詰み手数は**打鍵ごとに反映しない**。1 打鍵ごとに server の集計をやり直すことになり、
   // 取りこぼしは解析結果（`kifu_analyses`）への `EXISTS` を含むクエリ（prd/09 §6.2）。
-  // 空欄や途中の値を弾いて入力を止めないよう、入力欄はドラフトを持つ（一覧の検索欄と同じ形）
-  const [mateMaxDraft, setMateMaxDraft] = useState(String(mateMax));
-
-  // 戻る/進む・`/settings` での変更など、こちら以外の理由で値が変わったら入力欄を追従させる
-  useEffect(() => {
-    setMateMaxDraft(String(mateMax));
-  }, [mateMax]);
-
-  useEffect(() => {
-    const value = Number(mateMaxDraft);
-    if (!isValidMateMax(value) || value === mateMax) return;
-    const timer = setTimeout(() => {
+  // 空欄や途中の値を弾いて入力を止めないよう、入力欄は下書きを持つ（一覧の検索欄と同じ形）。
+  // 戻る/進む・`/settings` での変更など、こちら以外の理由で値が変わったら下書きが追従する
+  const [mateMaxDraft, setMateMaxDraft] = useDebouncedDraft(
+    String(mateMax),
+    (draft) => {
+      const value = Number(draft);
+      if (!isValidMateMax(value) || value === mateMax) return;
       // このページの条件（URL）と次に開いたときの既定値（localStorage）の両方を動かす
       setMateMax(value);
       updateSearch({ mateMax: value });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [mateMaxDraft, mateMax]);
+    },
+    400,
+  );
 
   const preset = presetOf({ from, to }, new Date());
   const rows = stats ? buildTacticTree(stats.rows, sort, order) : [];

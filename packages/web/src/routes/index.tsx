@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
 import { callApi } from '../lib/callApi';
@@ -19,6 +18,7 @@ import {
   type TacticSide,
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
+import { useDebouncedDraft } from '../lib/useDebouncedDraft';
 import { isAnalysisPending } from '../lib/analysisPending';
 import { subjectOutcomeOf } from '../lib/kifuResult';
 import { useAnalysisAssignee } from '../lib/useMe';
@@ -75,28 +75,17 @@ function KifuListPage() {
     order = DEFAULT_ORDER,
   } = Route.useSearch();
   const navigate = useNavigate();
-  // 検索語は打鍵ごとに URL を書き換えず、入力欄のドラフトを debounce して反映する
-  const [queryDraft, setQueryDraft] = useState(q);
-
-  // 戻る/進む・「条件をクリア」など URL 側が変わったときは入力欄を追従させる
-  useEffect(() => {
-    setQueryDraft(q);
-  }, [q]);
-
-  useEffect(() => {
-    if (queryDraft === q) return;
-    const timer = setTimeout(() => {
+  // 検索語は打鍵ごとに URL を書き換えず、入力欄の下書きを debounce して反映する。
+  // 戻る/進む・「条件をクリア」など URL 側が変わったときは下書きが追従する（`useDebouncedDraft`）
+  const [queryDraft, setQueryDraft] = useDebouncedDraft(
+    q,
+    (draft) =>
       navigate({
         to: '/',
-        search: (prev: KifuListSearch) => ({
-          ...prev,
-          q: queryDraft || undefined,
-          page: undefined,
-        }),
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [queryDraft, q, navigate]);
+        search: (prev: KifuListSearch) => ({ ...prev, q: draft || undefined, page: undefined }),
+      }),
+    300,
+  );
 
   const goToPage = (p: number) =>
     navigate({
@@ -112,8 +101,8 @@ function KifuListPage() {
     });
 
   const clearFilters = () => {
-    // ドラフトも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
-    // 上の同期 effect が発火せず、保留中のタイマーがクリア後に検索語を書き戻してしまう
+    // 下書きも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
+    // URL 側は変わらず下書きが追従しないので、待っていた反映がクリア後に検索語を書き戻してしまう
     setQueryDraft('');
     navigate({ to: '/', search: {} });
   };

@@ -156,6 +156,13 @@ describe('isReachableMove（駒の動き方として指せるか。prd/13 §3）
     expect(isReachableMove(state, 'G*5e')).toBe(false);
     expect(isReachableMove(state, 'P*5d')).toBe(false);
   });
+
+  it('打ち歩詰めのマスへは打てない（エンジンを落とすので shared の dropDestinations が外す）', () => {
+    // 1a の後手玉。2a 桂・2b 銀で逃げ場が無く、1b には 1c の先手香が利く
+    const mate = parseSfen('7nk/7s1/8L/9/9/9/9/9/4K4 b P 1')!;
+    expect(isReachableMove(mate, 'P*1b')).toBe(false);
+    expect(isReachableMove(mate, 'P*2c')).toBe(true);
+  });
 });
 
 describe('isMateAfter（候補なしの終局判定。prd/13 §5.2）', () => {

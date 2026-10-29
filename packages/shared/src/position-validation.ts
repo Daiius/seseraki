@@ -9,22 +9,25 @@
  * - 行き所のない駒（1 段目の歩・香 / 1〜2 段目の桂。後手は上下逆）
  * - 駒数上限（歩 18・香桂銀金各 4・角飛玉各 2）
  * - 手番側が相手玉を即取れる状態
+ * - 指し手（`validateMoveOnPosition`）については、加えて**打ち歩詰め**（`isPawnDropMate`）。
+ *   打ち歩詰めの局面を渡すと、ブラウザの WASM のエンジンはプロセスごと終わる
  *
  * ⚠ **これを通ってもエンジンが落ちる・返ってこない可能性は残る。** その場合は当該ジョブを
  * `failed` で完了させ、worker はエンジンを再起動して次へ進む（prd/12 §2.5）。
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
-import { applyMove, type BoardState, type Square } from './board';
+import { applyMove, withSquares, type BoardState, type Square } from './board';
 import {
   canPromote,
+  opponentOf,
   PIECE_TOTALS,
   unpromoted,
   type BasePieceKind,
   type PieceKind,
   type Side,
 } from './pieces';
-import { indexToUsi, isUsiMove, parseUsiMove } from './usi-move';
+import { indexToUsi, isUsiMove, parseUsiMove, type SquareRef } from './usi-move';
 
 /** 違反の種別。文言に依らず機械的に扱えるようにコードで持つ */
 export type PositionViolationCode =
@@ -38,7 +41,8 @@ export type PositionViolationCode =
   | 'malformed_move'
   | 'no_such_piece'
   | 'captures_king'
-  | 'illegal_promotion';
+  | 'illegal_promotion'
+  | 'pawn_drop_mate';
 
 export interface PositionViolation {
   code: PositionViolationCode;
@@ -153,7 +157,7 @@ export function isAttackedBy(
  *
  * 🔒 **合法手生成器ではない**（prd/12 §2.5 の決定は動かさない）。ここが答えるのは
  * 「**選んだ 1 枚がそのマスへ動けるか**」だけで、局面の全合法手を数え上げない。
- * 自玉が王手放置になる手・打ち歩詰めは**弾かない**——それはエンジンの担当（prd/13 §3）。
+ * 自玉が王手放置になる手は**弾かない**——それはエンジンの担当（prd/13 §3）。
  *
  * 出題（prd/13 §3）で着手可能マスを見せるために使う。**盤の見た目の助けであって、
  * 合否の判定には使わない。**
@@ -178,7 +182,7 @@ export function moveDestinations(
 
 /**
  * `kind` を打てるマスを列挙する。**空きマスのうち、打った結果が明らかに指せない手を除く**
- * （二歩・行き所のない駒）。⚠ 打ち歩詰めは**見ない**（判定にはエンジンが要る。prd/13 §3）。
+ * （二歩・行き所のない駒・打ち歩詰め）。打ち歩詰めは `validateMoveOnPosition` と同じ `isPawnDropMate` で見る。
  */
 export function dropDestinations(
   state: BoardState,
@@ -191,10 +195,69 @@ export function dropDestinations(
       if (state.board[row][col]) continue;
       if (isStuck({ kind, side }, row)) continue;
       if (kind === 'P' && hasPawnOnFile(state, side, col)) continue;
+      if (kind === 'P' && isPawnDropMate(state, side, { row, col })) continue;
       result.push({ row, col });
     }
   }
   return result;
+}
+
+/**
+ * `side` が空きマス `to` に歩を打つと**打ち歩詰め**になるか。
+ *
+ * 🔒 **合法手生成器ではない**（prd/12 §2.5）。範囲を絞って判定する:
+ * 打った歩が**相手玉の正面で王手になる**ときだけ、次の 2 つを見る。それ以外は `false`。
+ * - 玉の逃げ場: 玉の周り 8 マス（歩を取る手を含む）のうち、自分の駒が無く、玉が動いた後に
+ *   `side` の利きが無いマスがあるか（玉を動かしてから見るので、玉の陰になっていた走り駒の利きも数える）
+ * - 歩を取れる玉以外の駒: 取った後に自玉に `side` の利きが無いか（**ピンされた駒では取れない**）
+ *
+ * 歩は玉に接して王手するので、間に駒を打つ・動かす受けは無い。この 2 つで詰みかどうかが決まる。
+ */
+export function isPawnDropMate(state: BoardState, side: Side, to: SquareRef): boolean {
+  const { row, col } = to;
+  if (!inBoard(row, col) || state.board[row][col]) return false;
+  const defender = opponentOf(side);
+  const kingRow = side === 'sente' ? row - 1 : row + 1;
+  if (!inBoard(kingRow, col)) return false;
+  const king = state.board[kingRow][col];
+  if (!king || king.side !== defender || king.kind !== 'K') return false;
+
+  const dropped: BoardState = {
+    ...state,
+    board: withSquares(state.board, [[row, col, { kind: 'P', side }]]),
+  };
+  const safeAfter = (
+    updates: [row: number, col: number, square: Square][],
+    kingAt: readonly [row: number, col: number],
+  ) =>
+    !isAttackedBy(
+      { ...dropped, board: withSquares(dropped.board, updates) },
+      side,
+      kingAt[0],
+      kingAt[1],
+    );
+
+  // 玉の逃げ場（歩を取る手を含む）
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const r = kingRow + dr;
+      const c = col + dc;
+      if (!inBoard(r, c) || dropped.board[r][c]?.side === defender) continue;
+      if (safeAfter([[r, c, king], [kingRow, col, null]], [r, c])) return false;
+    }
+  }
+
+  // 玉以外の駒で歩を取る（取った後に自玉が取られる駒＝ピンされた駒は数えない）
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const piece = dropped.board[r][c];
+      if (!piece || piece.side !== defender || piece.kind === 'K') continue;
+      if (!attacks(dropped, r, c, row, col)) continue;
+      if (safeAfter([[row, col, piece], [r, c, null]], [kingRow, col])) return false;
+    }
+  }
+  return true;
 }
 
 /** その筋に自分の生の歩がいるか（二歩の判定） */
@@ -441,6 +504,13 @@ export function validateMoveOnPosition(
       violations.push({
         code: 'no_such_piece',
         message: `${to} には駒があるので打てません`,
+      });
+    }
+    // 打ち歩詰めは打った後の局面の検証では分からない（局面としては正常）ので、手として見る
+    if (kind === 'P' && isPawnDropMate(state, side, parsed.to)) {
+      violations.push({
+        code: 'pawn_drop_mate',
+        message: `${to} への歩打ちは打ち歩詰めです`,
       });
     }
   } else {

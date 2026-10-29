@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { createInitialState } from './board';
 import { canPromote, type PieceKind } from './pieces';
 import { parseSfen } from './sfen';
+import { usiToIndex } from './usi-move';
 import {
   canPromoteMove,
   mustPromoteMove,
   dropDestinations,
   isAttackedBy,
   isInCheck,
+  isPawnDropMate,
   moveDestinations,
   validateMoveOnPosition,
   validatePositionForEngine,
@@ -347,5 +349,77 @@ describe('mustPromoteMove（成らなければいけない手。prd/13 §7.1）'
     expect(mustPromoteMove(state, '1d1c')).toBe(false); // 歩の 3 段目は任意
     expect(mustPromoteMove(state, 'P*1a')).toBe(false);
     expect(mustPromoteMove(state, '5i5h')).toBe(false);
+  });
+});
+
+describe('打ち歩詰め（isPawnDropMate / validateMoveOnPosition / dropDestinations）', () => {
+  function moveCodesOf(sfen: string, move: string): PositionViolationCode[] {
+    const state = parseSfen(sfen);
+    expect(state, `parseSfen failed: ${sfen}`).not.toBeNull();
+    const result = validateMoveOnPosition(state!, move);
+    return result.ok ? [] : result.violations.map((v) => v.code);
+  }
+  const at = (usi: string) => {
+    const [row, col] = usiToIndex(usi);
+    return { row, col };
+  };
+  const canDropAt = (sfen: string, side: 'sente' | 'gote', usi: string) =>
+    dropDestinations(parseSfen(sfen)!, side, 'P').some(
+      (d) => d.row === at(usi).row && d.col === at(usi).col,
+    );
+
+  // 1a の後手玉。2a に後手の桂・2b に後手の銀（どちらも 1b を取れない）、1c に先手の香（1b に利く）
+  const MATE = '7nk/7s1/8L/9/9/9/9/9/4K4 b P 1';
+
+  it('典型: 逃げ場が無く、歩を取れる駒も無ければ打ち歩詰め', () => {
+    expect(isPawnDropMate(parseSfen(MATE)!, 'sente', at('1b'))).toBe(true);
+    expect(moveCodesOf(MATE, 'P*1b')).toEqual(['pawn_drop_mate']);
+    expect(canDropAt(MATE, 'sente', '1b')).toBe(false);
+  });
+
+  it('同じ形でも歩以外の駒を打つのは構わない（打ち歩詰めは歩だけ）', () => {
+    expect(moveCodesOf('7nk/7s1/8L/9/9/9/9/9/4K4 b G 1', 'G*1b')).toEqual([]);
+  });
+
+  it('歩を取れる駒がいれば合法', () => {
+    // 2b を金にすると横に動けるので 1b の歩を取れる
+    const sfen = '7nk/7g1/8L/9/9/9/9/9/4K4 b P 1';
+    expect(moveCodesOf(sfen, 'P*1b')).toEqual([]);
+    expect(canDropAt(sfen, 'sente', '1b')).toBe(true);
+  });
+
+  it('歩を取れる駒がピンされていれば打ち歩詰め', () => {
+    // 3c の先手角が 2b の金を通して 1a の玉を睨む。金が 1b を取ると玉が取られる
+    const sfen = '7nk/7g1/6B1L/9/9/9/9/9/4K4 b P 1';
+    expect(moveCodesOf(sfen, 'P*1b')).toEqual(['pawn_drop_mate']);
+    expect(canDropAt(sfen, 'sente', '1b')).toBe(false);
+  });
+
+  it('玉が逃げられれば合法', () => {
+    // 2a を空けると玉は 2a へ逃げられる
+    expect(moveCodesOf('8k/7s1/8L/9/9/9/9/9/4K4 b P 1', 'P*1b')).toEqual([]);
+  });
+
+  it('玉が歩を取れれば合法（歩に利きが無い）', () => {
+    expect(moveCodesOf('7nk/7s1/9/9/9/9/9/9/4K4 b P 1', 'P*1b')).toEqual([]);
+  });
+
+  it('逃げ場に利いていれば逃げ場にならない', () => {
+    // 2a は空いているが、9a の先手飛車が 2a に利く
+    expect(moveCodesOf('R7k/7s1/8L/9/9/9/9/9/4K4 b P 1', 'P*1b')).toEqual(['pawn_drop_mate']);
+  });
+
+  it('玉の正面でない歩打ちは見ない（王手でなければ打ち歩詰めではない）', () => {
+    expect(isPawnDropMate(parseSfen(MATE)!, 'sente', at('1c'))).toBe(false);
+    expect(isPawnDropMate(parseSfen(MATE)!, 'sente', at('2c'))).toBe(false);
+  });
+
+  it('後手の歩打ちも同じ（上下を反転して見る）', () => {
+    // 1i の先手玉。2i に先手の桂・2h に先手の銀、1g に後手の香
+    const sfen = '4k4/9/9/9/9/9/8l/7S1/7NK w p 1';
+    expect(moveCodesOf(sfen, 'P*1h')).toEqual(['pawn_drop_mate']);
+    expect(canDropAt(sfen, 'gote', '1h')).toBe(false);
+    // 2h を金にすれば取れる
+    expect(moveCodesOf('4k4/9/9/9/9/9/8l/7G1/7NK w p 1', 'P*1h')).toEqual([]);
   });
 });

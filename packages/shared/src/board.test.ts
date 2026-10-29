@@ -9,6 +9,7 @@ import {
   type BoardState,
 } from './board';
 import { parseSfen } from './sfen';
+import { RANDOM_GAME_B } from './test-fixtures/games';
 import { usiToIndex } from './usi-move';
 
 /**
@@ -272,106 +273,34 @@ describe('usiToJapaneseWithPiece', () => {
 });
 
 /**
- * 実棋譜 1 局分（ムラ vs daiius・70 手で後手の勝ち）。
- * `packages/server/src/kif/parser.test.ts` が持つ同じ棋譜の KIF を USI に変換したもの。
- * KIF パーサーへの依存を web のテストに持ち込まないよう、手列はリテラルで持つ。
+ * 1 局分の通し回帰。手列は無作為な合法手の対局（`test-fixtures/games.ts` の `RANDOM_GAME_B`。
+ * 85 手で詰み・実在の対局ではない）。KIF パーサーへの依存を持ち込まないよう、手列は USI のまま持つ。
  */
-const GAME_MOVES = [
-  '2g2f', //  1 ２六歩(27)
-  '3c3d', //  2 ３四歩(33)
-  '7g7f', //  3 ７六歩(77)
-  '4a3b', //  4 ３二金(41)
-  '3i4h', //  5 ４八銀(39)
-  '2b8h+', //  6 ８八角成(22)
-  '7i8h', //  7 同　銀(79)
-  '3a2b', //  8 ２二銀(31)
-  '8h7g', //  9 ７七銀(88)
-  '2b3c', // 10 ３三銀(22)
-  '6i7h', // 11 ７八金(69)
-  '7a6b', // 12 ６二銀(71)
-  '4g4f', // 13 ４六歩(47)
-  '6c6d', // 14 ６四歩(63)
-  '4h4g', // 15 ４七銀(48)
-  '6b6c', // 16 ６三銀(62)
-  '2f2e', // 17 ２五歩(26)
-  '7c7d', // 18 ７四歩(73)
-  '5i6h', // 19 ６八玉(59)
-  '9c9d', // 20 ９四歩(93)
-  '9g9f', // 21 ９六歩(97)
-  '8c8d', // 22 ８四歩(83)
-  '1g1f', // 23 １六歩(17)
-  '1c1d', // 24 １四歩(13)
-  '3g3f', // 25 ３六歩(37)
-  '8a7c', // 26 ７三桂(81)
-  '2i3g', // 27 ３七桂(29)
-  '5a4b', // 28 ４二玉(51)
-  '2h2i', // 29 ２九飛(28)
-  '6a5b', // 30 ５二金(61)
-  '4i4h', // 31 ４八金(49)
-  '6c5d', // 32 ５四銀(63)
-  '6h7i', // 33 ７九玉(68)
-  '4c4d', // 34 ４四歩(43)
-  '7i8h', // 35 ８八玉(79)
-  '6d6e', // 36 ６五歩(64)
-  '4g5f', // 37 ５六銀(47)
-  'B*6d', // 38 ６四角打
-  'B*2h', // 39 ２八角打
-  '8b6b', // 40 ６二飛(82)
-  '2i6i', // 41 ６九飛(29)
-  '7c8e', // 42 ８五桂(73)
-  '7g6h', // 43 ６八銀(77)
-  '5d5e', // 44 ５五銀(54)
-  '5f6e', // 45 ６五銀(56)
-  '6d8b', // 46 ８二角(64)
-  '6e7d', // 47 ７四銀(65)
-  '5e4f', // 48 ４六銀(55)
-  '7d8c+', // 49 ８三銀成(74)
-  '8b5e', // 50 ５五角(82)
-  '8h9h', // 51 ９八玉(88)
-  '9d9e', // 52 ９五歩(94)
-  '5g5f', // 53 ５六歩(57)
-  '5e6d', // 54 ６四角(55)
-  '9h8h', // 55 ８八玉(98)
-  '9e9f', // 56 ９六歩(95)
-  '8c8d', // 57 ８四全(83)（成銀の移動）
-  '9f9g+', // 58 ９七歩成(96)
-  '8i9g', // 59 同　桂(89)
-  '9a9g+', // 60 同　香成(91)
-  '9i9g', // 61 同　香(99)
-  '6d9g+', // 62 同　角成(64)
-  '8h8i', // 63 ８九玉(88)
-  'N*7g', // 64 ７七桂打
-  '7h7g', // 65 同　金(78)
-  '8e7g+', // 66 同　桂成(85)
-  '6h7g', // 67 同　銀(68)
-  '9g8g', // 68 ８七馬(97)
-  '6i7i', // 69 ７九飛(69)
-  'G*9h', // 70 ９八金打（詰み）
-];
+const GAME_MOVES = RANDOM_GAME_B;
 
-/** 70 手目までを適用した最終局面（後手の 9h 金 + 8g 馬で 8i の先手玉が詰み） */
+/** 85 手目（先手の ６七銀打）までを適用した最終局面 */
 const FINAL_BOARD = [
-  ' ・ ・ ・ ・ ・ ・ ・v Nv L',
-  ' ・ ・ ・v Rv Gv Kv G ・ ・',
-  ' ・ ・ ・ ・v P ・v Sv P ・',
-  ' ・^+S ・ ・ ・v Pv P ・v P',
-  ' ・ ・ ・ ・ ・ ・ ・^ P ・',
-  ' ・ ・^ P ・^ Pv S^ P ・^ P',
-  ' ・v+B^ S^ P ・ ・^ N ・ ・',
-  'v G ・ ・ ・ ・^ G ・^ B ・',
-  ' ・^ K^ R ・ ・ ・ ・ ・^ L',
+  ' ・v N ・ ・ ・ ・ ・v N ・',
+  'v Lv S ・ ・ ・^+P ・ ・v L',
+  'v P ・v R ・v G ・ ・v P ・',
+  ' ・v Pv G ・ ・ ・ ・ ・v P',
+  ' ・ ・v Pv Pv Pv Pv P^ P ・',
+  '^ P ・v K ・ ・ ・ ・ ・ ・',
+  '^ N^ P ・^ S^ P^ P ・ ・^ P',
+  '^ S^ B ・ ・^ G^ K ・^ S^ L',
+  '^ L ・ ・^ P^ B ・^ G^ N ・',
 ].join('\n');
 
-describe('実棋譜 1 局の通し回帰（ムラ vs daiius・70手）', () => {
+describe('1 局の通し回帰（無作為な合法手の対局・85 手）', () => {
   it('最終局面と持ち駒が一致する', () => {
     const positions = buildPositions(GAME_MOVES);
     expect(positions).toHaveLength(GAME_MOVES.length + 1);
 
     const final = positions[GAME_MOVES.length];
     expect(render(final)).toBe(FINAL_BOARD);
-    expect(final.hand.sente).toEqual({ P: 4, L: 1, N: 2 });
-    expect(final.hand.gote).toEqual({ P: 3, L: 1 });
-    expect(final.sideToMove).toBe('sente');
+    expect(final.hand.sente).toEqual({});
+    expect(final.hand.gote).toEqual({ P: 1, R: 1 });
+    expect(final.sideToMove).toBe('gote');
   });
 
   it('どの局面でも駒数が保存される', () => {

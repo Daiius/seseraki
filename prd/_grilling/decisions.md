@@ -384,7 +384,7 @@ PR #38 で `applyMove` を差分コピー（構造共有）にしたことで `B
   検出したランダム 2000 棋譜の差分検証は旧実装が消えた今は再現できないため、代替として**実データの経路を
   1 本通す**。`board.ts` は USI 手列を受け取るので、リテラルで持てば **KIF パーサー（server）への依存が要らない**
   （`sample.kif` を使うと web のテストが server に依存してしまう）。棋譜は
-  `packages/server/src/kif/parser.test.ts` と同じ「ムラ vs daiius」70 手を USI に変換して使う。
+  `packages/server/src/kif/parser.test.ts` と同じ実棋譜 70 手を USI に変換して使う（⚠ 2026-10-30 に、対局者名を伏せるため無作為な合法手の対局へ差し替えた）。
 - **`vitest.config.ts` を `vite.config.ts` と独立させる**。web の `vite.config.ts` は TanStack Router の
   ルート生成・React Compiler の babel 変換・Tailwind を積んでおり、そのままだとテスト実行のたびに
   **副作用（`routeTree.gen.ts` の再生成）と変換コスト**が乗る。純ロジックのテストにこれらは要らない。

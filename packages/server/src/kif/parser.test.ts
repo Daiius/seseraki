@@ -138,7 +138,7 @@ describe("parseKif", () => {
     });
   });
 
-  describe("実戦の指し手列（Daiius vs ffullbacks より抜粋）", () => {
+  describe("実戦の指し手列（抜粋）", () => {
     it("成りチェーンを正しくパースする", () => {
       // 角打 → 馬への成り → 馬の移動（成り済み）
       const kif = `
@@ -238,18 +238,18 @@ describe("parseKif", () => {
 
   describe("対局メタ（ヘッダ）抽出", () => {
     it("先手/後手/開始日時/手合割を抽出する", () => {
-      const kif = `開始日時：2026/07/15 15:54:18
+      const kif = `開始日時：2026/01/15 12:34:56
 手合割：平手
-先手：ムラ
+先手：先手A
 後手：daiius
    1 ２六歩(27)   ( 0:00/00:00:00)
    2 投了
 `;
       const { header } = parseKif(kif);
-      expect(header.sente).toBe("ムラ");
+      expect(header.sente).toBe("先手A");
       expect(header.gote).toBe("daiius");
       expect(header.handicap).toBe("平手");
-      expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");
+      expect(header.playedAt?.toISOString()).toBe("2026-01-15T03:34:56.000Z");
     });
 
     it("名前の段位を分離する（段位でない称号は名前に残す）", () => {
@@ -261,13 +261,13 @@ describe("parseKif", () => {
     });
 
     it("将棋ウォーズ形式の段級行（別行）を取り込む", () => {
-      const kif = `開始日時：2026/07/27 22:05:56
-終了日時：2026/07/27 22:25:56
+      const kif = `開始日時：2026/01/27 21:00:00
+終了日時：2026/01/27 21:20:00
 場所：将棋ウォーズ
 持ち時間：10分切れ負け
 手合割：平手
 初期局面：通常
-先手：coffee0418
+先手：先手A
 先手段級：二段
 後手：Daiius
 後手段級：初段
@@ -276,7 +276,7 @@ describe("parseKif", () => {
 2 投了
 `;
       const { header } = parseKif(kif);
-      expect(header.sente).toBe("coffee0418");
+      expect(header.sente).toBe("先手A");
       expect(header.senteDan).toBe(2);
       expect(header.gote).toBe("Daiius");
       expect(header.goteDan).toBe(1); // 初段
@@ -291,10 +291,10 @@ describe("parseKif", () => {
       ["LF", "\n"],
     ])("改行が %s でもヘッダと指し手を取り込む", (_name, eol) => {
       const kif = [
-        "開始日時：2026/07/27 22:05:56",
+        "開始日時：2026/01/27 21:00:00",
         "場所：将棋ウォーズ",
         "手合割：平手",
-        "先手：coffee0418",
+        "先手：先手A",
         "先手段級：二段",
         "後手：Daiius",
         "後手段級：初段",
@@ -304,7 +304,7 @@ describe("parseKif", () => {
         "",
       ].join(eol);
       const { header, moves, errors } = parseKif(kif);
-      expect(header.sente).toBe("coffee0418");
+      expect(header.sente).toBe("先手A");
       expect(header.gote).toBe("Daiius");
       expect(header.senteDan).toBe(2);
       expect(header.goteDan).toBe(1);
@@ -324,8 +324,8 @@ describe("parseKif", () => {
       const kif =
         "\uFEFF" +
         [
-          "開始日時：2026/07/27 22:05:56",
-          "先手：coffee0418",
+          "開始日時：2026/01/27 21:00:00",
+          "先手：先手A",
           "後手：Daiius",
           "手数----指手---------消費時間--",
           "1 ７六歩(77)   ( 0:01/00:00:01)",
@@ -334,7 +334,7 @@ describe("parseKif", () => {
       const { header } = parseKif(kif);
       // BOM が残ると先頭行だけ落ちて playedAt が null になる
       expect(header.playedAt).not.toBeNull();
-      expect(header.sente).toBe("coffee0418");
+      expect(header.sente).toBe("先手A");
       expect(header.gote).toBe("Daiius");
     });
 
@@ -344,9 +344,9 @@ describe("parseKif", () => {
         // 指し手行（MOVE_RE）は行頭空白を受けるので、ヘッダだけ受けないと
         // 「指し手は通るのにメタが空」という同じ壊れ方になる
         const { header } = parseKif(
-          ["  先手 ： coffee0418", "\t後手：\tDaiius", "　手合割：平手"].join("\n"),
+          ["  先手 ： 先手A", "\t後手：\tDaiius", "　手合割：平手"].join("\n"),
         );
-        expect(header.sente).toBe("coffee0418");
+        expect(header.sente).toBe("先手A");
         expect(header.gote).toBe("Daiius");
         expect(header.handicap).toBe("平手");
       });
@@ -354,9 +354,9 @@ describe("parseKif", () => {
       it("行中に紛れたゼロ幅文字でヘッダを落とさない", () => {
         // ZWSP が項目名を割ると、その行だけが静かに落ちる
         const { header } = parseKif(
-          `先\u200B手：coffee0418\n後手：Da\u200Biius\n`,
+          `先\u200B手：先手A\n後手：Da\u200Biius\n`,
         );
-        expect(header.sente).toBe("coffee0418");
+        expect(header.sente).toBe("先手A");
         expect(header.gote).toBe("Daiius");
       });
 
@@ -380,7 +380,7 @@ describe("parseKif", () => {
 
     it("級位は負数にする（値の大小がそのまま棋力の順序になる）", () => {
       const { header } = parseKif(
-        `先手：Daiius\n先手段級：初段\n後手：Nair41\n後手段級：1級\n`,
+        `先手：Daiius\n先手段級：初段\n後手：後手B\n後手段級：1級\n`,
       );
       expect(header.senteDan).toBe(1);
       expect(header.goteDan).toBe(-1);
@@ -408,8 +408,8 @@ describe("parseKif", () => {
       });
 
       it("後手も同様に出現順へ依存しない", () => {
-        const { header } = parseKif(`後手段級：1級\n後手：Nair41 五段\n`);
-        expect(header.gote).toBe("Nair41");
+        const { header } = parseKif(`後手段級：1級\n後手：後手B 五段\n`);
+        expect(header.gote).toBe("後手B");
         expect(header.goteDan).toBe(-1);
       });
 
@@ -420,8 +420,8 @@ describe("parseKif", () => {
     });
 
     it("開始日時を JST の Date にする", () => {
-      const { header } = parseKif(`開始日時：2026/07/15 15:54:18\n`);
-      expect(header.playedAt?.toISOString()).toBe("2026-07-15T06:54:18.000Z");
+      const { header } = parseKif(`開始日時：2026/01/15 12:34:56\n`);
+      expect(header.playedAt?.toISOString()).toBe("2026-01-15T03:34:56.000Z");
       expect(header.sourceTz).toBe("JST");
     });
 
@@ -429,38 +429,38 @@ describe("parseKif", () => {
       // App B は開始日時を JST で書くようになった。署名は変わらないので、署名で UTC と
       // 判定し続けると playedAt が 9h 未来へずれる。自動判定は廃止し、既定を JST にした。
       const kif = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
+開始日時：2026/01/17 14:00:00
 手合割：平手
 先手：daiius
-後手：りざーす
+後手：後手B
 持ち時間：10分+30秒
    1 ７六歩(77) ( 0:01/00:00:01)
    2 投了
 `;
       const { header } = parseKif(kif);
       expect(header.sourceTz).toBe("JST");
-      // 14:57 JST = 05:57Z
-      expect(header.playedAt?.toISOString()).toBe("2026-07-17T05:57:00.000Z");
+      // 14:00 JST = 05:00Z
+      expect(header.playedAt?.toISOString()).toBe("2026-01-17T05:00:00.000Z");
     });
 
     it("tzOverride を渡すと既定の JST より優先する（投入時のユーザー選択）", () => {
       // JST の KIF でも、UTC 指定なら UTC 解釈（+9h ずれる）
-      const jstKif = `開始日時：2026/07/15 15:54:18\n`;
+      const jstKif = `開始日時：2026/01/15 12:34:56\n`;
       const asUtc = parseKif(jstKif, "UTC").header;
       expect(asUtc.sourceTz).toBe("UTC");
-      expect(asUtc.playedAt?.toISOString()).toBe("2026-07-15T15:54:18.000Z");
+      expect(asUtc.playedAt?.toISOString()).toBe("2026-01-15T12:34:56.000Z");
       // 旧 UTC 署名の KIF でも、JST 指定なら JST 解釈
-      const bKif = `# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`;
+      const bKif = `# ----  KIF形式  ----\n開始日時：2026/01/17 14:00:00\n持ち時間：10分+30秒\n`;
       const asJst = parseKif(bKif, "JST").header;
       expect(asJst.sourceTz).toBe("JST");
-      expect(asJst.playedAt?.toISOString()).toBe("2026-07-17T05:57:00.000Z");
+      expect(asJst.playedAt?.toISOString()).toBe("2026-01-17T05:00:00.000Z");
     });
 
     it("存在しない日付は正規化せず null にする", () => {
       // JS は 2026/02/30 を 3/2 に正規化するが、それを弾く
       expect(parseKif(`開始日時：2026/02/30 12:00:00\n`).header.playedAt).toBeNull();
       // 不正な時刻も同様
-      expect(parseKif(`開始日時：2026/07/15 25:00:00\n`).header.playedAt).toBeNull();
+      expect(parseKif(`開始日時：2026/01/15 25:00:00\n`).header.playedAt).toBeNull();
     });
   });
 
@@ -469,7 +469,7 @@ describe("parseKif", () => {
   describe("旧 UTC 署名の判定（過去行の再導出専用）", () => {
     it("3 条件が揃ったものだけ UTC とみなす", () => {
       const bKif = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
+開始日時：2026/01/17 14:00:00
 持ち時間：10分+30秒
 `;
       expect(detectLegacyUtcTimezone(bKif)).toBe("UTC");
@@ -477,22 +477,22 @@ describe("parseKif", () => {
 
     it("持ち時間のみ / KIF形式コメントのみでは UTC とみなさない", () => {
       expect(
-        detectLegacyUtcTimezone(`開始日時：2026/07/17 14:57:00\n持ち時間：10分+30秒\n`),
+        detectLegacyUtcTimezone(`開始日時：2026/01/17 14:00:00\n持ち時間：10分+30秒\n`),
       ).toBe("JST");
       expect(
-        detectLegacyUtcTimezone(`# ----  KIF形式  ----\n開始日時：2026/07/17 14:57:00\n`),
+        detectLegacyUtcTimezone(`# ----  KIF形式  ----\n開始日時：2026/01/17 14:00:00\n`),
       ).toBe("JST");
     });
 
     it("終了日時/場所を持つ JST 系アプリは署名が一致しても UTC とみなさない", () => {
       const withEnd = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
-終了日時：2026/07/17 15:10:00
+開始日時：2026/01/17 14:00:00
+終了日時：2026/01/17 14:10:00
 持ち時間：10分+30秒
 `;
       expect(detectLegacyUtcTimezone(withEnd)).toBe("JST");
       const withPlace = `# ----  KIF形式  ----
-開始日時：2026/07/17 14:57:00
+開始日時：2026/01/17 14:00:00
 場所：-
 持ち時間：10分+30秒
 `;
@@ -500,7 +500,7 @@ describe("parseKif", () => {
     });
 
     it("KIF形式コメントが先頭行でない場合は UTC とみなさない", () => {
-      const notFirst = `開始日時：2026/07/17 14:57:00
+      const notFirst = `開始日時：2026/01/17 14:00:00
 # ----  KIF形式  ----
 持ち時間：10分+30秒
 `;
@@ -539,95 +539,42 @@ describe("parseKif", () => {
     });
   });
 
-  describe("実戦（ムラ vs daiius・成銀略記「全」を含む）", () => {
-    // 手57「８四全(83)」= 成銀の移動。旧実装はこの略記を取りこぼし手が欠落 →
-    // 手番 parity がズレて USI 列が破綻し illegal move でエンジンが落ちていた。
-    const KIF = `開始日時：2026/07/15 15:54:18
+  describe("成銀略記「全」を含む 1 局（手で組んだ合法な手順）", () => {
+    // 成銀の移動は「８一全(91)」のように一文字略記で書かれることがある。旧実装はこの略記を取りこぼし手が欠落 →
+    // 手番 parity がズレて USI 列が破綻し illegal move でエンジンが落ちていた（実在の対局ではない）。
+    const KIF = `開始日時：2026/01/15 12:34:56
 手合割：平手
-先手：ムラ
-後手：daiius
+先手：先手A
+後手：後手B
 手数----指手---------消費時間--
-   1 ２六歩(27) ( 0:01/00:00:01)
-   2 ３四歩(33) ( 0:00/00:00:00)
-   3 ７六歩(77) ( 0:00/00:00:01)
-   4 ３二金(41) ( 0:01/00:00:01)
-   5 ４八銀(39) ( 0:00/00:00:01)
-   6 ８八角成(22) ( 0:06/00:00:07)
-   7 同　銀(79) ( 0:02/00:00:03)
-   8 ２二銀(31) ( 0:00/00:00:07)
-   9 ７七銀(88) ( 0:00/00:00:03)
-  10 ３三銀(22) ( 0:00/00:00:07)
-  11 ７八金(69) ( 0:00/00:00:03)
-  12 ６二銀(71) ( 0:00/00:00:07)
-  13 ４六歩(47) ( 0:00/00:00:03)
-  14 ６四歩(63) ( 0:00/00:00:07)
-  15 ４七銀(48) ( 0:00/00:00:03)
-  16 ６三銀(62) ( 0:00/00:00:07)
-  17 ２五歩(26) ( 0:00/00:00:03)
-  18 ７四歩(73) ( 0:00/00:00:07)
-  19 ６八玉(59) ( 0:00/00:00:03)
-  20 ９四歩(93) ( 0:01/00:00:08)
-  21 ９六歩(97) ( 0:00/00:00:03)
-  22 ８四歩(83) ( 0:00/00:00:08)
-  23 １六歩(17) ( 0:00/00:00:03)
-  24 １四歩(13) ( 0:03/00:00:11)
-  25 ３六歩(37) ( 0:00/00:00:03)
-  26 ７三桂(81) ( 0:00/00:00:11)
-  27 ３七桂(29) ( 0:00/00:00:03)
-  28 ４二玉(51) ( 0:03/00:00:14)
-  29 ２九飛(28) ( 0:00/00:00:03)
-  30 ５二金(61) ( 0:02/00:00:16)
-  31 ４八金(49) ( 0:01/00:00:04)
-  32 ５四銀(63) ( 0:00/00:00:16)
-  33 ７九玉(68) ( 0:00/00:00:04)
-  34 ４四歩(43) ( 0:01/00:00:17)
-  35 ８八玉(79) ( 0:01/00:00:05)
-  36 ６五歩(64) ( 0:01/00:00:18)
-  37 ５六銀(47) ( 0:00/00:00:05)
-  38 ６四角打 ( 0:01/00:00:19)
-  39 ２八角打 ( 0:08/00:00:13)
-  40 ６二飛(82) ( 0:20/00:00:39)
-  41 ６九飛(29) ( 0:03/00:00:16)
-  42 ８五桂(73) ( 0:06/00:00:45)
-  43 ６八銀(77) ( 0:10/00:00:26)
-  44 ５五銀(54) ( 0:01/00:00:46)
-  45 ６五銀(56) ( 0:07/00:00:33)
-  46 ８二角(64) ( 0:01/00:00:47)
-  47 ７四銀(65) ( 0:05/00:00:38)
-  48 ４六銀(55) ( 0:02/00:00:49)
-  49 ８三銀成(74) ( 0:05/00:00:43)
-  50 ５五角(82) ( 0:04/00:00:53)
-  51 ９八玉(88) ( 0:07/00:00:50)
-  52 ９五歩(94) ( 0:08/00:01:01)
-  53 ５六歩(57) ( 0:09/00:00:59)
-  54 ６四角(55) ( 1:05/00:02:06)
-  55 ８八玉(98) ( 0:18/00:01:17)
-  56 ９六歩(95) ( 0:05/00:02:11)
-  57 ８四全(83) ( 0:03/00:01:20)
-  58 ９七歩成(96) ( 0:07/00:02:18)
-  59 同　桂(89) ( 0:02/00:01:22)
-  60 同　香成(91) ( 0:04/00:02:22)
-  61 同　香(99) ( 0:01/00:01:23)
-  62 同　角成(64) ( 0:02/00:02:24)
-  63 ８九玉(88) ( 0:02/00:01:25)
-  64 ７七桂打 ( 2:20/00:04:44)
-  65 同　金(78) ( 0:07/00:01:32)
-  66 同　桂成(85) ( 0:14/00:04:58)
-  67 同　銀(68) ( 0:00/00:01:32)
-  68 ８七馬(97) ( 0:01/00:04:59)
-  69 ７九飛(69) ( 0:12/00:01:44)
-  70 ９八金打 ( 0:07/00:05:06)
-  71 詰み
+   1 ７六歩(77) ( 0:01/00:00:01)
+   2 ３四歩(33) ( 0:01/00:00:01)
+   3 ２二角成(88) ( 0:01/00:00:02)
+   4 同　銀(31) ( 0:01/00:00:02)
+   5 ３一角打 ( 0:01/00:00:03)
+   6 ８四歩(83) ( 0:01/00:00:03)
+   7 ２二角成(31) ( 0:01/00:00:04)
+   8 ８五歩(84) ( 0:01/00:00:04)
+   9 ９二銀打 ( 0:01/00:00:05)
+  10 ８六歩(85) ( 0:01/00:00:05)
+  11 ９一銀成(92) ( 0:01/00:00:06)
+  12 ８七歩成(86) ( 0:01/00:00:06)
+  13 ８一全(91) ( 0:01/00:00:07)
+  14 同　飛(82) ( 0:01/00:00:07)
+  15 投了
 `;
 
-    it("全70手をエラーなく変換し、メタ・結果も取れる", () => {
+    it("全 14 手をエラーなく変換し、メタ・結果も取れる", () => {
       const r = parseKif(KIF);
       expect(r.errors).toEqual([]);
-      expect(r.moves).toHaveLength(70);
-      expect(r.moves[56].usi).toBe("8c8d"); // 手57 ８四全（成り済み成銀の移動、+ なし）
-      expect(r.header.sente).toBe("ムラ");
-      expect(r.header.gote).toBe("daiius");
-      expect(r.header.result).toBe("GOTE_WIN_CHECKMATE");
+      expect(r.moves.map((m) => m.usi)).toEqual([
+        "7g7f", "3c3d", "8h2b+", "3a2b", "B*3a", "8c8d", "3a2b+",
+        "8d8e", "S*9b", "8e8f", "9b9a+", "8f8g+", "9a8a", "8b8a",
+      ]);
+      expect(r.moves[12].usi).toBe("9a8a"); // 手13 ８一全（成り済み成銀の移動、+ なし）
+      expect(r.header.sente).toBe("先手A");
+      expect(r.header.gote).toBe("後手B");
+      expect(r.header.result).toBe("GOTE_WIN_RESIGN");
     });
   });
 });

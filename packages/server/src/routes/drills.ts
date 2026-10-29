@@ -7,6 +7,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { drillNamedEvaluationSchema } from 'shared';
 import { zv } from '../zod-validator.js';
+import { apiError, NOT_FOUND } from '../api-error.js';
 import { sessionRequired } from '../auth.js';
 import { analysisAssigneeOf } from '../analysis-report.js';
 import { isGiveUpLine } from '../drill-answer.js';
@@ -56,7 +57,7 @@ export const drillRoutes = new Hono()
       const ref = c.req.valid('param');
       const now = new Date().toISOString();
       const drill = await loadDrillQuestion(c.get('tx'), c.get('userId'), ref);
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       // `now` も `/drills/next` と同じく載せる。名指しで開いた問題（保存した URL・一覧から）から回が始まっても、
       // 最初の解答より前に回の開始時刻が決まるように（レビュー `OCL-BB10F0BB`。prd/13 §7.6）
       return c.json({ drill, now });
@@ -71,7 +72,7 @@ export const drillRoutes = new Hono()
     async (c) => {
       const ref = c.req.valid('param');
       const drill = await loadDrill(c.get('tx'), c.get('userId'), ref);
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       return c.json(await listDrillAttemptsOf(c.get('tx'), c.get('userId'), ref));
     },
   )
@@ -82,7 +83,7 @@ export const drillRoutes = new Hono()
     zv('param', drillRefParam),
     async (c) => {
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       await unexcludeDrill(c.get('tx'), c.get('userId'), drill.id);
       return c.json({ ok: true } as const);
     },
@@ -95,7 +96,7 @@ export const drillRoutes = new Hono()
     zv('param', drillRefParam),
     async (c) => {
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       // 以下の `id` は出題の行の ID（内部の値。記録と手順の記憶に使い、応答には載せない）
       const { id } = drill;
       await recordAttempt(c.get('tx'), {
@@ -130,10 +131,10 @@ export const drillRoutes = new Hono()
     async (c) => {
       const { line, practice } = c.req.valid('json');
       const drill = await loadDrill(c.get('tx'), c.get('userId'), c.req.valid('param'));
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       const { id } = drill;
       if (!isGiveUpLine(drill.kind, line, [recallLine(id), drill.answerPv])) {
-        return c.json({ error: '手順が出題と噛み合いません' } as const, 400);
+        return apiError(c, 400, 'bad_request', '手順が出題と噛み合いません');
       }
       if (!practice) {
         await recordAttempt(c.get('tx'), {
@@ -193,7 +194,7 @@ export const drillRoutes = new Hono()
       const tx = c.get('tx');
       const userId = c.get('userId');
       const drill = await loadDrill(tx, userId, c.req.valid('param'));
-      if (!drill) return c.json({ error: '出題が見つかりません' } as const, 404);
+      if (!drill) return apiError(c, 404, 'not_found', NOT_FOUND.drill);
       // 流れの本体は `drill-answer-flow.ts`。DB・手順の記憶・エンジンはここで渡す
       const graded = await gradeAnswer(drill, c.req.valid('json'), {
         recallLine,

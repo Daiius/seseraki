@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zv } from '../zod-validator.js';
+import { apiError, NOT_FOUND } from '../api-error.js';
 import { sessionRequired, sessionUser } from '../auth.js';
 import { clearProgress, getProgressFor } from '../analysis-progress.js';
 import { kifuListQuerySchema } from '../kifu-list-query.js';
@@ -33,7 +34,7 @@ export const kifuRoutes = new Hono()
     async (c) => {
       const { no } = c.req.valid('param');
       const kifu = await getKifuDetail(c.get('tx'), c.get('userId'), no);
-      if (!kifu) return c.json({ error: 'not found' }, 404);
+      if (!kifu) return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       return c.json(kifu);
     },
   )
@@ -68,7 +69,7 @@ export const kifuRoutes = new Hono()
       const { no } = c.req.valid('param');
       const id = await reanalyzeKifu(c.get('tx'), c.get('userId'), no);
       if (id === null) {
-        return c.json({ error: 'not found' }, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       }
       // 旧解析の進捗を落とす（**コミットの後**。以降に届く旧世代の報告は世代照合で弾かれる）
       c.get('afterCommit')(() => clearProgress(id));
@@ -83,7 +84,7 @@ export const kifuRoutes = new Hono()
       const { no } = c.req.valid('param');
       const id = await deleteKifu(c.get('tx'), c.get('userId'), no);
       if (id === null) {
-        return c.json({ error: 'not found' }, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       }
       // 消えた棋譜の「解析中」が残らないように（行が無くなるので以降の報告も弾かれる）
       c.get('afterCommit')(() => clearProgress(id));
@@ -104,7 +105,7 @@ export const kifuRoutes = new Hono()
       const { no } = c.req.valid('param');
       const { memo } = c.req.valid('json');
       if (!(await updateKifuMemo(c.get('tx'), c.get('userId'), no, memo))) {
-        return c.json({ error: 'not found' }, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       }
       return c.json({ ok: true });
     },

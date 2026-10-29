@@ -4,6 +4,7 @@
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import { BROWSER_ANALYSIS_LIMITS } from 'shared';
+import { apiError } from '../api-error.js';
 import { KIFU_CREATE_BODY_MAX_BYTES } from '../kifu-input.js';
 import { positiveInt4 } from '../params.js';
 
@@ -50,11 +51,11 @@ export const periodRefine = <S extends z.ZodType<{ validFrom?: string | null; va
  */
 export const smallBody = bodyLimit({
   maxSize: BROWSER_ANALYSIS_LIMITS.bodyMaxBytes,
-  onError: (c) => c.json({ error: 'body too large' } as const, 413),
+  onError: (c) => apiError(c, 413, 'body_too_large'),
 });
 
 /** 棋譜の取り込みの本文の上限（KIF の本文を載せるので `smallBody` より大きい）。超えたら 413 */
 export const kifuCreateBody = bodyLimit({
   maxSize: KIFU_CREATE_BODY_MAX_BYTES,
-  onError: (c) => c.json({ error: 'body too large' } as const, 413),
+  onError: (c) => apiError(c, 413, 'body_too_large'),
 });

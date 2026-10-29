@@ -5,6 +5,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { parseSfen, positionSfen, validateMoveOnPosition, validatePositionForEngine } from 'shared';
 import { zv } from '../zod-validator.js';
+import { apiError, NOT_FOUND } from '../api-error.js';
 import { sessionRequired, sessionUser } from '../auth.js';
 import { analysisAssigneeOf } from '../analysis-report.js';
 import { EvaluationQueueFullError, getEvaluationResult, startEvaluation } from '../position-eval.js';
@@ -33,9 +34,9 @@ export const positionRoutes = new Hono()
       // 盤・持ち駒・手番で照合するので、照合に使うバイト列も同じ局面から作る。
       // 読めない SFEN はどの棋譜も通っていないので 404（文字列で引いていた頃と同じ）
       const key = parsePositionKey(c.req.valid('query').pos ?? INITIAL_SFEN);
-      if (!key) return c.json({ error: 'not found' } as const, 404);
+      if (!key) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       const found = await findPositionGames(c.get('tx'), c.get('userId'), key);
-      if (!found) return c.json({ error: 'not found' } as const, 404);
+      if (!found) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       return c.json(found);
     },
   )
@@ -55,9 +56,9 @@ export const positionRoutes = new Hono()
     async (c) => {
       const { pos, side } = c.req.valid('query');
       const key = parsePositionKey(pos);
-      if (!key) return c.json({ error: 'not found' } as const, 404);
+      if (!key) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       const found = await findSubjectGames(c.get('tx'), c.get('userId'), key, side);
-      if (!found) return c.json({ error: 'not found' } as const, 404);
+      if (!found) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       return c.json(found);
     },
   )
@@ -79,13 +80,13 @@ export const positionRoutes = new Hono()
     async (c) => {
       const userId = c.get('userId');
       if (userId !== OWNER_USER_ID) {
-        return c.json({ error: 'この機能は使えません' } as const, 403);
+        return apiError(c, 403, 'forbidden', 'この機能は使えません');
       }
       const { pos, window, limit } = c.req.valid('query');
       const key = parsePositionKey(pos);
-      if (!key) return c.json({ error: 'not found' } as const, 404);
+      if (!key) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       const found = await findSimilarPositions(c.get('tx'), userId, key, { window, limit });
-      if (!found) return c.json({ error: 'not found' } as const, 404);
+      if (!found) return apiError(c, 404, 'not_found', NOT_FOUND.position);
       return c.json(found);
     },
   )
@@ -116,22 +117,20 @@ export const positionRoutes = new Hono()
       // エンジンをクラッシュ・ハングさせうる局面は 4xx で弾く
       const state = parseSfen(sfen);
       if (!state) {
-        return c.json({ error: 'SFEN を読めません', violations: [] }, 400);
+        return apiError(c, 400, 'bad_request', 'SFEN を読めません', { violations: [] });
       }
       const position = validatePositionForEngine(state);
       if (!position.ok) {
-        return c.json(
-          { error: 'エンジンに渡せない局面です', violations: position.violations },
-          400,
-        );
+        return apiError(c, 400, 'bad_request', 'エンジンに渡せない局面です', {
+          violations: position.violations,
+        });
       }
       if (move !== null) {
         const moveCheck = validateMoveOnPosition(state, move);
         if (!moveCheck.ok) {
-          return c.json(
-            { error: 'エンジンに渡せない指し手です', violations: moveCheck.violations },
-            400,
-          );
+          return apiError(c, 400, 'bad_request', 'エンジンに渡せない指し手です', {
+            violations: moveCheck.violations,
+          });
         }
       }
 
@@ -146,7 +145,7 @@ export const positionRoutes = new Hono()
       // 一部の局面だけ答えが返る口にしない。出題の解答の評価（`drill-engine.ts`）も担当 `worker` だけが
       // 手元 worker にジョブを積み、担当 `browser` はブラウザが名指しで読む（prd/14 §5.7・prd/13 §5.3）
       if ((await analysisAssigneeOf(c.get('tx'), userId)) !== 'worker') {
-        return c.json({ error: 'この機能は使えません' } as const, 403);
+        return apiError(c, 403, 'forbidden', 'この機能は使えません');
       }
 
       // 🔴 **エンジンにジョブを積む前に、既存の棋譜解析から引く**（prd/12 §2.6）。
@@ -188,7 +187,7 @@ export const positionRoutes = new Hono()
       } catch (err) {
         if (err instanceof EvaluationQueueFullError) {
           // worker が止まっている疑い。積み上げずにその場で断る
-          return c.json({ error: '評価キューが一杯です' } as const, 503);
+          return apiError(c, 503, 'unavailable', '評価キューが一杯です');
         }
         throw err;
       }
@@ -207,7 +206,7 @@ export const positionRoutes = new Hono()
       const { jobId } = c.req.valid('param');
       const poll = getEvaluationResult(jobId, c.get('userId'));
       if (poll.state === 'unknown') {
-        return c.json({ error: '評価ジョブが見つかりません' } as const, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.evaluationJob);
       }
       if (poll.state === 'pending') {
         return c.json({ status: 'pending' as const, jobId });

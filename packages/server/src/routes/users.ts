@@ -4,6 +4,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { zv } from '../zod-validator.js';
+import { apiError, NOT_FOUND } from '../api-error.js';
 import { sessionRequired } from '../auth.js';
 import { isUniqueViolation } from '../db/errors.js';
 import { clearProgressForOwner } from '../analysis-progress.js';
@@ -74,9 +75,9 @@ export const userRoutes = new Hono()
       const userId = c.get('userId');
       const result = await switchAnalysisAssignee(c.get('tx'), userId, c.req.valid('json').assignee);
       if (result.status === 'forbidden') {
-        return c.json({ error: 'この担当は選べません' } as const, 403);
+        return apiError(c, 403, 'forbidden', 'この担当は選べません');
       }
-      if (result.status === 'not-found') return c.json({ error: 'not found' } as const, 404);
+      if (result.status === 'not-found') return apiError(c, 404, 'not_found', NOT_FOUND.user);
       const changed = result.status === 'switched';
       // 切り替え前の解析の進捗を落とす（**コミットの後**。以降に届く旧世代の報告は世代と担当の照合で弾かれる）
       if (changed) c.get('afterCommit')(() => clearProgressForOwner(userId));
@@ -101,7 +102,7 @@ export const userRoutes = new Hono()
       } catch (e) {
         // `(userId, name)` は UNIQUE（大文字小文字を区別する。prd/11 §2.1・prd/14 §4.1）
         if (isUniqueViolation(e)) {
-          return c.json({ error: 'この名前は既に登録されている' } as const, 409);
+          return apiError(c, 409, 'conflict', 'この名前は既に登録されている');
         }
         throw e;
       }
@@ -119,7 +120,7 @@ export const userRoutes = new Hono()
       const userId = c.get('userId');
       // 🔒 本人の名前候補だけ（prd/14 §4）。他人のもの・無いものは 404
       if (!(await updateAliasPeriod(tx, userId, id, { validFrom, validTo }))) {
-        return c.json({ error: 'not found' } as const, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.alias);
       }
       const updated = await rebuildSubjectSides(tx, userId);
       return c.json({ ok: true, rederived: updated } as const);
@@ -137,7 +138,7 @@ export const userRoutes = new Hono()
       const userId = c.get('userId');
       // 🔒 本人の名前候補だけ（prd/14 §4）。他人のもの・無いものは 404
       if (!(await removeAlias(tx, userId, id))) {
-        return c.json({ error: 'not found' } as const, 404);
+        return apiError(c, 404, 'not_found', NOT_FOUND.alias);
       }
       const updated = await rebuildSubjectSides(tx, userId);
       return c.json({ ok: true, rederived: updated } as const);

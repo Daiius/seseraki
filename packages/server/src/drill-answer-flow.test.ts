@@ -105,8 +105,8 @@ describe('gradeAnswer: 次の一手', () => {
 
   it.each([
     [{ status: 'pending', jobId: 'job-1' } as const, 202, { status: 'pending', jobId: 'job-1' }],
-    [{ status: 'busy' } as const, 503, { error: '評価キューが一杯です' }],
-    [{ status: 'failed', error: 'worker が落ちた' } as const, 502, { error: 'worker が落ちた' }],
+    [{ status: 'busy' } as const, 503, { error: '評価キューが一杯です', code: 'unavailable' }],
+    [{ status: 'failed', error: 'worker が落ちた' } as const, 502, { error: 'worker が落ちた', code: 'bad_gateway' }],
   ])('候補手の外の手はエンジンの結果をステータスへ写す: %o → %i', async (answer, status, body) => {
     const { deps } = makeDeps(answer);
     const res = await gradeAnswer(BEST, { line: ['1g1f'] }, deps);
@@ -155,27 +155,27 @@ describe('gradeAnswer: 検証の順序（手順の照合 → 局面 → 評価�
   it('次の一手で 2 手以上の手順は 400（局面を作れない問題でも、照合が先）', async () => {
     const { deps } = makeDeps();
     const res = await gradeAnswer({ ...BEST, usiMoves: null }, { line: ['2g2f', '8c8d'] }, deps);
-    expect(res).toEqual({ status: 400, body: { error: '手順が出題と噛み合いません' } });
+    expect(res).toEqual({ status: 400, body: { error: '手順が出題と噛み合いません', code: 'bad_request' } });
   });
 
   it('詰将棋で正解手順のどれの先頭とも合わない手順は 400', async () => {
     const { deps } = makeDeps();
     const res = await gradeAnswer({ ...MATE, usiMoves: null }, { line: ['2g2f', '8c8d', '7g7f'] }, deps);
-    expect(res).toEqual({ status: 400, body: { error: '手順が出題と噛み合いません' } });
+    expect(res).toEqual({ status: 400, body: { error: '手順が出題と噛み合いません', code: 'bad_request' } });
   });
 
   it('局面を作れない問題は 409（評価の手の照合より先）', async () => {
     const { deps } = makeDeps();
     const evaluation = { move: '9a9b' } as unknown as NonNullable<Parameters<typeof gradeAnswer>[1]['evaluation']>;
     const res = await gradeAnswer({ ...BEST, usiMoves: [], moveNumber: 3 }, { line: ['2g2f'], evaluation }, deps);
-    expect(res).toEqual({ status: 409, body: { error: '出題局面を再現できません' } });
+    expect(res).toEqual({ status: 409, body: { error: '出題局面を再現できません', code: 'conflict' } });
   });
 
   it('評価の手が解答の手と違えば 400（指せない手の検証より先）', async () => {
     const { deps } = makeDeps();
     const evaluation = { move: '2g2f' } as unknown as NonNullable<Parameters<typeof gradeAnswer>[1]['evaluation']>;
     const res = await gradeAnswer(BEST, { line: ['5e5d'], evaluation }, deps);
-    expect(res).toEqual({ status: 400, body: { error: '評価の手が解答と噛み合いません' } });
+    expect(res).toEqual({ status: 400, body: { error: '評価の手が解答と噛み合いません', code: 'bad_request' } });
   });
 
   it('駒の無い升からの手は 400 で violations を返す', async () => {
@@ -189,7 +189,7 @@ describe('gradeAnswer: 検証の順序（手順の照合 → 局面 → 評価�
   it('駒の動き方として指せない手は 400（violations なし）', async () => {
     const { deps } = makeDeps();
     const res = await gradeAnswer(BEST, { line: ['7g7e'] }, deps);
-    expect(res).toEqual({ status: 400, body: { error: 'その手は指せません' } });
+    expect(res).toEqual({ status: 400, body: { error: 'その手は指せません', code: 'bad_request' } });
   });
 
   it('検証で落ちたときは記録もエンジンも呼ばない', async () => {

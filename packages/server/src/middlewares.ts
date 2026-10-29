@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
+import { apiError } from './api-error.js';
 
 // 比較の所要時間から鍵を推測されないよう定数時間で比べる。長さの違いも漏らさないよう、
 // 両方をハッシュして同じ長さにそろえてから比べる
@@ -45,7 +46,7 @@ export function isTrustedOrigin(origin: string | undefined, trusted: readonly st
 export function originRequired(trusted: readonly string[]): MiddlewareHandler {
   return async (c, next) => {
     if (!isTrustedOrigin(c.req.header('Origin'), trusted)) {
-      return c.json({ error: 'origin not allowed' } as const, 403);
+      return apiError(c, 403, 'forbidden', 'origin not allowed');
     }
     await next();
   };

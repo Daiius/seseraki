@@ -9,6 +9,7 @@ import {
   browserAnalysisStartSchema,
 } from 'shared';
 import { zv } from '../zod-validator.js';
+import { apiError, NOT_FOUND } from '../api-error.js';
 import { sessionRequired } from '../auth.js';
 import {
   browserClaimedProfile,
@@ -37,9 +38,9 @@ export const browserAnalysisRoutes = new Hono()
     async (c) => {
       const { no } = c.req.valid('param');
       const started = await startBrowserAnalysis(c.get('tx'), c.get('userId'), no, c.req.valid('json'));
-      if (started === null) return c.json({ error: 'not found' } as const, 404);
+      if (started === null) return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       if (started.status === 'wrong-assignee') {
-        return c.json({ error: '解析の担当がブラウザではありません' } as const, 409);
+        return apiError(c, 409, 'conflict', '解析の担当がブラウザではありません');
       }
       return c.json(started);
     },
@@ -86,11 +87,11 @@ export const browserAnalysisRoutes = new Hono()
       });
       switch (outcome.status) {
         case 'not-found':
-          return c.json({ error: 'not found' } as const, 404);
+          return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
         case 'out-of-range':
-          return c.json({ error: 'moveNumber out of range' } as const, 400);
+          return apiError(c, 400, 'bad_request', 'moveNumber out of range');
         case 'not-contiguous':
-          return c.json({ error: 'moveNumber not contiguous' } as const, 400);
+          return apiError(c, 400, 'bad_request', 'moveNumber not contiguous');
         case 'ignored':
           return c.json(
             { ok: true, applied: false, completed: false, stageCompleted: false, profile: null } as const,
@@ -127,7 +128,7 @@ export const browserAnalysisRoutes = new Hono()
         assignee: 'browser',
         stage: 'full',
       });
-      if (result === null) return c.json({ error: 'not found' } as const, 404);
+      if (result === null) return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
       return c.json({ ok: true, applied: result.applied } as const, 201);
     },
   )

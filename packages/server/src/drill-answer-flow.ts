@@ -14,6 +14,7 @@ import {
   type BoardState,
   type DrillNamedEvaluation,
 } from 'shared';
+import { errorBody } from './api-error.js';
 import type { AnalysisAssignee } from './analysis-report.js';
 import {
   DEFAULT_SCORING,
@@ -83,9 +84,9 @@ export function engineAnswerResponse(answer: EngineAnswer, reveal: ReturnType<ty
     case 'pending':
       return { body: { status: 'pending' as const, jobId: answer.jobId }, status: 202 as const };
     case 'busy':
-      return { body: { error: '評価キューが一杯です' }, status: 503 as const };
+      return { body: errorBody('unavailable', '評価キューが一杯です'), status: 503 as const };
     case 'failed':
-      return { body: { error: answer.error }, status: 502 as const };
+      return { body: errorBody('bad_gateway', answer.error), status: 502 as const };
     case 'evaluate':
       // 🔒 **答えは載せない**（`reveal` を付けない）。局面・利用者の手・読む設定だけ
       return {
@@ -160,27 +161,30 @@ export async function gradeAnswer(drill: AnswerDrill, request: AnswerRequest, de
   // 1. 手順の照合（局面を作る前）。覚えた別解だけで照らすと、「最初からやり直す」で元の手順を指したときに 400 になる
   const mateMatch = drill.kind === 'mate' ? matchMateLine([deps.recallLine(id), drill.answerPv], line) : null;
   if (drill.kind === 'best' ? line.length !== 1 : mateMatch?.state === 'mismatch') {
-    return { body: { error: '手順が出題と噛み合いません' }, status: 400 as const };
+    return { body: errorBody('bad_request', '手順が出題と噛み合いません'), status: 400 as const };
   }
 
   // 2. 出題局面 → `line` の 1 手前まで進めた局面。ここがユーザーの手を指す局面
   const base = drillPosition(drill.usiMoves, drill.moveNumber);
-  if (!base) return { body: { error: '出題局面を再現できません' }, status: 409 as const };
+  if (!base) return { body: errorBody('conflict', '出題局面を再現できません'), status: 409 as const };
   const move = line[line.length - 1];
   // 3. 評価の手との一致
   if (evaluation && evaluation.move !== move) {
-    return { body: { error: '評価の手が解答と噛み合いません' }, status: 400 as const };
+    return { body: errorBody('bad_request', '評価の手が解答と噛み合いません'), status: 400 as const };
   }
   const state = applyLine(base, line.slice(0, -1));
-  if (!state) return { body: { error: '手順を再現できません' }, status: 400 as const };
+  if (!state) return { body: errorBody('bad_request', '手順を再現できません'), status: 400 as const };
 
   // 4. 指せる手か。エンジンに渡す前の検証（prd/12 §2.5。クラッシュ・ハングさせうる手を落とす）と、駒の動き方
   const check = validateMoveOnPosition(state, move);
   if (!check.ok) {
-    return { body: { error: 'その手は指せません', violations: check.violations }, status: 400 as const };
+    return {
+      body: errorBody('bad_request', 'その手は指せません', { violations: check.violations }),
+      status: 400 as const,
+    };
   }
   if (!isReachableMove(state, move)) {
-    return { body: { error: 'その手は指せません' }, status: 400 as const };
+    return { body: errorBody('bad_request', 'その手は指せません'), status: 400 as const };
   }
 
   // 解答後にだけ返す情報（ネタバレ回避。prd/13 §7）。棋譜は番号で返す（prd/14 §4.4）

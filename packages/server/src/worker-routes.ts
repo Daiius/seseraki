@@ -15,6 +15,7 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { systemDb } from './db/system.js';
 import { kifus, kifuAnalyses, users } from './db/schema.js';
 import { apiKeyRequired } from './middlewares.js';
+import { apiError } from './api-error.js';
 import { idParam, INT4_MAX } from './params.js';
 import { ComposeVerificationError } from './kif/compose.js';
 import { formatDiff, importVideoKifu, videoKifuInputSchema } from './video-analysis.js';
@@ -62,7 +63,7 @@ export const workerRoutes = new Hono()
         // それ以外（DB の失敗など）は投げ直して 500 にする（内部のエラー文を応答に載せない）
         if (!(e instanceof ComposeVerificationError)) throw e;
         console.warn(`[VideoAnalysis] 取り込み中止 ${tag}: ${e.message}`);
-        return c.json({ error: e.message }, 422);
+        return apiError(c, 422, 'unprocessable', e.message);
       }
       if (result.created) {
         console.log(
@@ -294,7 +295,7 @@ export const workerRoutes = new Hono()
       // 🔴 候補手の rank は局面ごとに 1..n の連番であること（prd/16 §4.1）。保存形は rank を
       // 配列の位置から戻すので、欠番のまま受けると黙って書き換わる。DB を読む前に弾く
       if (!analyses.every((a) => hasContiguousRanks(a.candidates))) {
-        return c.json({ error: 'candidate ranks not contiguous' } as const, 400);
+        return apiError(c, 400, 'bad_request', 'candidate ranks not contiguous');
       }
       // 書き込みの本体はブラウザ解析の受け口と共用（`analysis-report.ts`。prd/14 §5.8）。
       // 世代の照合・完了の確定・`fullCount` の規則を 2 本に分けない
@@ -315,10 +316,10 @@ export const workerRoutes = new Hono()
         }),
       );
       if (outcome.status === 'out-of-range') {
-        return c.json({ error: 'moveNumber out of range' } as const, 400);
+        return apiError(c, 400, 'bad_request', 'moveNumber out of range');
       }
       if (outcome.status === 'not-contiguous') {
-        return c.json({ error: 'moveNumber not contiguous' } as const, 400);
+        return apiError(c, 400, 'bad_request', 'moveNumber not contiguous');
       }
       // ⚠ 破棄（古い世代・担当違い・棋譜が無い）は 201 `applied: false`。**4xx にしない**
       // ——手元 worker は 4xx を恒久失敗として記録する（担当の切り替えのたびに失敗が残ってしまう）

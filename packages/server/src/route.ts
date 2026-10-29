@@ -24,7 +24,9 @@
  */
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { HTTPException } from 'hono/http-exception';
 import { logger } from 'hono/logger';
+import { apiError, errorCodeOf } from './api-error.js';
 import { auth, settings as authSettings } from './auth.js';
 import { devLoginRoutes } from './dev-login.js';
 import { originRequiredForWrites } from './middlewares.js';
@@ -39,6 +41,22 @@ import { workerRoutes } from './worker-routes.js';
 export type { SourceTzChoice } from './kifu-queries.js';
 
 export const app = new Hono().basePath('/api');
+
+/**
+ * 例外を JSON のエラー応答にする（`api-error.ts`）。分けたルート（`routes/*.ts`・`worker-routes.ts`）にも効く
+ * （自前の `onError` を持たない子は親のものを使う）。
+ * - `HTTPException`（本文の JSON が壊れているときの 400 など）: その状態コードで、文は種類の既定の文
+ * - それ以外: 500 の `internal`。🔒 **例外の文言を本文に載せない**（ログにだけ出す）
+ *
+ * ⚠ ログインの経路のトランザクションは、ここで応答を作った後に `sessionRequired` が `c.error` を見て戻す
+ */
+app.onError((err, c) => {
+  if (err instanceof HTTPException && err.status < 500) {
+    return apiError(c, err.status, errorCodeOf(err.status));
+  }
+  console.error(err);
+  return apiError(c, 500, 'internal');
+});
 
 /**
  * Origin の検査（`originRequiredForWrites`）から外すパスの接頭辞。

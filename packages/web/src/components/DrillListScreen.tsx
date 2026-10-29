@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link, useNavigate, useRouter } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
-import { option, STATUSES, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
+import { callApi } from '../lib/callApi';
+import { STATUSES, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
+import { option } from '../lib/searchParams';
 import { refParam, type loadList } from '../lib/drillApi';
 import { DrillCardList } from './DrillCards';
 
@@ -30,19 +32,16 @@ export function DrillListScreen({
   async function unexclude(ref: DrillRef) {
     // 🔴 **応答を確かめてから引き直す**（レビュー `OCL-63C7DD79`）。POST だけが失敗して
     // GET が成功すると、**除外されたままの一覧が普通に描き直される**
-    try {
-      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].unexclude.$post({
-        param: refParam(ref),
-      });
-      if (!res.ok) {
-        setActionError(`除外を取り消せませんでした (${res.status})`);
-        return;
-      }
-      setActionError(null);
-      await router.invalidate();
-    } catch {
-      setActionError('サーバーに接続できません');
+    const result = await callApi(
+      client.api.drills[':kifuNo'][':moveNumber'][':kind'].unexclude.$post({ param: refParam(ref) }),
+      { fallback: (status) => `除外を取り消せませんでした (${status})` },
+    );
+    if (!result.ok) {
+      setActionError(result.error);
+      return;
     }
+    setActionError(null);
+    await router.invalidate();
   }
 
   return (

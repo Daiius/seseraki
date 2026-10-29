@@ -1,47 +1,30 @@
 import type { CSSProperties } from 'react';
 import { Link } from '@tanstack/react-router';
 import { parseSfen, type BoardState, type PieceKind } from 'shared';
+import type { InferResponseType } from 'hono/client';
 import { BoardGrid, HAND_ORDER, PIECE_DISPLAY } from './BoardGrid';
-import { solveFromListSearch, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
+import { Pager } from './Pager';
+import { client } from '../lib/honoClient';
+import { refOf, solveFromListSearch, type DrillRef, type DrillsSearch } from '../lib/drillSearch';
 import { attemptMoveLabel } from '../lib/drillAnswer';
 
-/**
+/*
  * 出題の問題の一覧（カード）と、その問題の解答履歴（prd/13 §7.7）。
  *
  * 🔴 **答えは出さない**（正解手・実戦の手・損失）。盤の縮図は出題局面なので答えではない。
  * ⚠ 棋譜名と棋譜詳細への導線はカードに載せない（狭い幅を取る。対局へは解いた後の「元の対局」で辿る）。
  * 🔒 問題は（棋譜の番号・手数・種類）で指す（prd/14 §4.4）。出題・解答の行の ID は API から来ない。
  */
-export interface DrillCardRow {
-  kind: 'mate' | 'best';
-  matePlies: number | null;
-  moveNumber: number;
-  /** 棋譜の番号（所有者ごと） */
-  kifuNo: number;
-  /** 出題局面（盤の縮図）。作れない行は null */
-  sfen: string | null;
-  playedAt: string | null;
-  kifuCreatedAt: string;
-  answers: number;
-  excluded: boolean;
-  status: 'unanswered' | 'wrong' | 'correct';
-}
 
-export interface DrillAttemptRow {
-  move: string | null;
-  moveText: string | null;
-  verdict: 'correct' | 'close' | 'wrong' | null;
-  lossCp: number | null;
-  excluded: boolean;
-  createdAt: string;
-  attemptNo: number | null;
-}
+/** 一覧の 1 行（`GET /api/drills` の `drills`） */
+type DrillCardRow = InferResponseType<typeof client.api.drills.$get, 200>['drills'][number];
+type ListPagination = InferResponseType<typeof client.api.drills.$get, 200>['pagination'];
 
-export interface Pagination {
-  page: number;
-  totalPages: number;
-  total: number;
-}
+/** 解答履歴の 1 行（`GET /api/drills/:kifuNo/:moveNumber/:kind/attempts` の `attempts`） */
+export type DrillAttemptRow = InferResponseType<
+  (typeof client.api.drills)[':kifuNo'][':moveNumber'][':kind']['attempts']['$get'],
+  200
+>['attempts'][number];
 
 /** 状態の札（prd/13 §7.7）。除外は状態より優先して出す */
 const STATUS_BADGE = {
@@ -58,7 +41,7 @@ const VERDICT_BADGE = {
 } as const;
 
 /** 種類（詰将棋なら手数。出題中のバッジと同じエンジンの手数） */
-export function drillKindText(kind: 'mate' | 'best', matePlies: number | null): string {
+function drillKindText(kind: 'mate' | 'best', matePlies: number | null): string {
   if (kind === 'best') return '次の一手';
   return matePlies === null ? '詰将棋' : `詰将棋 ${matePlies}手`;
 }
@@ -70,40 +53,6 @@ function dateText(value: string | null, fallback?: string): string {
 
 function timeText(value: string): string {
   return new Date(value).toLocaleString('ja-JP');
-}
-
-/** 行が指す問題（棋譜の番号・手数・種類。prd/14 §4.4） */
-function refOf(row: { kifuNo: number; moveNumber: number; kind: 'mate' | 'best' }): DrillRef {
-  return { kifuNo: row.kifuNo, moveNumber: row.moveNumber, kind: row.kind };
-}
-
-/** ページ送り。**1 ページに収まるときは出さない**（棋譜一覧と同じ見せ方） */
-export function Pager({
-  pagination,
-  onPage,
-}: {
-  pagination: Pagination;
-  onPage: (page: number) => void;
-}) {
-  if (pagination.totalPages <= 1) return null;
-  const { page, totalPages } = pagination;
-  return (
-    <div className="join mt-4 flex justify-center">
-      <button className="join-item btn" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-        «
-      </button>
-      <button className="join-item btn">
-        {page} / {totalPages}
-      </button>
-      <button
-        className="join-item btn"
-        disabled={page >= totalPages}
-        onClick={() => onPage(page + 1)}
-      >
-        »
-      </button>
-    </div>
-  );
 }
 
 /** 盤の縮図の 1 マスの寸法。カードを横に並べても 1 列のスマホ幅に収まる大きさ */
@@ -127,7 +76,7 @@ function MiniHand({ hand, mark }: { hand: Partial<Record<PieceKind, number>>; ma
  * 出題局面の小さな盤の縮図（prd/13 §7.7）。**解く画面と同じ向き**（解く側を下）。
  * 盤は解く画面・検討盤と同じ `BoardGrid` を、マスの寸法（`--sq`）だけ小さくして描く（盤の見た目を複製しない）
  */
-export function DrillThumbnail({ state }: { state: BoardState }) {
+function DrillThumbnail({ state }: { state: BoardState }) {
   const flipped = state.sideToMove === 'gote';
   const top = flipped ? 'sente' : 'gote';
   const bottom = flipped ? 'gote' : 'sente';
@@ -152,7 +101,7 @@ export function DrillCardList({
   onUnexclude,
 }: {
   rows: DrillCardRow[];
-  pagination: Pagination;
+  pagination: ListPagination;
   /** 今の一覧の検索パラメータ（開いた問題から同じ一覧へ戻るため） */
   search: DrillsSearch;
   /** 絞り込みが掛かっているか。**0 件の案内を出し分ける**（prd/05 §2.5 と同じ姿勢） */

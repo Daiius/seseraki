@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { usiToJapaneseWithPiece, type BoardState } from 'shared';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import { refParam, type Drill, type Reveal } from '../lib/drillApi';
 import { matePliesText, movesText, practiceNote, resultBadge } from '../lib/drillAnswer';
-import { MODE_LABEL, modeSearch, type DrillMode } from '../lib/drillSearch';
+import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
 import { DrillAttemptHistory, type DrillAttemptRow } from './DrillCards';
 import { ChevronDownIcon, DrillModeIcon } from './icons';
 
@@ -44,7 +45,7 @@ export function Result({
   ) : (
     '一覧に戻る'
   );
-  const otherModes = (['recommend', 'mate', 'best', 'wrong'] as const).filter((other) => other !== mode);
+  const otherModes = MODES.filter((other) => other !== mode);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -130,17 +131,16 @@ function AttemptsOf({ drill }: { drill: Drill }) {
   const { kifuNo, moveNumber, kind } = drill;
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].attempts.$get({
+    void (async () => {
+      const result = await callApi(
+        client.api.drills[':kifuNo'][':moveNumber'][':kind'].attempts.$get({
           param: refParam({ kifuNo, moveNumber, kind }),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const body = await res.json();
-        if (!cancelled) setRows(body.attempts);
-      } catch {
-        if (!cancelled) setError('解答履歴を読み込めませんでした');
-      }
+        }),
+      );
+      if (cancelled) return;
+      // 失敗の理由は出さない（履歴は添え物。読めなかったことだけ伝える）
+      if (result.ok) setRows(result.data.attempts);
+      else setError('解答履歴を読み込めませんでした');
     })();
     return () => {
       cancelled = true;

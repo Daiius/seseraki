@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import {
   DEFAULT_MATE_MAX,
   loadMateMax,
@@ -27,7 +28,9 @@ import {
   type StatsSort,
   type StatsTreeRow,
 } from '../lib/statsTactics';
-import type { KifuListSearch } from './index';
+import type { KifuListSearch } from '../lib/kifuListFilter';
+import { dateParam } from '../lib/searchParams';
+import { useDebouncedDraft } from '../lib/useDebouncedDraft';
 
 /**
  * URL に持つのは**集計そのものを変える条件だけ**（期間と詰み手数）。
@@ -43,13 +46,6 @@ export interface StatsSearch {
   to?: string;
   /** 取りこぼしと見なす詰み手数の上限。未指定なら `/settings` の既定値（prd/09 §5） */
   mateMax?: number;
-}
-
-/** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
-function dateParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? raw
-    : undefined;
 }
 
 export const Route = createFileRoute('/stats')({
@@ -74,16 +70,14 @@ export const Route = createFileRoute('/stats')({
     // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は kifus.subjectSide に
     // 導出済み（prd/11 §4）。名前候補が未設定なら全局が「自分未確定」に落ちるが、
     // それは server が数えて `excluded.ambiguousSelf` として返す
-    try {
-      const res = await client.api.stats.tactics.$get({
+    const result = await callApi(
+      client.api.stats.tactics.$get({
         query: { mateMax: deps.mateMax, from: deps.from, to: deps.to },
-      });
-      if (!res.ok)
-        return { stats: null, error: `サーバーエラー (${res.status})` };
-      return { stats: await res.json(), error: null };
-    } catch {
-      return { stats: null, error: 'サーバーに接続できません' };
-    }
+      }),
+    );
+    return result.ok
+      ? { stats: result.data, error: null }
+      : { stats: null, error: result.error };
   },
   component: StatsPage,
 });
@@ -137,24 +131,19 @@ function StatsPage() {
 
   // 詰み手数は**打鍵ごとに反映しない**。1 打鍵ごとに server の集計をやり直すことになり、
   // 取りこぼしは解析結果（`kifu_analyses`）への `EXISTS` を含むクエリ（prd/09 §6.2）。
-  // 空欄や途中の値を弾いて入力を止めないよう、入力欄はドラフトを持つ（一覧の検索欄と同じ形）
-  const [mateMaxDraft, setMateMaxDraft] = useState(String(mateMax));
-
-  // 戻る/進む・`/settings` での変更など、こちら以外の理由で値が変わったら入力欄を追従させる
-  useEffect(() => {
-    setMateMaxDraft(String(mateMax));
-  }, [mateMax]);
-
-  useEffect(() => {
-    const value = Number(mateMaxDraft);
-    if (!isValidMateMax(value) || value === mateMax) return;
-    const timer = setTimeout(() => {
+  // 空欄や途中の値を弾いて入力を止めないよう、入力欄は下書きを持つ（一覧の検索欄と同じ形）。
+  // 戻る/進む・`/settings` での変更など、こちら以外の理由で値が変わったら下書きが追従する
+  const [mateMaxDraft, setMateMaxDraft] = useDebouncedDraft(
+    String(mateMax),
+    (draft) => {
+      const value = Number(draft);
+      if (!isValidMateMax(value) || value === mateMax) return;
       // このページの条件（URL）と次に開いたときの既定値（localStorage）の両方を動かす
       setMateMax(value);
       updateSearch({ mateMax: value });
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [mateMaxDraft, mateMax]);
+    },
+    400,
+  );
 
   const preset = presetOf({ from, to }, new Date());
   const rows = stats ? buildTacticTree(stats.rows, sort, order) : [];

@@ -2,20 +2,15 @@ import { useEffect, useState } from 'react';
 import { ParentSize } from '@visx/responsive';
 import { scaleLinear } from '@visx/scale';
 import { LinePath, AreaClosed } from '@visx/shape';
-import {
-  formatLoss,
-  labelOf,
-  labelText,
-  type MoveLoss,
-  type Thresholds,
-} from 'shared';
+import { formatLoss, labelText, type MoveLoss, type Thresholds } from 'shared';
 import { useDisplaySize } from '../lib/displaySize';
-
-interface EvalPoint {
-  moveNumber: number;
-  /** 先手視点の評価値（cp）。mate の場合は ±3000 にクランプ */
-  value: number;
-}
+import { EVAL_CLAMP } from '../lib/usi';
+import {
+  evalMarkersOf,
+  evalPointsOf,
+  type EvalGraphAnalysis,
+  type EvalPoint,
+} from '../lib/evalGraph';
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(
@@ -31,10 +26,7 @@ function useIsMobile() {
 }
 
 interface EvalGraphProps {
-  analyses: {
-    moveNumber: number;
-    candidates: { rank: number; scoreType: string; scoreValue: number }[];
-  }[];
+  analyses: EvalGraphAnalysis[];
   /** 現在のスライダー位置（ハイライト用） */
   currentMove?: number;
   onClickMove?: (moveNumber: number) => void;
@@ -56,7 +48,7 @@ interface EvalGraphProps {
   } | null;
 }
 
-const CLAMP = 3000;
+const CLAMP = EVAL_CLAMP;
 /**
  * 詰み系マーカーの色。**短手数ほど真っ赤**、長手数ほど通常の悪手マーカー（`--color-error`）の赤に
  * 近づける（prd/05-analysis.md §2.4）。長手数の詰みは気づくのが困難なので、短手数の見逃しほど
@@ -93,16 +85,6 @@ const PADDING_X_DESKTOP = 32;
 const PADDING_X_MOBILE = 14;
 const PADDING_Y = 8;
 
-function toSenteValue(
-  scoreType: string,
-  scoreValue: number,
-  moveNumber: number,
-): number {
-  const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
-  if (scoreType === 'mate') return v > 0 ? CLAMP : -CLAMP;
-  return Math.max(-CLAMP, Math.min(CLAMP, v));
-}
-
 export function EvalGraph({
   analyses,
   currentMove,
@@ -112,41 +94,10 @@ export function EvalGraph({
   userSide,
   branch,
 }: EvalGraphProps) {
-  const points: EvalPoint[] = analyses
-    .filter((a) => a.candidates.length > 0)
-    .sort((a, b) => a.moveNumber - b.moveNumber)
-    .map((a) => {
-      const best = a.candidates.find((c) => c.rank === 1)!;
-      return {
-        moveNumber: a.moveNumber,
-        value: toSenteValue(best.scoreType, best.scoreValue, a.moveNumber),
-      };
-    });
-
-  const pointByMove = new Map(points.map((p) => [p.moveNumber, p]));
-  // マーカーは実手後の局面（moveNumber + 1）に置く。詰みで終わった棋譜は最終局面の解析が無く
-  // 点が存在しないため、その手を指す前の局面に置いて末尾に出す（頓死を見えなくしないため）。
-  // 疑問手はグラフに出さない——俯瞰の用途では悪手と詰み系に絞る（prd/05-analysis.md §2.4）。
+  const points = evalPointsOf(analyses);
+  // 悪手・詰み系のマーカー（置き場所と、疑問手を出さない理由は `evalMarkersOf`）
   const markers =
-    losses && thresholds
-      ? [...losses.values()].flatMap((loss) => {
-          const label = labelOf(loss, thresholds);
-          if (label !== 'blunder' && label !== 'mate') return [];
-          const point =
-            pointByMove.get(loss.moveNumber + 1) ?? pointByMove.get(loss.moveNumber);
-          if (!point) return [];
-          const isSenteMove = loss.moveNumber % 2 === 0;
-          return [
-            {
-              loss,
-              label,
-              point,
-              isSenteMove,
-              isUserMove: !userSide || (userSide === 'sente' ? isSenteMove : !isSenteMove),
-            },
-          ];
-        })
-      : [];
+    losses && thresholds ? evalMarkersOf(points, losses.values(), thresholds, userSide) : [];
 
   const isMobile = useIsMobile();
   const { displaySize } = useDisplaySize();

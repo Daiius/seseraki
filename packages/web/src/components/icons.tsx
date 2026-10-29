@@ -165,6 +165,25 @@ export function AcademicCapIcon({ className = 'size-5' }: IconProps) {
   );
 }
 
+/** メニュー（ellipsis-vertical。ケバブ） */
+export function EllipsisVerticalIcon({ className = 'size-5' }: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      width="24"
+      height="24"
+      strokeWidth={2}
+      stroke="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
+    </svg>
+  );
+}
+
 /** 局面検索（magnifying-glass） */
 export function MagnifyingGlassIcon({ className = 'size-5' }: IconProps) {
   return (

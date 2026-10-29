@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   createFileRoute,
   Link,
+  notFound,
   useNavigate,
   useRouter,
 } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
+import { callApi } from '../../lib/callApi';
+import { intParam } from '../../lib/searchParams';
 import { buildPositions } from 'shared';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { isAnalysisPending } from '../../lib/analysisPending';
@@ -30,6 +33,8 @@ import { KifuMemo } from '../../components/KifuMemo';
 import { LazyDetails } from '../../components/LazyDetails';
 import { TacticTags } from '../../components/TacticTags';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../../lib/touchTargets';
+import { closeMenu } from '../../lib/closeMenu';
+import { EllipsisVerticalIcon } from '../../components/icons';
 
 /** 成功・情報の通知を自動で消すまでの時間（読み切れる長さ。エラーは自動で消さない） */
 const INFO_TOAST_MS = 5_000;
@@ -47,26 +52,22 @@ export interface KifuDetailSearch {
   ply?: number;
 }
 
-/** `ply` は 0（初期局面）以上の整数だけ受ける。それ以外は指定なしと同じ扱い */
-function plyParam(raw: unknown): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
 /**
  * 棋譜詳細。🔒 **パスの `$id` は棋譜の番号**（所有者ごとの連番 `no`。prd/14 §4.4）で、内部の主キーではない。
  * 同じ URL でもログインしている人ごとに別の棋譜を指す
  */
 export const Route = createFileRoute('/kifus/$id')({
+  // `ply` は 0（初期局面）以上の整数だけ受ける。それ以外は指定なしと同じ扱い
   validateSearch: (search: Record<string, unknown>): KifuDetailSearch => ({
-    ply: plyParam(search.ply),
+    ply: intParam(search.ply, 0),
   }),
+  // 無い棋譜（他人の棋譜も同じ 404）は「見つかりません」、それ以外の失敗は状態コードを含めて
+  // 「読み込めませんでした」（どちらもルートの既定の表示。`components/RouteFallbacks.tsx`）
   loader: async ({ params }) => {
-    const res = await client.api.kifus[':no'].$get({
-      param: { no: params.id },
-    });
-    if (!res.ok) throw new Error('Kifu not found');
-    return await res.json();
+    const result = await callApi(client.api.kifus[':no'].$get({ param: { no: params.id } }));
+    if (result.ok) return result.data;
+    if (result.status === 404) throw notFound();
+    throw new Error(`棋譜を読み込めませんでした: ${result.error}`);
   },
   component: KifuDetailPage,
 });
@@ -143,37 +144,20 @@ function KifuDetailPage() {
   // USI 指し手列から盤面を構築。全局面はここで 1 度だけ作り、盤面へ渡す
   const positions = buildPositions(usiMoves);
 
-  /**
-   * kebab メニューを閉じる。
-   *
-   * daisyUI の dropdown は JS を持たず `:focus` / `:focus-within` で開閉するため、
-   * 中の項目を押してもフォーカスが内側に残ったままで開きっぱなしになる。
-   * 押した要素のフォーカスを明示的に外して閉じる。
-   */
-  const closeMenu = () => {
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-  };
-
   const handleDelete = async () => {
     if (!confirm('この棋譜を削除しますか？')) return;
     setActionResult(null);
     setBusy(true);
-    try {
-      const res = await client.api.kifus[':no'].$delete({
-        param: { no: String(kifu.no) },
-      });
-      if (!res.ok) {
-        setActionResult({ kind: 'error', message: `削除に失敗しました (${res.status})` });
-        return;
-      }
-      navigate({ to: '/' });
-    } catch {
-      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
-    } finally {
-      setBusy(false);
+    const result = await callApi(
+      client.api.kifus[':no'].$delete({ param: { no: String(kifu.no) } }),
+      { fallback: (status) => `削除に失敗しました (${status})` },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setActionResult({ kind: 'error', message: result.error });
+      return;
     }
+    navigate({ to: '/' });
   };
 
   // kifText を再変換して解析状態をリセットし、worker に拾い直させる。
@@ -182,24 +166,20 @@ function KifuDetailPage() {
     setActionResult(null);
     setDismissedError(null);
     setBusy(true);
-    try {
-      const res = await client.api.kifus[':no'].reanalyze.$post({
-        param: { no: String(kifu.no) },
-      });
-      if (!res.ok) {
-        setActionResult({ kind: 'error', message: `再解析に失敗しました (${res.status})` });
-        return;
-      }
-      setActionResult({
-        kind: 'info',
-        message: '再解析を開始しました。完了までしばらくかかります',
-      });
-      router.invalidate();
-    } catch {
-      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
-    } finally {
-      setBusy(false);
+    const result = await callApi(
+      client.api.kifus[':no'].reanalyze.$post({ param: { no: String(kifu.no) } }),
+      { fallback: (status) => `再解析に失敗しました (${status})` },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setActionResult({ kind: 'error', message: result.error });
+      return;
     }
+    setActionResult({
+      kind: 'info',
+      message: '再解析を開始しました。完了までしばらくかかります',
+    });
+    router.invalidate();
   };
 
   // 主体側は server が導出済み（prd/11 §4）
@@ -240,19 +220,10 @@ function KifuDetailPage() {
             className={ICON_BTN}
             aria-label="メニュー"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth={2}
-              stroke="currentColor"
-              className="size-5"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
-            </svg>
+            <EllipsisVerticalIcon />
           </button>
           <ul tabIndex={0} className={clsx(MENU_LIST, 'w-32')}>
-            {/* メニュー項目は押しても dropdown が閉じないので、実行前に明示的に閉じる */}
+            {/* メニュー項目は押しても dropdown が閉じないので、実行前に明示的に閉じる（`lib/closeMenu.ts`） */}
             <li>
               <button
                 onClick={() => {

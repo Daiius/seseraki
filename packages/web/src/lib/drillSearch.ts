@@ -1,3 +1,5 @@
+import { intParam, option, pageParam } from './searchParams';
+
 /**
  * 出題（`/drills`）の検索パラメータ（prd/13 §7.8）。ルートから切り出した純ロジック。
  *
@@ -66,23 +68,9 @@ export const MODE_LABEL: Record<DrillMode, string> = {
   wrong: '間違えた問題',
 };
 
-/** 許可値でなければ落とす（URL 直入力の未知の値は既定に戻す） */
-export function option<T extends string>(values: readonly T[], raw: unknown): T | undefined {
-  return values.find((v) => v === raw);
-}
-
-/** 正の整数だけを受ける。1 は既定なので URL に載せない */
-function pageParam(raw: unknown): number | undefined {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 1 ? value : undefined;
-}
-
-/** 整数で `min` 以上の値だけを受ける */
-function intParam(raw: unknown, min: number): number | undefined {
-  // ⚠ 空文字・null は `Number` で 0 になるので先に落とす
-  if (raw === '' || raw === null || raw === undefined) return undefined;
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= min ? value : undefined;
+/** 出題（`/drills/next` が返す 1 問・一覧の行）から、それを指す組だけを取り出す */
+export function refOf(drill: DrillRef): DrillRef {
+  return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
 }
 
 /** 問題を指す 3 つ組。**揃っていれば**組を、1 つでも欠けていれば null */

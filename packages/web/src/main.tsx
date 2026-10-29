@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
 import { initDisplaySize } from './lib/displaySize';
+import { RouteError, RouteNotFound } from './components/RouteFallbacks';
 import './app.css';
 
 // 🔴 **同じ URL の読み込み（`router.invalidate()`）でページ先頭へ戻さない。** router-core 1.171 は
@@ -13,6 +14,9 @@ import './app.css';
 let lastRenderedHref: string | undefined;
 const router = createRouter({
   routeTree,
+  // loader の失敗・無いページの表示（ルートのレイアウトの中に出る）
+  defaultErrorComponent: RouteError,
+  defaultNotFoundComponent: RouteNotFound,
   scrollRestoration: ({ location }) => {
     const changed = location.href !== lastRenderedHref;
     lastRenderedHref = location.href;

@@ -2,7 +2,6 @@ import { useRef, useState, type Ref } from 'react';
 import clsx from 'clsx';
 import { Link } from '@tanstack/react-router';
 import {
-  applyMove,
   computeMoveLosses,
   formatLoss,
   labelOf,
@@ -23,27 +22,14 @@ import {
   pvTexts,
   toSenteEval,
 } from '../lib/usi';
+import { displayOf, evalMoveNumberOf } from '../lib/kifuView';
 import { StudyBoard } from './StudyBoard';
 import type { StudySession } from '../lib/study';
 import { BoardControls } from './BoardControls';
 import { CandidateLine } from './CandidateLine';
 import { EvalGraph } from './EvalGraph';
+import { MagnifyingGlassIcon } from './icons';
 import type { AnalysisProfile } from '../lib/analysisProgress';
-
-const ICON_PROPS = {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  strokeWidth: 2,
-  stroke: 'currentColor',
-  className: 'size-5',
-} as const;
-
-const IconSearch = () => (
-  <svg {...ICON_PROPS} className="size-4 md:hidden">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m2.1-5.4a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z" />
-  </svg>
-);
 
 interface Analysis {
   moveNumber: number;
@@ -144,20 +130,15 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     if (next !== moveIndex || branchRank !== null) goToMain(next);
   };
 
-  // moveIndex N の盤面 = N 手指した後の局面
-  // この局面に至った手の解析 = moveNumber N-1 の解析結果
-  // moveIndex 0 の場合は moveNumber 0（初期局面からの候補手）
-  const prevAnalysis = sortedAnalyses.find(
-    (a) => a.moveNumber === (moveIndex > 0 ? moveIndex - 1 : 0),
-  );
+  // この局面に至った手の解析（手数の決め方は `evalMoveNumberOf`）
+  const evalMoveNumber = evalMoveNumberOf(moveIndex);
+  const prevAnalysis = sortedAnalyses.find((a) => a.moveNumber === evalMoveNumber);
 
   // 現在の局面（moveIndex）の解析 → 実手後の局面評価値
   const currentAnalysis = sortedAnalyses.find(
     (a) => a.moveNumber === moveIndex,
   );
   const currentBest = currentAnalysis?.candidates.find((c) => c.rank === 1);
-
-  const evalMoveNumber = moveIndex > 0 ? moveIndex - 1 : 0;
 
   // 初期局面では「直前の実手」が無いので判定を出さない（evalMoveNumber は 0 に丸められている）
   const currentLoss = moveIndex > 0 ? losses.get(evalMoveNumber) ?? null : null;
@@ -167,40 +148,21 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
     ? prevAnalysis?.candidates.find((c) => c.rank === branchRank) ?? null
     : null;
   const branchPv = branchCandidate?.pv ?? null;
-  // 🔴 **進めた手数は今の読み筋の長さで頭打ちにする。** 分岐を開いたまま解析が進むと（quick → full・再解析）、
-  // 同じ順位の読み筋が短くなることがある。頭打ちにしないと存在しない手を `applyMove` に渡して落ちる
-  const branchDepth = Math.min(storedBranchDepth, branchPv?.length ?? 0);
-  const branchActive = branchRank !== null
-    && branchDepth > 0
-    && branchPv !== null
-    && branchPv.length > 0;
-
-  // 表示用：盤面・直前手・直前手前局面・直前手の手番
-  let displayState: BoardState;
-  let displayedMove: string | undefined;
-  let displayedMovePreState: BoardState | undefined;
-  let displayedMoveNum = 0;
-
-  if (branchActive && branchPv) {
-    const base = positions[evalMoveNumber];
-    let st = base;
-    let preSt = base;
-    for (let i = 0; i < branchDepth; i++) {
-      preSt = st;
-      st = applyMove(st, branchPv[i]);
-    }
-    displayState = st;
-    displayedMove = branchPv[branchDepth - 1];
-    displayedMovePreState = preSt;
-    displayedMoveNum = evalMoveNumber + (branchDepth - 1);
-  } else {
-    displayState = positions[moveIndex];
-    if (moveIndex > 0) {
-      displayedMove = usiMoves[moveIndex - 1];
-      displayedMovePreState = positions[moveIndex - 1];
-      displayedMoveNum = moveIndex - 1;
-    }
-  }
+  // 表示する局面・直前の手（分岐の手数の頭打ちも `displayOf`）
+  const {
+    branchActive,
+    branchDepth,
+    state: displayState,
+    lastMove: displayedMove,
+    lastMovePreState: displayedMovePreState,
+    lastMoveNumber: displayedMoveNum,
+  } = displayOf({
+    positions,
+    usiMoves,
+    moveIndex,
+    branchPv,
+    branchDepth: storedBranchDepth,
+  });
 
   const lastMoveTo = displayedMove ? moveDestination(displayedMove) : null;
 
@@ -440,7 +402,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
             aria-label="この局面を探す"
             title="この局面を通った他の棋譜と、そこからの分岐を見る"
           >
-            <IconSearch />
+            <MagnifyingGlassIcon className="size-4 md:hidden" />
             <span className="hidden md:inline">この局面を探す</span>
           </Link>
           <span className="font-mono text-base-content/60">

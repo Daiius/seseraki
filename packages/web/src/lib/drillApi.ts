@@ -1,5 +1,6 @@
 import { client } from './honoClient';
 import { abortableSleep } from './abortableSleep';
+import { callApi, CONNECTION_ERROR, serverErrorText } from './callApi';
 import type { AnalysisAssignee } from './auth';
 import type { DrillMode, DrillRef, DrillsSearch } from './drillSearch';
 import {
@@ -32,24 +33,16 @@ export type Drill = NonNullable<Awaited<ReturnType<typeof loadOne>>['drill']>;
 export type SolveData = { drill: Drill | null; error: string | null };
 
 export async function loadCounts() {
-  try {
-    const res = await client.api.drills.counts.$get();
-    if (!res.ok) return { counts: null, error: `サーバーエラー (${res.status})` };
-    return { counts: await res.json(), error: null };
-  } catch {
-    return { counts: null, error: 'サーバーに接続できません' };
-  }
+  const result = await callApi(client.api.drills.counts.$get());
+  return result.ok ? { counts: result.data, error: null } : { counts: null, error: result.error };
 }
 
 export async function loadNext(mode: DrillMode, since: string | null) {
-  try {
-    const res = await client.api.drills.next.$get({ query: { mode, ...(since ? { since } : {}) } });
-    if (!res.ok) return { drill: null, now: null, error: `サーバーエラー (${res.status})` };
-    const body = await res.json();
-    return { drill: body.drill, now: body.now, error: null };
-  } catch {
-    return { drill: null, now: null, error: 'サーバーに接続できません' };
-  }
+  const result = await callApi(
+    client.api.drills.next.$get({ query: { mode, ...(since ? { since } : {}) } }),
+  );
+  if (!result.ok) return { drill: null, now: null, error: result.error };
+  return { drill: result.data.drill, now: result.data.now, error: null };
 }
 
 /** 問題を指す組（棋譜の番号・手数・種類。prd/14 §4.4）を API のパス引数へ */
@@ -61,40 +54,32 @@ export function refParam(ref: DrillRef) {
   };
 }
 
-/** 出題（`/drills/next` などが返す 1 問）から、それを指す組を取り出す */
-export function refOf(drill: DrillRef): DrillRef {
-  return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
-}
-
 /** 名指しの 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
 export async function loadOne(ref: DrillRef) {
-  try {
-    const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].$get({
-      param: refParam(ref),
-    });
-    if (res.status === 404) return { drill: null, now: null, error: '出題が見つかりません' };
-    if (!res.ok) return { drill: null, now: null, error: `サーバーエラー (${res.status})` };
-    const body = await res.json();
-    return { drill: body.drill, now: body.now, error: null };
-  } catch {
-    return { drill: null, now: null, error: 'サーバーに接続できません' };
+  const result = await callApi(
+    client.api.drills[':kifuNo'][':moveNumber'][':kind'].$get({ param: refParam(ref) }),
+  );
+  if (!result.ok) {
+    return {
+      drill: null,
+      now: null,
+      error: result.status === 404 ? '出題が見つかりません' : result.error,
+    };
   }
+  return { drill: result.data.drill, now: result.data.now, error: null };
 }
 
 export async function loadList(search: DrillsSearch) {
-  try {
-    const res = await client.api.drills.$get({
+  const result = await callApi(
+    client.api.drills.$get({
       query: {
         page: search.page ?? 1,
         ...(search.kind ? { kind: search.kind } : {}),
         ...(search.solved ? { status: search.solved } : {}),
       },
-    });
-    if (!res.ok) return { list: null, error: `サーバーエラー (${res.status})` };
-    return { list: await res.json(), error: null };
-  } catch {
-    return { list: null, error: 'サーバーに接続できません' };
-  }
+    }),
+  );
+  return result.ok ? { list: result.data, error: null } : { list: null, error: result.error };
 }
 
 /** 解答後に server が明かす情報（prd/13 §5.3） */
@@ -249,7 +234,7 @@ export async function requestAnswer(
   } catch {
     // 取り下げで fetch が中断された（AbortError）のは通信断ではない
     if (signal.aborted) return ABORTED;
-    return { kind: 'fail', text: 'サーバーに接続できません', waitEngineFrom: null };
+    return { kind: 'fail', text: CONNECTION_ERROR, waitEngineFrom: null };
   }
 }
 
@@ -272,9 +257,9 @@ export async function requestGiveUp(
     const step = answerStepOf<Reveal>(res.status, await res.json().catch(() => null));
     if (signal.aborted) return ABORTED;
     if (step.kind === 'done') return step;
-    return { kind: 'error', text: step.kind === 'error' ? step.text : `サーバーエラー (${res.status})` };
+    return { kind: 'error', text: step.kind === 'error' ? step.text : serverErrorText(res.status) };
   } catch {
     if (signal.aborted) return ABORTED;
-    return { kind: 'error', text: 'サーバーに接続できません' };
+    return { kind: 'error', text: CONNECTION_ERROR };
   }
 }

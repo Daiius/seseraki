@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useRouter } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 
 export function KifuMemo({
   kifuNo,
@@ -18,22 +19,17 @@ export function KifuMemo({
   const handleSave = async () => {
     setError(null);
     setSaving(true);
-    try {
-      const res = await client.api.kifus[':no'].$patch({
-        param: { no: String(kifuNo) },
-        json: { memo: draft },
-      });
-      if (!res.ok) {
-        setError(`保存失敗 (${res.status})`);
-        return;
-      }
-      setDraft('');
-      router.invalidate();
-    } catch {
-      setError('サーバーに接続できません');
-    } finally {
-      setSaving(false);
+    const result = await callApi(
+      client.api.kifus[':no'].$patch({ param: { no: String(kifuNo) }, json: { memo: draft } }),
+      { fallback: (status) => `保存失敗 (${status})` },
+    );
+    setSaving(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
     }
+    setDraft('');
+    router.invalidate();
   };
 
   return (

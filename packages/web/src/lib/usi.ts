@@ -23,6 +23,9 @@ export function mateLineOf(
   return classifyMateLine(state, pv, scoreValue);
 }
 
+/** 表示用の評価値の上下限（cp）。詰みはこの値に張り付く */
+export const EVAL_CLAMP = 3000;
+
 /**
  * 保存値（手番視点）を先手視点へ正規化し、±3000 にクランプする。
  * **表示用途に限る**——悪手判定（CPL）は同一局面内で最善手と実手を比べるため
@@ -30,84 +33,8 @@ export function mateLineOf(
  */
 export function toSenteEval(scoreType: string, scoreValue: number, moveNumber: number): number {
   const v = moveNumber % 2 === 1 ? -scoreValue : scoreValue;
-  if (scoreType === 'mate') return v > 0 ? 3000 : -3000;
-  return Math.max(-3000, Math.min(3000, v));
-}
-
-const COL_MAP: Record<string, string> = {
-  '1': '１',
-  '2': '２',
-  '3': '３',
-  '4': '４',
-  '5': '５',
-  '6': '６',
-  '7': '７',
-  '8': '８',
-  '9': '９',
-};
-
-// USI row (a-i) → 漢数字 (一-九)
-const ROW_MAP: Record<string, string> = {
-  a: '一',
-  b: '二',
-  c: '三',
-  d: '四',
-  e: '五',
-  f: '六',
-  g: '七',
-  h: '八',
-  i: '九',
-};
-
-// USI row (a-i) → 算用数字 (1-9)
-const ROW_NUM: Record<string, string> = {
-  a: '1',
-  b: '2',
-  c: '3',
-  d: '4',
-  e: '5',
-  f: '6',
-  g: '7',
-  h: '8',
-  i: '9',
-};
-
-const PIECE_MAP: Record<string, string> = {
-  P: '歩',
-  L: '香',
-  N: '桂',
-  S: '銀',
-  G: '金',
-  B: '角',
-  R: '飛',
-};
-
-/**
- * USI 表記を簡易日本語表記に変換
- *
- * - "7g7f"   → "７六(77)"
- * - "7g7f+"  → "７六成(77)"
- * - "B*5c"   → "５三角打"
- */
-export function usiToJapanese(usi: string): string {
-  // 駒打ち: "B*5c"
-  const dropMatch = usi.match(/^([PLNSGBR])\*(\d)([a-i])$/);
-  if (dropMatch) {
-    const [, piece, col, row] = dropMatch;
-    return `${COL_MAP[col]}${ROW_MAP[row]}${PIECE_MAP[piece]}打`;
-  }
-
-  // 通常の移動: "7g7f" or "7g7f+"
-  const moveMatch = usi.match(/^(\d)([a-i])(\d)([a-i])(\+?)$/);
-  if (moveMatch) {
-    const [, fromCol, fromRow, toCol, toRow, promote] = moveMatch;
-    const dest = `${COL_MAP[toCol]}${ROW_MAP[toRow]}`;
-    const from = `${fromCol}${ROW_NUM[fromRow]}`;
-    const suffix = promote ? '成' : '';
-    return `${dest}${suffix}(${from})`;
-  }
-
-  return usi;
+  if (scoreType === 'mate') return v > 0 ? EVAL_CLAMP : -EVAL_CLAMP;
+  return Math.max(-EVAL_CLAMP, Math.min(EVAL_CLAMP, v));
 }
 
 /**

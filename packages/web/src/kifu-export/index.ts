@@ -6,6 +6,7 @@
  */
 
 import { turnSymbol } from '../lib/usi';
+import { winnerOf } from '../lib/kifuResult';
 import {
   DEFAULT_THRESHOLDS,
   applyMove,
@@ -117,11 +118,9 @@ function formatResult(code: string | null | undefined): string | null {
     if (code.includes('IMPASSE')) return '入玉宣言（持将棋）';
     return '引き分け';
   }
-  const winner = code.startsWith('SENTE_WIN_')
-    ? '先手の'
-    : code.startsWith('GOTE_WIN_')
-      ? '後手の'
-      : null;
+  // 勝った側の読み方は一覧の勝敗バッジと共通（`lib/kifuResult.ts`）
+  const side = winnerOf(code);
+  const winner = side === 'sente' ? '先手の' : side === 'gote' ? '後手の' : null;
   if (!winner) return code;
   const reason = code.includes('CHECKMATE')
     ? '詰み勝ち'

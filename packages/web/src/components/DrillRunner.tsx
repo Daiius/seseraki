@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseSfen, type HandPieceKind, type SquareRef } from 'shared';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import { BoardWithHands, handSidesOf, pickerOf } from './BoardGrid';
 import {
   applyStudyMoves,
@@ -64,8 +65,8 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
   /** 入ってきた入口。一覧から名指しで開いた問題は null（大きいボタンが「一覧に戻る」になる。prd/13 §7.6） */
   const mode = search.mode ?? null;
 
-  // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない
-  const [drill] = useState<Drill | null>(initial.drill);
+  // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない（state に持たない）
+  const drill: Drill | null = initial.drill;
   const [error, setError] = useState<string | null>(initial.error);
   /** 出題局面からの確定した手順（受方の応手を含む。prd/13 §5.3） */
   const [line, setLine] = useState<string[]>([]);
@@ -319,19 +320,14 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     if (!drill) return;
     const signal = screenSignal();
     setError(null);
-    try {
-      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({
-        param: refParam(drill),
-      });
-      // 待っている間に画面を離れた。離れた先から勝手に移らない
-      if (signal.aborted) return;
-      if (!res.ok) {
-        setError(`自明だった問題として記録できませんでした (${res.status})`);
-        return;
-      }
-    } catch {
-      if (signal.aborted) return;
-      setError('サーバーに接続できません');
+    const result = await callApi(
+      client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({ param: refParam(drill) }),
+      { fallback: (status) => `自明だった問題として記録できませんでした (${status})` },
+    );
+    // 待っている間に画面を離れた。離れた先から勝手に移らない
+    if (signal.aborted) return;
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     onNext();

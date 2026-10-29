@@ -1,98 +1,36 @@
-import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import {
   DEFAULT_ORDER,
   DEFAULT_SORT,
   DEFAULT_TACTIC_SIDE,
   describeFilters,
   isFiltered,
-  ORDERS,
-  OUTCOMES,
-  SORTS,
-  STATUSES,
+  MAX_SEARCH_LENGTH,
   TACTIC_OPTIONS,
-  TACTIC_SIDES,
   tacticSideApplies,
-  type Order,
+  validateKifuListSearch,
+  type KifuListSearch,
   type Outcome,
   type Sort,
   type Status,
   type TacticSide,
 } from '../lib/kifuListFilter';
 import { useAnalysisProgress } from '../lib/useAnalysisProgress';
+import { useDebouncedDraft } from '../lib/useDebouncedDraft';
 import { isAnalysisPending } from '../lib/analysisPending';
+import { subjectOutcomeOf } from '../lib/kifuResult';
 import { useAnalysisAssignee } from '../lib/useMe';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
-import { TacticTags, TacticLegend, legendModeOf } from '../components/TacticTags';
+import { Pager } from '../components/Pager';
+import { TacticTags, TacticLegend } from '../components/TacticTags';
+import { legendModesOf } from '../lib/tacticLegend';
 
-// 一覧の絞り込み・並べ替えの許可値と条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）。
-// server 側の `q: z.string().trim().max(100)` と揃える。超える値を送ると一覧全体が 400 になるため、
-// 入力欄の maxLength と URL 直入力の正規化の両方で頭打ちにする
-const MAX_SEARCH_LENGTH = 100;
-
-// 生成される routeTree が `IndexRoute` の型でこれを参照するため export が要る
-export interface KifuListSearch {
-  page?: number;
-  q?: string;
-  status?: Status;
-  outcome?: Outcome;
-  tactic?: string;
-  tacticSide?: TacticSide;
-  /** 分析ページからの導線（prd/09 §7）。専用の入力 UI は持たず URL から受けるだけ */
-  missedMate?: number;
-  from?: string;
-  to?: string;
-  sort?: Sort;
-  order?: Order;
-}
-
-/** 許可値でなければ既定に落とす。既定値は `undefined` にして URL に載せない */
-function option<T extends string>(
-  values: readonly T[],
-  raw: unknown,
-  fallback: T,
-): T | undefined {
-  const value = values.find((v) => v === raw);
-  return value && value !== fallback ? value : undefined;
-}
-
-/** 判定が返しうるラベルだけを受ける（URL 直入力の未知の値は無視して全件に戻す） */
-function tacticParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && TACTIC_OPTIONS.includes(raw) ? raw : undefined;
-}
-
-/** 詰み手数の上限。1 以上の整数だけ受ける（server の zod と揃える） */
-function missedMateParam(raw: unknown): number | undefined {
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 ? n : undefined;
-}
-
-/** `<input type="date">` が返す `YYYY-MM-DD` だけを受ける */
-function dateParam(raw: unknown): string | undefined {
-  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : undefined;
-}
+// 一覧の絞り込み・並べ替えの許可値・検索パラメータの解釈・条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）
 
 export const Route = createFileRoute('/')({
-  validateSearch: (search: Record<string, unknown>): KifuListSearch => ({
-    page: Number(search.page) || undefined,
-    // 検索語は trim しない（入力中の末尾スペースが打鍵のたびに消えてしまうため）。
-    // 前後の空白は server 側の zod が落とす。長すぎる URL 直入力は捨てずに切り詰める
-    // （拒否して一覧全体をエラーにするより、頭 100 字で検索した方が扱いやすい）
-    q:
-      typeof search.q === 'string' && search.q !== ''
-        ? search.q.slice(0, MAX_SEARCH_LENGTH)
-        : undefined,
-    status: option(STATUSES, search.status, 'all'),
-    outcome: option(OUTCOMES, search.outcome, 'all'),
-    tactic: tacticParam(search.tactic),
-    tacticSide: option(TACTIC_SIDES, search.tacticSide, DEFAULT_TACTIC_SIDE),
-    missedMate: missedMateParam(search.missedMate),
-    from: dateParam(search.from),
-    to: dateParam(search.to),
-    sort: option(SORTS, search.sort, DEFAULT_SORT),
-    order: option(ORDERS, search.order, DEFAULT_ORDER),
-  }),
+  validateSearch: validateKifuListSearch,
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
     q: search.q,
@@ -110,20 +48,14 @@ export const Route = createFileRoute('/')({
     // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は
     // kifus.subjectSide に導出済み（prd/11 §4）。
     // `me` は「名前候補が設定されているか」を見るために取る（絞り込み UI の出し分け）
-    try {
-      const [res, meRes] = await Promise.all([
-        client.api.kifus.$get({ query: deps }),
-        client.api.users.me.$get(),
-      ]);
-      if (!res.ok) {
-        return { kifus: [], pagination: null, me: null, error: `サーバーエラー (${res.status})` };
-      }
-      const data = await res.json();
-      const me = meRes.ok ? await meRes.json() : null;
-      return { kifus: data.kifus, pagination: data.pagination, me, error: null };
-    } catch {
-      return { kifus: [], pagination: null, me: null, error: 'サーバーに接続できません' };
-    }
+    // `me` が取れなくても一覧は出す（絞り込み UI の出し分けが控えめになるだけ）
+    const [list, meResult] = await Promise.all([
+      callApi(client.api.kifus.$get({ query: deps })),
+      callApi(client.api.users.me.$get()),
+    ]);
+    if (!list.ok) return { kifus: [], pagination: null, me: null, error: list.error };
+    const me = meResult.ok ? meResult.data : null;
+    return { kifus: list.data.kifus, pagination: list.data.pagination, me, error: null };
   },
   component: KifuListPage,
 });
@@ -144,28 +76,17 @@ function KifuListPage() {
     order = DEFAULT_ORDER,
   } = Route.useSearch();
   const navigate = useNavigate();
-  // 検索語は打鍵ごとに URL を書き換えず、入力欄のドラフトを debounce して反映する
-  const [queryDraft, setQueryDraft] = useState(q);
-
-  // 戻る/進む・「条件をクリア」など URL 側が変わったときは入力欄を追従させる
-  useEffect(() => {
-    setQueryDraft(q);
-  }, [q]);
-
-  useEffect(() => {
-    if (queryDraft === q) return;
-    const timer = setTimeout(() => {
+  // 検索語は打鍵ごとに URL を書き換えず、入力欄の下書きを debounce して反映する。
+  // 戻る/進む・「条件をクリア」など URL 側が変わったときは下書きが追従する（`useDebouncedDraft`）
+  const [queryDraft, setQueryDraft] = useDebouncedDraft(
+    q,
+    (draft) =>
       navigate({
         to: '/',
-        search: (prev: KifuListSearch) => ({
-          ...prev,
-          q: queryDraft || undefined,
-          page: undefined,
-        }),
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [queryDraft, q, navigate]);
+        search: (prev: KifuListSearch) => ({ ...prev, q: draft || undefined, page: undefined }),
+      }),
+    300,
+  );
 
   const goToPage = (p: number) =>
     navigate({
@@ -181,8 +102,8 @@ function KifuListPage() {
     });
 
   const clearFilters = () => {
-    // ドラフトも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
-    // 上の同期 effect が発火せず、保留中のタイマーがクリア後に検索語を書き戻してしまう
+    // 下書きも同時に空へ戻す。debounce 待機中にクリアすると、URL の `q` が元から未指定なら
+    // URL 側は変わらず下書きが追従しないので、待っていた反映がクリア後に検索語を書き戻してしまう
     setQueryDraft('');
     navigate({ to: '/', search: {} });
   };
@@ -226,13 +147,10 @@ function KifuListPage() {
   const canFilterByTacticSide = tacticSideApplies(tactic) && canFilterByOutcome;
 
   // 見出しの凡例は**このページで実際に使われている色分け**から組む。
-  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModeOf` が決める。
-  const legendModes = kifus
-    .map((k) => legendModeOf(k.tactics, k.subjectSide ?? null))
-    .reduce(
-      (acc, mode) => (mode === null ? acc : { ...acc, [mode]: true }),
-      { self: false, unresolved: false },
-    );
+  // どの行が根拠になるか（手番固有のタグが表示に残るか）は `legendModesOf` が決める。
+  const legendModes = legendModesOf(
+    kifus.map((k) => ({ tactics: k.tactics, userSide: k.subjectSide ?? null })),
+  );
 
   return (
     <div>
@@ -454,13 +372,9 @@ function KifuListPage() {
               </thead>
               <tbody>
                 {kifus.map((kifu) => {
-                  const r = kifu.result;
                   const userSide = kifu.subjectSide ?? null;
-                  const isSente = userSide === 'sente';
-                  const isGote = userSide === 'gote';
-                  const won = !!r && ((isSente && r.includes('SENTE_WIN')) || (isGote && r.includes('GOTE_WIN')));
-                  const lost = !!r && ((isSente && r.includes('GOTE_WIN')) || (isGote && r.includes('SENTE_WIN')));
-                  const showResultBadge = isSente || isGote;
+                  // 主体側が決まらなければ null（バッジを出さない）
+                  const outcome = subjectOutcomeOf(kifu.result, userSide);
                   const analyzing =
                     progress && progress.kifuNo === kifu.no ? progress : null;
                   return (
@@ -486,9 +400,9 @@ function KifuListPage() {
                       </td>
                       <td>
                         <div className="flex gap-1 items-center">
-                          {showResultBadge && (
-                            won ? <span className="badge badge-soft badge-success badge-sm">勝</span>
-                            : lost ? <span className="badge badge-soft badge-error badge-sm">負</span>
+                          {outcome !== null && (
+                            outcome === 'win' ? <span className="badge badge-soft badge-success badge-sm">勝</span>
+                            : outcome === 'loss' ? <span className="badge badge-soft badge-error badge-sm">負</span>
                             : <span className="badge badge-ghost badge-sm">−</span>
                           )}
                           {analyzing ? (
@@ -545,26 +459,9 @@ function KifuListPage() {
               </tbody>
             </table>
           </div>
-          {pagination && pagination.totalPages > 1 && (
-            <div className="join mt-4 flex justify-center">
-              <button
-                className="join-item btn"
-                disabled={page <= 1}
-                onClick={() => goToPage(page - 1)}
-              >
-                «
-              </button>
-              <button className="join-item btn">
-                {page} / {pagination.totalPages}
-              </button>
-              <button
-                className="join-item btn"
-                disabled={page >= pagination.totalPages}
-                onClick={() => goToPage(page + 1)}
-              >
-                »
-              </button>
-            </div>
+          {pagination && (
+            // ページは URL の値（server の `pagination.page` ではなく）。範囲外の URL でも押した先が URL からずれない
+            <Pager pagination={{ page, totalPages: pagination.totalPages }} onPage={goToPage} />
           )}
         </>
       )}

@@ -3,6 +3,7 @@ import { BROWSER_ANALYSIS_LIMITS, drillNamedEvaluationSchema } from '../analysis
 import {
   isConclusiveMate,
   namedEvaluationOf,
+  searchmovesGoCommand,
   namedGoCommand,
   sfenPositionCommand,
   withAllLegalMoves,
@@ -37,6 +38,7 @@ describe('USI のコマンド', () => {
 
   it('searchmoves は最後に置く（後ろの語はすべて手として読まれる）', () => {
     expect(namedGoCommand(600, '7g7f')).toBe('go movetime 600 searchmoves 7g7f');
+    expect(searchmovesGoCommand('go depth 10', '7g7f')).toBe('go depth 10 searchmoves 7g7f');
   });
 });
 

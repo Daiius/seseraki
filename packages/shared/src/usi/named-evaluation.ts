@@ -44,8 +44,9 @@ export function isConclusiveMate(info: UsiInfo): boolean {
 }
 
 /**
- * 局面（SFEN）を USI の `position` にする。手数の無い 3 フィールドなら 1 を補う
- * （手元 worker の名指し評価と同じ。探索は手数に依存しない）
+ * 局面（SFEN）を USI の `position` にする。手数の無い 3 フィールド（局面キー）なら 1 を補う
+ * （USI は 4 フィールドを要求する。検討局面は棋譜から切り離された「その形」で、探索は手数に依存しない）。
+ * 手元 worker の局面評価・名指し評価とブラウザで共用
  */
 export function sfenPositionCommand(sfen: string): string {
   const trimmed = sfen.trim();
@@ -54,11 +55,17 @@ export function sfenPositionCommand(sfen: string): string {
 }
 
 /**
- * 名指し評価の `go`。⚠ **`searchmoves` は最後に置く**——やねうら王は `searchmoves` の後の語を
+ * `go …`（`go movetime <ms>` / `go depth <n>`）の末尾に `searchmoves <手>` を付けて名指しの `go` にする。
+ * ⚠ **`searchmoves` は最後に置く**——やねうら王は `searchmoves` の後の語を
  * すべて指し手として読む（`go searchmoves 7g7f movetime 600` だと `movetime` と `600` まで手として読まれる）
  */
+export function searchmovesGoCommand(goCommand: string, move: string): string {
+  return `${goCommand} searchmoves ${move}`;
+}
+
+/** 思考時間で止める名指し評価の `go`（{@link searchmovesGoCommand}） */
 export function namedGoCommand(movetimeMs: number, move: string): string {
-  return `go movetime ${movetimeMs} searchmoves ${move}`;
+  return searchmovesGoCommand(`go movetime ${movetimeMs}`, move);
 }
 
 /** 名指しの読みの間だけ有効にするエンジンのオプション（{@link withAllLegalMoves}） */

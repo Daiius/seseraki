@@ -1,15 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   analyzeKifu,
-  ChunkSubmitError,
+  analyzeTimeoutMs,
   extractMultiPvResults,
-  isPermanentSubmitStatus,
+  USI_ANALYZE_TIMEOUT_MARGIN_MS,
   leadingContiguousCandidates,
   toReportCandidates,
   type UsiAnalysisEngine,
   type UsiCandidate,
   type UsiMoveAnalysis,
 } from "./kifu-analysis";
+import { ChunkSubmitError } from "./analysis-submit";
 import { parseInfoLine } from "./parser";
 import type { UsiInfo, UsiSearchResult } from "./types";
 
@@ -29,15 +30,18 @@ const MOVES = [
 
 /**
  * 1 局面あたり `msPerPosition` かかるエンジンのスタブ。
- * 偽タイマーを進めることで、経過時間によるチャンク分割を実時間を使わず検証する。
+ * 注入する時計（`clock`）を進めることで、経過時間によるチャンク分割を実時間を使わず検証する。
  */
 function createStubEngine(msPerPosition: number) {
   const positions: string[] = [];
+  /** 解析のループに注入する時計。1 局面ごとに `msPerPosition` 進む */
+  let now = 0;
+  const clock = { now: () => now };
   const engine: UsiAnalysisEngine = {
     setOption: () => {},
     analyze: async (position: string): Promise<UsiSearchResult> => {
       positions.push(position);
-      vi.advanceTimersByTime(msPerPosition);
+      now += msPerPosition;
       const info = {
         multipv: 1,
         depth: 5,
@@ -51,7 +55,7 @@ function createStubEngine(msPerPosition: number) {
       };
     },
   };
-  return { engine, positions };
+  return { engine, positions, clock };
 }
 
 /** チャンクを受け取って溜める。`failAt` 回目の呼び出しでは submit 失敗を模す */
@@ -70,19 +74,11 @@ const moveNumbers = (chunks: UsiMoveAnalysis[][]) =>
   chunks.map((chunk) => chunk.map((a) => a.moveNumber));
 
 describe("analyzeKifu のチャンク submit", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("経過時間でチャンクを区切り、全局面を欠番なく渡す", async () => {
-    const { engine } = createStubEngine(1000);
+    const { engine, clock } = createStubEngine(1000);
     const { chunks, onChunk } = createChunkSink();
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       chunkIntervalMs: 3000,
       onChunk,
     });
@@ -98,20 +94,20 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("区切りに達しないうちに解析が終われば最終チャンク 1 回だけ送る", async () => {
-    const { engine } = createStubEngine(100);
+    const { engine, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
-    await analyzeKifu(engine, MOVES, { chunkIntervalMs: 30_000, onChunk });
+    await analyzeKifu(engine, MOVES, { clock, chunkIntervalMs: 30_000, onChunk });
 
     expect(moveNumbers(chunks)).toEqual([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
   });
 
   it("startMoveNumber から再開し、既に入っている局面は解析しない", async () => {
-    const { engine, positions } = createStubEngine(100);
+    const { engine, positions, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
     const progress: [number, number][] = [];
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       startMoveNumber: 8,
       chunkIntervalMs: 30_000,
       onChunk,
@@ -134,12 +130,12 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("割り込みで中断すると、未送信チャンクを送ってから抜ける（穴を空けない）", async () => {
-    const { engine, positions } = createStubEngine(100);
+    const { engine, positions, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
     const progress: [number, number][] = [];
     let boundary = 0;
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       chunkIntervalMs: 30_000,
       onChunk,
       onProgress: (analyzed, total) => progress.push([analyzed, total]),
@@ -160,10 +156,10 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("送るものが無ければ中断で空チャンクを送らない（完了と誤認させない）", async () => {
-    const { engine } = createStubEngine(100);
+    const { engine, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       onChunk,
       // 最初の局面境界で中断（1 局面も解析していない）
       onPositionBoundary: async () => true,
@@ -174,10 +170,10 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("割り込みを求めない境界（false / undefined）では解析を続ける", async () => {
-    const { engine } = createStubEngine(100);
+    const { engine, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       chunkIntervalMs: 30_000,
       onChunk,
       onPositionBoundary: async () => {},
@@ -188,10 +184,10 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("再開位置が全局面に達していれば空の最終チャンクを送る（完了を確定させる）", async () => {
-    const { engine, positions } = createStubEngine(100);
+    const { engine, positions, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
-    const result = await analyzeKifu(engine, MOVES, {
+    const result = await analyzeKifu(engine, MOVES, { clock,
       startMoveNumber: 11,
       onChunk,
     });
@@ -202,11 +198,11 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("チャンク submit が失敗したらそこで解析を中断する", async () => {
-    const { engine, positions } = createStubEngine(1000);
+    const { engine, positions, clock } = createStubEngine(1000);
     const { chunks, onChunk } = createChunkSink(2);
 
     await expect(
-      analyzeKifu(engine, MOVES, { chunkIntervalMs: 3000, onChunk }),
+      analyzeKifu(engine, MOVES, { clock, chunkIntervalMs: 3000, onChunk }),
     ).rejects.toBeInstanceOf(ChunkSubmitError);
 
     // 2 チャンク目（6 局面目）まで解析して止まる。残りは次の poll で続きから
@@ -218,10 +214,10 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("chunkMaxPositions を指定すると、時間に達していなくても局面数で区切る", async () => {
-    const { engine } = createStubEngine(100);
+    const { engine, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
-    await analyzeKifu(engine, MOVES, {
+    await analyzeKifu(engine, MOVES, { clock,
       chunkIntervalMs: 30_000,
       chunkMaxPositions: 4,
       onChunk,
@@ -235,11 +231,11 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("時間と局面数は早いほうで区切る（1 チャンクは局面数の上限を超えない）", async () => {
-    const { engine } = createStubEngine(1000);
+    const { engine, clock } = createStubEngine(1000);
     const { chunks, onChunk } = createChunkSink();
 
     // 時間なら 3 局面ごと・局面数なら 2 局面ごと。局面数が先に来る
-    await analyzeKifu(engine, MOVES, {
+    await analyzeKifu(engine, MOVES, { clock,
       chunkIntervalMs: 3000,
       chunkMaxPositions: 2,
       onChunk,
@@ -249,7 +245,9 @@ describe("analyzeKifu のチャンク submit", () => {
 
     // 逆に局面数の上限が緩ければ、時間で切れる（既定＝指定なしと同じ並び）
     const second = createChunkSink();
-    await analyzeKifu(createStubEngine(1000).engine, MOVES, {
+    const slow = createStubEngine(1000);
+    await analyzeKifu(slow.engine, MOVES, {
+      clock: slow.clock,
       chunkIntervalMs: 3000,
       chunkMaxPositions: 100,
       onChunk: second.onChunk,
@@ -263,11 +261,11 @@ describe("analyzeKifu のチャンク submit", () => {
   });
 
   it("局面数ちょうどで終わったら、空の最終チャンクで完了を確定させる", async () => {
-    const { engine } = createStubEngine(100);
+    const { engine, clock } = createStubEngine(100);
     const { chunks, onChunk } = createChunkSink();
 
     // 4 局面（3 手）を 2 局面ずつ
-    await analyzeKifu(engine, MOVES.slice(0, 3), {
+    await analyzeKifu(engine, MOVES.slice(0, 3), { clock,
       chunkMaxPositions: 2,
       onChunk,
     });
@@ -277,14 +275,6 @@ describe("analyzeKifu のチャンク submit", () => {
 });
 
 describe("ログの注入", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("ログは注入した出力先へ出す（局面ごとの 1 行・再開・エンジンの失敗）", async () => {
     const info: string[] = [];
     const error: string[] = [];
@@ -292,9 +282,9 @@ describe("ログの注入", () => {
       info: (message: string) => info.push(message),
       error: (message: string) => error.push(message),
     };
-    const { engine } = createStubEngine(0);
+    const { engine, clock } = createStubEngine(0);
 
-    await analyzeKifu(engine, MOVES, {
+    await analyzeKifu(engine, MOVES, { clock,
       startMoveNumber: 9,
       onChunk: async () => {},
       log,
@@ -322,8 +312,8 @@ describe("ログの注入", () => {
   });
 
   it("ログを渡さなくても動く", async () => {
-    const { engine } = createStubEngine(0);
-    const result = await analyzeKifu(engine, ["7g7f"]);
+    const { engine, clock } = createStubEngine(0);
+    const result = await analyzeKifu(engine, ["7g7f"], { clock });
     expect(result).toMatchObject({ analyzed: 2, interrupted: false });
   });
 });
@@ -332,10 +322,12 @@ describe("go コマンド", () => {
   /** 送られた go コマンドを記録するエンジン */
   function createCommandRecorder() {
     const commands: string[] = [];
+    const timeouts: (number | undefined)[] = [];
     const engine: UsiAnalysisEngine = {
       setOption: () => {},
-      analyze: async (_position, goCommand): Promise<UsiSearchResult> => {
+      analyze: async (_position, goCommand, options): Promise<UsiSearchResult> => {
         commands.push(goCommand);
+        timeouts.push(options?.timeoutMs);
         const info = {
           multipv: 1,
           depth: 5,
@@ -345,7 +337,7 @@ describe("go コマンド", () => {
         return { bestmove: { move: "7g7f" }, infoLines: [info], lastInfo: info };
       },
     };
-    return { engine, commands };
+    return { engine, commands, timeouts };
   }
 
   it("思考時間の指定には movetime を使う（byoyomi は指定どおりの時間にならない）", async () => {
@@ -362,6 +354,24 @@ describe("go コマンド", () => {
     await analyzeKifu(engine, [], { depth: 12, onChunk: async () => {} });
 
     expect(commands).toEqual(["go depth 12"]);
+  });
+
+  it("movetime の探索は「思考時間 + 余裕」で時間切れにし、depth の探索はセッションの既定に任せる", async () => {
+    const byTime = createCommandRecorder();
+    await analyzeKifu(byTime.engine, [], { movetime: 1000, onChunk: async () => {} });
+    expect(byTime.timeouts).toEqual([1000 + USI_ANALYZE_TIMEOUT_MARGIN_MS]);
+
+    const byDepth = createCommandRecorder();
+    await analyzeKifu(byDepth.engine, [], { depth: 12, onChunk: async () => {} });
+    expect(byDepth.timeouts).toEqual([undefined]);
+  });
+});
+
+describe("analyzeTimeoutMs", () => {
+  it("movetime があれば思考時間 + 余裕、無ければ undefined（セッションの既定）", () => {
+    expect(analyzeTimeoutMs({ movetime: 600 })).toBe(600 + USI_ANALYZE_TIMEOUT_MARGIN_MS);
+    expect(analyzeTimeoutMs({ movetime: 120_000 })).toBe(120_000 + USI_ANALYZE_TIMEOUT_MARGIN_MS);
+    expect(analyzeTimeoutMs({})).toBeUndefined();
   });
 });
 
@@ -614,26 +624,6 @@ describe("leadingContiguousCandidates", () => {
     expect(ranks(leadingContiguousCandidates([c(1), c(2), c(4), c(5)]))).toEqual([1, 2]);
     expect(ranks(leadingContiguousCandidates([c(2), c(3)]))).toEqual([]);
     expect(ranks(leadingContiguousCandidates([c(0), c(1)]))).toEqual([]);
-  });
-});
-
-describe("isPermanentSubmitStatus", () => {
-  it("入力の誤り（4xx）は恒久失敗", () => {
-    for (const status of [400, 404, 409, 413, 422]) {
-      expect(isPermanentSubmitStatus(status)).toBe(true);
-    }
-  });
-
-  it("⚠ 認証（401 / 403）と混雑（408 / 429）は一時失敗（恒久にすると全棋譜が失敗になる）", () => {
-    for (const status of [401, 403, 408, 429]) {
-      expect(isPermanentSubmitStatus(status)).toBe(false);
-    }
-  });
-
-  it("5xx と成功は恒久失敗ではない", () => {
-    for (const status of [200, 201, 500, 502, 503]) {
-      expect(isPermanentSubmitStatus(status)).toBe(false);
-    }
   });
 });
 

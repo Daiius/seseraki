@@ -5,6 +5,7 @@
  * ⚠ 全局面解析と同時に呼ばない（呼び出し側が全局面解析を止めてから呼ぶ。エンジンは 1 本）
  */
 import {
+  analyzeTimeoutMs,
   isConclusiveMate,
   namedEvaluationOf,
   namedGoCommand,
@@ -171,7 +172,11 @@ export function createEngineReads(deps: EngineReadsDeps, engines: EngineCache): 
           current.session.analyze(
             sfenPositionCommand(sfen),
             namedGoCommand(settings.movetimeMs, move),
-            settings.stopOnMate ? { stopWhen: isConclusiveMate } : undefined,
+            {
+              // 思考時間 + 余裕で時間切れにする（shared の既定 60 秒に任せない）
+              timeoutMs: analyzeTimeoutMs({ movetime: settings.movetimeMs }),
+              ...(settings.stopOnMate ? { stopWhen: isConclusiveMate } : {}),
+            },
           ),
         );
         const named = namedEvaluationOf(result, move, settings.pvMaxPlies);
@@ -214,6 +219,7 @@ export function createEngineReads(deps: EngineReadsDeps, engines: EngineCache): 
         const result = await withMultiPv(current.session, settings.multiPv, () =>
           current.session.analyze(sfenPositionCommand(sfen), positionGoCommand(settings.movetimeMs), {
             stopWhen: () => signal.aborted,
+            timeoutMs: analyzeTimeoutMs({ movetime: settings.movetimeMs }),
           }),
         );
         if (signal.aborted) return { kind: 'aborted' };

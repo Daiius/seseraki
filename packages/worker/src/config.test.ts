@@ -3,6 +3,7 @@ import {
   evalProvenance,
   hasQuickProfile,
   parseEvalSha256,
+  parseBoolean,
   parseFvScale,
   parsePositiveInt,
   profileSettings,
@@ -131,4 +132,23 @@ describe("parsePositiveInt", () => {
       );
     },
   );
+});
+
+describe("parseBoolean", () => {
+  it("未設定・空なら既定（USE_MOCK の既定は false）", () => {
+    expect(parseBoolean("USE_MOCK", undefined, false)).toBe(false);
+    expect(parseBoolean("USE_MOCK", " ", false)).toBe(false);
+  });
+
+  it("true / false だけを受ける", () => {
+    expect(parseBoolean("USE_MOCK", "true", false)).toBe(true);
+    expect(parseBoolean("USE_MOCK", "false", true)).toBe(false);
+    expect(parseBoolean("USE_MOCK", " true ", false)).toBe(true);
+  });
+
+  it("それ以外は起動時に落とす（黙って既定に倒さない）", () => {
+    for (const raw of ["1", "yes", "TRUE", "ture"]) {
+      expect(() => parseBoolean("USE_MOCK", raw, false)).toThrow(`USE_MOCK must be "true" or "false": ${raw}`);
+    }
+  });
 });

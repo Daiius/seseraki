@@ -259,6 +259,20 @@ describe('analyze（position + go → bestmove）', () => {
     expect(result).not.toHaveProperty('stoppedBy');
   });
 
+  it('時間切れは呼び出しごとに渡せる（省略時はセッションの既定）', async () => {
+    const { session, emit, clock } = setup(undefined, 5000);
+
+    const named = session.analyze('position startpos', 'go movetime 300', { timeoutMs: 30_300 });
+    expect(clock.scheduled).toEqual([30_300]);
+    emit('bestmove 7g7f');
+    await named;
+
+    const plain = session.analyze('position startpos', 'go depth 10');
+    expect(clock.scheduled).toEqual([30_300, 5000]);
+    emit('bestmove 7g7f');
+    await plain;
+  });
+
   it('bestmove が来なければ時間切れで失敗し、後から届いた行は次の探索に混ざらない', async () => {
     const { session, emit, clock } = setup(undefined, 5000);
 

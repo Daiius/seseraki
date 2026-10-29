@@ -3,16 +3,16 @@ import {
   drainEvaluationJobs,
   evaluateJob,
   InteractiveEngineError,
-  resetSearchmovesSupport,
   type EvalEngine,
   type PositionEvalJob,
-  type PositionEvalResult,
+  type PositionEvalOutcome,
   type PositionJobSource,
 } from "./position-eval.js";
-import type { UsiInfo, UsiSearchResult } from "shared";
+import { USI_ANALYZE_TIMEOUT_MARGIN_MS, type UsiInfo, type UsiSearchResult } from "shared";
 
 /** 局面キー（手数を持たない 3 フィールドの SFEN） */
 const SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -";
+const SEARCH = { movetime: 1000 };
 const GO = "go movetime 1000";
 
 /** info 行 1 本（1 候補手ぶん） */
@@ -37,13 +37,13 @@ function createStubEngine(
   responses: UsiSearchResult[],
   initialOptions: Record<string, string> = {},
 ) {
-  const calls: { position: string; go: string }[] = [];
+  const calls: { position: string; go: string; timeoutMs?: number }[] = [];
   /** setoption の送信履歴（`MultiPV=3` のような文字列）。**探索との前後関係も見たい** */
   const optionCalls: string[] = [];
   const options = new Map(Object.entries(initialOptions));
   const engine: EvalEngine = {
-    analyze: async (position: string, go: string) => {
-      calls.push({ position, go });
+    analyze: async (position: string, go: string, options?: { timeoutMs?: number }) => {
+      calls.push({ position, go, timeoutMs: options?.timeoutMs });
       optionCalls.push("(go)");
       const next = responses.shift();
       if (!next) throw new Error("no canned response left");
@@ -59,7 +59,6 @@ function createStubEngine(
 }
 
 beforeEach(() => {
-  resetSearchmovesSupport();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -81,13 +80,14 @@ describe("evaluateJob（局面評価）", () => {
     const result = await evaluateJob(
       engine,
       { id: "eval-1", sfen: SFEN, move: null },
-      GO,
+      SEARCH,
     );
 
     // 3 フィールドの局面キーに手数 1 を補って渡す（USI は 4 フィールドを要求する）
     expect(calls[0].position).toBe(`position sfen ${SFEN} 1`);
     expect(calls[0].go).toBe(GO);
-    expect(result.fallback).toBe(false);
+    expect(result).not.toHaveProperty("error");
+    if ("error" in result) return;
     expect(result.candidates.map((c) => c.move)).toEqual([
       "7g7f",
       "2g2f",
@@ -107,9 +107,12 @@ describe("evaluateJob（局面評価）", () => {
       ]),
     ]);
 
-    const result = await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    const result = await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
-    expect(result.candidates.map((c) => c.move)).toEqual(["2g2f", "7g7f", "6i7h"]);
+    expect(result).toMatchObject({
+      candidates: [{ move: "2g2f" }, { move: "7g7f" }, { move: "6i7h" }],
+    });
+    expect(result).toHaveProperty("candidates.length", 3);
   });
 
   // 🔴 dev 実測（2026-08-28）: `analyzeKifu` が解析の終わりに MultiPV を 1 へ戻すため、
@@ -120,7 +123,7 @@ describe("evaluateJob（局面評価）", () => {
       searchResult([info(1, ["7g7f"], 50)]),
     ]);
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
     // 設定 → 探索 → 復元の順であること（探索中に値が変わっていないこと）
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
@@ -132,7 +135,7 @@ describe("evaluateJob（局面評価）", () => {
       { MultiPV: "3" },
     );
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
     expect(optionCalls).toEqual(["(go)"]);
   });
@@ -141,10 +144,27 @@ describe("evaluateJob（局面評価）", () => {
     const { engine, optionCalls } = createStubEngine([], { MultiPV: "1" });
 
     await expect(
-      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3),
+      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3),
     ).rejects.toThrow();
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
+  it("思考時間 + 余裕で時間切れにし、depth の探索はセッションの既定に任せる", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["9g9f"], -20)]),
+    ]);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH);
+    await evaluateJob(engine, { id: "eval-2", sfen: SFEN, move: null }, { depth: 12 });
+    await evaluateJob(engine, { id: "eval-3", sfen: SFEN, move: "9g9f" }, { depth: 12 });
+
+    expect(calls.map((c) => [c.go, c.timeoutMs])).toEqual([
+      [GO, 1000 + USI_ANALYZE_TIMEOUT_MARGIN_MS],
+      ["go depth 12", undefined],
+      ["go depth 12 searchmoves 9g9f", undefined],
+    ]);
   });
 
   it("手数付き（4 フィールド）の SFEN はそのまま渡す", async () => {
@@ -154,7 +174,7 @@ describe("evaluateJob（局面評価）", () => {
     await evaluateJob(
       engine,
       { id: "eval-1", sfen: `${SFEN} 25`, move: null },
-      GO,
+      SEARCH,
     );
     expect(calls[0].position).toBe(`position sfen ${SFEN} 25`);
   });
@@ -168,20 +188,21 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9g9f", "3c3d", "2g2f"], -20)]),
     ]);
 
-    const result = await evaluateJob(engine, job, GO);
+    const result = await evaluateJob(engine, job, SEARCH);
 
     expect(calls).toHaveLength(1);
     expect(calls[0].go).toBe(`${GO} searchmoves 9g9f`);
-    expect(result.fallback).toBe(false);
-    expect(result.candidates).toEqual([
-      {
-        rank: 1,
-        move: "9g9f",
-        score: { type: "cp", value: -20 },
-        pv: ["9g9f", "3c3d", "2g2f"],
-        depth: 12,
-      },
-    ]);
+    expect(result).toEqual({
+      candidates: [
+        {
+          rank: 1,
+          move: "9g9f",
+          score: { type: "cp", value: -20 },
+          pv: ["9g9f", "3c3d", "2g2f"],
+          depth: 12,
+        },
+      ],
+    });
   });
 
   it("MultiPV は触らない（返すのはその手 1 本だけ）・GenerateAllLegalMoves は読みの間だけ有効にする", async () => {
@@ -189,7 +210,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9g9f", "3c3d"], -20)]),
     ]);
 
-    await evaluateJob(engine, job, GO, 3);
+    await evaluateJob(engine, job, SEARCH, 3);
 
     expect(optionCalls).toEqual([
       "GenerateAllLegalMoves=true",
@@ -203,34 +224,17 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9d9c", "9b9c"], -300)]),
     ]);
 
-    const result = await evaluateJob(engine, { ...job, move: "9d9c" }, GO);
+    const result = await evaluateJob(engine, { ...job, move: "9d9c" }, SEARCH);
 
     expect(calls[0].go).toBe(`${GO} searchmoves 9d9c`);
     expect(optionCalls[0]).toBe("GenerateAllLegalMoves=true");
-    expect(result.fallback).toBe(false);
-    expect(result.candidates[0]).toMatchObject({ move: "9d9c", pv: ["9d9c", "9b9c"] });
-  });
-
-  it("フォールバックの間も有効のまま、終わったら戻す", async () => {
-    const { engine, optionCalls } = createStubEngine([
-      searchResult([info(1, ["7g7f", "3c3d"], 50)]),
-      searchResult([info(1, ["3c3d", "2g2f"], 60)]),
-    ]);
-
-    await evaluateJob(engine, job, GO);
-
-    expect(optionCalls).toEqual([
-      "GenerateAllLegalMoves=true",
-      "(go)",
-      "(go)",
-      "GenerateAllLegalMoves=false",
-    ]);
+    expect(result).toMatchObject({ candidates: [{ move: "9d9c", pv: ["9d9c", "9b9c"] }] });
   });
 
   it("探索が失敗しても GenerateAllLegalMoves を戻す", async () => {
     const { engine, optionCalls } = createStubEngine([]);
 
-    await expect(evaluateJob(engine, job, GO)).rejects.toThrow();
+    await expect(evaluateJob(engine, job, SEARCH)).rejects.toThrow();
 
     expect(optionCalls.at(-1)).toBe("GenerateAllLegalMoves=false");
   });
@@ -240,78 +244,63 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["7g7f", "3c3d"], 50)]),
     ]);
 
-    await evaluateJob(engine, { ...job, move: null }, GO, 1);
+    await evaluateJob(engine, { ...job, move: null }, SEARCH, 1);
 
     expect(optionCalls.some((c) => c.startsWith("GenerateAllLegalMoves"))).toBe(false);
   });
 
-  it("searchmoves が無視されたら、手を適用した局面を評価して符号を反転する", async () => {
+  // 🔒 名指しが効かなかった（別の手が返った）ら、数字を作らずそのジョブの失敗にする。
+  // 以前はプロセスの生存期間ずっと符号反転のフォールバックに切り替わっていた（大域の判定）
+  it("名指ししていない手が返ったら、そのジョブの失敗にする（フォールバックしない）", async () => {
     const { engine, calls } = createStubEngine([
-      // searchmoves を無視して自分の最善手を返すエンジン
       searchResult([info(1, ["7g7f", "3c3d"], 50)]),
-      // フォールバック: 9g9f を指した後の局面（相手番）の評価
-      searchResult([info(1, ["3c3d", "2g2f"], 60)]),
     ]);
 
-    const result = await evaluateJob(engine, job, GO);
+    const result = await evaluateJob(engine, job, SEARCH);
 
-    expect(calls).toHaveLength(2);
-    expect(calls[1].position).toBe(`position sfen ${SFEN} 1 moves 9g9f`);
-    expect(calls[1].go).toBe(GO);
-    expect(result.fallback).toBe(true);
-    // 相手番の +60 は自分から見れば -60。読み筋の先頭に名指しした手を足して契約を揃える
-    expect(result.candidates).toEqual([
-      {
-        rank: 1,
-        move: "9g9f",
-        score: { type: "cp", value: -60 },
-        pv: ["9g9f", "3c3d", "2g2f"],
-        depth: 12,
-      },
-    ]);
+    expect(calls).toHaveLength(1);
+    expect(result).toEqual({
+      error: "Named move was not searched (requested 9g9f, returned 7g7f)",
+    });
   });
 
-  it("詰みの評価値も符号を反転する", async () => {
-    const { engine } = createStubEngine([
+  it("一度効かなくても、次のジョブはまた searchmoves で読む（判定を覚えない）", async () => {
+    const { engine, calls } = createStubEngine([
       searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["9g9f", "3c3d"], -20)]),
+    ]);
+
+    await evaluateJob(engine, job, SEARCH);
+    const second = await evaluateJob(engine, job, SEARCH);
+
+    expect(calls.map((c) => c.go)).toEqual([`${GO} searchmoves 9g9f`, `${GO} searchmoves 9g9f`]);
+    expect(second).toMatchObject({ candidates: [{ move: "9g9f", score: { type: "cp", value: -20 } }] });
+  });
+
+  it("評価を出さずに名指しした手を指したら候補なしで返す（数字を作らない）", async () => {
+    const { engine } = createStubEngine([
+      { bestmove: { move: "9g9f" }, infoLines: [], lastInfo: {} },
+    ]);
+    expect(await evaluateJob(engine, job, SEARCH)).toEqual({ candidates: [] });
+  });
+
+  it("即詰みの手は mate の評価をそのまま返す（ブラウザの採点と同じ解釈）", async () => {
+    const { engine } = createStubEngine([
       searchResult([
-        { multipv: 1, depth: 20, score: { type: "mate", value: 3 }, pv: ["3c3d"] },
+        { multipv: 1, depth: 1, score: { type: "mate", value: 1 }, pv: ["9g9f"] },
       ]),
     ]);
-    const result = await evaluateJob(engine, job, GO);
-    expect(result.candidates[0].score).toEqual({ type: "mate", value: -3 });
-  });
-
-  it("一度 searchmoves が非対応と分かったら、以降は直接フォールバックする", async () => {
-    const first = createStubEngine([
-      searchResult([info(1, ["7g7f"], 50)]),
-      searchResult([info(1, ["3c3d"], 60)]),
-    ]);
-    await evaluateJob(first.engine, job, GO);
-    expect(first.calls).toHaveLength(2);
-
-    const second = createStubEngine([searchResult([info(1, ["3c3d"], 60)])]);
-    const result = await evaluateJob(second.engine, job, GO);
-    // searchmoves は送らず、いきなり手を適用した局面を評価する
-    expect(second.calls).toHaveLength(1);
-    expect(second.calls[0].position).toBe(`position sfen ${SFEN} 1 moves 9g9f`);
-    expect(result.fallback).toBe(true);
-  });
-
-  it("フォールバック先に候補が無ければ候補なしで返す（数字を作らない）", async () => {
-    const { engine } = createStubEngine([
-      searchResult([info(1, ["7g7f"], 50)]),
-      searchResult([]),
-    ]);
-    const result = await evaluateJob(engine, job, GO);
-    expect(result).toEqual({ candidates: [], fallback: true });
+    expect(await evaluateJob(engine, job, SEARCH)).toEqual({
+      candidates: [
+        { rank: 1, move: "9g9f", score: { type: "mate", value: 1 }, pv: ["9g9f"], depth: 1 },
+      ],
+    });
   });
 });
 
 /** claim するジョブを並べ、報告を記録する source */
 function createStubSource(jobs: PositionEvalJob[]) {
-  const reports: { id: string; report: PositionEvalResult | { error: string } }[] =
-    [];
+  const reports: { id: string; report: PositionEvalOutcome }[] = [];
   const source: PositionJobSource = {
     claim: async () => jobs.shift() ?? null,
     report: async (id, report) => {
@@ -331,7 +320,7 @@ describe("drainEvaluationJobs", () => {
     ]);
     const { source, reports } = createStubSource([job("eval-1"), job("eval-2")]);
 
-    const processed = await drainEvaluationJobs(engine, source, GO);
+    const processed = await drainEvaluationJobs(engine, source, SEARCH);
 
     expect(processed).toBe(2);
     expect(reports.map((r) => r.id)).toEqual(["eval-1", "eval-2"]);
@@ -346,7 +335,7 @@ describe("drainEvaluationJobs", () => {
     );
     const { source } = createStubSource([job("eval-1")]);
 
-    await drainEvaluationJobs(engine, source, GO);
+    await drainEvaluationJobs(engine, source, SEARCH);
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
   });
@@ -362,7 +351,7 @@ describe("drainEvaluationJobs", () => {
       job("eval-3"),
     ]);
 
-    const processed = await drainEvaluationJobs(engine, source, GO, {
+    const processed = await drainEvaluationJobs(engine, source, SEARCH, {
       maxJobs: 2,
     });
 
@@ -380,7 +369,7 @@ describe("drainEvaluationJobs", () => {
     };
     const { source, reports } = createStubSource([job("eval-1")]);
 
-    await expect(drainEvaluationJobs(engine, source, GO)).rejects.toBeInstanceOf(
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).rejects.toBeInstanceOf(
       InteractiveEngineError,
     );
     // エラーも完了として報告する（結果もエラーも出ないまま宙に浮かせない）
@@ -392,6 +381,24 @@ describe("drainEvaluationJobs", () => {
     ]);
   });
 
+  it("名指しが効かなかったジョブは失敗として報告し、エンジンの再起動には回さない", async () => {
+    const { engine } = createStubEngine([
+      searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["2g2f"], 30)]),
+    ]);
+    const { source, reports } = createStubSource([
+      { id: "eval-1", sfen: SFEN, move: "9g9f" },
+      job("eval-2"),
+    ]);
+
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(2);
+    expect(reports[0]).toEqual({
+      id: "eval-1",
+      report: { error: "Named move was not searched (requested 9g9f, returned 7g7f)" },
+    });
+    expect(reports[1]).toMatchObject({ id: "eval-2", report: { candidates: [{ move: "2g2f" }] } });
+  });
+
   it("claim の失敗は握りつぶして戻る（棋譜解析を止めない）", async () => {
     const { engine } = createStubEngine([]);
     const source: PositionJobSource = {
@@ -400,7 +407,7 @@ describe("drainEvaluationJobs", () => {
       },
       report: async () => {},
     };
-    await expect(drainEvaluationJobs(engine, source, GO)).resolves.toBe(0);
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(0);
   });
 
   it("報告の失敗も握りつぶして戻る", async () => {
@@ -415,6 +422,6 @@ describe("drainEvaluationJobs", () => {
       },
     };
     // 1 件目の報告で失敗したらそこで戻る（2 件目は次の境界で拾う）
-    await expect(drainEvaluationJobs(engine, source, GO)).resolves.toBe(1);
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(1);
   });
 });

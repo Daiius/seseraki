@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { InferResponseType } from 'hono/client';
 import { client } from '../lib/honoClient';
+import { NETWORK_ERROR_MESSAGE } from '../lib/requestError';
 
 type Me = InferResponseType<typeof client.api.users.me.$get, 200>;
 
@@ -30,6 +31,9 @@ export function SelfSettings({ me, onChanged }: { me: Me; onChanged: () => void 
       const body = (await res.json()) as { rederived?: number };
       setMessage(ok(body.rederived ?? 0));
       onChanged();
+    } catch {
+      // 通信の失敗（server に届かない）。黙って終わらせず、画面に出す
+      setMessage(NETWORK_ERROR_MESSAGE);
     } finally {
       setBusy(false);
     }

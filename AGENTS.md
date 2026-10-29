@@ -154,7 +154,7 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 >   `run.profile: 'by-state'` で渡す（本文の `profile` は申告で、違えば破棄）。来歴の照合は**進行中の段の行**とだけ（`runsOfStage`。§5.9）。
 >   思考時間は段ごと（`BROWSER_ANALYSIS_MOVETIME_MS`。quick 100ms・full 600ms）
 > - ブラウザから届く解析結果（出題の採点の名指し評価も）は**信用できない入力**。検証と上限は `shared` の `analysis-limits.ts`（prd/14 §5.8）。
->   ブラウザから叩く書き込み口を足したら、Origin の検査（`route.ts` の `trustedOrigin`）と本文の上限（`smallBody`）も付ける
+>   ブラウザから叩く書き込み口を足したら、本文の上限（`routes/common.ts` の `smallBody`）を付ける（Origin の検査は `route.ts` の `app.use` が GET 以外の全部の口に一括で掛ける）
 >
 > 🔴 **Better Auth の表の ID は DB の既定値（`gen_random_uuid()`）で振る。** pg 方言の Better Auth は
 > `generateId: 'uuid'` の ID を JS 側で振らず DB に任せるので、既定値が無いと user の作成が NOT NULL で落ちる。

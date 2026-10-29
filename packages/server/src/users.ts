@@ -7,7 +7,7 @@
  * 認証は Google ログイン（prd/07）。所有者スコープ（prd/14 §4）が入るまでは所有者ゲート
  * （prd/07 §5.1）で**所有者（`OWNER_USER_ID`）以外のセッションを通さない**。
  */
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, isNull } from 'drizzle-orm';
 import type { Db } from './db/index.js';
 import { kifus, userAliases, users, videoKifuSources } from './db/schema';
 import type { Tx } from './tactics';
@@ -245,6 +245,38 @@ export async function countUnresolvedSubjects(tx: Tx | Db, userId: string): Prom
     .from(kifus)
     .where(and(eq(kifus.ownerId, userId), isNull(kifus.subjectSide)));
   return row?.n ?? 0;
+}
+
+/**
+ * 「自分」の設定画面に出す値（prd/11 §6.3）: 表示名・名前候補（登録順）・主体側が決まらない棋譜の数。
+ * ユーザーの行が無ければ `id` / `displayName` を欠いた形で返す（呼び出し側の応答の形は変えない）
+ */
+export async function selfProfile(tx: Tx, userId: string) {
+  const [user] = await tx
+    .select({ id: users.id, displayName: users.displayName })
+    .from(users)
+    .where(eq(users.id, userId));
+  const aliases = await tx
+    .select({
+      id: userAliases.id,
+      name: userAliases.name,
+      validFrom: userAliases.validFrom,
+      validTo: userAliases.validTo,
+    })
+    .from(userAliases)
+    .where(eq(userAliases.userId, userId))
+    .orderBy(asc(userAliases.id));
+  return {
+    ...user,
+    aliases,
+    /** 主体側が決まらない棋譜の数（名前候補の設定を促すために出す） */
+    unresolvedSubjects: await countUnresolvedSubjects(tx, userId),
+  };
+}
+
+/** 表示名を変える（本人の行だけ） */
+export async function updateDisplayName(tx: Tx, userId: string, displayName: string): Promise<void> {
+  await tx.update(users).set({ displayName }).where(eq(users.id, userId));
 }
 
 /** 名前候補を追加する。⚠ 呼び出し側が主体側の再導出まで同じトランザクションで行う */

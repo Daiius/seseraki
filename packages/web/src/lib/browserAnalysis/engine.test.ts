@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createUsiSession,
+  ENGINE_PATH_SEGMENT_PATTERN,
   engineEntryOf,
   type EngineManifest,
   type EngineManifestEntry,
@@ -16,6 +17,7 @@ import {
 } from './engineHost';
 import {
   engineManifestUrl,
+  engineOriginOf,
   engineUrls,
   fetchEngineManifest,
 } from './enginePaths';
@@ -104,6 +106,15 @@ describe('エンジンの URL の組み立て', () => {
     });
   });
 
+  it('web の base の下に置くときは、その下の URL にする（base が / ならオリジンのまま）', () => {
+    expect(engineOriginOf('https://app.example', '/')).toBe('https://app.example');
+    expect(engineOriginOf('https://app.example', './')).toBe('https://app.example');
+    expect(engineOriginOf('https://app.example', '/app/')).toBe('https://app.example/app');
+    expect(engineManifestUrl(engineOriginOf('https://app.example', '/app/'))).toBe(
+      'https://app.example/app/engine/manifest.json',
+    );
+  });
+
   it('ホストへの初期化の依頼は、エントリの値をそのまま運び、評価関数を /eval/ に置かせる', () => {
     expect(initRequest(MINI, engineUrls('http://localhost:5173', MINI))).toEqual({
       type: 'init',
@@ -111,6 +122,9 @@ describe('エンジンの URL の組み立て', () => {
         'http://localhost:5173/engine/1e50e75f5e2b8754/yaneuraou.sfnn_ka2_4096_8_64_progress8.js',
       baseUrl: 'http://localhost:5173/engine/1e50e75f5e2b8754/',
       exportName: 'YaneuraOu_SFNN_ka2_4096',
+      // ホストは import できないので、置き場と名前の形を本文で受け取る（shared の定義 1 つ）
+      evalDir: '/eval',
+      pathSegmentPattern: ENGINE_PATH_SEGMENT_PATTERN,
       evalFiles: [
         {
           url: 'http://localhost:5173/engine/eval/nn-45323c65135da65d.bin',

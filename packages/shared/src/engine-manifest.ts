@@ -8,20 +8,20 @@
 // 形: 評価関数の一覧（`evals`）と既定（`defaultId`）。評価関数の型（arch）はエンジンのコンパイル時に固定なので、
 // 各エントリが自分のエンジン（arch ごとのビルド）を持つ。arch が同じエントリはエンジンを共有してよい。
 import { z } from 'zod';
+import { ENGINE_PATH_SEGMENT_PATTERN } from './engine-paths';
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, 'sha256 は 64 桁の 16 進');
 
-// 1 階層ぶんの名前（区切り・親ディレクトリへの参照・先頭のドットを通さない）。
-// manifest の値をそのまま URL やパスに継ぐので、外へ出る値をここで弾く。
-const pathSegment = z
-  .string()
-  .regex(/^[A-Za-z0-9_-][A-Za-z0-9._-]*$/, '名前に使えない文字がある');
+// 1 階層ぶんの名前（形は engine-paths.ts の 1 か所で決める）。
+const segmentRegex = new RegExp(`^${ENGINE_PATH_SEGMENT_PATTERN}$`);
+
+const pathSegment = z.string().regex(segmentRegex, '名前に使えない文字がある');
 
 // manifest の置き場からの相対パス（1 階層以上）。
 const relativePath = z
   .string()
   .regex(
-    /^[A-Za-z0-9_-][A-Za-z0-9._-]*(\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/,
+    new RegExp(`^${ENGINE_PATH_SEGMENT_PATTERN}(\\/${ENGINE_PATH_SEGMENT_PATTERN})*$`),
     '相対パスに使えない文字がある',
   );
 

@@ -22,7 +22,7 @@ import {
 } from './browserDeps';
 import type { EngineChoice, EngineSettings } from './engineCache';
 import { createEngine } from './engineFactory';
-import { fetchEngineManifest } from './enginePaths';
+import { engineOriginOf, fetchEngineManifest } from './enginePaths';
 import type {
   NamedEvalOutcome,
   NamedEvalRequest,
@@ -101,7 +101,7 @@ async function prepare(
     return null;
   }
 
-  const origin = window.location.origin;
+  const origin = engineOriginOf(window.location.origin, import.meta.env.BASE_URL);
   const manifest = await fetchEngineManifest(origin, (url, init) => fetch(url, init));
   if (signal.aborted) return null;
   if (manifest === null) {

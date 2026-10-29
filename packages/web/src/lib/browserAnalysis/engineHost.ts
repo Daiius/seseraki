@@ -7,7 +7,11 @@
  * ——呼び出し側は Worker ごと作り直す（遅れて届く行を次の探索に混ぜない）。
  */
 import type { EngineManifestEntry, UsiTransport } from 'shared';
-import { stageMaxThreadsOf, type BrowserAnalysisSettings as ServerAnalysisSettings } from 'shared';
+import {
+  ENGINE_PATH_SEGMENT_PATTERN,
+  stageMaxThreadsOf,
+  type BrowserAnalysisSettings as ServerAnalysisSettings,
+} from 'shared';
 import type { EngineUrls } from './enginePaths';
 import type { AnalysisLoad } from './settings';
 
@@ -30,6 +34,12 @@ export type HostRequest =
       glueUrl: string;
       baseUrl: string;
       exportName: string;
+      /** 評価関数を置く仮想 FS のディレクトリ（{@link EVAL_DIR}）。ホストは import できないので本文で渡す */
+      evalDir: string;
+      /**
+       * 置き場の名前に許す形（`shared` の `ENGINE_PATH_SEGMENT_PATTERN`）。ホストは `evalDir` の直下で、この形の名前だけに書く
+       */
+      pathSegmentPattern: string;
       /** 評価関数のファイル（`nn.bin` と `progress.bin`）。ホストが大きさと sha256 を照合して置く */
       evalFiles: HostEvalFile[];
     }
@@ -69,6 +79,8 @@ export function initRequest(entry: EngineManifestEntry, urls: EngineUrls): HostR
     glueUrl: urls.glue,
     baseUrl: urls.base,
     exportName: entry.engine.exportName,
+    evalDir: EVAL_DIR,
+    pathSegmentPattern: ENGINE_PATH_SEGMENT_PATTERN,
     evalFiles: [
       {
         url: urls.nn,

@@ -14,14 +14,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Connect, Plugin, ResolvedConfig } from 'vite';
 import {
+  ENGINE_BASE_PATH,
   ENGINE_HOST_DEV_URL,
-  ENGINE_URL_PREFIX,
   ISOLATION_HEADERS,
   engineCacheControl,
   engineContentType,
   engineHostAssetName,
   engineRelativePath,
   isEngineRequired,
+  pathnameOf,
+  stripBase,
 } from './serving.ts';
 
 /** web のコードがホストの URL を受け取る仮想モジュール（型は `src/vite-env.d.ts`） */
@@ -42,9 +44,11 @@ export function enginePlugin(): Plugin {
     for (const [name, value] of Object.entries(ISOLATION_HEADERS)) {
       res.setHeader(name, value);
     }
-    const url = req.url ?? '';
-    const pathname = url.split(/[?#]/, 1)[0];
     if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    // `base` の下のパスとして比べる（ホストの URL は `base` 付きで渡している。下の `load`）
+    const url = stripBase(req.url ?? '', config.base);
+    if (url === null) return next();
+    const pathname = pathnameOf(url);
 
     if (pathname === ENGINE_HOST_DEV_URL) {
       const body = readHostSource();
@@ -55,7 +59,7 @@ export function enginePlugin(): Plugin {
       return;
     }
 
-    if (!pathname.startsWith(ENGINE_URL_PREFIX)) return next();
+    if (!pathname.startsWith(ENGINE_BASE_PATH)) return next();
     // ⚠ `/engine/` の下は、無ければ 404 を返す（next へ流すと SPA のフォールバックが index.html を 200 で返す）
     const rel = engineRelativePath(url);
     const file = rel === null ? null : path.join(engineDir, rel);

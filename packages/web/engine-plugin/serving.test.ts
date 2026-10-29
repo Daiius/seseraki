@@ -5,7 +5,28 @@ import {
   engineHostAssetName,
   engineRelativePath,
   isEngineRequired,
+  pathnameOf,
+  stripBase,
 } from './serving';
+
+describe('stripBase（Vite の base を剥がす）', () => {
+  it('base が / や相対なら何もしない', () => {
+    expect(stripBase('/engine/manifest.json', '/')).toBe('/engine/manifest.json');
+    expect(stripBase('/engine/manifest.json', './')).toBe('/engine/manifest.json');
+    expect(stripBase('/engine/manifest.json', '')).toBe('/engine/manifest.json');
+  });
+
+  it('base の下なら剥がして / から始まるパスにする（末尾の / の有無によらない）', () => {
+    expect(stripBase('/app/engine/manifest.json?t=1', '/app/')).toBe('/engine/manifest.json?t=1');
+    expect(stripBase('/app/engine-host.js', '/app')).toBe('/engine-host.js');
+    expect(pathnameOf(stripBase('/app/engine-host.js?v=1', '/app/')!)).toBe('/engine-host.js');
+  });
+
+  it('base の外は null（このプラグインでは扱わない）', () => {
+    expect(stripBase('/engine/manifest.json', '/app/')).toBeNull();
+    expect(stripBase('/application/engine/x', '/app/')).toBeNull();
+  });
+});
 
 describe('engineRelativePath', () => {
   it('/engine/ の下のパスを相対パスにする（クエリは落とす）', () => {

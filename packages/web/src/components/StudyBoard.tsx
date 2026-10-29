@@ -2,25 +2,19 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   DEFAULT_THRESHOLDS,
-  applyMove,
   lossLabel,
   usiToJapaneseWithPiece,
   type BoardState,
   type HandPieceKind,
   type MateLine,
-  type PieceKind,
   type Side,
   type SquareRef,
   type Thresholds,
 } from 'shared';
 import { BoardWithHands, pickerOf } from './BoardGrid';
-import {
-  ArrowUturnLeftIcon,
-  ArrowsRightLeftIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-} from './icons';
-import { formatTurnScore, mateLineOf, moveDestination } from '../lib/usi';
+import { ArrowUturnLeftIcon, ArrowsRightLeftIcon } from './icons';
+import { CandidateLine } from './CandidateLine';
+import { formatTurnScore, mateLineOf, moveDestination, pvTexts } from '../lib/usi';
 import {
   canPutSelectionOnHand,
   canRedo,
@@ -974,120 +968,59 @@ function EvalResultView({
         const active = replay !== null && replay.candidate === i ? replay : null;
         const pvLen = c.pv.length;
         return (
-          <details
+          <CandidateLine
             name="study-candidates"
             key={c.rank}
-            className={clsx('group rounded-lg p-2', active !== null && 'bg-base-200')}
+            className={clsx(active !== null && 'bg-base-200')}
             onToggle={(e) => {
               // 🔒 閉じたら再生を解除する（＝確定しない。上記のコメントの理由）。
               //    md 以上は CSS で常時展開だが、`open` 属性自体は動くので同じ経路を通る
               //    ——盤が検討局面へ戻るだけで、読めなくなるものは無い
               if (!e.currentTarget.open && active !== null) onReplay(null);
             }}
-          >
-            <summary className="flex items-center gap-2 list-none cursor-pointer md:cursor-default [&::-webkit-details-marker]:hidden">
-              <span className="font-mono text-base-content/50">{c.rank}</span>
-              <span className="font-bold">
-                {symbolAt(side, 0)}
-                {usiToJapaneseWithPiece(base, c.move)}
-              </span>
-              <span className="text-base-content/70">
-                {formatTurnScore(
-                  c.scoreType,
-                  c.scoreValue,
-                  side,
-                  mateLineOf(base, c.scoreType, c.scoreValue, c.pv),
-                )}
-              </span>
-              <span className="text-xs text-base-content/40">d{c.depth}</span>
-              {pvLen > 0 && (
-                <span className="ml-auto text-xs text-base-content/40 md:hidden">
-                  PV{pvLen}{' '}
-                  <span className="inline-block transition-transform group-open:rotate-180">▼</span>
-                </span>
-              )}
-            </summary>
-            {pvLen > 0 && (
-              <>
-                <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
-                  {(() => {
-                    let st = base;
-                    // 🔴 **再生位置の手を太字にする。** 太字にするのは `depth - 1` の手
-                    //    ——**いま盤に出ている局面へ至った直前の手**（`depth` 手進めた状態で
-                    //    最後に指された手）。手がかりが再生カウンタ（`3/9`）だけだと、
-                    //    長い読み筋のどこにいるのか読み筋の側から分からない。
-                    // 🔒 **見せ方は棋譜側の候補手一覧（`ShogiBoard`）と同じ**（prd/12 §3.2
-                    //    「独自の見せ方を作らない」）。⚠ **太字以外の装飾は足さない**
-                    //    ——色・背景を付けると棋譜側と見え方がずれる。
-                    const activeIdx = active !== null ? active.depth - 1 : -1;
-                    const nodes: ReactNode[] = [];
-                    for (let j = 0; j < pvLen; j++) {
-                      const text = `${symbolAt(side, j)}${usiToJapaneseWithPiece(st, c.pv[j])}`;
-                      if (j > 0) nodes.push(' ');
-                      if (j === activeIdx) {
-                        nodes.push(
-                          <strong key={j} className="text-base-content font-bold">
-                            {text}
-                          </strong>,
-                        );
-                      } else {
-                        nodes.push(<span key={j}>{text}</span>);
-                      }
-                      st = applyMove(st, c.pv[j]);
-                    }
-                    return nodes;
-                  })()}
-                </div>
-                {/*
-                  咎め筋の再生は**確定前のプレビュー**（prd/12 §3.2・決定 2026-09-01）。
-                  盤を触ればここまでが手順に確定し、「再生をやめる」なら確定せずに戻る。
-                  ⚠ **「戻る」から改名した**——選択肢が「捨てる / 続ける」の 2 つになった以上、
-                  「戻る」だけでは操作パネルの「棋譜に戻る」とどちらの戻るか読めない。
-                */}
-                <div className="mt-2 flex items-center gap-2 pl-5">
-                  <button
-                    type="button"
-                    className={clsx(btn.touch, 'btn-outline')}
-                    disabled={active === null}
-                    onClick={() =>
-                      onReplay(
-                        active !== null && active.depth > 1
-                          ? { candidate: i, depth: active.depth - 1 }
-                          : null,
-                      )
-                    }
-                    aria-label="読み筋を戻る"
-                  >
-                    <ChevronLeftIcon />
-                  </button>
-                  <span className="font-mono text-base-content/60 w-12 text-center">
-                    {active?.depth ?? 0}/{pvLen}
-                  </span>
-                  <button
-                    type="button"
-                    className={clsx(btn.touch, 'btn-outline')}
-                    disabled={active !== null && active.depth >= pvLen}
-                    onClick={() =>
-                      onReplay({ candidate: i, depth: (active?.depth ?? 0) + 1 })
-                    }
-                    aria-label="読み筋を進む"
-                  >
-                    <ChevronRightIcon />
-                  </button>
-                  {active !== null && (
-                    <button
-                      type="button"
-                      className={clsx(btn.touch, 'btn-ghost')}
-                      onClick={() => onReplay(null)}
-                      title="確定せずに検討局面へ戻る"
-                    >
-                      再生をやめる
-                    </button>
-                  )}
-                </div>
-              </>
+            rank={c.rank}
+            moveText={`${symbolAt(side, 0)}${usiToJapaneseWithPiece(base, c.move)}`}
+            scoreText={formatTurnScore(
+              c.scoreType,
+              c.scoreValue,
+              side,
+              mateLineOf(base, c.scoreType, c.scoreValue, c.pv),
             )}
-          </details>
+            depth={c.depth}
+            // 🔴 **再生位置の手を太字にする**（`CandidateLine`）。手がかりが再生カウンタ（`3/9`）だけだと、
+            //    長い読み筋のどこにいるのか読み筋の側から分からない。見せ方は棋譜側と同じ
+            pv={pvTexts(base, c.pv, (j) => symbolAt(side, j))}
+            /*
+              咎め筋の再生は**確定前のプレビュー**（prd/12 §3.2・決定 2026-09-01）。
+              盤を触ればここまでが手順に確定し、「再生をやめる」なら確定せずに戻る。
+              ⚠ **「戻る」から改名した**——選択肢が「捨てる / 続ける」の 2 つになった以上、
+              「戻る」だけでは操作パネルの「棋譜に戻る」とどちらの戻るか読めない。
+            */
+            replay={{
+              position: active?.depth ?? 0,
+              onBack: () =>
+                onReplay(
+                  active !== null && active.depth > 1
+                    ? { candidate: i, depth: active.depth - 1 }
+                    : null,
+                ),
+              onForward: () => onReplay({ candidate: i, depth: (active?.depth ?? 0) + 1 }),
+              backDisabled: active === null,
+              forwardDisabled: active !== null && active.depth >= pvLen,
+              buttonClassName: btn.touch,
+              labels: { back: '読み筋を戻る', forward: '読み筋を進む' },
+              extra: active !== null && (
+                <button
+                  type="button"
+                  className={clsx(btn.touch, 'btn-ghost')}
+                  onClick={() => onReplay(null)}
+                  title="確定せずに検討局面へ戻る"
+                >
+                  再生をやめる
+                </button>
+              ),
+            }}
+          />
         );
       })}
       </>

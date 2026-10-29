@@ -1,4 +1,10 @@
-import { classifyMateLine, type BoardState, type MateLine } from 'shared';
+import {
+  applyMove,
+  classifyMateLine,
+  usiToJapaneseWithPiece,
+  type BoardState,
+  type MateLine,
+} from 'shared';
 
 /**
  * 表示に使う mate 分類を作る。mate 以外・盤面や pv が無いときは `undefined`
@@ -102,6 +108,24 @@ export function usiToJapanese(usi: string): string {
   }
 
   return usi;
+}
+
+/**
+ * 読み筋（PV）を 1 手ずつ日本語にする（棋譜側の候補手一覧と検討盤の評価結果が共用する）。
+ * 駒名は盤の駒から取るので、`base`（読み筋の始まる局面）から 1 手ずつ進めながら読む。
+ * `symbolOf(j)` は j 手目（0 始まり）の手番記号
+ */
+export function pvTexts(
+  base: BoardState,
+  pv: readonly string[],
+  symbolOf: (ply: number) => string,
+): string[] {
+  let st = base;
+  return pv.map((move, j) => {
+    const text = `${symbolOf(j)}${usiToJapaneseWithPiece(st, move)}`;
+    st = applyMove(st, move);
+    return text;
+  });
 }
 
 /**

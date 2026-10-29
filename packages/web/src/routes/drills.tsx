@@ -16,7 +16,6 @@ import {
   currentState,
   isChoosingPromotion,
   lastMove,
-  promotionChoiceOf,
   resolvePromotion,
   selectionDestinations,
   tapHand,

@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { applyMove, parseSfen, type MateLine } from 'shared';
+import { applyMove, createInitialState, parseSfen, type MateLine } from 'shared';
 import {
   formatScore,
   formatScoreShort,
   formatTurnScore,
   mateLineOf,
   moveDestination,
+  pvTexts,
 } from './usi';
 
 /**
@@ -309,5 +310,20 @@ describe('moveDestination', () => {
     expect(moveDestination('')).toBeNull();
     expect(moveDestination('resign')).toBeNull();
     expect(moveDestination('K*5e')).toBeNull();
+  });
+});
+
+describe('pvTexts', () => {
+  it('局面を進めながら 1 手ずつ読み、手番記号を前に付ける', () => {
+    const symbols = ['▲', '△', '▲'];
+    expect(pvTexts(createInitialState(), ['7g7f', '3c3d', '8h2b+'], (j) => symbols[j])).toEqual([
+      '▲７六歩(77)',
+      '△３四歩(33)',
+      '▲２二角成(88)',
+    ]);
+  });
+
+  it('空の読み筋は空', () => {
+    expect(pvTexts(createInitialState(), [], () => '▲')).toEqual([]);
   });
 });

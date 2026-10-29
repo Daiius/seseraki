@@ -259,14 +259,14 @@ export async function statsTactics(tx: Tx, ownerId: string, query: StatsTacticsQ
   // 総局数と除外の内訳は期間内の全局が母集団（ラベルとは無関係）。
   // 集計対象が空でも 1 行返る
   const [summary] = await tx
-    .select(statsTacticsSummarySelect(query))
+    .select(statsTacticsSummarySelect())
     .from(kifus)
     .where(and(own, statsTacticsPeriodWhere(query)));
 
   const rows = await tx
     .select(statsTacticsRowsSelect(query))
     .from(kifus)
-    .innerJoin(kifuTactics, statsTacticsJoinOn(query))
+    .innerJoin(kifuTactics, statsTacticsJoinOn())
     .where(and(own, statsTacticsWhere(query)))
     .groupBy(kifuTactics.label)
     .orderBy(...statsTacticsOrderBy());

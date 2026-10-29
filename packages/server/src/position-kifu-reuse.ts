@@ -32,7 +32,7 @@
  */
 import { and, desc, eq, lt, sql, type SQL } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
-import type { Db, Tx } from './db/index.js';
+import type { Tx } from './db/index.js';
 import { kifuAnalyses, kifuPositions } from './db/schema.js';
 import { decodeCandidates, type StoredCandidate } from './kifu-analysis-detail.js';
 import type { EvalCandidate, EvalRequest, EvalOutcome } from './position-eval.js';
@@ -248,7 +248,7 @@ interface AnalysisRow {
  * 見られる形にして、上限が絞り込みより後にかかることをテストで固定するため。
  * 同時刻は `kifuId` の降順（応答が揺れないように順序を決め切る）。
  */
-export function positionEvalAnalysesQuery(q: Tx | Db, ownerId: string, sfen: string) {
+export function positionEvalAnalysesQuery(q: Tx, ownerId: string, sfen: string) {
   const p = positionAnalysis(kifuPositions.moveNumber);
   return q
     .select(analysisSelection(kifuPositions.moveNumber))
@@ -271,7 +271,7 @@ export function positionEvalAnalysesQuery(q: Tx | Db, ownerId: string, sfen: str
  * 本数は問わない（返すのはその手 1 本だから。prd/12 §2.6）。
  */
 export function namedMoveAnalysesQuery(
-  q: Tx | Db,
+  q: Tx,
   ownerId: string,
   sfen: string,
   move: string,
@@ -301,7 +301,7 @@ export function namedMoveAnalysesQuery(
  * 候補手が 1 本も無い解析は符号反転の材料にならないので、SQL の側で落とす。
  */
 export function playedMoveAnalysesQuery(
-  q: Tx | Db,
+  q: Tx,
   ownerId: string,
   sfen: string,
   move: string,
@@ -367,7 +367,7 @@ function emptyMatch(kifuId: number, moveNumber: number): KifuPositionMatch {
  * ①②は**両方引く**。どちらを採るかは `reuseFromKifu` が決める（①が優先）。
  */
 export async function findKifuPositionMatches(
-  q: Tx | Db,
+  q: Tx,
   ownerId: string,
   request: EvalRequest,
 ): Promise<KifuPositionMatch[]> {
@@ -413,7 +413,7 @@ export async function findKifuPositionMatches(
  * @param ownerId 要求者（🔒 セッションから取った ID）。**この人の棋譜からだけ引く**
  */
 export async function lookupKifuEvaluation(
-  q: Tx | Db,
+  q: Tx,
   ownerId: string,
   request: EvalRequest,
 ): Promise<ReusedEvalOutcome | null> {

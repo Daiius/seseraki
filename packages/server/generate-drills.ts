@@ -17,14 +17,14 @@
  */
 import { eq, isNotNull } from 'drizzle-orm';
 // 🔒 全員ぶんを扱うので RLS を迂回する system ロールで繋ぐ（prd/14 §4・prd/15 §2）。未設定なら throw
-import { endSystemDb, systemDb } from './src/db/system';
-import { kifus } from './src/db/schema';
+import { endSystemDb, systemDb } from './src/db/system.js';
+import { kifus } from './src/db/schema.js';
 import {
   drillConfigFromEnv,
   extractDrills,
   loadFullAnalyses,
   syncDrills,
-} from './src/drills';
+} from './src/drills.js';
 
 const db = systemDb();
 
@@ -62,7 +62,7 @@ async function main() {
       });
       if (n.upserted > 0) games++;
       removed += n.removed;
-      // 内訳は dry-run と同じ経路で数える（書き込み結果からは理由が読めない）
+      // 実書込では内訳（理由ごとの数）は数えない（書き込み結果からは理由が読めない）。内訳は dry-run で見る
       continue;
     }
     const [row] = await db

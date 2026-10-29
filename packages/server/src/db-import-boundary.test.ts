@@ -1,7 +1,7 @@
 /**
  * 🔒 **DB の接続（プール）に触れてよいモジュールを限る**（prd/14 §4「RLS の形」・prd/15 §2）。
  *
- * - **server ロールのプール**（`src/db/index.ts` の `db`。RLS が効く）: ログインの経路（`route.ts` の
+ * - **server ロールのプール**（`src/db/index.ts` の `db`。RLS が効く）: ログインの経路（`route.ts` / `routes/` の
  *   ハンドラと、そこから呼ぶクエリ関数）は、ユーザーとして開いたトランザクション（`user-tx.ts`）を
  *   引数で受け取る。`db` を直接使うと `app.user_id` を設定しないまま問い合わせることになる
  *   （RLS で「何も見えない」になる。それより前にここで落とす）
@@ -177,9 +177,15 @@ describe('DB の接続の import 境界（prd/14 §4・prd/15 §2）', () => {
     expect(importers('src/db/system.ts').filter((path) => server.has(path))).toEqual([]);
   });
 
-  it('route.ts（ログインの経路）はどのプールも import しない', () => {
+  it('route.ts と routes/（ログインの経路）はどのプールも import しない', () => {
+    const loginRoutes = sourceFiles()
+      .map((file) => relative(PACKAGE_ROOT, file))
+      .filter((path) => path === 'src/route.ts' || path.startsWith('src/routes/'));
+    // 分けたファイルを取りこぼしていない（routes/ が空なら検査が素通りになる）
+    expect(loginRoutes).toContain('src/routes/kifus.ts');
     for (const { module } of BOUNDARIES) {
-      expect(importers(module)).not.toContain('src/route.ts');
+      const found = importers(module);
+      expect(loginRoutes.filter((path) => found.includes(path))).toEqual([]);
     }
   });
 });

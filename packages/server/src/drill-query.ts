@@ -14,9 +14,9 @@
  * 行の ID で指すと作り直しで URL が切れるうえ、通しの連番なので総数が分かる。
  */
 import { and, count, eq, sql } from 'drizzle-orm';
-import { buildPositions, positionSfen, usiToJapaneseWithPiece } from 'shared';
-import type { Db, Tx } from './db/index.js';
-import { drillAttempts, drills, kifus } from './db/schema';
+import { positionSfen, usiToJapaneseWithPiece } from 'shared';
+import type { Tx } from './db/index.js';
+import { drillAttempts, drills, kifus } from './db/schema.js';
 import {
   ANSWER_COUNT,
   ATTEMPT_NO,
@@ -35,8 +35,9 @@ import {
   isoOf,
   type DrillListQuery,
   type DrillNextQuery,
-} from './drill-list-query';
-import { stateOfAnswer } from './drill-answer';
+} from './drill-list-query.js';
+import { stateOfAnswer } from './drill-answer.js';
+import { drillPosition } from './drill-answer-flow.js';
 
 /**
  * 出題を指す組（prd/14 §4.4）。「42 番の棋譜の 37 手目の次の一手」。
@@ -124,8 +125,7 @@ export async function pickNextDrill(
  * （`usiMoves` を作り直した直後などに起こりうる。数字を捏造しない）。
  */
 export function drillSfen(usiMoves: string[] | null, moveNumber: number): string | null {
-  if (!usiMoves || moveNumber > usiMoves.length) return null;
-  const state = buildPositions(usiMoves)[moveNumber];
+  const state = drillPosition(usiMoves, moveNumber);
   return state ? positionSfen(state) : null;
 }
 
@@ -160,7 +160,7 @@ export async function loadDrill(tx: Tx, ownerId: string, ref: DrillRef) {
 
 /** 解答を 1 件記録する（prd/13 §6.2） */
 export async function recordAttempt(
-  tx: Tx | Db,
+  tx: Tx,
   attempt: {
     drillId: number;
     /** 出題（`drills.ownerId`）の所有者。食い違えば複合 FK が落とす（prd/14 §4.1） */
@@ -363,8 +363,7 @@ export async function listDrillAttemptsOf(tx: Tx, ownerId: string, ref: DrillRef
     .limit(DRILL_PAGE_SIZE);
 
   // 日本語表記は**盤面が要る**（`shared` の `board.ts`）。1 問ぶんなので出題局面は 1 度だけ作る
-  const usiMoves = rows[0]?.usiMoves ?? null;
-  const base = usiMoves ? (buildPositions(usiMoves)[ref.moveNumber] ?? null) : null;
+  const base = drillPosition(rows[0]?.usiMoves ?? null, ref.moveNumber);
 
   return {
     attempts: rows.map(({ usiMoves: _usiMoves, move, line, ...row }) => {

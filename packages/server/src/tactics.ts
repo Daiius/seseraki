@@ -11,9 +11,7 @@
 import { eq } from 'drizzle-orm';
 import { detectTactics } from 'shared';
 import type { Tx } from './db/index.js';
-import { kifuTactics } from './db/schema';
-
-export type { Tx };
+import { kifuTactics } from './db/schema.js';
 
 /**
  * 子の表（`kifuTactics` / `kifuPositions` / `kifuAnalyses` など）に書くときの棋譜の指し方。

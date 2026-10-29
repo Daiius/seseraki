@@ -12,6 +12,7 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { apiError } from './api-error.js';
 import type { auth as Auth } from './auth.js';
 import { db } from './db/index.js';
 import { account, users } from './db/schema.js';
@@ -88,7 +89,7 @@ export function devLoginRoutes(auth: typeof Auth): Hono {
       email = await ownerEmail(auth);
     } else {
       if (!DEV_AS_PATTERN.test(as)) {
-        return c.json({ error: 'as は小文字英数と - _ の 32 文字まで' }, 400);
+        return apiError(c, 400, 'bad_request', 'as は小文字英数と - _ の 32 文字まで');
       }
       email = devUserEmail(as);
       await trySignUp(auth, email, `Dev ${as}`);

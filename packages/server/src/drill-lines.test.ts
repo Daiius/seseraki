@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { forgetLine, recallLine, rememberLine, resetLines } from './drill-lines';
+import { forgetLine, recallLine, rememberLine, resetLines } from './drill-lines.js';
 
 describe('drill-lines（詰みの指し継ぎで覚える手順。prd/13 §5.2）', () => {
   beforeEach(() => {

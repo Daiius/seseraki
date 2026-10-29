@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ComposeVerificationError, composeKif, composeKifVerified, verifyRoundTrip } from './compose';
-import { parseKif } from './parser';
+import { ComposeVerificationError, composeKif, composeKifVerified, verifyRoundTrip } from './compose.js';
+import { parseKif } from './parser.js';
 
 /** 合成 → parse で USI 列が戻ることを確かめる（このファイルの主張はほぼ全部これ） */
 function roundTrip(usiMoves: string[]): string[] {

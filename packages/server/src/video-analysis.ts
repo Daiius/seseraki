@@ -8,13 +8,13 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { systemDb } from './db/system.js';
-import { kifuAnalyses, kifus, videoKifuSources } from './db/schema';
-import { composeKifVerified } from './kif/compose';
-import { ANALYSIS_STATE_RESET } from './analysis-submit';
-import { replaceTactics } from './tactics';
-import { replacePositions } from './positions';
+import { kifuAnalyses, kifus, videoKifuSources } from './db/schema.js';
+import { composeKifVerified } from './kif/compose.js';
+import { ANALYSIS_STATE_RESET } from './analysis-submit.js';
+import { replaceTactics } from './tactics.js';
+import { replacePositions } from './positions.js';
 import { insertKifu } from './kifu-number.js';
-import { OWNER_USER_ID, subjectSideFromVideo } from './users';
+import { OWNER_USER_ID, subjectSideFromVideo } from './users.js';
 
 /**
  * 取り込みの入力（`POST /api/video-analysis/kifus`）。

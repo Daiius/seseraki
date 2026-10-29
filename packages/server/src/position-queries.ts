@@ -8,7 +8,7 @@
  * ⚠ グローバルの `db` を import しない（`db-import-boundary.test.ts` が検査する）。
  * 🔒 **応答の棋譜は番号（`kifuNo` = `kifus.displayNo`）で指す**（prd/14 §4.4）。内部の主キーは載せない。
  */
-import { and, asc, count, desc, eq, gte, isNotNull, isNull, lte, not, notExists, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, lte, not, notExists, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   createInitialState,
@@ -21,6 +21,7 @@ import type { Tx } from './db/index.js';
 import { kifuPositions, kifus } from './db/schema.js';
 import { playedOrCreatedAt } from './kifu-list-query.js';
 import { hashOf, samePosition, sameSideLayout, sfenOfRow } from './positions.js';
+import { countUnresolvedSubjects } from './users.js';
 
 /** 局面検索の起点。`pos` 未指定ならここから辿る（prd/10 §6.2） */
 export const INITIAL_SFEN = positionSfen(createInitialState());
@@ -225,10 +226,7 @@ export async function findSubjectGames(
   }));
 
   // 主体側が決まらない所有者の棋譜の数（この検索の対象外になっているもの）
-  const [unresolved] = await tx
-    .select({ n: count() })
-    .from(kifus)
-    .where(and(eq(kifus.ownerId, ownerId), isNull(kifus.subjectSide)));
+  const unresolved = await countUnresolvedSubjects(tx, ownerId);
 
   const total = verified.length;
   return {
@@ -240,7 +238,7 @@ export async function findSubjectGames(
     /** 🔒 読み出しを `SUBJECT_SCAN_LIMIT` 行で打ち切ったか（prd/14 §6.3。黙って切らない） */
     truncated,
     /** 🔒 主体側が決まらないので除外した棋譜の数（prd/10 §3.3） */
-    unresolvedSubjects: unresolved?.n ?? 0,
+    unresolvedSubjects: unresolved,
   };
 }
 

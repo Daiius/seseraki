@@ -12,6 +12,7 @@ import { ThresholdSettings } from '../components/ThresholdSettings';
 import { DisplaySizeSettings } from '../components/DisplaySizeSettings';
 import { SelfSettings } from '../components/SelfSettings';
 import { AnalysisSettings } from '../components/AnalysisSettings';
+import { BuildVersionInfo } from '../components/BuildVersionInfo';
 import { useMe } from '../lib/useMe';
 import { client } from '../lib/honoClient';
 
@@ -124,6 +125,7 @@ function SettingsPage() {
           手以内の詰み（エンジンの詰み手数）を逃して負けた局を取りこぼしとする
         </label>
       </section>
+      <BuildVersionInfo />
     </div>
   );
 }

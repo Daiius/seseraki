@@ -74,4 +74,15 @@ COPY --from=build /workspace/packages/server/dist/migrate.js ./migrate.js
 # ここを忘れると、本番でマイグレーションを流すまで気づけない。
 COPY --from=build /workspace/packages/server/drizzle ./drizzle
 
+# ビルドの版（prd/02 §5「版の確かめ方」）。`GET /api/version` が返す。`.dockerignore` が `.git` を除くので
+# イメージの中では git から取れない——ビルド引数で渡す。未指定なら unknown（ビルドは止めない）。
+#   --build-arg GIT_COMMIT=$(git rev-parse HEAD)
+#   --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+#   --build-arg GIT_DIRTY=$(test -z "$(git status --porcelain)" && echo false || echo true)
+# 最後のステージの末尾に置く（値が毎回変わるので、手前の層のキャッシュを壊さないように）
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ARG GIT_DIRTY=false
+ENV GIT_COMMIT=$GIT_COMMIT BUILD_TIME=$BUILD_TIME GIT_DIRTY=$GIT_DIRTY
+
 CMD ["server.js"]

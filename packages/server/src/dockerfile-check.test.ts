@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   finalStageIsProduction,
   missingEntryCopies,
+  missingVersionEnv,
 } from './dockerfile-check.js';
 
 const DOCKERFILE = readFileSync(
@@ -22,6 +23,29 @@ describe('Dockerfile.prod', () => {
         'migrate',
         'link-owner-account',
       ]),
+    ).toEqual([]);
+  });
+
+  it('最終ステージがビルドの版をビルド引数から ENV へ渡す（GET /api/version。prd/02 §5）', () => {
+    expect(missingVersionEnv(DOCKERFILE)).toEqual([]);
+  });
+});
+
+describe('missingVersionEnv', () => {
+  it('ビルドステージだけにあっても渡したとみなさない', () => {
+    expect(
+      missingVersionEnv(
+        'FROM a AS build\nARG GIT_COMMIT\nENV GIT_COMMIT=$GIT_COMMIT\nFROM b\n',
+      ),
+    ).toEqual(['GIT_COMMIT', 'BUILD_TIME', 'GIT_DIRTY']);
+  });
+
+  it('ARG と ENV が揃っていれば足りている', () => {
+    expect(
+      missingVersionEnv(
+        'FROM b\nARG GIT_COMMIT=unknown\nARG BUILD_TIME\nARG GIT_DIRTY=false\n' +
+          'ENV GIT_COMMIT=$GIT_COMMIT BUILD_TIME=$BUILD_TIME\nENV GIT_DIRTY=$GIT_DIRTY\n',
+      ),
     ).toEqual([]);
   });
 });

@@ -248,7 +248,7 @@ export function formatList(names: readonly string[]): string {
 export function describePlan(plan: Plan, cfg: DeployConfig): string {
   const lines = [
     `転送: assets/ ${plan.current.length} ファイル → ${cfg.host}:${cfg.root}/assets/（削除なしで上書き）`,
-    `転送: トップレベル（index.html など）を最後に → ${cfg.host}:${cfg.root}/`,
+    `転送: トップレベル（index.html・version.json など）を最後に → ${cfg.host}:${cfg.root}/`,
     `1 つ前の一覧: ${plan.previous === null ? 'なし（初回扱い・何も消さない）' : `あり（${plan.previous.length} ファイル）`}`,
   ];
   if (plan.recoveredPending) {
@@ -344,6 +344,7 @@ export function uploadAssetsStep(cfg: DeployConfig): Step {
 
 /**
  * index.html などトップレベルを送る。assets/ より後に呼ぶ（新しい index.html が未着のチャンクを指さないように）。
+ * ビルドの版（`version.json`。prd/02 §5）もここで index.html と一緒に送る——名前が固定なので世代管理には載らない。
  * 名前にハッシュが付かないので `--checksum` で中身を比べる。サイズと更新時刻の比較だけだと、
  * ハッシュの長さが同じ index.html を同じ秒に書いたとき送り漏らす（テストで実際に踏んだ）。
  */

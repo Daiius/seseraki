@@ -288,7 +288,7 @@ docker compose run --rm --no-deps -e GENERATE_DRILLS_APPLY=1 <server サービ�
 > - ⚠ **`localhost` 以外の http（LAN の IP）では動かない**（SharedArrayBuffer は secure context だけ）。実機は https の remote dev で。
 > - **完了は担当によらず full**（prd/14 §5.7）。ブラウザも 2 段（quick → full）で回す。「解析が終わったか」は
 >   `lib/analysisPending.ts` の `isAnalysisPending` の 1 か所で判定する（画面ごとに `analysisProfile` を直に書かない）。
-> - 🔒 **段はブラウザが決めない**（`runner.ts`）。開始の口が返す段（`profile`）と思考時間で回し、チャンクに段を載せる。
+> - 🔒 **段はブラウザが決めない**（`kifuAnalysis.ts`）。開始の口が返す段（`profile`）と思考時間で回し、チャンクに段を載せる。
 >   順序（開いている詳細は quick → full を最優先・使用中は常にで quick を先に）は `scheduler.ts`。並びは server の未解析の一覧に従い、
 >   web で段を推測しない（prd/14 §5.10）。
 > - 経過はコンソールに `[browser-analysis]` の接頭辞で出る。

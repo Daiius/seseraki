@@ -8,9 +8,11 @@
  *
  * 失敗の記録がある棋譜は進まないので待たない（やり直すのは再解析だけ）。
  */
+import type { AnalysisProfile } from './analysisProgress';
+
 export interface AnalysisPendingInput {
   /** 完了した段階（`kifus.analysisProfile`）。どの段階も完了していなければ null */
-  analysisProfile: 'quick' | 'full' | null;
+  analysisProfile: AnalysisProfile | null;
   /** 失敗の記録があるか */
   failed: boolean;
 }

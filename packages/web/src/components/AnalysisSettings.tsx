@@ -10,7 +10,7 @@ import {
   type AnalysisMode,
 } from '../lib/browserAnalysis/settings';
 import { useBrowserAnalysisState } from '../lib/browserAnalysis/store';
-import { ENGINE_BASE_PATH } from '../lib/browserAnalysis/enginePaths';
+import { engineAssetUrl, engineOriginOf } from '../lib/browserAnalysis/enginePaths';
 import { BrowserAnalysisNotice, megabytes } from './BrowserAnalysis';
 
 const ASSIGNEE_OPTIONS: { value: AnalysisAssignee; label: string; hint: string }[] = [
@@ -289,7 +289,7 @@ export function AnalysisSettings({ me }: { me: Me }) {
                         ・
                         <a
                           className="link"
-                          href={`${ENGINE_BASE_PATH}${entry.license.file}`}
+                          href={engineAssetUrl(engineOriginOf('', import.meta.env.BASE_URL), entry.license.file)}
                           target="_blank"
                           rel="noreferrer"
                         >

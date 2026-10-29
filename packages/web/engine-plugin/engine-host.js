@@ -9,7 +9,8 @@
 // メインスレッドには置けない。
 //
 // メインスレッドとのやり取り（`src/lib/browserAnalysis/engineHost.ts` と対）:
-//   受ける: { type: 'init', glueUrl, baseUrl, exportName, evalFiles: [{ url, bytes, sha256, path }] }
+//   受ける: { type: 'init', glueUrl, baseUrl, exportName, evalDir, pathSegmentPattern,
+//             evalFiles: [{ url, bytes, sha256, path }] }
 //           { type: 'cmd', line }   USI の 1 行
 //           { type: 'quit' }
 //   送る:   { type: 'download', loaded, total }   評価関数の受信バイト数（全ファイルの合計）
@@ -17,13 +18,13 @@
 //           { type: 'line', line }                エンジンの出力 1 行
 //           { type: 'dead', message }             エンジンが死んだ・起動できなかった（以後は何も送らない）
 //
-// 評価関数のファイル（nn.bin・progress.bin）は仮想 FS の /eval/ に置く（`path`）。
+// 評価関数のファイル（nn.bin・progress.bin）は仮想 FS の evalDir（/eval）の直下に置く（`path`）。
+// evalDir と、置き場の名前に許す形（shared の ENGINE_PATH_SEGMENT_PATTERN）は init の本文で受け取る（import できないため）。
 // ⚠ EvalDir は絶対パス /eval にする（engineHost.ts）。`.` だと上流は progress.bin を「実行ファイルのフォルダ + EvalDir」から
 // 探して見つけられず、isready で黙って終了する。ほかのファイル（eval_options.txt）は置かない（オプションが固定される）。
 'use strict';
 
 var LOG = '[browser-analysis] host:';
-var EVAL_DIR = '/eval';
 var engine = null;
 var dead = false;
 
@@ -129,9 +130,22 @@ async function init(message) {
   if (!Array.isArray(evalFiles) || evalFiles.length === 0) {
     throw new Error('評価関数のファイルが指定されていません');
   }
+  if (typeof message.pathSegmentPattern !== 'string' || message.pathSegmentPattern === '') {
+    throw new Error('置き場の名前の形が指定されていません');
+  }
+  var segment = new RegExp('^(?:' + message.pathSegmentPattern + ')$');
+  var evalDir = String(message.evalDir);
+  // 置き場のディレクトリはルート直下の 1 階層だけ（/eval）
+  if (evalDir.charAt(0) !== '/' || !segment.test(evalDir.slice(1))) {
+    throw new Error('評価関数のディレクトリが不正です: ' + evalDir);
+  }
   for (var i = 0; i < evalFiles.length; i++) {
-    // 置き場は /eval/<名前> だけ（ほかの場所に書かせない）
-    if (!/^\/eval\/[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(String(evalFiles[i].path))) {
+    // 置き場は <evalDir>/<名前> だけ（ほかの場所に書かせない）
+    var filePath = String(evalFiles[i].path);
+    if (
+      filePath.slice(0, evalDir.length + 1) !== evalDir + '/' ||
+      !segment.test(filePath.slice(evalDir.length + 1))
+    ) {
       throw new Error('評価関数の置き場が不正です: ' + evalFiles[i].path);
     }
   }
@@ -170,8 +184,8 @@ async function init(message) {
   });
 
   var contents = await evalPromise;
-  // 評価関数は仮想 FS の /eval/ に置き、EvalDir（/eval）/ EvalFile で指す
-  instance.FS.mkdir(EVAL_DIR);
+  // 評価関数は仮想 FS の evalDir（/eval）に置き、EvalDir / EvalFile で指す
+  instance.FS.mkdir(evalDir);
   for (var k = 0; k < evalFiles.length; k++) {
     instance.FS.writeFile(evalFiles[k].path, contents[k], { canOwn: true });
     console.info(LOG, 'eval written', evalFiles[k].path, contents[k].length);

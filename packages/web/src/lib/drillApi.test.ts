@@ -62,7 +62,7 @@ vi.mock('./honoClient', () => {
   };
 });
 
-import { pause, requestAnswer, requestGiveUp, type Drill } from './drillApi';
+import { requestAnswer, requestGiveUp, type Drill } from './drillApi';
 
 const DRILL = { kifuNo: 1, moveNumber: 10, kind: 'mate' } as Drill;
 const BODY = { line: ['2g2f'] };
@@ -84,34 +84,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   for (const queue of Object.values(calls)) queue.length = 0;
-});
-
-describe('pause（取り下げられる待ち）', () => {
-  it('時間が来たら戻る', async () => {
-    let done = false;
-    void pause(1000, new AbortController().signal).then(() => (done = true));
-    await vi.advanceTimersByTimeAsync(999);
-    expect(done).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(done).toBe(true);
-  });
-
-  it('中断されたら待たずに戻り、タイマーを残さない', async () => {
-    const controller = new AbortController();
-    let done = false;
-    void pause(60_000, controller.signal).then(() => (done = true));
-    controller.abort();
-    await Promise.resolve();
-    expect(done).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('中断済みならすぐ戻る', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    await pause(60_000, controller.signal);
-    expect(vi.getTimerCount()).toBe(0);
-  });
 });
 
 describe('requestAnswer の取り下げ（画面を離れた）', () => {

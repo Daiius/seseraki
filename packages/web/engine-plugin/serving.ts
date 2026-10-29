@@ -1,8 +1,10 @@
 // エンジンの配信物（packages/engine-wasm の dist/engine）を配るときの、純粋な判断。
 // prd/14-multi-user.md §5.5。プラグイン本体（index.ts）から使い、ここだけを unit テストする。
+// ⚠ `shared` からではなく相対パスで読む——Vite の設定の読み込みは `shared` をバンドルせずに外へ出し、node が
+// `shared` の `src/index.ts`（拡張子なしの import）を読めずに落ちる。`engine-paths.ts` は何も import しない
+import { ENGINE_BASE_PATH, isEnginePathSegment } from '../../shared/src/engine-paths.ts';
 
-/** エンジンの配信物を置く URL の接頭辞（web の `lib/browserAnalysis/enginePaths.ts` と同じ値） */
-export const ENGINE_URL_PREFIX = '/engine/';
+export { ENGINE_BASE_PATH };
 
 /** エンジンのホスト（classic の Worker のスクリプト）を dev / preview で配る URL */
 export const ENGINE_HOST_DEV_URL = '/engine-host.js';
@@ -19,24 +21,41 @@ export const ISOLATION_HEADERS = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
 } as const;
 
+/** URL からクエリとフラグメントを落としたパス */
+export function pathnameOf(url: string): string {
+  return url.split(/[?#]/, 1)[0];
+}
+
 /**
- * リクエストの URL を、配信物のディレクトリからの相対パスにする。`/engine/` の下でなければ null。
+ * Vite の `base` を剥がしたパス（`/` から始まる）。`base` の下でなければ null（このプラグインでは扱わない）。
+ * プラグインのミドルウェアは Vite の内部のミドルウェア（`base` を剥がすもの）より前に置くので、自分で剥がす。
+ * `base` が `/` や相対（`./`・空。build だけで使う形）なら何もしない
+ */
+export function stripBase(url: string, base: string): string | null {
+  if (!base.startsWith('/') || base === '/') return url;
+  const prefix = base.endsWith('/') ? base : `${base}/`;
+  if (!url.startsWith(prefix)) return null;
+  return `/${url.slice(prefix.length)}`;
+}
+
+/**
+ * リクエストの URL（`base` を剥がしたもの）を、配信物のディレクトリからの相対パスにする。`/engine/` の下でなければ null。
  *
  * 🔒 ディレクトリの外へ出るパス（`..`・空の区間・バックスラッシュ・先頭のドット）は null（配らない）。
- * 通すのは manifest の `pathSegment` と同じ文字だけ（`shared` の `engine-manifest.ts`）。
+ * 通すのは manifest と同じ形の名前だけ（`shared` の `isEnginePathSegment`）。
  */
 export function engineRelativePath(url: string): string | null {
-  const pathname = url.split(/[?#]/, 1)[0];
-  if (!pathname.startsWith(ENGINE_URL_PREFIX)) return null;
+  const pathname = pathnameOf(url);
+  if (!pathname.startsWith(ENGINE_BASE_PATH)) return null;
   let rel: string;
   try {
-    rel = decodeURIComponent(pathname.slice(ENGINE_URL_PREFIX.length));
+    rel = decodeURIComponent(pathname.slice(ENGINE_BASE_PATH.length));
   } catch {
     return null;
   }
   if (rel === '') return null;
   const segments = rel.split('/');
-  if (!segments.every((s) => /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/.test(s))) {
+  if (!segments.every(isEnginePathSegment)) {
     return null;
   }
   return segments.join('/');

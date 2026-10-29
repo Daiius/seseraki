@@ -5,14 +5,12 @@
  * コピーする。`packages/web/engine-plugin`）。一覧は `manifest.json` で、ほかは内容ハッシュ入りのパス。
  */
 import {
+  ENGINE_BASE_PATH,
   engineAssetPaths,
   parseEngineManifest,
   type EngineManifest,
   type EngineManifestEntry,
 } from 'shared';
-
-/** 配信物を置くパス（`engine-plugin/serving.ts` の `ENGINE_URL_PREFIX` と同じ値） */
-export const ENGINE_BASE_PATH = '/engine/';
 
 export interface EngineUrls {
   /** グルー（`importScripts` で読む。`mainScriptUrlOrBlob` にも渡す） */
@@ -25,7 +23,16 @@ export interface EngineUrls {
   progress: string;
 }
 
-/** manifest の URL。`origin` は末尾に `/` を付けない（`https://example.com`） */
+/**
+ * 配信物の URL の基準（オリジンと、web の `base` から末尾の `/` を除いたもの）。`base` が `/`・相対ならオリジンだけ。
+ * dev / preview の配信（`engine-plugin`）も `base` を剥がしてから比べるので、`base` の下に置いても揃う
+ */
+export function engineOriginOf(origin: string, baseUrl: string): string {
+  if (!baseUrl.startsWith('/') || baseUrl === '/') return origin;
+  return `${origin}${baseUrl.replace(/\/+$/, '')}`;
+}
+
+/** manifest の URL。`origin` は末尾に `/` を付けない（`https://example.com`。{@link engineOriginOf}） */
 export function engineManifestUrl(origin: string): string {
   return `${origin}${ENGINE_BASE_PATH}manifest.json`;
 }

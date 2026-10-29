@@ -143,7 +143,7 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 #### 担当 `browser` の検討盤はブラウザで読む（決定・2026-10-29）
 
 > ✅ **実装済み（本番は未反映）**（2026-10-29）。web だけの変更で、server・手元 worker は変えていない。
-> `lib/browserAnalysis/studyEval.ts`（設定・同意・`EvalResult` への変換）・`runner.ts` の `evaluatePosition`・`shared` の `position-evaluation.ts`。
+> `lib/browserAnalysis/studyEval.ts`（設定・同意・`EvalResult` への変換）・`engineReads.ts` の `evaluatePosition`・`shared` の `position-evaluation.ts`。
 
 - 🔒 **画面で完結させる。** 担当 `browser` の利用者が「評価する」（§3.2）を押したら、server の口を通さずに、このブラウザの
   WASM エンジン（[14](./14-multi-user.md) §5.5）で読む。**結果は server に送らず、保存もしない。server に新しい口は作らない**
@@ -153,8 +153,14 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 - **読む量**: **候補 3 本（MultiPV 3。§2.2 の契約）・1000ms・スレッドは最大 4**（負荷「控えめ」ならその半分の 2。
   全局面解析の full の段と同じ決め方。[14](./14-multi-user.md) §5.5・§5.10）
   - 🔒 **設定は web の定数**（`studyEval.ts` の `STUDY_EVAL_SETTINGS`）。server を経由しないので、server が決めて渡す経路が無い
-  - ⚠ エンジンの上限（`maxThreads` 8）と置換表（`hashMb` 64）は、全局面解析の値（server の `BROWSER_ANALYSIS_SETTINGS`）とそろえる。
-    違うと、全局面解析と共用のエンジンを評価のたびに作り直す（評価関数の読み込みからになる）
+  - 🔒 **エンジンの大きさ（`maxThreads`・`hashMb`）は今あるエンジンのものを使う**（2026-10-30 改定。`engineCache.ts` の `followCurrentSizing`）。
+    局面評価では作り直すかの比較から大きさを外し、評価関数の選択と負荷の設定だけを見る。web の定数の `maxThreads` 8・`hashMb` 64 は、
+    エンジンがまだ無いときに作る大きさとしてだけ使う
+    - 理由: server の定数を web に手で写すと、ずれたときに評価のたびに評価関数の読み込みから作り直す。shared の定数にして両方から
+      読む案は、server の値を変えたときに web の再デプロイを要する（開始の口で設定を渡す理由——[14](./14-multi-user.md) §5.8——を崩す）うえ、
+      配信済みの古い web とはやはりずれる。局面評価の結果は画面に出すだけで来歴を残さないので、大きさを全局面解析に合わせて困ることはない
+    - ⚠ 改定前（2026-10-29）: 全局面解析の値（server の `BROWSER_ANALYSIS_SETTINGS`）と手でそろえる。違うと、全局面解析と共用のエンジンを
+      評価のたびに作り直す
   - 🔴 **MultiPV は自分で 3 にしてから読み、終わったら元へ戻す**（§2.2 と同じ理由。`shared` の `withMultiPv`）。全局面解析は MultiPV 1 で回る
 - **直前の手の採点（§3.2）も同じエンジンで、直列に読む**: 主の局面 → 1 手前の局面の順。**主の結果を先に出し、採点は後から足す**
   （見え方は手元 worker と同じ）。主が出なければ 1 手前は読まない。エンジンはこのブラウザに 1 本なので、並行に頼んでも順に読むだけ

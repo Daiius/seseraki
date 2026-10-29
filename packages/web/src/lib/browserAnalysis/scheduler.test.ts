@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AnalyzeHooks, KifuOutcome } from './runner';
+import type { AnalyzeHooks, KifuOutcome } from './kifuAnalysis';
 import {
   anySignal,
   COOLDOWN_MS,

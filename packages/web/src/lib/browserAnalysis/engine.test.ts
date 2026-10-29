@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createUsiSession,
+  ENGINE_PATH_SEGMENT_PATTERN,
   engineEntryOf,
   type EngineManifest,
   type EngineManifestEntry,
@@ -10,11 +11,13 @@ import {
   analysisThreads,
   engineOptions,
   initRequest,
+  threadsFor,
   type HostRequest,
   type HostWorkerLike,
 } from './engineHost';
 import {
   engineManifestUrl,
+  engineOriginOf,
   engineUrls,
   fetchEngineManifest,
 } from './enginePaths';
@@ -103,6 +106,15 @@ describe('エンジンの URL の組み立て', () => {
     });
   });
 
+  it('web の base の下に置くときは、その下の URL にする（base が / ならオリジンのまま）', () => {
+    expect(engineOriginOf('https://app.example', '/')).toBe('https://app.example');
+    expect(engineOriginOf('https://app.example', './')).toBe('https://app.example');
+    expect(engineOriginOf('https://app.example', '/app/')).toBe('https://app.example/app');
+    expect(engineManifestUrl(engineOriginOf('https://app.example', '/app/'))).toBe(
+      'https://app.example/app/engine/manifest.json',
+    );
+  });
+
   it('ホストへの初期化の依頼は、エントリの値をそのまま運び、評価関数を /eval/ に置かせる', () => {
     expect(initRequest(MINI, engineUrls('http://localhost:5173', MINI))).toEqual({
       type: 'init',
@@ -110,6 +122,9 @@ describe('エンジンの URL の組み立て', () => {
         'http://localhost:5173/engine/1e50e75f5e2b8754/yaneuraou.sfnn_ka2_4096_8_64_progress8.js',
       baseUrl: 'http://localhost:5173/engine/1e50e75f5e2b8754/',
       exportName: 'YaneuraOu_SFNN_ka2_4096',
+      // ホストは import できないので、置き場と名前の形を本文で受け取る（shared の定義 1 つ）
+      evalDir: '/eval',
+      pathSegmentPattern: ENGINE_PATH_SEGMENT_PATTERN,
       evalFiles: [
         {
           url: 'http://localhost:5173/engine/eval/nn-45323c65135da65d.bin',
@@ -193,6 +208,30 @@ describe('analysisThreads（負荷の設定。prd/14 §5.10）', () => {
     expect(analysisThreads(0, 8, 'max')).toBe(1);
     expect(analysisThreads(Number.NaN, 8, 'max')).toBe(1);
     expect(analysisThreads(undefined, 8, 'gentle')).toBe(1);
+  });
+});
+
+describe('threadsFor（作るとき・合わせるときのスレッド数）', () => {
+  const created = { maxThreads: 8, stageMaxThreads: 4 };
+  const base = { createdSettings: created, hardwareConcurrency: 16, load: 'max' as const };
+
+  it('固定のスレッド数があればその数（段の上限・負荷・論理コア数によらない）', () => {
+    expect(threadsFor({ ...base, fixed: 2 })).toBe(2);
+    expect(threadsFor({ ...base, fixed: 2, cap: 8, load: 'gentle' })).toBe(2);
+  });
+
+  it('無ければ負荷の設定の数。上限は段の上限（cap）と、作ったときの maxThreads の小さいほう', () => {
+    expect(threadsFor({ ...base, fixed: null, cap: 4 })).toBe(4);
+    expect(threadsFor({ ...base, fixed: null, cap: 8 })).toBe(8);
+    expect(threadsFor({ ...base, fixed: null, cap: 16 })).toBe(8);
+    expect(threadsFor({ ...base, fixed: null, cap: 4, load: 'gentle' })).toBe(2);
+    expect(threadsFor({ ...base, fixed: null, cap: 8, hardwareConcurrency: 2 })).toBe(2);
+  });
+
+  it('cap が無ければ作ったときの段の上限（無ければ maxThreads）', () => {
+    expect(threadsFor({ ...base })).toBe(4);
+    expect(threadsFor({ ...base, createdSettings: { maxThreads: 8 } })).toBe(8);
+    expect(threadsFor({ ...base, createdSettings: { maxThreads: 8 }, load: 'gentle' })).toBe(4);
   });
 });
 

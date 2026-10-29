@@ -13,7 +13,7 @@
  * ⚠ このモジュールは出題の画面から読み込むので、エンジンや runner の実装を import しない。
  */
 import { useSyncExternalStore } from 'react';
-import { getBrowserAnalysisSettings, setBrowserAnalysisSettings, withConsent } from './settings';
+import { createConsentPrompt } from './consentPrompt';
 
 export interface DrillEngineState {
   /** 判定だけの常駐を起こしてほしい（最初の 1 手を指した）。タブの間は落とさない */
@@ -24,15 +24,22 @@ export interface DrillEngineState {
   declined: boolean;
 }
 
-let state: DrillEngineState = { wanted: false, asking: false, declined: false };
+/** 🔒 断ったらこのタブでは聞き直さない（判定は手元 worker に回る） */
+const consent = createConsentPrompt({ rememberDecline: true });
+
+let state: DrillEngineState = { wanted: false, ...consent.getState() };
 const listeners = new Set<() => void>();
-/** 同意の答えを待っている呼び出し */
-let waiters: ((agreed: boolean) => void)[] = [];
 
 function patch(next: Partial<DrillEngineState>): void {
   state = { ...state, ...next };
   for (const listener of [...listeners]) listener();
 }
+
+/** 同意の案内の状態を、この段取りの状態に写す */
+function followConsent(): void {
+  consent.subscribe(() => patch(consent.getState()));
+}
+followConsent();
 
 export function getDrillEngineState(): DrillEngineState {
   return state;
@@ -58,43 +65,21 @@ export function requestDrillEngine(): void {
  * ほかに待つ呼び出しが無ければ案内も閉じる（次に開いた画面に、頼まれていない同意の案内が残らないように）
  */
 export function askDrillEngineConsent(signal?: AbortSignal): Promise<boolean> {
-  if (state.declined || signal?.aborted) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const waiter = (agreed: boolean) => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve(agreed);
-    };
-    const onAbort = () => {
-      if (!waiters.includes(waiter)) return;
-      waiters = waiters.filter((w) => w !== waiter);
-      if (waiters.length === 0 && state.asking) patch({ asking: false });
-      resolve(false);
-    };
-    waiters.push(waiter);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    if (!state.asking) patch({ asking: true });
-  });
+  return consent.ask(signal);
 }
 
 /**
  * 同意の答え（案内のボタン）。同意なら評価関数（`nn.bin` の sha256）の同意を端末の設定に足す——
- * 判定だけの常駐が起動し直してエンジンを読み込む（`DrillGradingHost`）
+ * 判定だけの常駐が起動し直してエンジンを読み込む（`DrillGradingHost`）。sha256 が無ければ断ったものとして扱う
  */
 export function answerDrillEngineConsent(agreed: boolean, evalSha256: string | null): void {
-  if (agreed && evalSha256) {
-    setBrowserAnalysisSettings({
-      consentedEvalSha256s: withConsent(getBrowserAnalysisSettings().consentedEvalSha256s, evalSha256),
-    });
-  }
-  const resolved = waiters;
-  waiters = [];
-  patch({ asking: false, declined: !agreed });
-  for (const resolve of resolved) resolve(agreed);
+  consent.answer(agreed, evalSha256);
 }
 
 /** テスト用: 状態を最初に戻す */
 export function resetDrillEngineForTest(): void {
-  state = { wanted: false, asking: false, declined: false };
-  waiters = [];
+  consent.reset();
+  followConsent();
+  state = { wanted: false, ...consent.getState() };
   listeners.clear();
 }

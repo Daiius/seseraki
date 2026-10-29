@@ -56,7 +56,8 @@ export type NamedEvalOutcome =
 
 /**
  * 検討盤の局面評価（prd/12 §2.2・§2.4）で頼まれること。担当 `browser` の利用者の検討盤が、server を通さずに頼む。
- * 🔒 設定は web の定数（`studyEval.ts` の `STUDY_EVAL_SETTINGS`。server を経由しないため）
+ * 🔒 設定は web の定数（`studyEval.ts` の `STUDY_EVAL_SETTINGS`。server を経由しないため）。
+ * エンジンの大きさ（`maxThreads`・`hashMb`）は、エンジンがまだ無いときに作る大きさとしてだけ使う（今あるエンジンを作り直さない）
  */
 export interface PositionEvalRequest {
   /** 読む局面（正規化 SFEN。検証済み） */
@@ -204,8 +205,9 @@ export function createEngineReads(deps: EngineReadsDeps, engines: EngineCache): 
     return withEngineRetry(
       'position',
       signal,
-      // 固定のスレッド数は無い——負荷の設定の数（上限は段の上限。全局面解析の full と同じ決め方）
-      () => engines.acquire(settings, choice),
+      // 固定のスレッド数は無い——負荷の設定の数（上限は段の上限。全局面解析の full と同じ決め方）。
+      // 🔒 エンジンの大きさ（maxThreads・hashMb）は今あるエンジンのものを使う（大きさの違いで作り直さない。prd/12 §2.4）
+      () => engines.acquire(settings, choice, undefined, { followCurrentSizing: true }),
       async (current): Promise<PositionEvalOutcome> => {
         // 🔴 局面評価は MultiPV を自分で設定してから読み、終わったら戻す（全局面解析は MultiPV 1。prd/12 §2.2）。
         // 取り下げられたら次の info で stop を送って打ち切る（結果は捨てる）

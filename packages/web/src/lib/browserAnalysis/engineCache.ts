@@ -102,13 +102,28 @@ export function engineKey(
   return `${choice.id}:${choice.info.engineBuild}:${choice.info.evalHash}:${settings.maxThreads}:${settings.hashMb}:${load}`;
 }
 
+export interface AcquireOptions {
+  /**
+   * 🔒 **今あるエンジンの大きさ（`maxThreads`・`hashMb`）をそのまま使う**——キーの比較から `settings` の大きさを外す。
+   * 評価関数の選択と負荷の設定が同じなら、大きさが違っても作り直さない。エンジンが無いときだけ `settings` の大きさで作る。
+   * 検討盤の局面評価（web の定数で頼む。server を経由しない）が使う: server の全局面解析の大きさと web の定数を
+   * 手で揃えておく必要をなくす（ずれると、評価のたびに評価関数の読み込みから作り直すことになる）
+   */
+  followCurrentSizing?: boolean;
+}
+
 export interface EngineCache {
   /**
    * 求める設定のエンジンを返す（無い・キーが違えば作り直す）。段の上限・固定のスレッド数に合わせてから返す。
    * 止めた後は投げる（{@link STOPPED_DETAIL}）。投げたら呼び出し側が {@link EngineCache.discard} する
    * @param threads 固定のスレッド数（詰将棋の判定。prd/13 §5.5）。無ければ負荷の設定で決まる数（全局面解析・次の一手）
    */
-  acquire(settings: EngineSettings, choice: EngineChoice, threads?: number): Promise<AnalysisEngine>;
+  acquire(
+    settings: EngineSettings,
+    choice: EngineChoice,
+    threads?: number,
+    options?: AcquireOptions,
+  ): Promise<AnalysisEngine>;
   /** 今のエンジンを捨てる（次の `acquire` で作り直す）。エンジンが失敗したとき */
   discard(): void;
   /** 止める。以後エンジンを作らない */
@@ -119,6 +134,8 @@ export interface EngineCache {
 export function createEngineCache(deps: EngineCacheDeps): EngineCache {
   let engine: AnalysisEngine | null = null;
   let currentKey = '';
+  /** 今のエンジンを作ったときの設定（{@link AcquireOptions.followCurrentSizing}） */
+  let createdSettings: EngineSettings | null = null;
   let disposed = false;
 
   const discard = () => {
@@ -130,11 +147,14 @@ export function createEngineCache(deps: EngineCacheDeps): EngineCache {
     settings: EngineSettings,
     choice: EngineChoice,
     threads?: number,
+    options: AcquireOptions = {},
   ): Promise<AnalysisEngine> => {
     // 止めた後はエンジンを作らない（作ってすぐ捨てる読み込み・Worker の起動をしない）
     if (disposed) throw new Error(STOPPED_DETAIL);
     const load = deps.currentLoad();
-    const key = engineKey(choice, settings, load);
+    const sizing =
+      options.followCurrentSizing && engine && createdSettings ? createdSettings : settings;
+    const key = engineKey(choice, sizing, load);
     if (!engine || currentKey !== key) {
       if (engine) deps.log.info(`recreating the engine (${currentKey} -> ${key})`);
       discard();
@@ -147,6 +167,7 @@ export function createEngineCache(deps: EngineCacheDeps): EngineCache {
       }
       engine = created;
       currentKey = key;
+      createdSettings = settings;
     }
     // 🔒 **詰将棋の判定の固定のスレッド数は、作り直さずに切り替える**（`setoption Threads` → `isready`）。
     // 上流は `setoption Threads` でその場でスレッドを作り直し（`resize_threads`）、`isready` でもう一度揃える。

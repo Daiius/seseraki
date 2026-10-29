@@ -34,8 +34,9 @@ import { getBrowserAnalysisState, subscribeBrowserAnalysisState } from './store'
  * - **候補手 3 本**（MultiPV 3。prd/12 §2.2 の契約。手元 worker の局面評価と同じ本数）
  * - **1000ms**（手元 worker の局面評価の思考時間 `ENGINE_MOVETIME` と同じ長さ）
  * - **スレッドは最大 4**（負荷「控えめ」ならその半分の 2）。全局面解析の full の段と同じ決め方（prd/14 §5.5）
- * - ⚠ `maxThreads` と `hashMb` は全局面解析の値（server の `BROWSER_ANALYSIS_SETTINGS`）とそろえる。違うと、全局面解析と共用の
- *   エンジンを局面評価のたびに作り直す（評価関数の読み込みからになる）。server の値を変えたら、ここも合わせる
+ * - `maxThreads` と `hashMb` は、**エンジンがまだ無いときに作る大きさ**としてだけ使う。全局面解析と共用のエンジンがあれば、
+ *   その大きさのまま読む（`engineCache.ts` の `followCurrentSizing`。2026-10-30）——server の `BROWSER_ANALYSIS_SETTINGS` と
+ *   ずれても、局面評価のたびにエンジンを作り直さない。値は server の今の値に合わせてある（後で全局面解析が始まっても作り直さずに済む）
  */
 export const STUDY_EVAL_SETTINGS: PositionEvalSettings = {
   multiPv: 3,

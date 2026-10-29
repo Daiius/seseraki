@@ -44,7 +44,7 @@ function serve(outcome: PositionEvalOutcome) {
 }
 
 describe('局面評価の読み方（web の定数。prd/12 §2.4）', () => {
-  it('候補 3 本・1000ms・スレッドの上限 4。エンジンの上限と置換表は全局面解析とそろえる', () => {
+  it('候補 3 本・1000ms・スレッドの上限 4。エンジンが無いときに作る大きさは全局面解析と同じ', () => {
     expect(STUDY_EVAL_SETTINGS).toMatchObject({
       multiPv: 3,
       movetimeMs: 1000,

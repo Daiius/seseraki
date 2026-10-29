@@ -1264,6 +1264,16 @@ describe('createBrowserEngineRunner — 検討盤の局面評価（prd/12 §2.4�
     expect(h.engines).toHaveLength(1);
   });
 
+  it('🔒 局面評価の大きさ（maxThreads・hashMb）が全局面解析と違っても、今あるエンジンのまま読む（作り直さない）', async () => {
+    const { h } = positionHarness();
+    const runner = createBrowserEngineRunner(h.deps);
+    expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'complete' });
+    const resized = { ...request, settings: { ...request.settings, maxThreads: 4, hashMb: 16 } };
+    expect((await runner.evaluatePosition(resized, neverAborted)).kind).toBe('ok');
+    expect(h.engines).toHaveLength(1);
+    expect(h.engines[0].disposed).toBe(false);
+  });
+
   it('取り下げられていれば読まない（エンジンも作らない）', async () => {
     const { h } = positionHarness();
     const controller = new AbortController();

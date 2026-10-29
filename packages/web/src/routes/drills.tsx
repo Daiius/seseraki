@@ -39,6 +39,7 @@ import {
   missText,
   practiceNote,
   resultBadge,
+  engineWaitFromOf,
   retriesAfterEngineReady,
   type AnswerBody,
   type MissReason,
@@ -798,9 +799,9 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
      * 判定できなかった。**その手は盤から戻す**（指し直せるように）。ただしエンジンの準備（同意・ダウンロード）を
      * 待つときだけ盤に残し、準備ができたら同じ手で判定し直す（上の effect）
      */
-    const fail = (text: string, waitEngine: boolean) => {
+    const fail = (text: string, waitEngineFrom: BrowserAnalysisPhase | null) => {
       setError(text);
-      if (waitEngine) setUngradableAt(getBrowserAnalysisState().phase);
+      if (waitEngineFrom !== null) setUngradableAt(waitEngineFrom);
       else setSession(sessionOf(drill, line));
       setJudging(false);
     };
@@ -808,6 +809,11 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     let deadline = Date.now() + POLL_BUDGET_MS;
     /** このブラウザで読めなかった理由（読めない旨を申告した後、サーバーでも判定されなかったときに出す） */
     let unreadable: Exclude<GradingResult, { kind: 'ok' }> | null = null;
+    /**
+     * 読めなかった時点のエンジンの状態（判定し直しの基準）。🔴 送り直しの応答を待つ間に同意されても、
+     * この値で判定し直す（諦めた時点の状態を使うと、もう使える状態なので二度と判定し直さない。レビュー `OCL-239BA9E5`）
+     */
+    let unreadableFrom: BrowserAnalysisPhase | null = null;
     try {
       while (Date.now() < deadline) {
         const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].answer.$post({
@@ -827,7 +833,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
             if (onEvaluate(body) === 'give-up') {
               fail(
                 unreadable ? gradingFailureMessage(unreadable) : '判定できませんでした。もう一度お試しください',
-                unreadable?.kind === 'unavailable',
+                unreadableFrom,
               );
               return;
             }
@@ -840,15 +846,18 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
               clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
               ...(assignee === 'worker' && drill.kind === 'mate' ? { askConsent: askDrillEngineConsent } : {}),
             });
+            const gradedFrom =
+              graded.kind === 'ok' ? null : engineWaitFromOf(graded, getBrowserAnalysisState().phase);
             if (graded.kind !== 'ok' && drill.kind === 'mate') {
               // 詰将棋は「この端末では読めない」と申告して送り直す（サーバーで解析する利用者はサーバーで判定される）
               unreadable = graded;
+              unreadableFrom = gradedFrom;
               body = answerBodyUnavailable(body);
               deadline = Date.now() + POLL_BUDGET_MS;
               continue;
             }
             if (graded.kind !== 'ok') {
-              fail(gradingFailureMessage(graded), graded.kind === 'unavailable');
+              fail(gradingFailureMessage(graded), gradedFrom);
               return;
             }
             body = answerBodyWithEvaluation(body, graded.evaluation);
@@ -857,7 +866,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
             continue;
           }
           case 'error':
-            fail(step.text, false);
+            fail(step.text, null);
             return;
           case 'continue': {
             // 詰みの指し継ぎ。受方の応手まで進めて次の手を待つ（prd/13 §5.2）
@@ -888,9 +897,9 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
           }
         }
       }
-      fail('判定が終わりませんでした。もう一度お試しください', false);
+      fail('判定が終わりませんでした。もう一度お試しください', null);
     } catch {
-      fail('サーバーに接続できません', false);
+      fail('サーバーに接続できません', null);
     }
   }
 

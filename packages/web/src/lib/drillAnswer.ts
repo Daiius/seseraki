@@ -10,6 +10,7 @@
  * 🔒 **判定は server**。ここは応答の振り分けと、送り直しの本文の組み立てだけ。
  */
 import type { DrillNamedEvaluation, NamedEvalSettings } from 'shared';
+import type { GradingResult } from './browserAnalysis/grading';
 import type { BrowserAnalysisPhase } from './browserAnalysis/store';
 
 /** 解答の本文（送り直しても `line` と線引きは変えない） */
@@ -135,6 +136,19 @@ const ENGINE_USABLE: ReadonlySet<BrowserAnalysisPhase> = new Set(['idle', 'loadi
  */
 export function retriesAfterEngineReady(failedAt: BrowserAnalysisPhase, now: BrowserAnalysisPhase): boolean {
   return !ENGINE_USABLE.has(failedAt) && ENGINE_USABLE.has(now);
+}
+
+/**
+ * 採点できなかった結果から、エンジンの準備を待って判定し直すときの**基準の状態**（{@link retriesAfterEngineReady} の `failedAt`）。
+ * エンジンを使えない（`unavailable`）ときだけ、その結果が返った時点の状態を返す。それ以外（読みの失敗・噛み合わない）は待たない（null）。
+ * 🔴 **画面が判定を諦めた時点の状態ではなく、この時点の状態を基準にする**（レビュー `OCL-239BA9E5`）——詰将棋は読めない旨を申告して
+ * server に送り直すので、その応答を待つ間に同意されると、諦めた時点ではもう使える状態（`loading` など）になっていて二度と判定し直さない
+ */
+export function engineWaitFromOf(
+  result: Exclude<GradingResult, { kind: 'ok' }>,
+  phaseAtResult: BrowserAnalysisPhase,
+): BrowserAnalysisPhase | null {
+  return result.kind === 'unavailable' ? phaseAtResult : null;
 }
 
 /** 間違えた手の案内（prd/13 §7.1）。🔒 内部の用語を出さない */

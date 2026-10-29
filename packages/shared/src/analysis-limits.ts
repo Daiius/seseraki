@@ -156,8 +156,3 @@ export const drillNamedEvaluationSchema = z
     path: ['candidate', 'pv'],
   });
 export type DrillNamedEvaluation = z.infer<typeof drillNamedEvaluationSchema>;
-
-/** 読み筋を上限の長さに切る（web が送る前に通す。拒否を恒久失敗にしないため） */
-export function clampPv(pv: readonly string[]): string[] {
-  return pv.slice(0, BROWSER_ANALYSIS_LIMITS.pvMaxPlies);
-}

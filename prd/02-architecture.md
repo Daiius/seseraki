@@ -136,6 +136,9 @@
   - **`rsync` はローカルだけでなくリモート側にも必要**（リモートに無いと `pending.txt` の記録後、
     最初の rsync 転送が `rsync: command not found` で失敗し、`pending.txt` は残る）。
     リモートのシェルは POSIX sh を前提にする。
+  - ⚠ **トップレベルの転送（`uploadTopLevelStep`）は `--delete` を付けていない**（2026-10-30 時点・未対応）。ビルドから消えた
+    トップレベルのファイルや古い `engine/` の中身は配信先に溜まり、手で消すしかない。案は `--delete` を付けた dry-run の一覧を計画に
+    出して確かめてから消す・消す対象を `engine/` の manifest に載らないものに限る、など。対象を誤ると本番の配信物が消えるので、変えるときは別に詰める。
 - **版の確かめ方**（2026-10-30）: 本番の web と server がどのコミットから作られたかを、外から確かめられるようにする。
   値はどちらも `{ commit, builtAt, dirty }`（SHA は 40 桁・日時は ISO 8601 の UTC・`dirty` は追跡しているファイルに
   未コミットの変更がある状態でビルドしたか）。分からない値は `unknown` にし、ビルドは止めない。
@@ -212,7 +215,7 @@
   そのまま使う。本番はイメージ同梱の `migrate.js` で流す（AGENTS.md）。dev DB には `.env.database` を読む `db:migrate:dev` を使う。
 - 初回セットアップ（dev）: `pnpm dev` 起動後に `pnpm db:migrate:dev && pnpm db:seed`。dev のスキーマ変更も `pnpm db:migrate:dev`。
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
-  - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY・`SWARS_*` 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL・`VITE_SWARS_USER_ID`・自分の名前候補 `VITE_SELF_NAMES`）。
+  - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL。自分の名前候補は DB が正で env には持たない。[11](./11-users.md)）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。

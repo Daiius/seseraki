@@ -154,21 +154,30 @@ verify_file() {
     die "$what の sha256 が一致しません（期待 $expected_sha・実際 $sha）: $file"
 }
 
-# アーカイブの中から 1 ファイルを標準出力へ取り出す（展開先を持たせず、アーカイブの中のパスに書き込ませない）。
-extract_entry() {
-  local archive=$1 entry=$2
+# アーカイブから nn.bin と progress.bin を取り出して、それぞれ指定のファイルへ書く。
+# 7z には標準出力へ取り出させる（展開先を持たせず、アーカイブの中のパスに書き込ませない）。
+# ホストに 7z が無ければ使い捨てコンテナを **1 回だけ**立て、2 つを続けて標準出力へ流す。
+# 境目は期待する nn.bin の大きさで切る。中身が期待と違えば、切り方によらず後の照合（verify_file）で止まる。
+extract_eval_files() {
+  local archive=$1 nn_out=$2 progress_out=$3 nn_bytes=$4
   if SEVENZIP=$(find_7z); then
-    "$SEVENZIP" e -so -r "$archive" "$entry"
-  else
-    require_docker
-    require_image "$UP_EVAL_EXTRACT_IMAGE"
-    docker run --rm -v "$archive:/in/archive.7z:ro" "$UP_EVAL_EXTRACT_IMAGE" sh -c '
-      set -e
-      apt-get update -qq >&2
-      apt-get install -y -qq --no-install-recommends p7zip-full >&2
-      exec 7z e -so -r /in/archive.7z "$1"
-    ' sh "$entry"
+    "$SEVENZIP" e -so -r "$archive" nn.bin >"$nn_out"
+    "$SEVENZIP" e -so -r "$archive" progress.bin >"$progress_out"
+    return 0
   fi
+  require_docker
+  require_image "$UP_EVAL_EXTRACT_IMAGE"
+  local both=$nn_out.both
+  docker run --rm -v "$archive:/in/archive.7z:ro" "$UP_EVAL_EXTRACT_IMAGE" sh -c '
+    set -e
+    apt-get update -qq >&2
+    apt-get install -y -qq --no-install-recommends p7zip-full >&2
+    7z e -so -r /in/archive.7z nn.bin
+    7z e -so -r /in/archive.7z progress.bin
+  ' >"$both"
+  head -c "$nn_bytes" "$both" >"$nn_out"
+  tail -c +"$((nn_bytes + 1))" "$both" >"$progress_out"
+  rm -f -- "$both"
 }
 
 # 一時の名前で置いて確かめ、名前を付け替える。同じ内容がもう置いてあれば置き直さない。
@@ -214,8 +223,7 @@ for id in "${TO_FETCH[@]}"; do
     PROGRESS_SOURCE=$WORK_DIR/$id.progress.bin
     rm -f -- "$NN_SOURCE" "$PROGRESS_SOURCE"
     log "展開します: $id..."
-    extract_entry "$ARCHIVE" nn.bin >"$NN_SOURCE"
-    extract_entry "$ARCHIVE" progress.bin >"$PROGRESS_SOURCE"
+    extract_eval_files "$ARCHIVE" "$NN_SOURCE" "$PROGRESS_SOURCE" "$nn_bytes"
     cleanup=1
   fi
 

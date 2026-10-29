@@ -6,7 +6,7 @@
 // server 再起動で消えるが worker の次の報告で復活し、**stale が自動で消える利点**にもなる。
 //
 // worker は棋譜を 1 件ずつ処理するので**解析中の棋譜は常に高々 1 件**。単一プロセス前提で
-// モジュールスコープに持つ流儀は `swars/job-store.ts` と同じ（prd/02 §1 / prd/07）。
+// モジュールスコープに持つ（prd/02 §1 / prd/07）。`position-eval.ts` も同じ流儀。
 
 import type { AnalysisProfile } from './analysis-submit.js';
 

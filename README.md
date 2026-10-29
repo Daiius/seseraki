@@ -79,8 +79,6 @@ dev の Vite proxy と同じ規約なので、環境ごとの差が出ない。
 ### web (静的ファイルを nginx 等に配置)
 
 ```bash
-VITE_SWARS_USER_ID=<swars-user-id> \
-VITE_SELF_NAMES=<name1,name2,...> \
 pnpm --filter web build
 ```
 
@@ -89,10 +87,8 @@ pnpm --filter web build
 
 - `VITE_API_URL`: 通常は**未設定**でよい（同一オリジンの `/api` にフォールバック）。
   別オリジンの server を直接叩く特殊構成のときだけ設定する。
-- `VITE_SWARS_USER_ID`: swars 棋譜取得対象のユーザー ID（取得 API に渡す単一アカウント ID）
-- `VITE_SELF_NAMES`: 自分の対局者名の候補（カンマ区切り・任意）。将棋アプリごとに表示名が
-  異なる場合に列挙し、KIF の対局者名がいずれかに一致すれば自分とみなす。`VITE_SWARS_USER_ID`
-  も自動で候補に含む。
+- 自分の対局者名の候補は env ではなく DB が正（画面の /settings で設定する。prd/11）。
+  以前の `VITE_SELF_NAMES` / `VITE_SWARS_USER_ID` は廃止した。
 
 ### リバースプロキシ
 

@@ -4,21 +4,18 @@ import { canPromote, unpromoted, type Piece } from './pieces';
 import { usiToIndex, type SquareRef } from './usi-move';
 import {
   addToHand,
-  createEmptyState,
   dropFromHand,
-  flipPieceSide,
   handCount,
   movePiece,
   moveToHand,
   pieceAt,
-  pieceBox,
   placePiece,
   removePiece,
   setHandCount,
   setPromoted,
-  setSideToMove,
   toggleSideToMove,
 } from './position-edit';
+import { createEmptyState, pieceBox } from './test-fixtures/piece-box';
 
 /** USI のマス表記（"7g"）を添字に直す。テストを盤の言葉で書くための道具 */
 function sq(usi: string): SquareRef {
@@ -338,20 +335,7 @@ describe('setPromoted', () => {
   });
 });
 
-describe('flipPieceSide', () => {
-  it('駒の側を入れ替える（成り状態は保つ）', () => {
-    const state = setPromoted(createInitialState(), P77, true);
-    const next = expectImmutable(state, (s) => flipPieceSide(s, P77));
-    expect(pieceAt(next, P77)).toEqual({ kind: '+P', side: 'gote' });
-  });
-
-  it('空きマスは state をそのまま返す', () => {
-    const state = createInitialState();
-    expect(flipPieceSide(state, P76)).toBe(state);
-  });
-});
-
-describe('setSideToMove / toggleSideToMove', () => {
+describe('toggleSideToMove', () => {
   it('手番を切り替える', () => {
     const state = createInitialState();
     const next = expectImmutable(state, (s) => toggleSideToMove(s));
@@ -361,15 +345,9 @@ describe('setSideToMove / toggleSideToMove', () => {
     expect(next.board).toBe(state.board);
     expect(next.hand).toBe(state.hand);
   });
-
-  it('同じ手番を指定したら state をそのまま返す', () => {
-    const state = createInitialState();
-    expect(setSideToMove(state, 'sente')).toBe(state);
-    expect(setSideToMove(state, 'gote').sideToMove).toBe('gote');
-  });
 });
 
-describe('pieceBox', () => {
+describe('pieceBox（テストの道具。test-fixtures/piece-box.ts）', () => {
   it('初期局面では駒箱が空', () => {
     expect(pieceBox(createInitialState())).toEqual({
       P: 0, L: 0, N: 0, S: 0, G: 0, B: 0, R: 0, K: 0,
@@ -479,7 +457,6 @@ describe('非有限・非整数の入力（回帰）', () => {
       expect(removePiece(state, square)).toBe(state);
       expect(moveToHand(state, square)).toBe(state);
       expect(setPromoted(state, square, true)).toBe(state);
-      expect(flipPieceSide(state, square)).toBe(state);
       expect(placePiece(state, square, { kind: 'P', side: 'sente' })).toBe(state);
       expect(movePiece(state, P77, square)).toBe(state);
       expect(movePiece(state, square, P76)).toBe(state);

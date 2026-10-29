@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPositions } from './board';
 import { boardBytes, handBytes, positionSfen, sideSfen } from './position';
-import { positionHashHex } from './position-hash';
+import { positionHashHex } from './test-fixtures/position-hash-hex';
 import { RANDOM_GAME_A, RANDOM_GAME_B, RANDOM_GAME_C } from './test-fixtures/games';
 
 /**

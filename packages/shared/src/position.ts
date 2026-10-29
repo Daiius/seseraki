@@ -228,25 +228,6 @@ export function positionKey(state: BoardState): PositionKey {
   };
 }
 
-/**
- * 2 つの局面の距離（prd/10 §5.2）。
- *
- * ```
- * dist = Σ(81 マス)[ 駒種・側が不一致 ] + Σ(側 × 駒種) | 持ち駒枚数の差 |
- * ```
- *
- * 🔒 **持ち駒は側と駒種まで区別して数える。** 相手の持ち駒か自分の持ち駒かは
- * 別の意味を持つので、独立した情報として数える。
- *
- * ⚠ **この定義は初期値**。使ってみて不満が出たら変える前提で、SQL ではなくここに置く。
- */
-export function positionDistance(
-  a: { board: Uint8Array; hands: Uint8Array },
-  b: { board: Uint8Array; hands: Uint8Array },
-): number {
-  return positionDiff(a, b).total;
-}
-
 /** 距離の内訳。**画面には「盤の一致 76/81」の形で出したい**ので、合計だけでは足りない */
 export interface PositionDiff {
   /** 駒種・側が食い違うマスの数（0〜81） */
@@ -257,6 +238,18 @@ export interface PositionDiff {
   total: number;
 }
 
+/**
+ * 2 つの局面の距離とその内訳（prd/10 §5.2）。
+ *
+ * ```
+ * dist = Σ(81 マス)[ 駒種・側が不一致 ] + Σ(側 × 駒種) | 持ち駒枚数の差 |
+ * ```
+ *
+ * 🔒 **持ち駒は側と駒種まで区別して数える。** 相手の持ち駒か自分の持ち駒かは
+ * 別の意味を持つので、独立した情報として数える。
+ *
+ * ⚠ **この定義は初期値**。使ってみて不満が出たら変える前提で、SQL ではなくここに置く。
+ */
 export function positionDiff(
   a: { board: Uint8Array; hands: Uint8Array },
   b: { board: Uint8Array; hands: Uint8Array },

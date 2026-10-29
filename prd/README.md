@@ -32,7 +32,7 @@
   LLM 解説用 Markdown エクスポート / cookie セッション認証 /
   動画解析の取り込みと局面索引・局面検索（[10](./10-video-analysis.md)。動画解析は所有者専用で、取り込みは API_KEY の口だけ。
   web の一覧画面は撤去した。局面検索は自分の対局にも使う）。
-- **無効化**: swars 一括取り込み（エンドポイントと画面を外した・コードは残置。[04](./04-ingestion.md) §4）。
+- **撤去**: swars 一括取り込み（エンドポイントと画面を外し、コードも削除した。[04](./04-ingestion.md) §4）。
 - **計画中**: 局面単位の再解析 / LLM 解説の自動生成（commentator）/
   ユーザー（自分）の server 側への移行（[11](./11-users.md)）/
   検討モードと局面評価（[12](./12-position-lab.md)）/
@@ -50,7 +50,7 @@
   に置いて web/server（将来 commentator）で共有する（[02](./02-architecture.md) §3）。
 
 ```
-        [ KIF 貼り付け / CSA 直接貼り付け ]（swars 一括取り込みは無効・§4）
+        [ KIF 貼り付け / CSA 直接貼り付け ]（swars 一括取り込みは撤去済み・§4）
                           │  すべて server 側で USI へ変換し kifus に収束
                           ▼
    web (UI) ──fetch /api──> server (Hono) ──> Postgres
@@ -65,7 +65,7 @@
 
 - 秘密情報（`.env*`・API_KEY・DB 資格情報・session cookie の値）。
 - 本番/開発の具体情報（ドメイン・TLS・接続先・リバースプロキシ構成）。PRD は**姿勢のみ**記述する。
-- **`swars` はコードに実在するコードネーム**（`swarsGameKey`・`/api/swars/import`・`SWARS_*` 環境変数等）。
+- **`swars` はコードに実在するコードネーム**（`swarsGameKey` 列・`source='swars'`。取り込み機能の `/api/swars/import`・`SWARS_*` 環境変数は撤去済み）。
   PRD でも**実装と一致させて `swars` 表記を用いる**（識別子・エンドポイント・環境変数名を消して実装と乖離させない）。
   一方で **swars の正式名称・取得の詳細な仕組み・アクセス姿勢・資格情報**は公開文書に書かず、gitignore 対象の
   **`.claude-personal/`** に置き「存在すれば参照」する。
@@ -75,7 +75,7 @@
 1. [01-domain.md](./01-domain.md) — 将棋棋譜ドメインとプロダクト動機（KIF/USI・対局メタ・解析の意味）
 2. [02-architecture.md](./02-architecture.md) — 技術スタック / monorepo / 型共有 / 開発環境 / デプロイ姿勢
 3. [03-data-model.md](./03-data-model.md) — DB スキーマ（kifus / moveAnalyses / candidateMoves）
-4. [04-ingestion.md](./04-ingestion.md) — 投入ルート / KIF→USI 変換 / メタ抽出 / 一括取り込み
+4. [04-ingestion.md](./04-ingestion.md) — 投入ルート / KIF→USI 変換 / メタ抽出（swars 一括取り込みは撤去済み）
 5. [05-analysis.md](./05-analysis.md) — worker エンジン解析 / Web 可視化（盤面・評価値・候補手・悪手判定）
 6. [06-llm-commentary.md](./06-llm-commentary.md) — LLM 解説用エクスポートと自動生成構想
 7. [07-auth-and-privacy.md](./07-auth-and-privacy.md) — 認証 / API_KEY / 公開配置

@@ -17,7 +17,7 @@
 | [prd/01-domain.md](./prd/01-domain.md) | 将棋棋譜ドメインとプロダクト動機（KIF/USI・対局メタ・解析の意味・戦型ラベル（3 層の判定・銀の戦法）） |
 | [prd/02-architecture.md](./prd/02-architecture.md) | 技術スタック / monorepo / 型・ロジック共有 / 開発環境 / デプロイ姿勢 |
 | [prd/03-data-model.md](./prd/03-data-model.md) | DB スキーマ（kifus / moveAnalyses / candidateMoves / commentaries） |
-| [prd/04-ingestion.md](./prd/04-ingestion.md) | 投入ルート / KIF・CSA→USI 変換 / メタ抽出 / 一括取り込み |
+| [prd/04-ingestion.md](./prd/04-ingestion.md) | 投入ルート / KIF→USI 変換 / メタ抽出（swars 一括取り込みは撤去済み） |
 | [prd/05-analysis.md](./prd/05-analysis.md) | worker エンジン解析 / Web 可視化 |
 | [prd/06-llm-commentary.md](./prd/06-llm-commentary.md) | LLM 解説用エクスポートと自動生成（commentator） |
 | [prd/07-auth-and-privacy.md](./prd/07-auth-and-privacy.md) | 認証 / API_KEY / 公開配置 |
@@ -53,7 +53,7 @@
 | パッケージ | 役割 |
 |---|---|
 | [`packages/web`](./packages/web) | 棋譜管理 UI（React + Vite + TanStack Router + Tailwind）。ホーム画面に追加して standalone で使える（manifest・アイコン。service worker なし。[prd/02](./prd/02-architecture.md) §8）。ブラウザ解析の実行（`src/lib/browserAnalysis`）と、エンジンの配信物を配る Vite のプラグイン（`engine-plugin`）もここ |
-| [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF/CSA パース・一括取り込み |
+| [`packages/server`](./packages/server) | Hono(RPC) API・DB・KIF パース |
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 | [`packages/kifu-vision`](./packages/kifu-vision) | 録画から棋譜を復元して取り込む手元の CLI（実験。取り込みは server の API_KEY の口へ送る。[prd/10](./prd/10-video-analysis.md)） |

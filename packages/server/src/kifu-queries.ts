@@ -202,15 +202,6 @@ function byNo(ownerId: string, no: number) {
   return and(eq(kifus.ownerId, ownerId), eq(kifus.displayNo, no));
 }
 
-/**
- * 所有者の番号 → 内部の主キー。他人の棋譜・無い棋譜は null。
- * 子の表・worker・プロセス内の状態（解析の進捗）は内部の主キーで持つので、番号はここで解く
- */
-export async function kifuIdOf(tx: Tx, ownerId: string, no: number): Promise<number | null> {
-  const [row] = await tx.select({ id: kifus.id }).from(kifus).where(byNo(ownerId, no));
-  return row?.id ?? null;
-}
-
 /** 棋譜の詳細（解析・戦型つき）。他人の棋譜・無い棋譜は null */
 export async function getKifuDetail(tx: Tx, ownerId: string, no: number) {
   const [row] = await tx.select().from(kifus).where(byNo(ownerId, no));

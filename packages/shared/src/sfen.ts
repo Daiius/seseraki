@@ -1,19 +1,18 @@
 /**
  * SFEN の読み書き（prd/12 §2.5）。
  *
- * 書き出しは局面索引が既に持っている（`position.ts` の `positionSfen`）。ここに足すのは
- * **読み込み**と、**エンジンに渡す形の書き出し**の 2 つ。
+ * 書き出しは局面索引が既に持っている（`position.ts` の `positionSfen`）。ここに置くのは
+ * **読み込み**だけ。
  *
- * - 読み込み: 検討モードの局面は web が作って SFEN 文字列で server へ送る。server は
+ * - 検討モードの局面は web が作って SFEN 文字列で server へ送る。server は
  *   エンジンに渡す前に検証する（`position-validation.ts`）ため、盤面へ戻す必要がある。
- * - エンジン向け: USI の `position sfen …` は**手数まで含む 4 フィールド**を要求する。
- *   局面キー（`positionSfen`）は手順前後を合流させるために手数を持たないので、そのままでは渡せない。
+ * - USI の `position sfen …` は手数まで含む 4 フィールドを要求する。局面キー（`positionSfen`）は
+ *   手数を持たないので、エンジンに渡す側が手数を補う（`usi/named-evaluation.ts`）。
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
 import type { BoardState, Hand, Square } from './board';
 import type { PieceKind, Side } from './pieces';
-import { positionSfen } from './position';
 
 /** SFEN の駒文字（大文字）→ 駒種。成りは `+` を前置して表す */
 const CHAR_PIECE: Record<string, PieceKind> = {
@@ -105,15 +104,4 @@ export function parseSfen(sfen: string): BoardState | null {
   if (!hand) return null;
 
   return { board, hand, sideToMove: turnField === 'b' ? 'sente' : 'gote' };
-}
-
-/**
- * USI の `position sfen …` に渡す 4 フィールドの SFEN。
- *
- * 手数は **1 に固定**する。検討局面は棋譜から切り離された「その形」でしかなく、
- * 手数を持たない（局面キーが手数を含まない理由と同じ。`positionSfen`）。
- * エンジンの探索は手数に依存しない。
- */
-export function usiPositionSfen(state: BoardState): string {
-  return `${positionSfen(state)} 1`;
 }

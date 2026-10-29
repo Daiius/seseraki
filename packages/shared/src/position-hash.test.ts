@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildPositions, createInitialState } from './board';
 import { positionSfen, sideSfen } from './position';
-import { positionHash, positionHashHex } from './position-hash';
+import { positionHash } from './position-hash';
+import { positionHashHex } from './test-fixtures/position-hash-hex';
 
 /** 参照実装（BigInt で素直に書いた FNV-1a 64）。高速版と値が一致することを確かめる */
 function referenceHex(text: string): string {

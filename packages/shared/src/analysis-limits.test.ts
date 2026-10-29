@@ -5,7 +5,6 @@ import {
   browserAnalysisErrorSchema,
   browserAnalysisStartSchema,
   browserCandidateSchema,
-  clampPv,
   isPvToken,
 } from './analysis-limits';
 
@@ -152,13 +151,5 @@ describe('開始・失敗の本文', () => {
     expect(
       ok(browserAnalysisErrorSchema, { revision: 1, error: 'x'.repeat(BROWSER_ANALYSIS_LIMITS.errorMaxLength + 1) }),
     ).toBe(false);
-  });
-});
-
-describe('clampPv', () => {
-  it('上限の長さに切る（短ければそのまま）', () => {
-    expect(clampPv(['7g7f'])).toEqual(['7g7f']);
-    const long = Array.from({ length: BROWSER_ANALYSIS_LIMITS.pvMaxPlies + 10 }, () => '7g7f');
-    expect(clampPv(long)).toHaveLength(BROWSER_ANALYSIS_LIMITS.pvMaxPlies);
   });
 });

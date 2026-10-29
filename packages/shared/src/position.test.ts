@@ -4,7 +4,6 @@ import {
   boardBytes,
   handBytes,
   positionDiff,
-  positionDistance,
   positionKey,
   positionSfen,
   sideLayoutKey,
@@ -187,16 +186,16 @@ describe('stateFromBytes（バイト列から局面を戻す）', () => {
   });
 });
 
-describe('positionDistance', () => {
+describe('距離（positionDiff の total）', () => {
   it('同じ局面の距離は 0', () => {
     const a = positionKey(createInitialState());
-    expect(positionDistance(a, a)).toBe(0);
+    expect(positionDiff(a, a).total).toBe(0);
   });
 
   it('1 手動かすと 2 マスぶん違う（移動元と移動先）', () => {
     const a = positionKey(createInitialState());
     const b = keyAfter(['7g7f']);
-    expect(positionDistance(a, b)).toBe(2);
+    expect(positionDiff(a, b).total).toBe(2);
   });
 
   it('駒を取ると持ち駒の差も数える', () => {
@@ -205,7 +204,7 @@ describe('positionDistance', () => {
     const after = keyAfter(['7g7f', '3c3d', '8h2b+']);
     // 8h が空になり、2b が後手の角 → 先手の馬 に変わる = 2 マス
     // 先手の持ち駒に角が 1 枚 = 1
-    expect(positionDistance(before, after)).toBe(3);
+    expect(positionDiff(before, after).total).toBe(3);
   });
 
   it('持ち駒の持ち主が違えば距離が出る（盤が同じでも）', () => {
@@ -213,7 +212,7 @@ describe('positionDistance', () => {
     const senteHas = positionKey({ ...base, hand: { sente: { P: 1 }, gote: {} } });
     const goteHas = positionKey({ ...base, hand: { sente: {}, gote: { P: 1 } } });
     // 盤は同じ。持ち駒は先手 +1 / 後手 +1 の 2 箇所で食い違う
-    expect(positionDistance(senteHas, goteHas)).toBe(2);
+    expect(positionDiff(senteHas, goteHas).total).toBe(2);
   });
 });
 
@@ -223,7 +222,6 @@ describe('positionDiff（距離の内訳）', () => {
     const before = keyAfter(['7g7f', '3c3d']);
     const after = keyAfter(['7g7f', '3c3d', '8h2b+']);
     expect(positionDiff(before, after)).toEqual({ board: 2, hands: 1, total: 3 });
-    expect(positionDistance(before, after)).toBe(3);
   });
 
   it('盤だけが違うときは hands が 0', () => {

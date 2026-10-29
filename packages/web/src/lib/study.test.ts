@@ -20,6 +20,7 @@ import {
   canUndo,
   createStudySession,
   currentState,
+  historyButtons,
   isChoosingPromotion,
   isLastMovePromoted,
   isStudying,
@@ -843,5 +844,24 @@ describe('成 / 不成の選択待ち（出題・検討盤。prd/13 §7.1・prd/
       expect(canTogglePromotion(plain)).toBe(true);
       expect(lastMove(togglePromotion(plain))).toBe('1d1c+');
     });
+  });
+});
+
+describe('historyButtons（コントローラー行の ◀ ▶ を押せるか）', () => {
+  const pos = parseSfen('4k4/9/9/5S1LP/9/p8/9/9/4K4 b P 1')!;
+
+  it('検討していない・再生中は押せない。普段は undo / redo の可否のまま', () => {
+    expect(historyButtons(createStudySession(pos), false)).toEqual({ canUndo: false, canRedo: false });
+    const moved = applyStudyMoves(pos, ['4d5e'], 'free');
+    expect(historyButtons(moved, true)).toEqual({ canUndo: false, canRedo: false });
+    expect(historyButtons(moved, false)).toEqual({ canUndo: true, canRedo: false });
+    expect(historyButtons(undo(moved), false)).toEqual({ canUndo: false, canRedo: true });
+  });
+
+  it('🔴 成 / 不成の選択待ちの間は両方押せる（押したら取り消しになる）', () => {
+    const before = createStudySession(pos, 'free');
+    const choosing = resolvePromotion(before, tapSquare(tapSquare(before, sq('1d')), sq('1c')));
+    expect(isChoosingPromotion(choosing)).toBe(true);
+    expect(historyButtons(choosing, false)).toEqual({ canUndo: true, canRedo: true });
   });
 });

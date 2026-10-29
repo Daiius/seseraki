@@ -13,15 +13,14 @@ import { StudyPanel } from './StudyPanel';
 import { moveDestination } from '../lib/usi';
 import {
   canPutSelectionOnHand,
-  canRedo,
   canTogglePromotion,
-  canUndo,
   cancelPromotion,
   choosePromotion,
   clearSelection,
   commitReplay,
   createStudySession,
   currentState,
+  historyButtons,
   isChoosingPromotion,
   isLastMovePromoted,
   isStudying,
@@ -116,6 +115,13 @@ export interface StudyControls {
    * 常に false（採点は出さない。prd/12 §3.2「棋譜側では直前の手の採点を出さない」）。
    */
   grading: boolean;
+  /**
+   * 成 / 不成の選択待ちか（prd/12 §3.2）。🔴 **この間はコントローラー行のどのボタンも、操作せずにその手を取り消す**
+   * （レビュー `OCL-919E71C1`）。◀ ▶ ≪ ≫・評価するは上の各操作が自前で振り替えるので、ここを見るのは盤面反転だけ
+   */
+  choosing: boolean;
+  /** 選択待ちの手を取り消す（指す前の局面へ） */
+  cancelChoice: () => void;
 }
 
 /** 検討していないときのキーボード手送り（分岐移動を含む。`ShogiBoard` が渡す） */
@@ -352,8 +358,10 @@ export function StudyBoard({
    */
   const controls: StudyControls = {
     studying,
-    canUndo: studying && !replaying && canUndo(session),
-    canRedo: studying && !replaying && canRedo(session),
+    // 成 / 不成の選択待ちの間は ◀ ▶ ≪ ≫ も押せる（押したら取り消し。`guard`・`historyButtons`）
+    ...historyButtons(session, replaying),
+    choosing,
+    cancelChoice,
     undo: guard(() => edit(undo(session))),
     redo: guard(() => edit(redo(session))),
     undoAll: guard(() => edit(undoAll(session))),

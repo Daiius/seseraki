@@ -132,7 +132,12 @@ export function BoardControls({
       >
         <ChevronDoubleRightIcon />
       </button>
-      <button className={clsx(btn.icon, 'btn-outline')} onClick={onFlip} title="盤面反転">
+      {/* 成 / 不成の選択待ちの間は反転せず、その手を取り消す（他のボタンと同じ振り替え。prd/12 §3.2） */}
+      <button
+        className={clsx(btn.icon, 'btn-outline')}
+        onClick={study.choosing ? study.cancelChoice : onFlip}
+        title="盤面反転"
+      >
         <FlipIcon />
       </button>
       {/*

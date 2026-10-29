@@ -563,6 +563,21 @@ export function cancelPromotion(session: StudySession): StudySession {
 }
 
 /**
+ * コントローラー行の ◀ ≪ / ▶ ≫ を押せるか（検討中。prd/12 §3.1）。
+ * - 咎め筋の再生中（`replaying`）は押せない（確定の引き金にしない。prd/12 §3.2）
+ * - 🔴 **成 / 不成の選択待ちの間は両方押せる**——押したら手送りせずにその手を取り消す（prd/12 §3.2・レビュー `OCL-919E71C1`）。
+ *   仮に指した手で redo 分は切れているので、普段の判定のままだと ▶ ≫ が無効になり、取り消しの口にならない
+ */
+export function historyButtons(
+  session: StudySession,
+  replaying: boolean,
+): { canUndo: boolean; canRedo: boolean } {
+  if (!isStudying(session) || replaying) return { canUndo: false, canRedo: false };
+  if (isChoosingPromotion(session)) return { canUndo: true, canRedo: true };
+  return { canUndo: canUndo(session), canRedo: canRedo(session) };
+}
+
+/**
  * 盤の上に出す成 / 不成の選択肢の中身（行き先のマスと、不成の形の駒）。選択待ちでなければ null。
  * 選ぶ前の盤は不成の形で駒が乗っているので、行き先の駒をそのまま「成らない形」として出す
  */

@@ -11,8 +11,10 @@
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。DOM / node の API を使わない。
  */
-import { applyMove, type BoardState, type Side } from './board';
+import { applyMove, type BoardState } from './board';
+import { opponentOf, type Side } from './pieces';
 import { isAttackedBy } from './position-validation';
+import { parseUsiMove } from './usi-move';
 
 /**
  * 分類の種類。
@@ -120,9 +122,6 @@ export interface MateLine {
   matedSideInCheck: boolean;
 }
 
-/** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
-const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
-
 /**
  * 投了（`bestmove resign`）。**指し手ではない**ので盤面には適用できない。
  *
@@ -131,21 +130,6 @@ const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
  * dev DB の実データでも `win` を含む pv は 1 件も無い。
  */
 const RESIGN = 'resign';
-
-/** USI 座標（例 `7g`）→ `[row, col]`。盤の内部表現は `board.ts` と同じ向き */
-function usiToIndex(usi: string): [row: number, col: number] {
-  return [usi.charCodeAt(1) - 97, 9 - Number(usi[0])];
-}
-
-/** 指し手の移動先（打ちも移動も受ける。`7g7f+` の `+` は落としてから読む） */
-function destination(move: string): [row: number, col: number] {
-  const square = move.endsWith('+') ? move.slice(-3, -1) : move.slice(-2);
-  return usiToIndex(square);
-}
-
-function opponentOf(side: Side): Side {
-  return side === 'sente' ? 'gote' : 'sente';
-}
 
 function findKing(state: BoardState, side: Side): [row: number, col: number] | null {
   for (let row = 0; row < 9; row++) {
@@ -244,15 +228,15 @@ export function classifyMateLine(
   let current = state;
 
   for (const move of pv.slice(0, plies)) {
-    if (!USI_MOVE.test(move)) return unknown();
+    const parsed = parseUsiMove(move);
+    if (!parsed) return unknown();
     const mover = current.sideToMove;
-    if (!move.includes('*')) {
+    if (parsed.type === 'move') {
       // applyMove は不正な手を黙って読み飛ばすので、ここで追えないことを検出する
-      const [fromRow, fromCol] = usiToIndex(move.slice(0, 2));
-      const piece = current.board[fromRow][fromCol];
+      const piece = current.board[parsed.from.row][parsed.from.col];
       if (!piece || piece.side !== mover) return unknown();
     }
-    const [toRow, toCol] = destination(move);
+    const { row: toRow, col: toCol } = parsed.to;
     const next = applyMove(current, move);
 
     if (mover === attacker) {
@@ -264,7 +248,7 @@ export function classifyMateLine(
       interposed = null;
     } else {
       const wasCheck = attackerChecks.length > 0 && attackerChecks[attackerChecks.length - 1];
-      interposed = wasCheck && move.includes('*') ? [toRow, toCol] : null;
+      interposed = wasCheck && parsed.type === 'drop' ? [toRow, toCol] : null;
     }
     current = next;
   }

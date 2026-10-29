@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createInitialState, type BoardState, type Piece } from './board';
+import { createInitialState, type BoardState } from './board';
+import { canPromote, unpromoted, type Piece } from './pieces';
+import { usiToIndex, type SquareRef } from './usi-move';
 import {
   addToHand,
-  canPromote,
   createEmptyState,
   dropFromHand,
   flipPieceSide,
@@ -17,13 +18,12 @@ import {
   setPromoted,
   setSideToMove,
   toggleSideToMove,
-  unpromoted,
-  type SquareRef,
 } from './position-edit';
 
 /** USI のマス表記（"7g"）を添字に直す。テストを盤の言葉で書くための道具 */
 function sq(usi: string): SquareRef {
-  return { row: usi.charCodeAt(1) - 97, col: 9 - Number(usi[0]) };
+  const [row, col] = usiToIndex(usi);
+  return { row, col };
 }
 
 /** 元の state が変わっていないことを確かめるための深いスナップショット */
@@ -263,6 +263,21 @@ describe('dropFromHand', () => {
   it('盤外は state をそのまま返す（持ち駒も減らさない）', () => {
     const state = addToHand(createEmptyState(), 'sente', 'P', 1);
     expect(dropFromHand(state, 'sente', 'P', { row: 9, col: 0 })).toBe(state);
+  });
+
+  it('置き先の駒は movePiece と同じく打った側の持ち駒へ入る（駒の総数を変えない）', () => {
+    const state = addToHand(createInitialState(), 'sente', 'G', 1);
+    const next = dropFromHand(state, 'sente', 'G', sq('3c'));
+    expect(pieceAt(next, sq('3c'))).toEqual({ kind: 'G', side: 'sente' });
+    expect(handCount(next, 'sente', 'G')).toBe(0);
+    expect(handCount(next, 'sente', 'P')).toBe(1);
+  });
+
+  it('置き先が玉なら玉は駒箱へ（持ち駒にしない）', () => {
+    const state = addToHand(createInitialState(), 'sente', 'G', 1);
+    const next = dropFromHand(state, 'sente', 'G', sq('5a'));
+    expect(next.hand.sente).toEqual({});
+    expect(pieceBox(next).K).toBe(1);
   });
 });
 

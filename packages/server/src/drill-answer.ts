@@ -206,8 +206,9 @@ function squareIndex(usi: string): { row: number; col: number } | null {
  * **合法性を問わないのが仕様**（prd/12 §2.5）。歩を横に動かせることは検討盤では正しい。
  * 出題の解答は「実際に指せた手」でなければ意味がないので、**この経路だけ**で見る。
  *
- * 🔒 **合法手生成器ではない**——選んだ 1 枚の行き先を見るだけで、王手放置も打ち歩詰めも見ない
- * （prd/13 §3。そこはエンジンの担当）。
+ * 🔒 **合法手生成器ではない**——選んだ 1 枚の行き先を見るだけで、王手放置は見ない
+ * （prd/13 §3。そこはエンジンの担当）。打ち歩詰めは `dropDestinations` が外す
+ * （エンジンを落とすので、手前の `validateMoveOnPosition` も `pawn_drop_mate` で弾く）。
  */
 export function isReachableMove(state: BoardState, move: string): boolean {
   const drop = /^([PLNSGBR])\*([1-9][a-i])$/.exec(move);

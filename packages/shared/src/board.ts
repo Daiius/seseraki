@@ -3,65 +3,32 @@
  *
  * USI の手を順に適用して各マスの駒を追跡する。
  * USI 座標: 列は 1-9（右から左）、行は a-i（上から下）
- * 内部配列: board[row][col] で row=0 が一段目（上）、col=0 が9筋（右端）
+ * 内部配列: board[row][col] で row=0 が一段目（上）、col=0 が9筋（左端）
+ *
+ * 駒の定義は `pieces.ts`、USI の座標・指し手の書式は `usi-move.ts` にある。
  */
 
-// 駒の種類
-export type PieceKind =
-  | 'P' | 'L' | 'N' | 'S' | 'G' | 'B' | 'R' | 'K'   // 生駒
-  | '+P' | '+L' | '+N' | '+S' | '+B' | '+R';           // 成駒
-
-export type Side = 'sente' | 'gote';
-
-export interface Piece {
-  kind: PieceKind;
-  side: Side;
-}
+import {
+  opponentOf,
+  unpromoted,
+  withPromotion,
+  type HandPieceKind,
+  type Piece,
+  type PieceKind,
+  type Side,
+} from './pieces';
+import { isOnBoard, parseUsiMove, usiToIndex, type SquareRef } from './usi-move';
 
 export type Square = Piece | null;
 
+/**
+ * KIF の指し手に使う駒名（成香・成桂・成銀は 1 文字の `杏` / `圭` / `全`）。
+ * ⚠ 局面の検証の説明文（`position-validation.ts`）は `成香` と書く。KIF の往復の都合なので統一しない。
+ */
 const PIECE_NAMES: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
   '+P': 'と', '+L': '杏', '+N': '圭', '+S': '全', '+B': '馬', '+R': '龍',
 };
-
-// USI 駒文字 → PieceKind（駒打ち用）
-const USI_DROP_PIECE: Record<string, PieceKind> = {
-  P: 'P', L: 'L', N: 'N', S: 'S', G: 'G', B: 'B', R: 'R',
-};
-
-/**
- * 成り: 生駒 → 成駒。
- * 盤面編集（`position-edit.ts`）も同じ対応表を使うので export する。
- */
-export const PROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
-  P: '+P', L: '+L', N: '+N', S: '+S', B: '+B', R: '+R',
-};
-
-/**
- * その駒種は成れるか（金・玉・既に成った駒は成れない）。
- * 🔒 **「成れる駒」の定義はここ 1 か所**（`PROMOTE_MAP` から導く）。盤面編集・局面の検証・
- * 出題の「成れる手」の判定はすべてこれを使う。
- */
-export function canPromote(kind: PieceKind): boolean {
-  return PROMOTE_MAP[kind] !== undefined;
-}
-
-/** 成駒 → 生駒（持ち駒にするとき）。盤面編集からも使う */
-export const UNPROMOTE_MAP: Partial<Record<PieceKind, PieceKind>> = {
-  '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',
-};
-
-/**
- * USI 座標 (例: "7g") → [row, col] (0-indexed)
- * USI: 列 1-9 は右から左、行 a-i は上から下
- * 内部: col 0=9筋, col 8=1筋 / row 0=一段, row 8=九段
- */
-function usiToIndex(usi: string): [number, number] {
-  const col = 9 - Number(usi[0]); // "7" → col 2
-  const row = usi.charCodeAt(1) - 97; // "g" → row 6
-  return [row, col];
-}
 
 /**
  * 初期配置を生成
@@ -150,76 +117,111 @@ export function withHand(
     : { sente: hand.sente, gote: pieces };
 }
 
+/** 駒をどこから動かすか: 盤上のマス、または `side` の持ち駒 */
+export type Origin =
+  | { square: SquareRef }
+  | { hand: HandPieceKind; side: Side };
+
+/**
+ * 駒を動かす・取る・打つ**中核**。新しい盤面を返し、元の盤面は変更しない。
+ *
+ * 🔒 **USI の再生（`applyMove`）と盤面編集（`movePiece` / `dropFromHand`）はどちらもここを通す。**
+ * 別々に持っていたころは、玉を取る・自分の駒の上・同じマスへの移動・持っていない駒の打ちで
+ * 挙動が食い違っていた。
+ *
+ * **手番は触らない。規則（手番・駒の動き方・成れるか）も見ない**——それは呼び出し側の仕事。
+ *
+ * - 盤上から動かす: 移動元が空・移動元と移動先が同じなら `null`
+ * - 持ち駒から打つ: その駒を持っていなければ `null`。**生駒のまま置く**（`promote` は見ない）
+ * - 移動先が盤外なら `null`
+ * - 移動先に駒があれば、**動かした側の持ち駒へ入る**（成駒は生駒に戻す）。自分の駒でも同じ
+ *   （編集では「どけて置き換える」で、どけた駒の行き先を 1 つに決めておく）。
+ *   ⚠ **玉は持ち駒にならない**——盤から消える（盤面編集の言葉では駒箱へ戻る）
+ * - `promote` は移動後の成り状態（`withPromotion`。省略で元のまま・`true` で成る・`false` で生駒に戻す）
+ *
+ * 変化した行と、動かした側の持ち駒だけを差し替え、残りは元の state と共有する（`BoardState` の不変契約）。
+ */
+export function relocate(
+  state: BoardState,
+  origin: Origin,
+  to: SquareRef,
+  promote?: boolean,
+): BoardState | null {
+  if (!isOnBoard(to)) return null;
+
+  let piece: Piece;
+  const updates: [row: number, col: number, square: Square][] = [];
+  if ('square' in origin) {
+    const from = origin.square;
+    if (!isOnBoard(from)) return null;
+    if (from.row === to.row && from.col === to.col) return null;
+    const moving = state.board[from.row][from.col];
+    if (!moving) return null;
+    piece = { kind: withPromotion(moving.kind, promote), side: moving.side };
+    // 移動先 → 移動元の順（移動元と移動先が同じ手は上で弾いているので順序に意味は無い）
+    updates.push([to.row, to.col, piece], [from.row, from.col, null]);
+  } else {
+    if ((state.hand[origin.side][origin.hand] ?? 0) <= 0) return null;
+    piece = { kind: origin.hand, side: origin.side };
+    updates.push([to.row, to.col, piece]);
+  }
+
+  // 動かした側の持ち駒（打った駒を減らし、どけた駒を足す）。変わらなければ元の参照のまま
+  const side = piece.side;
+  let pieces = state.hand[side];
+  const bump = (kind: PieceKind, delta: number) => {
+    if (pieces === state.hand[side]) pieces = { ...pieces };
+    const n = (pieces[kind] ?? 0) + delta;
+    if (n <= 0) delete pieces[kind];
+    else pieces[kind] = n;
+  };
+  if ('hand' in origin) bump(origin.hand, -1);
+  const displaced = state.board[to.row][to.col];
+  if (displaced && displaced.kind !== 'K') bump(unpromoted(displaced.kind), 1);
+
+  return {
+    board: withSquares(state.board, updates),
+    hand: pieces === state.hand[side] ? state.hand : withHand(state.hand, side, pieces),
+    sideToMove: state.sideToMove,
+  };
+}
+
 /**
  * USI の手を適用して新しい盤面を返す（元の盤面は変更しない）
  *
  * 変化したマス（移動元・移動先）と手番側の持ち駒だけを差分コピーし、
  * 残りは元の state と共有する（`BoardState` の不変契約が前提）。
+ * 駒を動かす中身は `relocate`（盤面編集と共用）。
+ *
+ * 🔒 **指せない手では例外を投げず、盤面を変えずに手番だけ進める。** 呼び出し側
+ * （棋譜の再生 `buildPositions`・読み筋の再生・出題の手順の再生・動画からの復元の検算）は
+ * どれも例外を前提にしておらず、局面列の長さ（i 手目の局面 = 添字 i）がずれないことを当てにしている。
+ * 「指せたか」を知りたい側は自分で確かめる（`validateMoveOnPosition` / 盤の突き合わせ）。
+ *
+ * 指せない手として読み飛ばすもの:
+ * - USI の書式に合わない手（盤外の座標 `0a` なども含む）
+ * - 移動元が空・**手番でない側の駒を動かす**・移動元と移動先が同じ・**自分の駒を取る**
+ * - **持っていない駒を打つ**・駒のあるマスへ打つ
+ *
+ * ⚠ 駒の動き方・成れるか（敵陣か）・王手放置は見ない（既知の棋譜を再生する道具なので）。
+ * 成れない駒の `+` は無視する。玉を取る手は指せるが、玉は持ち駒に入らない（`relocate`）。
  */
 export function applyMove(state: BoardState, usiMove: string): BoardState {
   const side = state.sideToMove;
-  const nextSide: Side = side === 'sente' ? 'gote' : 'sente';
+  const skipped: BoardState = { ...state, sideToMove: opponentOf(side) };
+  const move = parseUsiMove(usiMove);
+  if (!move) return skipped;
 
-  // 駒打ち: "B*5c"
-  const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d[a-i])$/);
-  if (dropMatch) {
-    const [, piece, to] = dropMatch;
-    const [toR, toC] = usiToIndex(to);
-    const kind = USI_DROP_PIECE[piece];
-    const h = { ...state.hand[side] };
-    h[kind] = (h[kind] ?? 0) - 1;
-    if (h[kind]! <= 0) delete h[kind];
-    return {
-      board: withSquares(state.board, [[toR, toC, { kind, side }]]),
-      hand: withHand(state.hand, side, h),
-      sideToMove: nextSide,
-    };
+  let next: BoardState | null;
+  if (move.type === 'drop') {
+    if (state.board[move.to.row][move.to.col]) return skipped;
+    next = relocate(state, { hand: move.piece, side }, move.to);
+  } else {
+    if (state.board[move.from.row][move.from.col]?.side !== side) return skipped;
+    if (state.board[move.to.row][move.to.col]?.side === side) return skipped;
+    next = relocate(state, { square: move.from }, move.to, move.promote ? true : undefined);
   }
-
-  // 通常の移動: "7g7f" or "7g7f+"
-  const moveMatch = usiMove.match(/^(\d[a-i])(\d[a-i])(\+?)$/);
-  if (moveMatch) {
-    const [, from, to, promote] = moveMatch;
-    const [fromR, fromC] = usiToIndex(from);
-    const [toR, toC] = usiToIndex(to);
-
-    const piece = state.board[fromR][fromC];
-    if (!piece) {
-      // 不正な手だが壊さないようにスキップ
-      return { ...state, sideToMove: nextSide };
-    }
-
-    // 取った駒を持ち駒に
-    const captured = state.board[toR][toC];
-    let hand = state.hand;
-    if (captured) {
-      let capturedKind = captured.kind;
-      if (UNPROMOTE_MAP[capturedKind]) {
-        capturedKind = UNPROMOTE_MAP[capturedKind]!;
-      }
-      const h = { ...state.hand[side] };
-      h[capturedKind] = (h[capturedKind] ?? 0) + 1;
-      hand = withHand(state.hand, side, h);
-    }
-
-    // 移動
-    let kind = piece.kind;
-    if (promote && PROMOTE_MAP[kind]) {
-      kind = PROMOTE_MAP[kind]!;
-    }
-    // 移動先 → 移動元の順（移動元 == 移動先の不正な手でも空マスになる旧挙動を保つ）
-    return {
-      board: withSquares(state.board, [
-        [toR, toC, { kind, side }],
-        [fromR, fromC, null],
-      ]),
-      hand,
-      sideToMove: nextSide,
-    };
-  }
-
-  // パース不能な手はスキップ
-  return { ...state, sideToMove: nextSide };
+  return next ? { ...next, sideToMove: opponentOf(side) } : skipped;
 }
 
 /**
@@ -241,7 +243,7 @@ export function buildPositions(usiMoves: string[]): BoardState[] {
  */
 export function getPieceName(state: BoardState, usiSquare: string): string {
   const [row, col] = usiToIndex(usiSquare);
-  const piece = state.board[row][col];
+  const piece = state.board[row]?.[col];
   return piece ? PIECE_NAMES[piece.kind] : '';
 }
 
@@ -270,14 +272,14 @@ export function usiToJapaneseWithPiece(
   };
 
   // 駒打ち
-  const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d)([a-i])$/);
+  const dropMatch = usiMove.match(/^([PLNSGBR])\*([1-9])([a-i])$/);
   if (dropMatch) {
     const [, piece, col, row] = dropMatch;
     return `${COL[col]}${ROW[row]}${PIECE[piece]}打`;
   }
 
   // 通常移動
-  const moveMatch = usiMove.match(/^(\d[a-i])(\d)([a-i])(\+?)$/);
+  const moveMatch = usiMove.match(/^([1-9][a-i])([1-9])([a-i])(\+?)$/);
   if (moveMatch) {
     const [, from, toCol, toRow, promote] = moveMatch;
     const pieceName = getPieceName(state, from);

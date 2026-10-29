@@ -4,7 +4,8 @@
  * **`usiMoves` だけで決まる派生値**で、エンジン解析を必要としない。正は指し手列であって
  * 保存値ではないので、いつでも再計算できることを契約にする（prd/01 §6.4）。
  */
-import { buildPositions, type BoardState, type Side } from '../board';
+import { buildPositions, type BoardState } from '../board';
+import type { Side } from '../pieces';
 import {
   ALL_KINDS,
   features,

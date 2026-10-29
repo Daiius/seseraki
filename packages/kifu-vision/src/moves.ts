@@ -219,7 +219,12 @@ export function inferMove(before: Square[][], after: Square[][]): InferResult {
  * 実際に突き合わせるところまでやって初めて検証になる。
  */
 export function verifyMove(before: Square[][], usi: string, side: Side, after: Square[][]): boolean {
-  const state = { board: before, hand: { sente: {}, gote: {} }, sideToMove: side };
+  // 見るのは盤の配置だけ。`applyMove` は持っていない駒の打ちを読み飛ばすので、
+  // 打ちなら打つ駒を 1 枚だけ持たせて渡す（持ち駒の正しさは `canPlay` の担当）
+  const drop = /^([PLNSGBR])\*/.exec(usi);
+  const held = drop ? { [drop[1]]: 1 } : {};
+  const hand = side === 'sente' ? { sente: held, gote: {} } : { sente: {}, gote: held };
+  const state = { board: before, hand, sideToMove: side };
   return boardsEqual(applyMove(state, usi).board, after);
 }
 

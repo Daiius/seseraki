@@ -4,9 +4,12 @@ import {
   buildPositions,
   createInitialState,
   getPieceName,
+  relocate,
   usiToJapaneseWithPiece,
   type BoardState,
 } from './board';
+import { parseSfen } from './sfen';
+import { usiToIndex } from './usi-move';
 
 /**
  * 盤面を人が読める図にする。
@@ -142,9 +145,95 @@ describe('applyMove', () => {
     expect(next.hand).toBe(state.hand); // 駒を取っていないので持ち駒も共有
   });
 
-  it('移動元 == 移動先の退化した手では移動元が空になる', () => {
-    // 移動先 → 移動元 の更新順に依存する挙動。差分コピー化で変わっていないことを固定する。
-    expect(getPieceName(applyMove(createInitialState(), '7g7g'), '7g')).toBe('');
+  it('移動元 == 移動先の退化した手は盤面を変えず手番だけ進める（盤面編集の movePiece と同じ）', () => {
+    // 以前は移動先 → 移動元の更新順で駒が消えていた。中核（relocate）に寄せて揃えた
+    const state = createInitialState();
+    const next = applyMove(state, '7g7g');
+    expect(next.board).toBe(state.board);
+    expect(next.sideToMove).toBe('gote');
+  });
+
+  it('玉を取っても持ち駒に玉を入れない（盤から消えるだけ）', () => {
+    const state = parseSfen('4k4/4R4/9/9/9/9/9/9/4K4 b - 1')!;
+    const next = applyMove(state, '5b5a');
+    expect(getPieceName(next, '5a')).toBe('飛');
+    expect(next.hand.sente).toEqual({});
+  });
+
+  it('盤外の座標（0 筋）は書式違いとして読み飛ばす', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b P 1')!;
+    for (const bad of ['P*0e', '0i1i', '5i0i']) {
+      const next = applyMove(state, bad);
+      expect(next.board, bad).toBe(state.board);
+      expect(next.hand, bad).toBe(state.hand);
+      expect(next.sideToMove, bad).toBe('gote');
+    }
+  });
+
+  it('手番でない側の駒は動かさない（色を変えて動かしていた旧挙動を直す）', () => {
+    const state = createInitialState();
+    const next = applyMove(state, '3c3d'); // 先手番に後手の歩
+    expect(next.board).toBe(state.board);
+    expect(next.sideToMove).toBe('gote');
+  });
+
+  it('自分の駒は取れない（盤面を変えず手番だけ進める）', () => {
+    const state = createInitialState();
+    const next = applyMove(state, '7i7g'); // 7g には先手の歩
+    expect(next.board).toBe(state.board);
+    expect(next.hand).toBe(state.hand);
+  });
+
+  it('駒のあるマスへは打てない', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b P 1')!;
+    const next = applyMove(state, 'P*5a');
+    expect(next.board).toBe(state.board);
+    expect(next.hand).toBe(state.hand);
+  });
+
+  it('持っていない駒は打てない（盤面を変えず手番だけ進める）', () => {
+    const state = createInitialState();
+    const next = applyMove(state, 'P*5e');
+    expect(next.board).toBe(state.board);
+    expect(next.hand).toBe(state.hand);
+    expect(next.sideToMove).toBe('gote');
+  });
+});
+
+describe('relocate（applyMove と盤面編集の中核）', () => {
+  const at = (usi: string) => {
+    const [row, col] = usiToIndex(usi);
+    return { row, col };
+  };
+
+  it('取った駒は動かした側の持ち駒へ（成駒は生駒に戻す）', () => {
+    const state = parseSfen('4k4/9/4+r4/9/4B4/9/9/9/4K4 b - 1')!;
+    const next = relocate(state, { square: at('5e') }, at('5c'))!;
+    expect(next.hand.sente).toEqual({ R: 1 });
+    expect(next.sideToMove).toBe('sente'); // 手番は触らない
+  });
+
+  it('自分の駒の上に動かすと、どけた駒は動かした側の持ち駒へ', () => {
+    const state = createInitialState();
+    const next = relocate(state, { square: at('7i') }, at('7g'))!;
+    expect(getPieceName(next, '7g')).toBe('銀');
+    expect(next.hand.sente).toEqual({ P: 1 });
+  });
+
+  it('打ちは持ち駒を 1 枚減らす。0 枚になればキーを落とす', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b 2P 1')!;
+    const once = relocate(state, { hand: 'P', side: 'sente' }, at('5e'))!;
+    expect(once.hand.sente).toEqual({ P: 1 });
+    const twice = relocate(once, { hand: 'P', side: 'sente' }, at('4e'))!;
+    expect(twice.hand.sente).toEqual({});
+  });
+
+  it('指せないものは null（空マス・同じマス・持っていない駒・盤外）', () => {
+    const state = createInitialState();
+    expect(relocate(state, { square: at('5e') }, at('5d'))).toBeNull();
+    expect(relocate(state, { square: at('7g') }, at('7g'))).toBeNull();
+    expect(relocate(state, { hand: 'P', side: 'sente' }, at('5e'))).toBeNull();
+    expect(relocate(state, { square: at('7g') }, { row: 9, col: 0 })).toBeNull();
   });
 });
 

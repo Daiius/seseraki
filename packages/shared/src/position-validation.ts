@@ -9,13 +9,25 @@
  * - 行き所のない駒（1 段目の歩・香 / 1〜2 段目の桂。後手は上下逆）
  * - 駒数上限（歩 18・香桂銀金各 4・角飛玉各 2）
  * - 手番側が相手玉を即取れる状態
+ * - 指し手（`validateMoveOnPosition`）については、加えて**打ち歩詰め**（`isPawnDropMate`）。
+ *   打ち歩詰めの局面を渡すと、ブラウザの WASM のエンジンはプロセスごと終わる
  *
  * ⚠ **これを通ってもエンジンが落ちる・返ってこない可能性は残る。** その場合は当該ジョブを
  * `failed` で完了させ、worker はエンジンを再起動して次へ進む（prd/12 §2.5）。
  *
  * ⚠ **環境非依存**（`lib: esnext` / `types: []`）。
  */
-import { applyMove, canPromote, type BoardState, type PieceKind, type Side, type Square } from './board';
+import { applyMove, withSquares, type BoardState, type Square } from './board';
+import {
+  canPromote,
+  opponentOf,
+  PIECE_TOTALS,
+  unpromoted,
+  type BasePieceKind,
+  type PieceKind,
+  type Side,
+} from './pieces';
+import { indexToUsi, isUsiMove, parseUsiMove, type SquareRef } from './usi-move';
 
 /** 違反の種別。文言に依らず機械的に扱えるようにコードで持つ */
 export type PositionViolationCode =
@@ -29,7 +41,8 @@ export type PositionViolationCode =
   | 'malformed_move'
   | 'no_such_piece'
   | 'captures_king'
-  | 'illegal_promotion';
+  | 'illegal_promotion'
+  | 'pawn_drop_mate';
 
 export interface PositionViolation {
   code: PositionViolationCode;
@@ -41,19 +54,7 @@ export type PositionValidation =
   | { ok: true }
   | { ok: false; violations: PositionViolation[] };
 
-/** 成駒 → 生駒。枚数を数えるときは成りを元に戻して数える */
-const UNPROMOTED: Record<PieceKind, PieceKind> = {
-  P: 'P', L: 'L', N: 'N', S: 'S', G: 'G', B: 'B', R: 'R', K: 'K',
-  '+P': 'P', '+L': 'L', '+N': 'N', '+S': 'S', '+B': 'B', '+R': 'R',
-};
-
-/** 駒種ごとの総数（盤上 + 双方の持ち駒）の上限 */
-const PIECE_LIMIT: Record<PieceKind, number> = {
-  P: 18, L: 4, N: 4, S: 4, G: 4, B: 2, R: 2, K: 2,
-  // 成駒は生駒に戻して数えるのでここは使わない（型を埋めるためだけに置く）
-  '+P': 18, '+L': 4, '+N': 4, '+S': 4, '+B': 2, '+R': 2,
-};
-
+/** 説明文に使う駒名。⚠ KIF の表記（`board.ts` の `杏` など）とは意図的に違う（`pieces.ts`） */
 const PIECE_NAME: Record<PieceKind, string> = {
   P: '歩', L: '香', N: '桂', S: '銀', G: '金', B: '角', R: '飛', K: '玉',
   '+P': 'と', '+L': '成香', '+N': '成桂', '+S': '成銀', '+B': '馬', '+R': '龍',
@@ -156,7 +157,7 @@ export function isAttackedBy(
  *
  * 🔒 **合法手生成器ではない**（prd/12 §2.5 の決定は動かさない）。ここが答えるのは
  * 「**選んだ 1 枚がそのマスへ動けるか**」だけで、局面の全合法手を数え上げない。
- * 自玉が王手放置になる手・打ち歩詰めは**弾かない**——それはエンジンの担当（prd/13 §3）。
+ * 自玉が王手放置になる手は**弾かない**——それはエンジンの担当（prd/13 §3）。
  *
  * 出題（prd/13 §3）で着手可能マスを見せるために使う。**盤の見た目の助けであって、
  * 合否の判定には使わない。**
@@ -181,7 +182,7 @@ export function moveDestinations(
 
 /**
  * `kind` を打てるマスを列挙する。**空きマスのうち、打った結果が明らかに指せない手を除く**
- * （二歩・行き所のない駒）。⚠ 打ち歩詰めは**見ない**（判定にはエンジンが要る。prd/13 §3）。
+ * （二歩・行き所のない駒・打ち歩詰め）。打ち歩詰めは `validateMoveOnPosition` と同じ `isPawnDropMate` で見る。
  */
 export function dropDestinations(
   state: BoardState,
@@ -194,10 +195,69 @@ export function dropDestinations(
       if (state.board[row][col]) continue;
       if (isStuck({ kind, side }, row)) continue;
       if (kind === 'P' && hasPawnOnFile(state, side, col)) continue;
+      if (kind === 'P' && isPawnDropMate(state, side, { row, col })) continue;
       result.push({ row, col });
     }
   }
   return result;
+}
+
+/**
+ * `side` が空きマス `to` に歩を打つと**打ち歩詰め**になるか。
+ *
+ * 🔒 **合法手生成器ではない**（prd/12 §2.5）。範囲を絞って判定する:
+ * 打った歩が**相手玉の正面で王手になる**ときだけ、次の 2 つを見る。それ以外は `false`。
+ * - 玉の逃げ場: 玉の周り 8 マス（歩を取る手を含む）のうち、自分の駒が無く、玉が動いた後に
+ *   `side` の利きが無いマスがあるか（玉を動かしてから見るので、玉の陰になっていた走り駒の利きも数える）
+ * - 歩を取れる玉以外の駒: 取った後に自玉に `side` の利きが無いか（**ピンされた駒では取れない**）
+ *
+ * 歩は玉に接して王手するので、間に駒を打つ・動かす受けは無い。この 2 つで詰みかどうかが決まる。
+ */
+export function isPawnDropMate(state: BoardState, side: Side, to: SquareRef): boolean {
+  const { row, col } = to;
+  if (!inBoard(row, col) || state.board[row][col]) return false;
+  const defender = opponentOf(side);
+  const kingRow = side === 'sente' ? row - 1 : row + 1;
+  if (!inBoard(kingRow, col)) return false;
+  const king = state.board[kingRow][col];
+  if (!king || king.side !== defender || king.kind !== 'K') return false;
+
+  const dropped: BoardState = {
+    ...state,
+    board: withSquares(state.board, [[row, col, { kind: 'P', side }]]),
+  };
+  const safeAfter = (
+    updates: [row: number, col: number, square: Square][],
+    kingAt: readonly [row: number, col: number],
+  ) =>
+    !isAttackedBy(
+      { ...dropped, board: withSquares(dropped.board, updates) },
+      side,
+      kingAt[0],
+      kingAt[1],
+    );
+
+  // 玉の逃げ場（歩を取る手を含む）
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const r = kingRow + dr;
+      const c = col + dc;
+      if (!inBoard(r, c) || dropped.board[r][c]?.side === defender) continue;
+      if (safeAfter([[r, c, king], [kingRow, col, null]], [r, c])) return false;
+    }
+  }
+
+  // 玉以外の駒で歩を取る（取った後に自玉が取られる駒＝ピンされた駒は数えない）
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      const piece = dropped.board[r][c];
+      if (!piece || piece.side !== defender || piece.kind === 'K') continue;
+      if (!attacks(dropped, r, c, row, col)) continue;
+      if (safeAfter([[row, col, piece], [r, c, null]], [kingRow, col])) return false;
+    }
+  }
+  return true;
 }
 
 /** その筋に自分の生の歩がいるか（二歩の判定） */
@@ -302,13 +362,13 @@ export function validatePositionForEngine(state: BoardState): PositionValidation
   }
 
   // --- 行き所のない駒 / 駒数の集計 ---
-  const counts: Partial<Record<PieceKind, number>> = {};
+  const counts: Partial<Record<BasePieceKind, number>> = {};
   const stuck = new Set<string>();
   for (let row = 0; row < 9; row++) {
     for (let col = 0; col < 9; col++) {
       const square = state.board[row][col];
       if (!square) continue;
-      const base = UNPROMOTED[square.kind];
+      const base = unpromoted(square.kind);
       counts[base] = (counts[base] ?? 0) + 1;
       if (isStuck(square, row)) {
         stuck.add(`${square.side}:${square.kind}`);
@@ -337,14 +397,15 @@ export function validatePositionForEngine(state: BoardState): PositionValidation
         });
         continue;
       }
-      counts[kind] = (counts[kind] ?? 0) + n;
+      const base = unpromoted(kind);
+      counts[base] = (counts[base] ?? 0) + n;
     }
   }
-  for (const [kind, n] of Object.entries(counts) as [PieceKind, number][]) {
-    if (n > PIECE_LIMIT[kind]) {
+  for (const [kind, n] of Object.entries(counts) as [BasePieceKind, number][]) {
+    if (n > PIECE_TOTALS[kind]) {
       violations.push({
         code: 'piece_count_exceeded',
-        message: `${PIECE_NAME[kind]}が ${n} 枚あります（上限 ${PIECE_LIMIT[kind]} 枚）`,
+        message: `${PIECE_NAME[kind]}が ${n} 枚あります（上限 ${PIECE_TOTALS[kind]} 枚）`,
       });
     }
   }
@@ -379,13 +440,12 @@ function inPromotionZone(row: number, side: Side): boolean {
  * 別々に持つと、**押せるのに server が 400 を返すボタン**ができる（実際に踏んだ）。
  */
 export function canPromoteMove(state: BoardState, move: string): boolean {
-  const match = /^([1-9][a-i])([1-9][a-i])\+?$/.exec(move);
-  if (!match) return false;
-  const [fromRow, fromCol] = usiToIndex(match[1]);
-  const [toRow] = usiToIndex(match[2]);
-  const piece = state.board[fromRow]?.[fromCol];
+  const parsed = parseUsiMove(move);
+  if (parsed?.type !== 'move') return false;
+  const { from, to } = parsed;
+  const piece = state.board[from.row][from.col];
   if (!piece || !canPromote(piece.kind)) return false;
-  return inPromotionZone(fromRow, piece.side) || inPromotionZone(toRow, piece.side);
+  return inPromotionZone(from.row, piece.side) || inPromotionZone(to.row, piece.side);
 }
 
 /**
@@ -397,18 +457,10 @@ export function canPromoteMove(state: BoardState, move: string): boolean {
  */
 export function mustPromoteMove(state: BoardState, move: string): boolean {
   if (!canPromoteMove(state, move)) return false;
-  const [fromRow, fromCol] = usiToIndex(move.slice(0, 2));
-  const [toRow] = usiToIndex(move.slice(2, 4));
-  const piece = state.board[fromRow][fromCol]!;
-  return isStuck(piece, toRow);
-}
-
-/** USI の指し手の書式（移動 `7g7f` / 成り `7g7f+` / 打ち `P*5e`） */
-const USI_MOVE = /^(?:[1-9][a-i][1-9][a-i]\+?|[PLNSGBR]\*[1-9][a-i])$/;
-
-/** USI 座標（例 `7g`）→ `[row, col]`。盤の内部表現は `board.ts` と同じ向き */
-function usiToIndex(usi: string): [row: number, col: number] {
-  return [usi.charCodeAt(1) - 97, 9 - Number(usi[0])];
+  const parsed = parseUsiMove(move);
+  if (parsed?.type !== 'move') return false;
+  const piece = state.board[parsed.from.row][parsed.from.col]!;
+  return isStuck(piece, parsed.to.row);
 }
 
 /**
@@ -427,7 +479,7 @@ export function validateMoveOnPosition(
   state: BoardState,
   usiMove: string,
 ): PositionValidation {
-  if (!USI_MOVE.test(usiMove)) {
+  if (!isUsiMove(usiMove)) {
     return {
       ok: false,
       violations: [
@@ -438,37 +490,40 @@ export function validateMoveOnPosition(
   const side = state.sideToMove;
   const violations: PositionViolation[] = [];
 
-  const drop = usiMove.match(/^([PLNSGBR])\*([1-9][a-i])$/);
-  if (drop) {
-    const [, char, to] = drop;
-    const kind = char as PieceKind;
-    const [toRow, toCol] = usiToIndex(to);
+  const parsed = parseUsiMove(usiMove)!;
+  if (parsed.type === 'drop') {
+    const kind = parsed.piece;
+    const to = indexToUsi(parsed.to.row, parsed.to.col);
     if ((state.hand[side][kind] ?? 0) < 1) {
       violations.push({
         code: 'no_such_piece',
         message: `${SIDE_NAME[side]}の持ち駒に${PIECE_NAME[kind]}がありません`,
       });
     }
-    if (state.board[toRow][toCol]) {
+    if (state.board[parsed.to.row][parsed.to.col]) {
       violations.push({
         code: 'no_such_piece',
         message: `${to} には駒があるので打てません`,
       });
     }
+    // 打ち歩詰めは打った後の局面の検証では分からない（局面としては正常）ので、手として見る
+    if (kind === 'P' && isPawnDropMate(state, side, parsed.to)) {
+      violations.push({
+        code: 'pawn_drop_mate',
+        message: `${to} への歩打ちは打ち歩詰めです`,
+      });
+    }
   } else {
-    const [, from, to, promote] = usiMove.match(
-      /^([1-9][a-i])([1-9][a-i])(\+?)$/,
-    )!;
-    const [fromRow, fromCol] = usiToIndex(from);
-    const [toRow, toCol] = usiToIndex(to);
-    const moving = state.board[fromRow][fromCol];
+    const from = indexToUsi(parsed.from.row, parsed.from.col);
+    const to = indexToUsi(parsed.to.row, parsed.to.col);
+    const moving = state.board[parsed.from.row][parsed.from.col];
     if (!moving || moving.side !== side) {
       violations.push({
         code: 'no_such_piece',
         message: `${from} に${SIDE_NAME[side]}の駒がありません`,
       });
     }
-    const captured = state.board[toRow][toCol];
+    const captured = state.board[parsed.to.row][parsed.to.col];
     if (captured && captured.side === side) {
       violations.push({
         code: 'no_such_piece',
@@ -483,13 +538,16 @@ export function validateMoveOnPosition(
         message: `${to} の${SIDE_NAME[captured.side]}玉を取る手は渡せません`,
       });
     }
-    if (promote && moving && moving.side === side) {
+    if (parsed.promote && moving && moving.side === side) {
       if (!canPromote(moving.kind)) {
         violations.push({
           code: 'illegal_promotion',
           message: `${PIECE_NAME[moving.kind]}は成れません`,
         });
-      } else if (!inPromotionZone(fromRow, side) && !inPromotionZone(toRow, side)) {
+      } else if (
+        !inPromotionZone(parsed.from.row, side) &&
+        !inPromotionZone(parsed.to.row, side)
+      ) {
         violations.push({
           code: 'illegal_promotion',
           message: `${from}${to} は敵陣に入らないので成れません`,

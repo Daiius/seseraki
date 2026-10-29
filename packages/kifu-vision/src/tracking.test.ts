@@ -117,10 +117,10 @@ describe('completeIfInitial', () => {
 });
 
 describe('canPlay', () => {
-  it('持っていない駒の打ちを断る（applyMove は黙って通してしまう）', () => {
+  it('持っていない駒の打ちを断る（applyMove は例外を投げずに読み飛ばす）', () => {
     const s = createInitialState();
     expect(canPlay(s, 'P*1c', 'sente')).toBe(false);
-    // ⚠ shared の applyMove は例外を投げない。持ち駒が負になって消えるだけ。
+    // ⚠ shared の applyMove は例外を投げない。盤を変えずに手番だけ進める。
     expect(() => applyMove(s, 'P*1c')).not.toThrow();
   });
 

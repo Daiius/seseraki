@@ -124,26 +124,29 @@ describe('extractDrills', () => {
 });
 
 describe('extractDrills（詰み）', () => {
-  // 2 手進めた局面（先手番）。金を 5b へ打てば 5a の後手玉に王手が掛かる形を借りて、
-  // **読み筋が王手の連続かどうか**の分岐だけを見る（合法性はエンジンの担当。prd/13 §3）
-  const OPENING = ['7g7f', '3c3d', '2g2f'];
+  // 角を交換した局面（先手番・先手は角を持つ）。角を 4b へ打てば 5a の後手玉に王手が掛かる形を借りて、
+  // **読み筋が王手の連続かどうか**の分岐だけを見る（合法性はエンジンの担当。prd/13 §3）。
+  // ⚠ 持っていない駒の打ちは applyMove が読み飛ばすので、打つ駒は実際に持たせておく
+  const PREFIX = ['7g7f', '3c3d', '8h2b+', '3a2b'];
+  const AT = PREFIX.length;
+  const OPENING = [...PREFIX, '2g2f'];
 
   it('詰み逃しを mate 種別で拾い、読み筋を正解手順として持つ', () => {
     const drills = extractDrills({
       usiMoves: OPENING,
       subjectSide: 'sente',
-      analyses: [analysis(2, ['G*5b', 'm1', ['G*5b']], ['2g2f', 300])],
+      analyses: [analysis(AT, ['B*4b', 'm1', ['B*4b']], ['2g2f', 300])],
       config: CONFIG,
     });
 
     expect(drills).toHaveLength(1);
     expect(drills[0]).toMatchObject({
-      moveNumber: 2,
+      moveNumber: AT,
       kind: 'mate',
       reason: 'missed_mate',
-      answerMove: 'G*5b',
+      answerMove: 'B*4b',
       matePlies: 1,
-      answerPv: ['G*5b'],
+      answerPv: ['B*4b'],
     });
   });
 
@@ -152,7 +155,7 @@ describe('extractDrills（詰み）', () => {
       usiMoves: OPENING,
       subjectSide: 'sente',
       // 初手が静かな手の読み筋は `checkmate` に分類されない
-      analyses: [analysis(2, ['5g5f', 'm3', ['5g5f', '5a4b', 'G*4c']], ['2g2f', 300])],
+      analyses: [analysis(AT, ['5g5f', 'm3', ['5g5f', '5a4b', 'B*3c']], ['2g2f', 300])],
       config: CONFIG,
     });
     expect(drills).toEqual([]);
@@ -162,7 +165,7 @@ describe('extractDrills（詰み）', () => {
     const drills = extractDrills({
       usiMoves: OPENING,
       subjectSide: 'sente',
-      analyses: [analysis(2, ['G*5b', 'm11', ['G*5b']], ['2g2f', 300])],
+      analyses: [analysis(AT, ['B*4b', 'm11', ['B*4b']], ['2g2f', 300])],
       config: { ...CONFIG, mateMaxPlies: 10 },
     });
     expect(drills).toEqual([]);
@@ -170,10 +173,10 @@ describe('extractDrills（詰み）', () => {
 
   it('実際に詰ませていたら出題しない（逃した詰みだけを拾う）', () => {
     const drills = extractDrills({
-      usiMoves: [...OPENING, 'G*5b'],
+      usiMoves: [...PREFIX, 'B*4b'],
       subjectSide: 'sente',
       // 実手が候補 1 位の詰みそのもの
-      analyses: [analysis(3, ['G*5b', 'm1', ['G*5b']])],
+      analyses: [analysis(AT, ['B*4b', 'm1', ['B*4b']])],
       config: CONFIG,
     });
     expect(drills).toEqual([]);
@@ -183,7 +186,7 @@ describe('extractDrills（詰み）', () => {
     const drills = extractDrills({
       usiMoves: OPENING,
       subjectSide: 'sente',
-      analyses: [analysis(2, ['2g2f', 'm-3', ['2g2f']], ['5g5f', 'm-1'])],
+      analyses: [analysis(AT, ['2g2f', 'm-3', ['2g2f']], ['5g5f', 'm-1'])],
       config: CONFIG,
     });
     expect(drills).toEqual([]);

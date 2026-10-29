@@ -1,10 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
+import clsx from 'clsx';
 import { useRouter, useRouterState } from '@tanstack/react-router';
 import { forgetMe } from '../lib/auth';
 import {
   engineEntryDownloadBytes,
   engineEntryOf,
   type EngineManifest,
+  type EngineManifestEntry,
 } from 'shared';
 import {
   getBrowserAnalysisSettings,
@@ -19,6 +21,7 @@ import {
   requestBrowserAnalysisRestart,
   setAnalysisFocus,
   useBrowserAnalysisState,
+  type BrowserAnalysisState,
 } from '../lib/browserAnalysis/store';
 import { unsupportedMessage } from '../lib/browserAnalysis/support';
 import { megabytes } from '../lib/browserAnalysis/format';
@@ -146,28 +149,28 @@ export function DrillEngineConsent() {
   if (!asking || !manifest) return null;
   const entry = engineEntryOf(manifest, settings.evalId);
   return (
-    <div role="status" className="alert shadow-lg py-2 flex flex-col items-stretch gap-2">
-      <div className="text-sm">
-        詰将棋の判定をこのブラウザで行うと、その場で結果が出ます。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
-        {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。
-      </div>
-      <div className="flex gap-2 self-end">
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          onClick={() => answerDrillEngineConsent(false, null)}
-        >
-          サーバーで判定する
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          onClick={() => answerDrillEngineConsent(true, entry.nn.sha256)}
-        >
-          ダウンロードする
-        </button>
-      </div>
-    </div>
+    <EngineConsentPrompt
+      entry={entry}
+      lead="詰将棋の判定をこのブラウザで行うと、その場で結果が出ます。"
+      actions={
+        <>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => answerDrillEngineConsent(false, null)}
+          >
+            サーバーで判定する
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => answerDrillEngineConsent(true, entry.nn.sha256)}
+          >
+            ダウンロードする
+          </button>
+        </>
+      }
+    />
   );
 }
 
@@ -188,53 +191,43 @@ export function StudyEvalBrowserStatus() {
   if (asking && manifest) {
     const entry = engineEntryOf(manifest, settings.evalId);
     return (
-      <div role="status" className="alert py-2 flex flex-col items-stretch gap-2">
-        <div className="text-sm">
-          この局面をこのブラウザで評価します。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
-          {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。棋譜の解析にも使います。
-        </div>
-        <div className="flex gap-2 self-end">
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => answerStudyEvalConsent(false, null)}
-          >
-            やめる
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => answerStudyEvalConsent(true, entry.nn.sha256)}
-          >
-            ダウンロードして評価する
-          </button>
-        </div>
-      </div>
+      // 評価結果の枠の中に出すので浮かせない（影を付けない）
+      <EngineConsentPrompt
+        entry={entry}
+        inline
+        lead="この局面をこのブラウザで評価します。"
+        trail="棋譜の解析にも使います。"
+        actions={
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => answerStudyEvalConsent(false, null)}
+            >
+              やめる
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => answerStudyEvalConsent(true, entry.nn.sha256)}
+            >
+              ダウンロードして評価する
+            </button>
+          </>
+        }
+      />
     );
   }
-  const total = download?.total ?? 0;
-  const loaded = download?.loaded ?? 0;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
         <span className="loading loading-dots loading-md" aria-label="評価しています" />
         <span className="text-base-content/60">
           {phase === 'loading' ? '解析エンジンを準備しています' : 'このブラウザで評価しています'}
-          {phase === 'loading' && total > 0 && (
-            <span className="ms-2 tabular-nums">
-              {megabytes(loaded)} / {megabytes(total)}
-            </span>
-          )}
+          {phase === 'loading' && <EngineDownloadAmount download={download} />}
         </span>
       </div>
-      {phase === 'loading' && (
-        <progress
-          className="progress progress-info w-full"
-          value={total > 0 ? loaded : undefined}
-          max={total > 0 ? total : undefined}
-          aria-label="解析エンジンのダウンロード"
-        />
-      )}
+      {phase === 'loading' && <EngineDownloadProgress download={download} />}
     </div>
   );
 }
@@ -260,6 +253,74 @@ function unconsentedSelection(
 }
 
 /**
+ * 評価関数のダウンロードの同意を求める案内（全局面解析・詰将棋の判定・検討盤の評価で共通）。
+ * 「最初に解析エンジンのデータ（評価関数・大きさ）をダウンロードします」の文は共通で、前後の文とボタンを呼ぶ側が渡す。
+ * 🔒 **大きさを示して明示の開始を求める**（prd/14 §5.10）
+ */
+function EngineConsentPrompt({
+  entry,
+  lead,
+  trail,
+  actions,
+  inline = false,
+}: {
+  entry: EngineManifestEntry;
+  /** 何のためのダウンロードか（文の頭） */
+  lead: string;
+  /** ダウンロードの文の後に添える文 */
+  trail?: string;
+  /** ボタン（右に寄せて並べる） */
+  actions: ReactNode;
+  /** ほかの枠の中に置く（浮かせる通知の影を付けない） */
+  inline?: boolean;
+}) {
+  return (
+    <div
+      role="status"
+      className={clsx('alert py-2 flex flex-col items-stretch gap-2', !inline && 'shadow-lg')}
+    >
+      <div className="text-sm">
+        {lead}最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
+        {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。{trail}
+      </div>
+      <div className="flex gap-2 self-end">{actions}</div>
+    </div>
+  );
+}
+
+type DownloadProgress = BrowserAnalysisState['download'];
+
+/** ダウンロードの量（「3.2MB / 8.7MB」）。全体の大きさが分からない間は出さない */
+function EngineDownloadAmount({
+  download,
+  className,
+}: {
+  download: DownloadProgress;
+  className?: string;
+}) {
+  const total = download?.total ?? 0;
+  if (total <= 0) return null;
+  return (
+    <span className={clsx('ms-2 tabular-nums', className)}>
+      {megabytes(download?.loaded ?? 0)} / {megabytes(total)}
+    </span>
+  );
+}
+
+/** ダウンロードの進捗バー。全体の大きさが分からない間は動き続ける（値なしの progress） */
+function EngineDownloadProgress({ download }: { download: DownloadProgress }) {
+  const total = download?.total ?? 0;
+  return (
+    <progress
+      className="progress progress-info w-full"
+      value={total > 0 ? (download?.loaded ?? 0) : undefined}
+      max={total > 0 ? total : undefined}
+      aria-label="解析エンジンのダウンロード"
+    />
+  );
+}
+
+/**
  * ブラウザ解析の案内（同意・準備中・解析できない理由）。解析が普通に動いている間は何も出さない。
  *
  * 🔒 **その端末での初回は、ダウンロードの大きさを示して明示の開始を求める**（prd/14 §5.10）。
@@ -278,34 +339,29 @@ export function BrowserAnalysisNotice() {
       // 同意は選んでいる評価関数ごと（prd/14 §5.10）
       const entry = engineEntryOf(manifest, settings.evalId);
       return (
-        <div
-          role="status"
-          className="alert shadow-lg py-2 flex flex-col items-stretch gap-2"
-        >
-          <div className="text-sm">
-            棋譜をこのブラウザで解析します。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
-            {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。
-          </div>
-          <button
-            type="button"
-            className="btn btn-primary btn-sm self-end"
-            onClick={() =>
-              setBrowserAnalysisSettings({
-                consentedEvalSha256s: withConsent(
-                  getBrowserAnalysisSettings().consentedEvalSha256s,
-                  entry.nn.sha256,
-                ),
-              })
-            }
-          >
-            ダウンロードして解析する
-          </button>
-        </div>
+        <EngineConsentPrompt
+          entry={entry}
+          lead="棋譜をこのブラウザで解析します。"
+          actions={
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() =>
+                setBrowserAnalysisSettings({
+                  consentedEvalSha256s: withConsent(
+                    getBrowserAnalysisSettings().consentedEvalSha256s,
+                    entry.nn.sha256,
+                  ),
+                })
+              }
+            >
+              ダウンロードして解析する
+            </button>
+          }
+        />
       );
     }
-    case 'loading': {
-      const total = download?.total ?? 0;
-      const loaded = download?.loaded ?? 0;
+    case 'loading':
       return (
         <div
           role="status"
@@ -313,21 +369,11 @@ export function BrowserAnalysisNotice() {
         >
           <div className="text-sm">
             解析エンジンを準備しています
-            {total > 0 && (
-              <span className="ms-2 tabular-nums text-base-content/70">
-                {megabytes(loaded)} / {megabytes(total)}
-              </span>
-            )}
+            <EngineDownloadAmount download={download} className="text-base-content/70" />
           </div>
-          <progress
-            className="progress progress-info w-full"
-            value={total > 0 ? loaded : undefined}
-            max={total > 0 ? total : undefined}
-            aria-label="解析エンジンのダウンロード"
-          />
+          <EngineDownloadProgress download={download} />
         </div>
       );
-    }
     case 'unsupported':
       return (
         <div role="status" className="alert alert-warning shadow-lg py-2 text-sm">

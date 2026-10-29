@@ -205,6 +205,16 @@ describe('engineOptions', () => {
     expect(engineOptions(MINI, settings, 16, 'gentle').threads).toBe(4);
   });
 
+  it('段ごとの上限（stageMaxThreads。full は 4。prd/14 §5.5）で絞る。控えめはその半分。無ければ maxThreads', () => {
+    const full = { ...settings, stageMaxThreads: 4 };
+    expect(engineOptions(MINI, full, 16, 'max').threads).toBe(4);
+    expect(engineOptions(MINI, full, 16, 'gentle').threads).toBe(2);
+    expect(engineOptions(MINI, full, 2, 'max').threads).toBe(2);
+    expect(engineOptions(MINI, { ...settings, stageMaxThreads: 8 }, 16, 'max').threads).toBe(8);
+    // 詰将棋の判定の固定のスレッド数は段の上限によらない
+    expect(engineOptions(MINI, full, 16, 'max', 2).threads).toBe(2);
+  });
+
   it('論理コア数が分からなければ 1 スレッド', () => {
     expect(engineOptions(MINI, settings, undefined, 'max').threads).toBe(1);
   });

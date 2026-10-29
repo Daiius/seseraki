@@ -5,6 +5,7 @@ import {
 } from '../analysis-limits';
 import {
   analyzeKifuForBrowser,
+  stageMaxThreadsOf,
   toBrowserReportAnalyses,
   toBrowserReportCandidate,
   type BrowserAnalysisRun,
@@ -287,5 +288,24 @@ describe('analyzeKifuForBrowser', () => {
 
     expect(summary).toMatchObject({ analyzed: 1, interrupted: true });
     expect(chunks.map((c) => c.map((a) => a.moveNumber))).toEqual([[0]]);
+  });
+});
+
+describe('stageMaxThreadsOf（段ごとのスレッド数の上限。prd/14 §5.5）', () => {
+  it('stageMaxThreads があればそれ（full は 4）', () => {
+    expect(stageMaxThreadsOf({ maxThreads: 8, stageMaxThreads: 4 })).toBe(4);
+    expect(stageMaxThreadsOf({ maxThreads: 8, stageMaxThreads: 8 })).toBe(8);
+  });
+
+  it('🔒 足す前の server（欄が無い）・読めない値なら maxThreads', () => {
+    expect(stageMaxThreadsOf({ maxThreads: 8 })).toBe(8);
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '4' as unknown as number]) {
+      expect(stageMaxThreadsOf({ maxThreads: 8, stageMaxThreads: bad })).toBe(8);
+    }
+  });
+
+  it('maxThreads（エンジンの上限）を超えない。端数は切り捨て', () => {
+    expect(stageMaxThreadsOf({ maxThreads: 8, stageMaxThreads: 16 })).toBe(8);
+    expect(stageMaxThreadsOf({ maxThreads: 8, stageMaxThreads: 4.7 })).toBe(4);
   });
 });

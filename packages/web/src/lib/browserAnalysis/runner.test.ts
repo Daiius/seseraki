@@ -616,6 +616,69 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
     expect(h.engines).toHaveLength(1);
   });
 
+  /** 偽のエンジンに setThreads を付け、切り替えを記録する（`cap` が無ければ 8 を上限とする） */
+  function trackThreads(h: Harness) {
+    const switched: [number | null, number | undefined][] = [];
+    const created = h.deps.createEngine;
+    h.deps.createEngine = async (settings, load, choice, threads) => {
+      const engine = await created(settings, load, choice, threads);
+      let current = 8;
+      return {
+        ...engine,
+        get threads() {
+          return current;
+        },
+        setThreads: async (next: number | null, cap?: number) => {
+          switched.push([next, cap]);
+          current = next ?? cap ?? 8;
+        },
+      };
+    };
+    return switched;
+  }
+
+  it('🔒 段ごとのスレッド数の上限（full は 4。prd/14 §5.5）は、エンジンを作り直さずに段の開始で合わせる', async () => {
+    let call = 0;
+    const h = harness({
+      start: () =>
+        call++ === 0
+          ? runOf({ settings: { ...QUICK, stageMaxThreads: 8 } }, 'quick')
+          : runOf({ settings: { ...FULL, stageMaxThreads: 4 } }, 'full'),
+      chunk: (chunk) => {
+        const last = chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length;
+        return chunk.profile === 'quick' ? okChunk(true, false, last) : okChunk(true, last, last);
+      },
+    });
+    const switched = trackThreads(h);
+    expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
+    // エンジンの上限（maxThreads）は段で共通なので、作り直さない（評価関数を読み直さない）
+    expect(h.engines).toHaveLength(1);
+    expect(switched).toEqual([
+      [null, 8],
+      [null, 4],
+    ]);
+    // 来歴のスレッド数は段ごと
+    expect(h.chunks.map((c) => [c.profile, c.threads])).toEqual([
+      ['quick', 8],
+      ['quick', 8],
+      ['quick', 8],
+      ['full', 4],
+      ['full', 4],
+      ['full', 4],
+    ]);
+  });
+
+  it('段の上限を返さない server（足す前）では、どちらの段も maxThreads を上限にする', async () => {
+    const h = twoStage();
+    const switched = trackThreads(h);
+    expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
+    expect(h.engines).toHaveLength(1);
+    expect(switched).toEqual([
+      [null, 8],
+      [null, 8],
+    ]);
+  });
+
   it('進捗は段ごとに 0 から数え直し、段を載せる（quick → full）', async () => {
     const h = twoStage();
     await createKifuRunner(h.deps).analyze(3, neverAborted);

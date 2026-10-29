@@ -28,6 +28,7 @@ import {
   namedEvaluationOf,
   namedGoCommand,
   sfenPositionCommand,
+  stageMaxThreadsOf,
   withAllLegalMoves,
   type BrowserAnalysisChunk,
   type DrillNamedEvaluation,
@@ -125,9 +126,10 @@ export interface AnalysisEngine {
   hashMb: number;
   /**
    * 動いているエンジンのスレッド数を変える（`setoption Threads` → `isready`。詰将棋の判定の固定のスレッド数。prd/13 §5.5）。
-   * null は作ったときの数（負荷の設定で決まる数）に戻す。同じ数なら何もしない。投げたらエンジンを作り直す（呼び出し側）
+   * null は負荷の設定で決まる数にする。その上限は `cap`（段ごとの上限。prd/14 §5.5）、省略時は作ったときの上限。
+   * 同じ数なら何もしない。投げたらエンジンを作り直す（呼び出し側）
    */
-  setThreads?(threads: number | null): Promise<void>;
+  setThreads?(threads: number | null, cap?: number): Promise<void>;
   dispose(): void;
 }
 
@@ -350,7 +352,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     choice: EngineChoice,
     threads?: number,
   ): Promise<AnalysisEngine> => {
-    // 評価関数の選択（端末の設定）・スレッド数の上限・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
+    // 評価関数の選択（端末の設定）・エンジンのスレッド数の上限（段で共通の maxThreads）・置換表の指定（server の定数）か、負荷の設定（端末の設定）が変わったら作り直す。
     // ⚠ 負荷の設定の変更は動いているエンジンに setoption で変えず、作り直す（prd/14 §5.10 の決定のまま）
     const load = deps.currentLoad();
     const key = `${choice.id}:${choice.info.engineBuild}:${choice.info.evalHash}:${settings.maxThreads}:${settings.hashMb}:${load}`;
@@ -372,7 +374,9 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     // 評価関数は読み直さない（作り直すと評価関数の読み込みからになり、1 手の判定が秒単位で遅れる）。
     // 全局面解析に戻るときは null で負荷の設定の数に戻す。切り替えに失敗したら投げる——呼び出し側がエンジンを作り直す
     // （作り直しは上の、求める数で作る経路を通る）
-    await engine.setThreads?.(threads ?? null);
+    // 🔒 **段ごとのスレッド数の上限（full は 4。prd/14 §5.5）も同じ経路で合わせる。** キーに入れるのは段で共通の
+    // `maxThreads` だけ——段が変わるたびに作り直すと、そのたびに評価関数の読み込みからになる
+    await engine.setThreads?.(threads ?? null, stageMaxThreadsOf(settings));
     return engine;
   };
 

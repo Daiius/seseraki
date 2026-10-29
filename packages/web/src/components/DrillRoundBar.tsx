@@ -3,7 +3,9 @@ import { Link } from '@tanstack/react-router';
 import { drillRound, roundText } from '../lib/drillRound';
 import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
-import { ArrowRestartIcon, BookOpenIcon, EyeSlashIcon, HomeIcon } from './icons';
+import { ArrowRestartIcon, BookOpenIcon, EllipsisVerticalIcon, EyeSlashIcon, HomeIcon } from './icons';
+// daisyUI の dropdown はフォーカスで開閉するので、項目を押したらフォーカスを外して閉じる
+import { closeMenu } from '../lib/closeMenu';
 
 /**
  * 解く画面の上部: 「この回 N 問中 M 問正解」と、右端のケバブ（prd/13 §7.6）。
@@ -38,23 +40,10 @@ export type SolveActions = {
  * ⚠ 解く前の「元の対局」は答えが見えている画面へ移る（§7.1 で伏せている棋譜を自分で開く）。記録は付かない
  */
 function SolveMenu({ solve }: { solve?: SolveActions }) {
-  // daisyUI の dropdown はフォーカスで開閉するので、項目を押したらフォーカスを外して閉じる（kifus/$id と同じ）
-  const closeMenu = () => {
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-  };
   return (
     <div className="dropdown dropdown-end">
       <button tabIndex={0} className={ICON_BTN} aria-label="メニュー">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          stroke="currentColor"
-          className="size-5"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
-        </svg>
+        <EllipsisVerticalIcon />
       </button>
       <ul tabIndex={0} className={`${MENU_LIST} w-40`}>
         <li>

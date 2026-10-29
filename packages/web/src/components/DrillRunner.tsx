@@ -65,8 +65,8 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
   /** 入ってきた入口。一覧から名指しで開いた問題は null（大きいボタンが「一覧に戻る」になる。prd/13 §7.6） */
   const mode = search.mode ?? null;
 
-  // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない
-  const [drill] = useState<Drill | null>(initial.drill);
+  // 読み込むたびに `key` で作り直す（呼び出し側）ので、ここで差し替えることはない（state に持たない）
+  const drill: Drill | null = initial.drill;
   const [error, setError] = useState<string | null>(initial.error);
   /** 出題局面からの確定した手順（受方の応手を含む。prd/13 §5.3） */
   const [line, setLine] = useState<string[]>([]);

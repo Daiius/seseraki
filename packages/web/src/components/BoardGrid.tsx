@@ -6,8 +6,8 @@ import { PlusIcon } from './icons';
 /**
  * 盤の見た目（9x9 + 筋段のラベル）と持ち駒表示。
  *
- * 🔒 **盤の見た目は 1 箇所に保つ。** 棋譜詳細（`ShogiBoard` → `StudyBoard`）と
- * 局面検索（`routes/positions.tsx`）の両方がここを使う。複製しない。
+ * 🔒 **盤の見た目は 1 箇所に保つ。** 棋譜詳細の検討盤（`ShogiBoard` → `StudyBoard`）・局面検索（`routes/positions.tsx`）・
+ * 出題の解く画面（`DrillRunner`）と一覧の縮図（`DrillCards`）がここを使う。複製しない。
  *
  * ⚠ `ShogiBoard` から切り出したのは、検討盤（`StudyBoard`）が盤を描くため。
  * `ShogiBoard` に置いたままだと `ShogiBoard → StudyBoard → ShogiBoard` の循環 import になる。

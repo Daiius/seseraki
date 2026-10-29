@@ -54,11 +54,6 @@ export function refParam(ref: DrillRef) {
   };
 }
 
-/** 出題（`/drills/next` などが返す 1 問）から、それを指す組を取り出す */
-export function refOf(drill: DrillRef): DrillRef {
-  return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
-}
-
 /** 名指しの 1 問（prd/13 §5.4）。返る形は `/drills/next` と同じ */
 export async function loadOne(ref: DrillRef) {
   const result = await callApi(

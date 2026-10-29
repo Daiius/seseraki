@@ -23,6 +23,7 @@ import { isAnalysisPending } from '../lib/analysisPending';
 import { subjectOutcomeOf } from '../lib/kifuResult';
 import { useAnalysisAssignee } from '../lib/useMe';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
+import { Pager } from '../components/Pager';
 import { TacticTags, TacticLegend } from '../components/TacticTags';
 import { legendModesOf } from '../lib/tacticLegend';
 
@@ -458,26 +459,9 @@ function KifuListPage() {
               </tbody>
             </table>
           </div>
-          {pagination && pagination.totalPages > 1 && (
-            <div className="join mt-4 flex justify-center">
-              <button
-                className="join-item btn"
-                disabled={page <= 1}
-                onClick={() => goToPage(page - 1)}
-              >
-                «
-              </button>
-              <button className="join-item btn">
-                {page} / {pagination.totalPages}
-              </button>
-              <button
-                className="join-item btn"
-                disabled={page >= pagination.totalPages}
-                onClick={() => goToPage(page + 1)}
-              >
-                »
-              </button>
-            </div>
+          {pagination && (
+            // ページは URL の値（server の `pagination.page` ではなく）。範囲外の URL でも押した先が URL からずれない
+            <Pager pagination={{ page, totalPages: pagination.totalPages }} onPage={goToPage} />
           )}
         </>
       )}

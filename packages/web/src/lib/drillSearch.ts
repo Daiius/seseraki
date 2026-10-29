@@ -68,6 +68,11 @@ export const MODE_LABEL: Record<DrillMode, string> = {
   wrong: '間違えた問題',
 };
 
+/** 出題（`/drills/next` が返す 1 問・一覧の行）から、それを指す組だけを取り出す */
+export function refOf(drill: DrillRef): DrillRef {
+  return { kifuNo: drill.kifuNo, moveNumber: drill.moveNumber, kind: drill.kind };
+}
+
 /** 問題を指す 3 つ組。**揃っていれば**組を、1 つでも欠けていれば null */
 export function drillRefOf(search: Pick<DrillsSearch, 'kifu' | 'ply' | 'drillKind'>): DrillRef | null {
   const { kifu, ply, drillKind } = search;

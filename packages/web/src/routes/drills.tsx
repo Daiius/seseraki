@@ -4,7 +4,6 @@ import {
   loadList,
   loadNext,
   loadOne,
-  refOf,
 } from '../lib/drillApi';
 import { DrillHome } from '../components/DrillHome';
 import { DrillListScreen } from '../components/DrillListScreen';
@@ -16,6 +15,7 @@ import {
   drillRefOf,
   drillScreenOf,
   pinnedSearch,
+  refOf,
   validateDrillsSearch,
   type DrillsSearch,
 } from '../lib/drillSearch';

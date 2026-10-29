@@ -28,22 +28,8 @@ import type { StudySession } from '../lib/study';
 import { BoardControls } from './BoardControls';
 import { CandidateLine } from './CandidateLine';
 import { EvalGraph } from './EvalGraph';
+import { MagnifyingGlassIcon } from './icons';
 import type { AnalysisProfile } from '../lib/analysisProgress';
-
-const ICON_PROPS = {
-  xmlns: 'http://www.w3.org/2000/svg',
-  fill: 'none',
-  viewBox: '0 0 24 24',
-  strokeWidth: 2,
-  stroke: 'currentColor',
-  className: 'size-5',
-} as const;
-
-const IconSearch = () => (
-  <svg {...ICON_PROPS} className="size-4 md:hidden">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m2.1-5.4a7.5 7.5 0 11-15 0 7.5 7.5 0 0115 0z" />
-  </svg>
-);
 
 interface Analysis {
   moveNumber: number;
@@ -416,7 +402,7 @@ export function ShogiBoard({ usiMoves, positions, analyses, sente, gote, subject
             aria-label="この局面を探す"
             title="この局面を通った他の棋譜と、そこからの分岐を見る"
           >
-            <IconSearch />
+            <MagnifyingGlassIcon className="size-4 md:hidden" />
             <span className="hidden md:inline">この局面を探す</span>
           </Link>
           <span className="font-mono text-base-content/60">

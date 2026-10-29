@@ -9,38 +9,11 @@ import {
 } from './icons';
 import type { StudyControls } from './StudyBoard';
 import { useDisplaySize } from '../lib/displaySize';
+import { controlButtonsOf } from '../lib/touchTargets';
 import { evaluateButtonViewState } from '../lib/evaluateButton';
 
-/** 操作ボタンの高さ（`StudyBoard.tsx` の `TOUCH_BTN` と同じ流儀）。モバイル 44px（375px 未満は 40px）、md 以上は 32px。 */
-const TOUCH_BTN =
-  'btn max-md:h-11 max-md:min-h-11 max-[374px]:h-10 max-[374px]:min-h-10 md:btn-sm';
-const TOUCH_BTN_COMPACT = 'btn btn-sm';
-
-/**
- * アイコンのみのボタンを正方形にする（`StudyBoard.tsx` の `ICON_BTN` と同じ流儀）。
- * 高さと同じ幅を明示し `px-0` で内側パディングを消す。`shrink-0` で、行が窮屈でも
- * このボタンから先に潰れないようにする（同じ行の ◀ ▶ が `flex-1` で伸縮を引き受ける）。
- */
-const ICON_BTN = `${TOUCH_BTN} shrink-0 px-0 max-md:w-11 max-[374px]:w-10 md:w-8`;
-const ICON_BTN_COMPACT = `${TOUCH_BTN_COMPACT} shrink-0 px-0 w-8`;
-
-/**
- * ◀ ▶ 用。モバイルは `flex-1` を維持してスライダーが消えたぶんの幅を吸う（伸縮そのまま）。
- * md 以上は `flex-none` に切り替わるので、そこだけ他のアイコンボタンと同じ正方形にする。
- */
-const ICON_BTN_FLEX = `${TOUCH_BTN} flex-1 md:flex-none md:shrink-0 md:px-0 md:w-8`;
-const ICON_BTN_FLEX_COMPACT = `${TOUCH_BTN_COMPACT} flex-1 md:flex-none md:shrink-0 md:px-0 md:w-8`;
-
-/**
- * 評価する（コントローラー行の 7 つ目。prd/12 §3.2・決定 2026-09-01）。
- * モバイルは他のアイコンボタンと同じ正方形（`px-0` + 固定幅）、md 以上はラベル「評価」を
- * 添えるぶん幅を内容ぶんに戻す（情報行の「この局面を探す」と同じ流儀）。
- * ⚠ **`max-md:` / `md:` の対で書く**（`ICON_BTN` と同じ理由。裸の `w-*` を `md:w-*` で
- * 上書きする形は、同じプロパティを同じ詳細度で 2 回書くことになり Tailwind の生成順に
- * 依存する。互いに排他な variant の対にすれば依存しない）。
- */
-const EVAL_BTN = `${TOUCH_BTN} shrink-0 gap-1 max-md:px-0 max-md:w-11 max-[374px]:w-10 md:w-auto md:px-3`;
-const EVAL_BTN_COMPACT = `${TOUCH_BTN_COMPACT} shrink-0 gap-1 max-md:px-0 max-md:w-8 md:w-auto md:px-3`;
+// ボタンのクラス（高さ・正方形・表示サイズの設定での切り替え）は `lib/touchTargets.ts` の `controlButtonsOf`。
+// 検討盤の操作パネル・読み筋の再生と同じ 1 か所から取る
 
 /**
  * 盤の下のコントローラー行（≪ ◀ slider ▶ ≫ + 盤面反転 + 評価する。prd/05 §2.1）。
@@ -75,7 +48,7 @@ const EVAL_BTN_COMPACT = `${TOUCH_BTN_COMPACT} shrink-0 gap-1 max-md:px-0 max-md
  * 既定は `md:btn-sm`（モバイルは daisyUI の既定サイズ = 連打しやすい大きさ、md 以上で小さく）、
  * `compact` はモバイルでも `btn-sm`。縦のスペースを評価値・読み筋へ回すための選択肢。
  *
- * 🔒 **アイコンのみのボタンは正方形にする**（`StudyBoard.tsx` の `ICON_BTN` と同じ流儀・
+ * 🔒 **アイコンのみのボタンは正方形にする**（`lib/touchTargets.ts` の `ControlButtons.icon`・
  * prd/05 §2.1 の 44px 基準。基準を割る変更ではなく、daisyUI 既定の水平パディング任せで
  * 横長（実測 52px 前後）になっていたのを揃える方向）。既定 44px / 375px 未満 40px /
  * md 以上 32px（`compact` は全幅 32px）。
@@ -104,10 +77,7 @@ export function BoardControls({
   const atStart = !branchActive && moveIndex === 0;
   const atEnd = !branchActive && moveIndex === totalMoves;
   const { displaySize } = useDisplaySize();
-  const compact = displaySize.controlSize === 'compact';
-  const iconBtn = compact ? ICON_BTN_COMPACT : ICON_BTN;
-  const iconBtnFlex = compact ? ICON_BTN_FLEX_COMPACT : ICON_BTN_FLEX;
-  const evalBtn = compact ? EVAL_BTN_COMPACT : EVAL_BTN;
+  const btn = controlButtonsOf(displaySize.controlSize);
   // 見た目の判断（disabled / busy / title）は純関数（`lib/evaluateButton.ts`）に切り出してある
   const evalView = evaluateButtonViewState({
     studying: study.studying,
@@ -118,7 +88,7 @@ export function BoardControls({
   return (
     <div className="flex items-center gap-2 max-w-3xl no-tap-select">
       <button
-        className={clsx(iconBtn, 'btn-outline')}
+        className={clsx(btn.icon, 'btn-outline')}
         onClick={study.studying ? study.undoAll : () => onGoTo(0)}
         disabled={study.studying ? !study.canUndo : atStart}
         title={study.studying ? '検討の最初へ (Home)' : '最初へ (Home)'}
@@ -126,7 +96,7 @@ export function BoardControls({
         <ChevronDoubleLeftIcon />
       </button>
       <button
-        className={clsx(iconBtnFlex, 'btn-outline')}
+        className={clsx(btn.iconFlex, 'btn-outline')}
         onClick={study.studying ? study.undo : () => onGoTo(Math.max(0, moveIndex - 1))}
         disabled={study.studying ? !study.canUndo : atStart}
         title={study.studying ? '検討を1手戻す (←)' : '戻る (←)'}
@@ -145,7 +115,7 @@ export function BoardControls({
         aria-label="手数"
       />
       <button
-        className={clsx(iconBtnFlex, 'btn-outline')}
+        className={clsx(btn.iconFlex, 'btn-outline')}
         onClick={
           study.studying ? study.redo : () => onGoTo(Math.min(totalMoves, moveIndex + 1))
         }
@@ -155,14 +125,14 @@ export function BoardControls({
         <ChevronRightIcon />
       </button>
       <button
-        className={clsx(iconBtn, 'btn-outline')}
+        className={clsx(btn.icon, 'btn-outline')}
         onClick={study.studying ? study.redoAll : () => onGoTo(totalMoves)}
         disabled={study.studying ? !study.canRedo : atEnd}
         title={study.studying ? '検討の最後へ (End)' : '最後へ (End)'}
       >
         <ChevronDoubleRightIcon />
       </button>
-      <button className={clsx(iconBtn, 'btn-outline')} onClick={onFlip} title="盤面反転">
+      <button className={clsx(btn.icon, 'btn-outline')} onClick={onFlip} title="盤面反転">
         <FlipIcon />
       </button>
       {/*
@@ -175,7 +145,7 @@ export function BoardControls({
       */}
       <button
         type="button"
-        className={clsx(evalBtn, 'btn-outline')}
+        className={clsx(btn.eval, 'btn-outline')}
         onClick={study.evaluate}
         disabled={evalView.disabled}
         aria-busy={evalView.busy}

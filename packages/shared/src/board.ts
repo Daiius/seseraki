@@ -9,6 +9,7 @@
  */
 
 import {
+  opponentOf,
   unpromoted,
   withPromotion,
   type HandPieceKind,
@@ -16,7 +17,7 @@ import {
   type PieceKind,
   type Side,
 } from './pieces';
-import { isOnBoard, usiToIndex, type SquareRef } from './usi-move';
+import { isOnBoard, parseUsiMove, usiToIndex, type SquareRef } from './usi-move';
 
 export type Square = Piece | null;
 
@@ -191,37 +192,36 @@ export function relocate(
  * 変化したマス（移動元・移動先）と手番側の持ち駒だけを差分コピーし、
  * 残りは元の state と共有する（`BoardState` の不変契約が前提）。
  * 駒を動かす中身は `relocate`（盤面編集と共用）。
+ *
+ * 🔒 **指せない手では例外を投げず、盤面を変えずに手番だけ進める。** 呼び出し側
+ * （棋譜の再生 `buildPositions`・読み筋の再生・出題の手順の再生・動画からの復元の検算）は
+ * どれも例外を前提にしておらず、局面列の長さ（i 手目の局面 = 添字 i）がずれないことを当てにしている。
+ * 「指せたか」を知りたい側は自分で確かめる（`validateMoveOnPosition` / 盤の突き合わせ）。
+ *
+ * 指せない手として読み飛ばすもの:
+ * - USI の書式に合わない手（盤外の座標 `0a` なども含む）
+ * - 移動元が空・**手番でない側の駒を動かす**・移動元と移動先が同じ・**自分の駒を取る**
+ * - **持っていない駒を打つ**・駒のあるマスへ打つ
+ *
+ * ⚠ 駒の動き方・成れるか（敵陣か）・王手放置は見ない（既知の棋譜を再生する道具なので）。
+ * 成れない駒の `+` は無視する。玉を取る手は指せるが、玉は持ち駒に入らない（`relocate`）。
  */
 export function applyMove(state: BoardState, usiMove: string): BoardState {
   const side = state.sideToMove;
-  const nextSide: Side = side === 'sente' ? 'gote' : 'sente';
+  const skipped: BoardState = { ...state, sideToMove: opponentOf(side) };
+  const move = parseUsiMove(usiMove);
+  if (!move) return skipped;
 
-  let next: BoardState | null = null;
-  // 駒打ち: "B*5c"
-  const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d[a-i])$/);
-  // 通常の移動: "7g7f" or "7g7f+"
-  const moveMatch = usiMove.match(/^(\d[a-i])(\d[a-i])(\+?)$/);
-  if (dropMatch) {
-    const [toR, toC] = usiToIndex(dropMatch[2]);
-    next = relocate(
-      state,
-      { hand: dropMatch[1] as HandPieceKind, side },
-      { row: toR, col: toC },
-    );
-  } else if (moveMatch) {
-    const [, from, to, promote] = moveMatch;
-    const [fromR, fromC] = usiToIndex(from);
-    const [toR, toC] = usiToIndex(to);
-    next = relocate(
-      state,
-      { square: { row: fromR, col: fromC } },
-      { row: toR, col: toC },
-      promote ? true : undefined,
-    );
+  let next: BoardState | null;
+  if (move.type === 'drop') {
+    if (state.board[move.to.row][move.to.col]) return skipped;
+    next = relocate(state, { hand: move.piece, side }, move.to);
+  } else {
+    if (state.board[move.from.row][move.from.col]?.side !== side) return skipped;
+    if (state.board[move.to.row][move.to.col]?.side === side) return skipped;
+    next = relocate(state, { square: move.from }, move.to, move.promote ? true : undefined);
   }
-
-  // パース不能な手・指せない手は盤面を変えずに手番だけ進める
-  return next ? { ...next, sideToMove: nextSide } : { ...state, sideToMove: nextSide };
+  return next ? { ...next, sideToMove: opponentOf(side) } : skipped;
 }
 
 /**
@@ -243,7 +243,7 @@ export function buildPositions(usiMoves: string[]): BoardState[] {
  */
 export function getPieceName(state: BoardState, usiSquare: string): string {
   const [row, col] = usiToIndex(usiSquare);
-  const piece = state.board[row][col];
+  const piece = state.board[row]?.[col];
   return piece ? PIECE_NAMES[piece.kind] : '';
 }
 
@@ -272,14 +272,14 @@ export function usiToJapaneseWithPiece(
   };
 
   // 駒打ち
-  const dropMatch = usiMove.match(/^([PLNSGBR])\*(\d)([a-i])$/);
+  const dropMatch = usiMove.match(/^([PLNSGBR])\*([1-9])([a-i])$/);
   if (dropMatch) {
     const [, piece, col, row] = dropMatch;
     return `${COL[col]}${ROW[row]}${PIECE[piece]}打`;
   }
 
   // 通常移動
-  const moveMatch = usiMove.match(/^(\d[a-i])(\d)([a-i])(\+?)$/);
+  const moveMatch = usiMove.match(/^([1-9][a-i])([1-9])([a-i])(\+?)$/);
   if (moveMatch) {
     const [, from, toCol, toRow, promote] = moveMatch;
     const pieceName = getPieceName(state, from);

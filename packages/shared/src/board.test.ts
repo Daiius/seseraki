@@ -160,6 +160,37 @@ describe('applyMove', () => {
     expect(next.hand.sente).toEqual({});
   });
 
+  it('盤外の座標（0 筋）は書式違いとして読み飛ばす', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b P 1')!;
+    for (const bad of ['P*0e', '0i1i', '5i0i']) {
+      const next = applyMove(state, bad);
+      expect(next.board, bad).toBe(state.board);
+      expect(next.hand, bad).toBe(state.hand);
+      expect(next.sideToMove, bad).toBe('gote');
+    }
+  });
+
+  it('手番でない側の駒は動かさない（色を変えて動かしていた旧挙動を直す）', () => {
+    const state = createInitialState();
+    const next = applyMove(state, '3c3d'); // 先手番に後手の歩
+    expect(next.board).toBe(state.board);
+    expect(next.sideToMove).toBe('gote');
+  });
+
+  it('自分の駒は取れない（盤面を変えず手番だけ進める）', () => {
+    const state = createInitialState();
+    const next = applyMove(state, '7i7g'); // 7g には先手の歩
+    expect(next.board).toBe(state.board);
+    expect(next.hand).toBe(state.hand);
+  });
+
+  it('駒のあるマスへは打てない', () => {
+    const state = parseSfen('4k4/9/9/9/9/9/9/9/4K4 b P 1')!;
+    const next = applyMove(state, 'P*5a');
+    expect(next.board).toBe(state.board);
+    expect(next.hand).toBe(state.hand);
+  });
+
   it('持っていない駒は打てない（盤面を変えず手番だけ進める）', () => {
     const state = createInitialState();
     const next = applyMove(state, 'P*5e');

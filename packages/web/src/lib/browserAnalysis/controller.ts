@@ -25,19 +25,20 @@ import {
   type HostWorkerLike,
 } from './engineHost';
 import { engineUrls, fetchEngineManifest } from './enginePaths';
-import {
-  createKifuRunner,
-  type AnalysisEngine,
-  type EngineChoice,
-  type EngineSettings,
-  type KifuRunner,
-  type NamedEvalOutcome,
-  type NamedEvalRequest,
-  type PositionEvalOutcome,
-  type PositionEvalRequest,
-  type RunnerDeps,
-  type RunnerLog,
-} from './runner';
+import type {
+  AnalysisEngine,
+  EngineChoice,
+  EngineSettings,
+  RunnerLog,
+} from './engineCache';
+import type {
+  NamedEvalOutcome,
+  NamedEvalRequest,
+  PositionEvalOutcome,
+  PositionEvalRequest,
+} from './engineReads';
+import type { Visibility } from './kifuAnalysis';
+import { createBrowserEngineRunner, type BrowserEngineRunner } from './runner';
 import { createScheduler, PriorityAbortedError } from './scheduler';
 import { setBrowserReader } from './grading';
 import {
@@ -98,7 +99,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 /** ページの可視（スマホはバックグラウンドで凍結する。その間の失敗を数えないために見る） */
-function createVisibility(signal: AbortSignal): RunnerDeps['visibility'] {
+function createVisibility(signal: AbortSignal): Visibility {
   let lastChangedAt: number | null =
     document.visibilityState === 'hidden' ? Date.now() : null;
   const onChange = () => {
@@ -341,7 +342,7 @@ function runnerBaseDeps(
 
 /** 採点の読みを 1 つ読み、経過をコンソールに出す（`[browser-analysis] drill: …`） */
 async function gradeWithLog(
-  runner: KifuRunner,
+  runner: BrowserEngineRunner,
   request: NamedEvalRequest,
 ): Promise<NamedEvalOutcome> {
   const { threads, stopOnMate, movetimeMs } = request.settings;
@@ -373,7 +374,7 @@ async function gradeWithLog(
 
 /** 検討盤の局面評価を 1 つ読み、経過をコンソールに出す（`[browser-analysis] position: …`） */
 async function evaluatePositionWithLog(
-  runner: KifuRunner,
+  runner: BrowserEngineRunner,
   request: PositionEvalRequest,
   signal: AbortSignal,
 ): Promise<PositionEvalOutcome> {
@@ -418,7 +419,7 @@ async function main(
   );
   patch({ phase: 'idle' });
 
-  const runner = createKifuRunner({
+  const runner = createBrowserEngineRunner({
     ...runnerBaseDeps(origin, manifest, signal, patch),
     onProgress: (progress) => {
       patch(
@@ -507,7 +508,7 @@ async function drillOnlyMain(signal: AbortSignal): Promise<void> {
   log.info(`drill grading only: eval=${selected.id} build=${selected.engine.buildId}`);
   patch({ phase: 'idle' });
 
-  const runner = createKifuRunner({
+  const runner = createBrowserEngineRunner({
     ...runnerBaseDeps(origin, manifest, signal, patch),
     onProgress: () => {},
     onStageCompleted: () => {},

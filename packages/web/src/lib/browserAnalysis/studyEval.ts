@@ -19,7 +19,7 @@ import type { EvalResult } from '../positionEval';
 import { validateEvalTarget } from '../positionEval';
 import type { EvalTarget } from '../study';
 import { requestBrowserPositionEval, type GradingUnavailableReason } from './grading';
-import type { PositionEvalSettings } from './runner';
+import type { PositionEvalSettings } from './engineReads';
 import { getBrowserAnalysisSettings, setBrowserAnalysisSettings, withConsent } from './settings';
 import { getBrowserAnalysisState, subscribeBrowserAnalysisState } from './store';
 

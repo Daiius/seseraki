@@ -1,5 +1,5 @@
 /**
- * どの棋譜をいつ解析するか（prd/14 §5.10）。常駐して、棋譜を 1 つずつ {@link KifuRunner} に渡す。
+ * どの棋譜をいつ解析するか（prd/14 §5.10）。常駐して、棋譜を 1 つずつ {@link BrowserEngineRunner} に渡す。
  *
  * - **詳細ページだけ**（`detail`）: 開いている詳細ページの棋譜だけを解析する。ページを離れたら中断する
  * - **使用中は常に**（`always`）: 開いている詳細の棋譜を最優先し、ほかは server が返す未解析の一覧の順。
@@ -18,7 +18,8 @@
  *
  * 依存は注入する（unit テスト用）。DOM には触れない。
  */
-import type { AnalyzeHooks, KifuOutcome, RunnerLog } from './runner';
+import type { RunnerLog } from './engineCache';
+import type { AnalyzeHooks, KifuOutcome } from './kifuAnalysis';
 import type { AnalysisMode } from './settings';
 
 export type PendingResult =
@@ -36,7 +37,7 @@ export function pendingStatusKind(
 
 export interface SchedulerDeps {
   mode: AnalysisMode;
-  /** 1 つの棋譜を解析する（{@link KifuRunner.analyze}） */
+  /** 1 つの棋譜を解析する（{@link BrowserEngineRunner.analyze}） */
   analyze(
     kifuNo: number,
     signal: AbortSignal,

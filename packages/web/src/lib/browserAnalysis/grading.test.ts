@@ -14,7 +14,7 @@ import type {
   NamedEvalRequest,
   PositionEvalOutcome,
   PositionEvalRequest,
-} from './runner';
+} from './engineReads';
 import { PriorityAbortedError, SchedulerStoppedError } from './scheduler';
 import type { BrowserAnalysisPhase } from './store';
 

@@ -12,7 +12,7 @@ import {
   type ErrorReportResult,
   type RunnerApi,
   type StartResult,
-} from './runner';
+} from './apiResult';
 import { pendingStatusKind, type PendingResult } from './scheduler';
 
 function failure(

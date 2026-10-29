@@ -457,7 +457,7 @@ dev の解析から拾った詰み局面 11 問（rank1 が正の `mate`・手�
   打ち切りの条件は `isConclusiveMate`（正の `mate`・bound なし・multipv 1・**読み筋が詰みの手数まで揃っている**。短い読み筋で打ち切ると、server が末尾を詰み上がりと読んで詰む前に正解を記録する・未完の手順を別解として覚えるため、揃うまで待つ。レビュー `OCL-D09F6297`）。`namedEvaluationOf` は `stoppedBy` があればその行だけで評価を作る
   （`stop` の後に出る行は使わない）。来歴の `movetimeMs` は上限の値のまま
 - **スレッド数の切り替え**: 動いているエンジンに `setoption name Threads value 2` → `isready` を送って切り替え、全局面解析（と次の一手の採点）の前に
-  負荷の設定の数へ同じ手順で戻す（`runner.ts` の `ensureEngine`・`controller.ts` の `setThreads`）。新しく作るエンジンは求める数で作る（担当 `worker` の判定だけのエンジンは
+  負荷の設定の数へ同じ手順で戻す（`engineCache.ts` の `acquire`・`controller.ts` の `setThreads`）。新しく作るエンジンは求める数で作る（担当 `worker` の判定だけのエンジンは
   最初から 2）。切り替えに失敗したらエンジンを作り直して求める数で作る。
   根拠（上流 `YaneuraOu` の固定コミットを読んだ）: `Threads` の on_change が `resize_threads()`（スレッドを作り直し・置換表を確保し直す）を呼び、`isready` も
   `resize_threads()` → 置換表の消去を行う。評価関数（NNUE）は読み直さない。WASM のビルドは `PTHREAD_POOL_SIZE=32`（起動時に 32 本の Worker を作る）なので、

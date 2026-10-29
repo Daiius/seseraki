@@ -143,7 +143,7 @@ worker の解析基盤は [05](./05-analysis.md)、LLM 解説との接続は [06
 #### 担当 `browser` の検討盤はブラウザで読む（決定・2026-10-29）
 
 > ✅ **実装済み（本番は未反映）**（2026-10-29）。web だけの変更で、server・手元 worker は変えていない。
-> `lib/browserAnalysis/studyEval.ts`（設定・同意・`EvalResult` への変換）・`runner.ts` の `evaluatePosition`・`shared` の `position-evaluation.ts`。
+> `lib/browserAnalysis/studyEval.ts`（設定・同意・`EvalResult` への変換）・`engineReads.ts` の `evaluatePosition`・`shared` の `position-evaluation.ts`。
 
 - 🔒 **画面で完結させる。** 担当 `browser` の利用者が「評価する」（§3.2）を押したら、server の口を通さずに、このブラウザの
   WASM エンジン（[14](./14-multi-user.md) §5.5）で読む。**結果は server に送らず、保存もしない。server に新しい口は作らない**

@@ -4,24 +4,22 @@ import type {
   BrowserAnalysisRun,
   UsiSearchResult,
 } from 'shared';
+import type {
+  AnalysisStage,
+  ChunkResult,
+  ErrorReportResult,
+  StartResult,
+} from './apiResult';
+import type { AnalysisEngine, EngineChoice } from './engineCache';
 import {
-  classifyFailureStatus,
-  createKifuRunner,
-  errorReportResultOf,
   MAX_STALE_RESTARTS,
   PAUSE_CHECK_WHILE_HIDDEN_MS,
   RETRY_DELAYS_MS,
   YIELD_CHECK_INTERVAL_MS,
-  type AnalysisEngine,
-  type AnalysisStage,
   type AnalyzeHooks,
-  type ChunkResult,
-  type EngineChoice,
-  type ErrorReportResult,
   type LocalProgress,
-  type RunnerDeps,
-  type StartResult,
-} from './runner';
+} from './kifuAnalysis';
+import { createBrowserEngineRunner, type RunnerDeps } from './runner';
 import type { AnalysisLoad } from './settings';
 
 // 4 手の棋譜（局面は 0..4 の 5 つ）。チャンクは 2 局面ごとに切る
@@ -190,34 +188,10 @@ function harness(script: {
 
 const neverAborted = new AbortController().signal;
 
-describe('classifyFailureStatus', () => {
-  it('401 はログイン切れ・403 は続けても直らない拒否', () => {
-    expect(classifyFailureStatus(401)).toBe('unauthorized');
-    expect(classifyFailureStatus(403)).toBe('fatal');
-  });
-  it('入力の誤り（4xx）は拒否、5xx と混雑は再試行', () => {
-    expect(classifyFailureStatus(400)).toBe('rejected');
-    expect(classifyFailureStatus(413)).toBe('rejected');
-    expect(classifyFailureStatus(408)).toBe('retry');
-    expect(classifyFailureStatus(429)).toBe('retry');
-    expect(classifyFailureStatus(500)).toBe('retry');
-    expect(classifyFailureStatus(503)).toBe('retry');
-  });
-});
-
-describe('errorReportResultOf（失敗の報告の 201 の本文）', () => {
-  it('applied: true だけが記録済み。破棄（applied: false）は記録済みにしない', () => {
-    expect(errorReportResultOf({ ok: true, applied: true })).toBe('recorded');
-    expect(errorReportResultOf({ ok: true, applied: false })).toBe('discarded');
-    expect(errorReportResultOf({ ok: true })).toBe('discarded');
-    expect(errorReportResultOf(null)).toBe('discarded');
-  });
-});
-
-describe('createKifuRunner', () => {
+describe('createBrowserEngineRunner', () => {
   it('開始 → 解析 → チャンクの報告 → 完了', async () => {
     const h = harness({});
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.starts).toBe(1);
@@ -254,7 +228,7 @@ describe('createKifuRunner', () => {
 
   it('再開位置から解析する', async () => {
     const h = harness({ start: () => runOf({ startMoveNumber: 3 }) });
-    await createKifuRunner(h.deps).analyze(3, neverAborted);
+    await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(h.chunks.flatMap((c) => c.analyses.map((a) => a.moveNumber))).toEqual([3, 4]);
   });
 
@@ -266,14 +240,14 @@ describe('createKifuRunner', () => {
       ['not-found', { kind: 'skipped', reason: 'not-found' }],
     ] as const) {
       const h = harness({ start: () => ({ kind: 'skip', reason }) });
-      expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual(expected);
+      expect(await createBrowserEngineRunner(h.deps).analyze(3, neverAborted)).toEqual(expected);
       expect(h.engines).toHaveLength(0);
     }
   });
 
   it('担当がブラウザでない（409）なら止める。エンジンは読み込まない', async () => {
     const h = harness({ start: () => ({ kind: 'wrong-assignee' }) });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome).toMatchObject({ kind: 'halt', reason: 'wrong-assignee' });
     expect(h.engines).toHaveLength(0);
   });
@@ -286,7 +260,7 @@ describe('createKifuRunner', () => {
           ? okChunk(false, false)
           : okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length),
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.starts).toBe(2);
@@ -306,7 +280,7 @@ describe('createKifuRunner', () => {
     const h = harness({
       chunk: () => (okChunk(false, false)),
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
     expect(h.starts).toBe(MAX_STALE_RESTARTS + 1);
     expect(h.errors).toEqual([]);
@@ -324,7 +298,7 @@ describe('createKifuRunner', () => {
         return okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length);
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.sleeps).toEqual([RETRY_DELAYS_MS[0], RETRY_DELAYS_MS[1]]);
@@ -334,7 +308,7 @@ describe('createKifuRunner', () => {
 
   it('通信の失敗が続いたら後回しにする（棋譜の失敗としては報告しない）', async () => {
     const h = harness({ chunk: () => ({ kind: 'retry', detail: 'status 500' }) });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
     expect(h.sleeps).toEqual(RETRY_DELAYS_MS);
     expect(h.errors).toEqual([]);
@@ -345,7 +319,7 @@ describe('createKifuRunner', () => {
     const h = harness({
       start: (call) => (call === 0 ? { kind: 'retry', detail: 'status 502' } : runOf()),
     });
-    expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual({
+    expect(await createBrowserEngineRunner(h.deps).analyze(3, neverAborted)).toEqual({
       kind: 'complete',
     });
     expect(h.starts).toBe(2);
@@ -353,7 +327,7 @@ describe('createKifuRunner', () => {
 
   it('入力の誤りとして拒否された（4xx）ら、失敗として記録して止める', async () => {
     const h = harness({ chunk: () => ({ kind: 'rejected', status: 400 }) });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('failed');
     expect(h.errors).toHaveLength(1);
     expect(h.errors[0]).toMatchObject({ revision: 7 });
@@ -366,7 +340,7 @@ describe('createKifuRunner', () => {
         if (engineNo === 0 && position === 2) throw { name: 'ExitStatus', message: 'exit(1)' };
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.engines).toHaveLength(2);
@@ -382,7 +356,7 @@ describe('createKifuRunner', () => {
         if (position === 2) throw new Error('info string Error! : Illegal Input Move');
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome.kind).toBe('failed');
     expect(h.engines).toHaveLength(2);
@@ -401,7 +375,7 @@ describe('createKifuRunner', () => {
         if (engineNo === 1 && position === 3) throw new Error('boom');
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.engines).toHaveLength(3);
     expect(h.errors).toEqual([]);
@@ -419,7 +393,7 @@ describe('createKifuRunner', () => {
         }
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.waitedVisible).toBe(3);
@@ -433,7 +407,7 @@ describe('createKifuRunner', () => {
       },
       reportError: () => 'unsent',
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
   });
 
@@ -446,7 +420,7 @@ describe('createKifuRunner', () => {
       },
       reportError: () => 'discarded',
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(h.errors).toHaveLength(1);
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.starts).toBe(3);
@@ -461,7 +435,7 @@ describe('createKifuRunner', () => {
           : okChunk(true, chunk.analyses.at(-1)!.moveNumber === USI_MOVES.length),
       reportError: () => 'discarded',
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.errors).toEqual([expect.objectContaining({ revision: 7 })]);
   });
@@ -471,7 +445,7 @@ describe('createKifuRunner', () => {
       chunk: () => ({ kind: 'rejected', status: 400 }),
       reportError: () => 'discarded',
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome.kind).toBe('deferred');
     expect(h.errors).toHaveLength(MAX_STALE_RESTARTS + 1);
   });
@@ -482,7 +456,7 @@ describe('createKifuRunner', () => {
         throw new Error('評価関数を取得できません (404)');
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome).toMatchObject({ kind: 'halt', reason: 'engine-load' });
     expect(h.errors).toEqual([]);
     expect(h.chunks).toEqual([]);
@@ -501,7 +475,7 @@ describe('createKifuRunner', () => {
         if (engineNo === 0 && position === 1) throw new Error('engine died');
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(outcome).toEqual({ kind: 'complete' });
     expect(loads).toBe(4);
     expect(h.errors).toEqual([]);
@@ -515,7 +489,7 @@ describe('createKifuRunner', () => {
         if (position === 2) controller.abort();
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, controller.signal);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, controller.signal);
 
     expect(outcome).toEqual({ kind: 'aborted' });
     // 局面 2 まで解析し、未送信ぶん（[2]）を送ってから止まる
@@ -532,7 +506,7 @@ describe('createKifuRunner', () => {
       // 読み込み（評価関数のダウンロード）の最中に、詳細ページを離れる
       createEngine: () => controller.abort(),
     });
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     expect(await runner.analyze(1, controller.signal)).toEqual({ kind: 'aborted' });
     expect(h.engines[0].disposed).toBe(false);
     expect(h.chunks).toEqual([]);
@@ -543,21 +517,21 @@ describe('createKifuRunner', () => {
 
   it('読み込み中に止められたエンジンは、使わずに捨てる', async () => {
     const controller = new AbortController();
-    let runner: ReturnType<typeof createKifuRunner> | null = null;
+    let runner: ReturnType<typeof createBrowserEngineRunner> | null = null;
     const h = harness({
       createEngine: () => {
         controller.abort();
         runner!.dispose();
       },
     });
-    runner = createKifuRunner(h.deps);
+    runner = createBrowserEngineRunner(h.deps);
     expect(await runner.analyze(1, controller.signal)).toEqual({ kind: 'aborted' });
     expect(h.engines[0].disposed).toBe(true);
   });
 
   it('🔒 dispose の後はエンジンを作り直さない（解析・名指しの読み・局面評価のどれでも）', async () => {
     const h = harness({});
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     runner.dispose();
     expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'aborted' });
     expect(
@@ -581,7 +555,7 @@ describe('createKifuRunner', () => {
 
   it('エンジンは棋譜をまたいで使い回し、dispose で止める', async () => {
     const h = harness({});
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     await runner.analyze(1, neverAborted);
     await runner.analyze(2, neverAborted);
     expect(h.engines).toHaveLength(1);
@@ -592,11 +566,11 @@ describe('createKifuRunner', () => {
   it('セッション切れ（401）・続けても直らない拒否（403）は止める', async () => {
     const unauthorized = harness({ chunk: () => ({ kind: 'unauthorized' }) });
     expect(
-      await createKifuRunner(unauthorized.deps).analyze(3, neverAborted),
+      await createBrowserEngineRunner(unauthorized.deps).analyze(3, neverAborted),
     ).toMatchObject({ kind: 'halt', reason: 'unauthorized' });
 
     const fatal = harness({ start: () => ({ kind: 'fatal', detail: '送れません (403)' }) });
-    expect(await createKifuRunner(fatal.deps).analyze(3, neverAborted)).toMatchObject({
+    expect(await createBrowserEngineRunner(fatal.deps).analyze(3, neverAborted)).toMatchObject({
       kind: 'halt',
       reason: 'fatal',
       detail: '送れません (403)',
@@ -605,7 +579,7 @@ describe('createKifuRunner', () => {
   });
 });
 
-describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
+describe('createBrowserEngineRunner（2 段。prd/14 §5.8・§5.10）', () => {
   const QUICK = { ...SETTINGS, movetimeMs: 100 };
   const FULL = { ...SETTINGS, movetimeMs: 600 };
   /** server の役: 1 回目の開始は quick、quick が揃った後は full を返す。full が揃ったら完了 */
@@ -640,7 +614,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
 
   it('quick が揃ったら、同じ棋譜を続けて full へ（開始の口を叩き直す）', async () => {
     const h = twoStage();
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
 
     expect(outcome).toEqual({ kind: 'complete' });
     expect(h.starts).toBe(2);
@@ -693,7 +667,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
       },
     });
     const switched = trackThreads(h);
-    expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
+    expect(await createBrowserEngineRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
     // エンジンの上限（maxThreads）は段で共通なので、作り直さない（評価関数を読み直さない）
     expect(h.engines).toHaveLength(1);
     expect(switched).toEqual([
@@ -714,7 +688,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
   it('段の上限を返さない server（足す前）では、どちらの段も maxThreads を上限にする', async () => {
     const h = twoStage();
     const switched = trackThreads(h);
-    expect(await createKifuRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
+    expect(await createBrowserEngineRunner(h.deps).analyze(3, neverAborted)).toEqual({ kind: 'complete' });
     expect(h.engines).toHaveLength(1);
     expect(switched).toEqual([
       [null, 8],
@@ -724,7 +698,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
 
   it('進捗は段ごとに 0 から数え直し、段を載せる（quick → full）', async () => {
     const h = twoStage();
-    await createKifuRunner(h.deps).analyze(3, neverAborted);
+    await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     const shown = h.progress.filter((p) => p !== null);
     expect(shown.map((p) => `${p.profile}:${p.analyzed}`)).toEqual([
       'quick:0', 'quick:1', 'quick:2', 'quick:3', 'quick:4', 'quick:5',
@@ -735,7 +709,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
 
   it('full の途中から再開する（開始の口が返す再開位置）', async () => {
     const h = twoStage({ fullFrom: 3 });
-    await createKifuRunner(h.deps).analyze(3, neverAborted);
+    await createBrowserEngineRunner(h.deps).analyze(3, neverAborted);
     expect(
       h.chunks.filter((c) => c.profile === 'full').flatMap((c) => c.analyses.map((a) => a.moveNumber)),
     ).toEqual([3, 4]);
@@ -755,7 +729,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
         return false;
       },
     };
-    expect(await createKifuRunner(h.deps).analyze(3, neverAborted, hooks)).toEqual({
+    expect(await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, hooks)).toEqual({
       kind: 'complete',
     });
     // 聞くのは full の開始の前と、full の途中（時計を間隔ぶん進めているので局面の境目ごと）だけ。
@@ -766,7 +740,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
 
   it('full を始める前に譲れと言われたら、エンジンを読み込まずに譲る', async () => {
     const h = harness({ start: () => runOf({}, 'full') });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldYield: async () => true,
     });
     expect(outcome).toEqual({ kind: 'yielded' });
@@ -784,7 +758,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
         if (position === 2) yieldNow = true;
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldYield: async () => yieldNow,
     });
     expect(outcome).toEqual({ kind: 'yielded' });
@@ -797,7 +771,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
   it('譲るかは間隔を空けて聞く（局面ごとに未解析の一覧を叩かない）', async () => {
     let asked = 0;
     const h = harness({ start: () => runOf({}, 'full') });
-    await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldYield: async () => {
         asked++;
         return false;
@@ -814,7 +788,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
         state.time += YIELD_CHECK_INTERVAL_MS;
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldYield: async () => {
         throw new Error('network down');
       },
@@ -824,7 +798,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
 
   it('負荷の設定が変わったら、次の解析の開始でエンジンを作り直す', async () => {
     const h = harness({});
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     await runner.analyze(1, neverAborted);
     expect(h.engineLoads).toEqual(['max']);
 
@@ -862,7 +836,7 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
       return start(no, engine);
     };
 
-    const outcome = await createKifuRunner(h.deps).analyze(1, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(1, neverAborted);
     expect(outcome).toEqual({ kind: 'complete' });
     // 解析中の段（quick）は区切りまで前の評価関数のまま、次の段（full）で作り直す
     expect(h.engineChoices).toEqual(['tsuyo11mini', 'tsuyo11micro']);
@@ -881,14 +855,14 @@ describe('createKifuRunner（2 段。prd/14 §5.8・§5.10）', () => {
   it('🔒 選んだ評価関数に同意していなければ（null）、開始の口も叩かずに止める', async () => {
     const h = harness({});
     h.choice = null;
-    const outcome = await createKifuRunner(h.deps).analyze(1, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(1, neverAborted);
     expect(outcome).toMatchObject({ kind: 'halt', reason: 'needs-consent' });
     expect(h.starts).toBe(0);
     expect(h.engines).toHaveLength(0);
   });
 });
 
-describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/13 §5.3）', () => {
+describe('createBrowserEngineRunner — 採点の読み（出題の名指し評価。prd/13 §5.3）', () => {
   const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
   const request = { sfen: SFEN, move: '2g2f', settings: { ...SETTINGS, movetimeMs: 600 } };
 
@@ -929,7 +903,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
 
   it('局面と手を名指しで読み、解答に付ける形（来歴つき）にする', async () => {
     const { h, sent } = namedHarness(() => named('2g2f', { type: 'cp', value: -120 }, ['2g2f', '8c8d']));
-    const outcome = await createKifuRunner(h.deps).evaluateNamed(request);
+    const outcome = await createBrowserEngineRunner(h.deps).evaluateNamed(request);
     expect(sent).toEqual([
       { position: `position sfen ${SFEN}`, go: 'go movetime 600 searchmoves 2g2f' },
     ]);
@@ -965,7 +939,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
       };
       return engine;
     };
-    const outcome = await createKifuRunner(h.deps).evaluateNamed({ ...request, move: '9d9c' });
+    const outcome = await createBrowserEngineRunner(h.deps).evaluateNamed({ ...request, move: '9d9c' });
     expect(outcome).toMatchObject({ kind: 'ok', evaluation: { move: '9d9c' } });
     expect(options).toEqual(['GenerateAllLegalMoves=true', '(go)', 'GenerateAllLegalMoves=false']);
   });
@@ -973,13 +947,13 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
   it('負荷の設定が効く（全局面解析と同じく、エンジンを作るときに読む）', async () => {
     const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
     h.load = 'gentle';
-    await createKifuRunner(h.deps).evaluateNamed(request);
+    await createBrowserEngineRunner(h.deps).evaluateNamed(request);
     expect(h.engineLoads).toEqual(['gentle']);
   });
 
   it('選んでいる評価関数で読み、来歴もその評価関数にする（切り替えたらエンジンを作り直す）', async () => {
     const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     await runner.evaluateNamed(request);
     const microInfo = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'b'.repeat(64), fvScale: 16 };
     h.choice = { id: 'tsuyo11micro', info: microInfo };
@@ -994,13 +968,13 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
   it('🔒 選んだ評価関数に同意していなければ読まない（failed）', async () => {
     const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
     h.choice = null;
-    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toMatchObject({ kind: 'failed' });
+    expect(await createBrowserEngineRunner(h.deps).evaluateNamed(request)).toMatchObject({ kind: 'failed' });
     expect(h.engines).toHaveLength(0);
   });
 
   it('全局面解析のエンジンを使い回す（読み込み直さない）', async () => {
     const { h } = namedHarness(() => named('2g2f', { type: 'cp', value: 0 }, ['2g2f']));
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     await runner.evaluateNamed(request);
     await runner.evaluateNamed(request);
     expect(h.engines).toHaveLength(1);
@@ -1008,7 +982,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
 
   it('🔒 名指しが効かずに別の手が返ったら mismatch（数字を作らない）', async () => {
     const { h } = namedHarness(() => named('7g7f', { type: 'cp', value: 50 }, ['7g7f']));
-    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'mismatch', returned: '7g7f' });
+    expect(await createBrowserEngineRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'mismatch', returned: '7g7f' });
   });
 
   it('エンジンが失敗したら作り直して 1 度だけ読み直す', async () => {
@@ -1016,7 +990,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
       if (engineNo === 0) throw new Error('dead');
       return named('2g2f', { type: 'mate', value: 3 }, ['2g2f', '8c8d', '2f2e']);
     });
-    const outcome = await createKifuRunner(h.deps).evaluateNamed(request);
+    const outcome = await createBrowserEngineRunner(h.deps).evaluateNamed(request);
     expect(outcome).toMatchObject({ kind: 'ok', evaluation: { candidate: { scoreType: 'mate', scoreValue: 3 } } });
     expect(h.engines.map((e) => e.disposed)).toEqual([true, false]);
   });
@@ -1040,7 +1014,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
       };
       return engine;
     };
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     const outcome = await runner.evaluateNamed({
       ...request,
       settings: { ...request.settings, movetimeMs: 1000, threads: 2, stopOnMate: true },
@@ -1075,7 +1049,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
         },
       };
     };
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     const mateRequest = { ...request, settings: { ...request.settings, threads: 2 } };
 
     // 担当がサーバーの端末: 判定のためだけに作るエンジンは、最初から 2 スレッドで作る
@@ -1109,7 +1083,7 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
         },
       };
     };
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     await runner.evaluateNamed(request);
     const outcome = await runner.evaluateNamed({ ...request, settings: { ...request.settings, threads: 2 } });
     expect(outcome).toMatchObject({ kind: 'ok', evaluation: { threads: 2 } });
@@ -1120,15 +1094,15 @@ describe('createKifuRunner — 採点の読み（出題の名指し評価。prd/
     const { h } = namedHarness(() => {
       throw new Error('dead');
     });
-    expect(await createKifuRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'failed', detail: 'dead' });
+    expect(await createBrowserEngineRunner(h.deps).evaluateNamed(request)).toEqual({ kind: 'failed', detail: 'dead' });
   });
 });
 
-describe('createKifuRunner — ほかのタブの採点の読みに譲る（prd/14 §5.10）', () => {
+describe('createBrowserEngineRunner — ほかのタブの採点の読みに譲る（prd/14 §5.10）', () => {
   it('局面の境目で聞き、待っていれば未送信のチャンクを送って paused で止める', async () => {
     const h = harness({});
     let boundaries = 0;
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       // 3 局面を解析した後の境目で、ほかのタブの採点の読みが現れる
       shouldPause: async () => ++boundaries > 3,
     });
@@ -1139,7 +1113,7 @@ describe('createKifuRunner — ほかのタブの採点の読みに譲る（prd/
   });
 });
 
-describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲る（レビュー OCL-62435AC8）', () => {
+describe('createBrowserEngineRunner — 見えるのを待つ間も採点の読みに譲る（レビュー OCL-62435AC8）', () => {
   /** 隠れたまま見えるようにならないページ（待ちは中断でだけ終わる） */
   function stuckHidden(h: Harness) {
     h.deps.visibility.waitVisible = (signal) =>
@@ -1161,7 +1135,7 @@ describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲�
     stuckHidden(h);
     let asked = 0;
     // 局面の境目（0..2 の 3 回）の後、見えるのを待つ間の 2 回目で採点の読みが現れる
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldPause: async () => ++asked > 4,
     });
     expect(outcome).toEqual({ kind: 'paused' });
@@ -1177,7 +1151,7 @@ describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲�
       },
     });
     stuckHidden(h);
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldPause: async () => true,
     });
     expect(outcome).toEqual({ kind: 'paused' });
@@ -1194,7 +1168,7 @@ describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲�
         }
       },
     });
-    const outcome = await createKifuRunner(h.deps).analyze(3, neverAborted, {
+    const outcome = await createBrowserEngineRunner(h.deps).analyze(3, neverAborted, {
       shouldPause: async () => false,
     });
     expect(outcome).toEqual({ kind: 'complete' });
@@ -1202,7 +1176,7 @@ describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲�
   });
 });
 
-describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () => {
+describe('createBrowserEngineRunner — 検討盤の局面評価（prd/12 §2.4）', () => {
   const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
   const request = {
     sfen: SFEN,
@@ -1262,7 +1236,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
 
   it('🔴 MultiPV を 3 にして 1000ms 読み、終わったら元へ戻す。候補手 3 本を手番側の値で返す', async () => {
     const { h, sent } = positionHarness();
-    const outcome = await createKifuRunner(h.deps).evaluatePosition(request, neverAborted);
+    const outcome = await createBrowserEngineRunner(h.deps).evaluatePosition(request, neverAborted);
     expect(sent).toEqual(['MultiPV=3', `position sfen ${SFEN} 1 | go movetime 1000`, 'MultiPV=1']);
     expect(outcome).toEqual({
       kind: 'ok',
@@ -1277,13 +1251,13 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
 
   it('スレッド数は負荷の設定の数で、上限は段の上限（4）', async () => {
     const { h, caps } = positionHarness();
-    await createKifuRunner(h.deps).evaluatePosition(request, neverAborted);
+    await createBrowserEngineRunner(h.deps).evaluatePosition(request, neverAborted);
     expect(caps).toEqual([4]);
   });
 
   it('全局面解析のエンジンを使い回す（作り直さない）', async () => {
     const { h } = positionHarness();
-    const runner = createKifuRunner(h.deps);
+    const runner = createBrowserEngineRunner(h.deps);
     // 全局面解析（SETTINGS）と局面評価で maxThreads・hashMb が同じなら、エンジンは 1 本のまま
     expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'complete' });
     await runner.evaluatePosition(request, neverAborted);
@@ -1294,7 +1268,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
     const { h } = positionHarness();
     const controller = new AbortController();
     controller.abort();
-    expect(await createKifuRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
+    expect(await createBrowserEngineRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
       kind: 'aborted',
     });
     expect(h.engines).toHaveLength(0);
@@ -1306,7 +1280,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
       controller.abort();
       return threeCandidates();
     });
-    expect(await createKifuRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
+    expect(await createBrowserEngineRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
       kind: 'aborted',
     });
     // 打ち切りの判定は取り下げを見る（取り下げられたら次の info で stop を送る）
@@ -1317,7 +1291,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
   it('🔒 選んだ評価関数に同意していなければ読まない（failed）', async () => {
     const { h } = positionHarness();
     h.choice = null;
-    expect(await createKifuRunner(h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
+    expect(await createBrowserEngineRunner(h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
       kind: 'failed',
     });
     expect(h.engines).toHaveLength(0);
@@ -1328,7 +1302,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
       if (engineNo === 0) throw new Error('dead');
       return threeCandidates();
     });
-    expect(await createKifuRunner(once.h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
+    expect(await createBrowserEngineRunner(once.h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
       kind: 'ok',
     });
     expect(once.h.engines.map((e) => e.disposed)).toEqual([true, false]);
@@ -1336,7 +1310,7 @@ describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () =
     const twice = positionHarness(() => {
       throw new Error('dead');
     });
-    expect(await createKifuRunner(twice.h.deps).evaluatePosition(request, neverAborted)).toEqual({
+    expect(await createBrowserEngineRunner(twice.h.deps).evaluatePosition(request, neverAborted)).toEqual({
       kind: 'failed',
       detail: 'dead',
     });

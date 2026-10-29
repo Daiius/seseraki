@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createInitialState, parseSfen, positionSfen } from 'shared';
 import { setBrowserReader } from './grading';
-import type { PositionEvalOutcome, PositionEvalRequest } from './runner';
+import type { PositionEvalOutcome, PositionEvalRequest } from './engineReads';
 import { patchBrowserAnalysisState, resetBrowserAnalysisState } from './store';
 import {
   STUDY_EVAL_SETTINGS,

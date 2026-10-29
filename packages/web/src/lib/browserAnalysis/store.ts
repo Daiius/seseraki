@@ -7,7 +7,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { EngineManifest } from 'shared';
-import type { LocalProgress } from './runner';
+import type { LocalProgress } from './kifuAnalysis';
 import type { UnsupportedReason } from './support';
 
 export type BrowserAnalysisPhase =

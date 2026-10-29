@@ -58,7 +58,7 @@ pnpm --filter engine-wasm test                   # 成果物を node で動か�
   更新するときはこのファイルだけを変えて流し直す。
 - 評価関数は、**アーカイブと中身（`nn.bin`・`progress.bin`）の大きさと sha256 が UPSTREAM と一致しなければ置かない**（`--from` でも中身は同じく照合する）。
 - **アーカイブから取り出すのは `nn.bin` と `progress.bin` だけ。** 中の `eval_options.txt`（`FV_SCALE 24`）・`tag.json`・`banner.png` は置かない（下の「落とし穴」）。
-- 7z の展開は、ホストに 7z があればそれを、無ければ使い捨てコンテナ（`EVAL_EXTRACT_IMAGE` に `p7zip-full` を入れる）を使う。
+- 7z の展開は、ホストに 7z があればそれを、無ければ使い捨てコンテナ（`EVAL_EXTRACT_IMAGE` に `p7zip-full` を入れる）を使う（評価関数 1 つにつき 1 回だけ起動し、`nn.bin` と `progress.bin` を続けて取り出す）。
 - Docker が無い・接続できない・イメージが手元に無いときは、何もせずに理由を出して止まる（イメージを勝手に pull しない）。
 - 作業場所は `.cache/`（上流の checkout・ダウンロードしたアーカイブ・エンジンごとの直近のビルドの記録 `engine-<名前>.stamp`）。消してよい。
 

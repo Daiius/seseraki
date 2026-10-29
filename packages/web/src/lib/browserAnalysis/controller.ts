@@ -13,7 +13,6 @@ import {
   engineEntryDownloadBytes,
   engineEntryOf,
   stageMaxThreadsOf,
-  type BrowserAnalysisSettings as ServerAnalysisSettings,
   type EngineManifest,
   type EngineManifestEntry,
 } from 'shared';
@@ -30,14 +29,17 @@ import {
   createKifuRunner,
   type AnalysisEngine,
   type EngineChoice,
+  type EngineSettings,
   type KifuRunner,
   type NamedEvalOutcome,
   type NamedEvalRequest,
+  type PositionEvalOutcome,
+  type PositionEvalRequest,
   type RunnerDeps,
   type RunnerLog,
 } from './runner';
 import { createScheduler } from './scheduler';
-import { setBrowserGrader } from './grading';
+import { setBrowserReader } from './grading';
 import {
   getBrowserAnalysisSettings,
   hasConsented,
@@ -148,7 +150,7 @@ function currentChoice(manifest: EngineManifest): EngineChoice | null {
 async function createEngine(
   origin: string,
   entry: EngineManifestEntry,
-  settings: ServerAnalysisSettings,
+  settings: EngineSettings,
   load: AnalysisLoad,
   signal: AbortSignal,
   patch: typeof patchBrowserAnalysisState,
@@ -306,7 +308,7 @@ function runnerBaseDeps(
     currentEngine: () => currentChoice(manifest),
     // エンジンの読み込みは、棋譜の中断ではなく常駐の停止（`signal`）で止める
     createEngine: (
-      settings: ServerAnalysisSettings,
+      settings: EngineSettings,
       load: AnalysisLoad,
       choice: EngineChoice,
       threads?: number,
@@ -356,6 +358,39 @@ async function gradeWithLog(
       break;
     case 'failed':
       log.warn(`drill: failed: ${outcome.detail}`);
+      break;
+  }
+  return outcome;
+}
+
+/** 検討盤の局面評価を 1 つ読み、経過をコンソールに出す（`[browser-analysis] position: …`） */
+async function evaluatePositionWithLog(
+  runner: KifuRunner,
+  request: PositionEvalRequest,
+  signal: AbortSignal,
+): Promise<PositionEvalOutcome> {
+  // 待っている間に取り下げられた（局面が変わった）。エンジンを使わない
+  if (signal.aborted) return { kind: 'aborted' };
+  const { multiPv, movetimeMs } = request.settings;
+  log.info(`position: reading ${request.sfen} multipv=${multiPv} for ${movetimeMs}ms`);
+  const started = Date.now();
+  const outcome = await runner.evaluatePosition(request, signal);
+  const elapsed = Date.now() - started;
+  switch (outcome.kind) {
+    case 'ok': {
+      const [best] = outcome.candidates;
+      log.info(
+        best
+          ? `position: ${outcome.candidates.length} candidates, best ${best.move} score ${best.scoreType} ${best.scoreValue} depth ${best.depth} threads=${outcome.threads} in ${elapsed}ms`
+          : `position: no candidate in ${elapsed}ms`,
+      );
+      break;
+    }
+    case 'aborted':
+      log.info(`position: withdrawn after ${elapsed}ms`);
+      break;
+    case 'failed':
+      log.warn(`position: failed: ${outcome.detail}`);
       break;
   }
   return outcome;
@@ -427,11 +462,13 @@ async function main(
     },
   });
 
-  // 出題の採点の読み（prd/13 §5.3・§5.5）。全局面解析より先に、同じエンジンで読む。
+  // 出題の採点の読み（prd/13 §5.3・§5.5）と検討盤の局面評価（prd/12 §2.4）。全局面解析より先に、同じエンジンで読む。
   // 詰将棋の判定は固定のスレッド数に切り替えて読み、全局面解析に戻るときに負荷の設定の数へ戻す（runner の ensureEngine）
-  const offGrader = setBrowserGrader((request) =>
-    scheduler.runPriority(() => gradeWithLog(runner, request)),
-  );
+  const offGrader = setBrowserReader({
+    named: (request) => scheduler.runPriority(() => gradeWithLog(runner, request)),
+    position: (request, signal) =>
+      scheduler.runPriority(() => evaluatePositionWithLog(runner, request, signal)),
+  });
   const offFocus = onAnalysisFocusChange(scheduler.setFocus);
   const offPoke = onBrowserAnalysisPoke(scheduler.poke);
   scheduler.setFocus(getAnalysisFocus());
@@ -467,10 +504,15 @@ async function drillOnlyMain(signal: AbortSignal): Promise<void> {
   });
   // エンジンは 1 本なので、判定は 1 つずつ読む
   let queue: Promise<unknown> = Promise.resolve();
-  const offGrader = setBrowserGrader((request) => {
-    const run = queue.then(() => gradeWithLog(runner, request));
+  const enqueue = <T,>(read: () => Promise<T>): Promise<T> => {
+    const run = queue.then(read);
     queue = run.catch(() => {});
     return run;
+  };
+  // 局面評価も受けるが、担当 `worker` の検討盤は server の口を使うので、ここに頼まれることは無い
+  const offGrader = setBrowserReader({
+    named: (request) => enqueue(() => gradeWithLog(runner, request)),
+    position: (request, signal) => enqueue(() => evaluatePositionWithLog(runner, request, signal)),
   });
   try {
     await new Promise<void>((resolve) => {

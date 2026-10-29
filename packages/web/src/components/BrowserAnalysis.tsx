@@ -26,6 +26,10 @@ import {
   askDrillEngineConsent,
   useDrillEngineState,
 } from '../lib/browserAnalysis/drillEngine';
+import {
+  answerStudyEvalConsent,
+  useStudyEvalConsentAsking,
+} from '../lib/browserAnalysis/studyEval';
 
 /**
  * ブラウザ解析の常駐（prd/14 §5.10）。`__root.tsx` に置き、どのページでも生きる。何も描かない。
@@ -162,6 +166,74 @@ export function DrillEngineConsent() {
           ダウンロードする
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 検討盤の局面評価をこのブラウザで読んでいる間の表示（担当がブラウザの利用者。prd/12 §2.4）。評価結果の枠の「評価しています」に出す。
+ *
+ * - 同意を求めている（押した時点でダウンロードに同意していなかった）: 大きさを示して明示の開始を求める（prd/14 §5.10）。
+ *   同意すれば全局面解析にも効く（同意は端末ごと・評価関数ごとに 1 つ）。やめたら評価しない
+ * - エンジンを準備している: ダウンロードの進捗
+ * - それ以外: 評価している旨だけ
+ *
+ * 文言に内部の用語（担当・MultiPV）は出さない
+ */
+export function StudyEvalBrowserStatus() {
+  const asking = useStudyEvalConsentAsking();
+  const { phase, manifest, download } = useBrowserAnalysisState();
+  const settings = useBrowserAnalysisSettings();
+  if (asking && manifest) {
+    const entry = engineEntryOf(manifest, settings.evalId);
+    return (
+      <div role="status" className="alert py-2 flex flex-col items-stretch gap-2">
+        <div className="text-sm">
+          この局面をこのブラウザで評価します。最初に解析エンジンのデータ（評価関数 {entry.name}・約{' '}
+          {megabytes(engineEntryDownloadBytes(entry))}）をダウンロードします。棋譜の解析にも使います。
+        </div>
+        <div className="flex gap-2 self-end">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => answerStudyEvalConsent(false, null)}
+          >
+            やめる
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => answerStudyEvalConsent(true, entry.nn.sha256)}
+          >
+            ダウンロードして評価する
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const total = download?.total ?? 0;
+  const loaded = download?.loaded ?? 0;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span className="loading loading-dots loading-md" aria-label="評価しています" />
+        <span className="text-base-content/60">
+          {phase === 'loading' ? '解析エンジンを準備しています' : 'このブラウザで評価しています'}
+          {phase === 'loading' && total > 0 && (
+            <span className="ms-2 tabular-nums">
+              {megabytes(loaded)} / {megabytes(total)}
+            </span>
+          )}
+        </span>
+      </div>
+      {phase === 'loading' && (
+        <progress
+          className="progress progress-info w-full"
+          value={total > 0 ? loaded : undefined}
+          max={total > 0 ? total : undefined}
+          aria-label="解析エンジンのダウンロード"
+        />
+      )}
     </div>
   );
 }

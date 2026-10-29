@@ -1158,3 +1158,144 @@ describe('createKifuRunner — 見えるのを待つ間も採点の読みに譲�
     expect(h.waitedVisible).toBe(1);
   });
 });
+
+describe('createKifuRunner — 検討盤の局面評価（prd/12 §2.4）', () => {
+  const SFEN = 'lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -';
+  const request = {
+    sfen: SFEN,
+    settings: { multiPv: 3, movetimeMs: 1000, stageMaxThreads: 4, maxThreads: 8, hashMb: 64, pvMaxPlies: 128 },
+  };
+  const threeCandidates = (): UsiSearchResult => {
+    const lines = [
+      { depth: 15, multipv: 1, score: { type: 'cp' as const, value: 40 }, pv: ['2g2f', '8c8d'] },
+      { depth: 15, multipv: 2, score: { type: 'cp' as const, value: 30 }, pv: ['7g7f', '3c3d'] },
+      { depth: 15, multipv: 3, score: { type: 'cp' as const, value: 10 }, pv: ['5g5f'] },
+    ];
+    return { bestmove: { move: '2g2f' }, infoLines: lines, lastInfo: lines[2] };
+  };
+
+  /** 送った USI（オプションと go）を記録し、`reply` で応答するエンジン */
+  function positionHarness(reply: (engineNo: number) => UsiSearchResult = () => threeCandidates()) {
+    const h = harness({});
+    const sent: string[] = [];
+    const stopWhens: unknown[] = [];
+    const caps: (number | undefined)[] = [];
+    h.deps.createEngine = async (_settings, load, choice) => {
+      const engineNo = h.engines.length;
+      h.engineLoads.push(load);
+      h.engineChoices.push(choice.id);
+      const options = new Map<string, string>();
+      const engine: AnalysisEngine & { disposed: boolean } = {
+        disposed: false,
+        name: 'FakeEngine',
+        threads: 4,
+        hashMb: 64,
+        session: {
+          setOption: (name, value) => {
+            options.set(name, value);
+            sent.push(`${name}=${value}`);
+          },
+          getOption: (name) => options.get(name),
+          analyze: async (position, go, analyzeOptions) => {
+            sent.push(`${position} | ${go}`);
+            stopWhens.push(analyzeOptions?.stopWhen);
+            return reply(engineNo);
+          },
+        },
+        setThreads: async (next, cap) => {
+          // 固定のスレッド数は渡さない（負荷の設定の数に、段の上限で合わせる）
+          expect(next).toBeNull();
+          caps.push(cap);
+        },
+        dispose() {
+          engine.disposed = true;
+        },
+      };
+      h.engines.push(engine);
+      return engine;
+    };
+    return { h, sent, stopWhens, caps };
+  }
+
+  it('🔴 MultiPV を 3 にして 1000ms 読み、終わったら元へ戻す。候補手 3 本を手番側の値で返す', async () => {
+    const { h, sent } = positionHarness();
+    const outcome = await createKifuRunner(h.deps).evaluatePosition(request, neverAborted);
+    expect(sent).toEqual(['MultiPV=3', `position sfen ${SFEN} 1 | go movetime 1000`, 'MultiPV=1']);
+    expect(outcome).toEqual({
+      kind: 'ok',
+      threads: 4,
+      candidates: [
+        { rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 40, depth: 15, pv: ['2g2f', '8c8d'] },
+        { rank: 2, move: '7g7f', scoreType: 'cp', scoreValue: 30, depth: 15, pv: ['7g7f', '3c3d'] },
+        { rank: 3, move: '5g5f', scoreType: 'cp', scoreValue: 10, depth: 15, pv: ['5g5f'] },
+      ],
+    });
+  });
+
+  it('スレッド数は負荷の設定の数で、上限は段の上限（4）', async () => {
+    const { h, caps } = positionHarness();
+    await createKifuRunner(h.deps).evaluatePosition(request, neverAborted);
+    expect(caps).toEqual([4]);
+  });
+
+  it('全局面解析のエンジンを使い回す（作り直さない）', async () => {
+    const { h } = positionHarness();
+    const runner = createKifuRunner(h.deps);
+    // 全局面解析（SETTINGS）と局面評価で maxThreads・hashMb が同じなら、エンジンは 1 本のまま
+    expect(await runner.analyze(1, neverAborted)).toEqual({ kind: 'complete' });
+    await runner.evaluatePosition(request, neverAborted);
+    expect(h.engines).toHaveLength(1);
+  });
+
+  it('取り下げられていれば読まない（エンジンも作らない）', async () => {
+    const { h } = positionHarness();
+    const controller = new AbortController();
+    controller.abort();
+    expect(await createKifuRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
+      kind: 'aborted',
+    });
+    expect(h.engines).toHaveLength(0);
+  });
+
+  it('読んでいる途中に取り下げられたら打ち切り、結果は捨てる', async () => {
+    const controller = new AbortController();
+    const { h, stopWhens } = positionHarness(() => {
+      controller.abort();
+      return threeCandidates();
+    });
+    expect(await createKifuRunner(h.deps).evaluatePosition(request, controller.signal)).toEqual({
+      kind: 'aborted',
+    });
+    // 打ち切りの判定は取り下げを見る（取り下げられたら次の info で stop を送る）
+    const stopWhen = stopWhens[0] as () => boolean;
+    expect(stopWhen()).toBe(true);
+  });
+
+  it('🔒 選んだ評価関数に同意していなければ読まない（failed）', async () => {
+    const { h } = positionHarness();
+    h.choice = null;
+    expect(await createKifuRunner(h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
+      kind: 'failed',
+    });
+    expect(h.engines).toHaveLength(0);
+  });
+
+  it('エンジンが失敗したら作り直して 1 度だけ読み直す。2 度続けば failed', async () => {
+    const once = positionHarness((engineNo) => {
+      if (engineNo === 0) throw new Error('dead');
+      return threeCandidates();
+    });
+    expect(await createKifuRunner(once.h.deps).evaluatePosition(request, neverAborted)).toMatchObject({
+      kind: 'ok',
+    });
+    expect(once.h.engines.map((e) => e.disposed)).toEqual([true, false]);
+
+    const twice = positionHarness(() => {
+      throw new Error('dead');
+    });
+    expect(await createKifuRunner(twice.h.deps).evaluatePosition(request, neverAborted)).toEqual({
+      kind: 'failed',
+      detail: 'dead',
+    });
+  });
+});

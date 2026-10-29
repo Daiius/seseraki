@@ -50,17 +50,4 @@ describe('evaluateButtonViewState', () => {
       title: '評価しています',
     });
   });
-
-  it('評価を使えない（ブラウザで解析する設定）ときは押せず、理由を title で言う', () => {
-    const view = evaluateButtonViewState({
-      studying: true,
-      grading: true,
-      evaluating: false,
-      unavailable: true,
-    });
-    expect(view.disabled).toBe(true);
-    // 評価中ではないのでスピナーにはしない
-    expect(view.busy).toBe(false);
-    expect(view.title).toContain('まだ使えません');
-  });
 });

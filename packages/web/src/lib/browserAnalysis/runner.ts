@@ -27,14 +27,18 @@ import {
   isPermanentSubmitStatus,
   namedEvaluationOf,
   namedGoCommand,
+  positionCandidatesOf,
+  positionGoCommand,
   sfenPositionCommand,
   stageMaxThreadsOf,
   withAllLegalMoves,
+  withMultiPv,
   type BrowserAnalysisChunk,
   type DrillNamedEvaluation,
   type BrowserAnalysisRun,
   type BrowserAnalysisSettings as ServerAnalysisSettings,
   type NamedEvalSettings,
+  type PositionCandidate,
   type UsiAnalysisEngine,
 } from 'shared';
 import type { AnalysisLoad } from './settings';
@@ -116,9 +120,16 @@ export interface RunnerApi {
   ): Promise<ErrorReportResult>;
 }
 
+/**
+ * エンジンを作る・合わせるのに使う設定（スレッド数の上限・置換表）。全局面解析の設定（開始の口）・採点の読みの設定（server）・
+ * 局面評価の設定（web の定数）のどれからでも渡せるように、要る欄だけにする
+ */
+export type EngineSettings = Pick<ServerAnalysisSettings, 'maxThreads' | 'stageMaxThreads' | 'hashMb'>;
+
 /** 起動済み（`readyok` まで済んだ）のエンジン */
 export interface AnalysisEngine {
-  session: UsiAnalysisEngine;
+  /** `getOption` は局面評価が MultiPV を元へ戻すのに使う（無ければ USI の既定の 1 へ戻す） */
+  session: UsiAnalysisEngine & { getOption?(name: string): string | undefined };
   /** エンジンの名乗り（USI の `id name`） */
   name: string | null;
   /** いまのスレッド数（{@link AnalysisEngine.setThreads} で変わる） */
@@ -181,7 +192,7 @@ export interface RunnerDeps {
    * 止めるのは常駐そのものを止めるときで、それは呼び出し側（`createEngine` の実装）が受け持つ
    */
   createEngine(
-    settings: ServerAnalysisSettings,
+    settings: EngineSettings,
     load: AnalysisLoad,
     choice: EngineChoice,
     /** 固定のスレッド数（詰将棋の判定）。無ければ負荷の設定で決める。どちらでも `setThreads(null)` は負荷の設定の数に戻す */
@@ -250,6 +261,28 @@ export type NamedEvalOutcome =
     }
   /** エンジンが名指しした手を読まなかった（その局面で指せない手など）。🔒 数字を作らず、採点を頼まない */
   | { kind: 'mismatch'; returned: string }
+  /** エンジンを読み込めない・読みが失敗した（作り直して 1 度やり直した後） */
+  | { kind: 'failed'; detail: string };
+
+/**
+ * 検討盤の局面評価（prd/12 §2.2・§2.4）で頼まれること。担当 `browser` の利用者の検討盤が、server を通さずに頼む。
+ * 🔒 設定は web の定数（`studyEval.ts` の `STUDY_EVAL_SETTINGS`。server を経由しないため）
+ */
+export interface PositionEvalRequest {
+  /** 読む局面（正規化 SFEN。検証済み） */
+  sfen: string;
+  settings: PositionEvalSettings;
+}
+
+/** 局面評価の設定（候補手数・思考時間・読み筋の長さと、エンジンの設定） */
+export type PositionEvalSettings = EngineSettings &
+  Pick<ServerAnalysisSettings, 'multiPv' | 'movetimeMs' | 'pvMaxPlies'>;
+
+export type PositionEvalOutcome =
+  /** 候補手（rank 順。手番側の値）。画面に出すだけで server には送らない */
+  | { kind: 'ok'; candidates: PositionCandidate[]; threads: number }
+  /** 頼んだ側が取り下げた（局面が変わった）。読み始める前なら読まない・読んでいる途中なら打ち切る */
+  | { kind: 'aborted' }
   /** エンジンを読み込めない・読みが失敗した（作り直して 1 度やり直した後） */
   | { kind: 'failed'; detail: string };
 
@@ -328,6 +361,13 @@ export interface KifuRunner {
    * ⚠ 全局面解析と同時に呼ばない（呼び出し側が全局面解析を止めてから呼ぶ。エンジンは 1 本）
    */
   evaluateNamed(request: NamedEvalRequest): Promise<NamedEvalOutcome>;
+  /**
+   * 検討盤の局面評価を 1 つ読む（prd/12 §2.2）。`position sfen …` → `go movetime <ms>` を、MultiPV を
+   * `settings.multiPv`（3）にして読み、終わったら元の MultiPV に戻す。エンジンは全局面解析と共用する。
+   * スレッド数は負荷の設定の数（上限は `settings` の段の上限）。`signal` が中断されたら読まない・読みを打ち切る。
+   * ⚠ 全局面解析と同時に呼ばない（{@link KifuRunner.evaluateNamed} と同じ）
+   */
+  evaluatePosition(request: PositionEvalRequest, signal: AbortSignal): Promise<PositionEvalOutcome>;
   /** エンジンを止める */
   dispose(): void;
 }
@@ -348,7 +388,7 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
    * @param threads 固定のスレッド数（詰将棋の判定。prd/13 §5.5）。無ければ負荷の設定で決まる数（全局面解析・次の一手）
    */
   const ensureEngine = async (
-    settings: ServerAnalysisSettings,
+    settings: EngineSettings,
     choice: EngineChoice,
     threads?: number,
   ): Promise<AnalysisEngine> => {
@@ -787,9 +827,56 @@ export function createKifuRunner(deps: RunnerDeps): KifuRunner {
     return { kind: 'failed', detail };
   };
 
+  const evaluatePosition = async (
+    request: PositionEvalRequest,
+    signal: AbortSignal,
+  ): Promise<PositionEvalOutcome> => {
+    const { sfen, settings } = request;
+    const choice = deps.currentEngine();
+    if (choice === null) return { kind: 'failed', detail: NEEDS_CONSENT_DETAIL };
+    let detail = '';
+    // エンジンが失敗したら 1 度だけ作り直して読み直す（名指しの読みと同じ）
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // 頼んだ側が取り下げた（待っている間に局面が変わった）。エンジンを使わずに返す
+      if (signal.aborted) return { kind: 'aborted' };
+      let current: AnalysisEngine;
+      try {
+        // 固定のスレッド数は無い——負荷の設定の数（上限は段の上限。全局面解析の full と同じ決め方）
+        current = await ensureEngine(settings, choice);
+      } catch (error) {
+        disposeEngine();
+        detail = `解析エンジンを読み込めませんでした（${messageOf(error)}）`;
+        log.warn(`position: engine load failed (${attempt + 1}): ${messageOf(error)}`);
+        continue;
+      }
+      try {
+        // 🔴 局面評価は MultiPV を自分で設定してから読み、終わったら戻す（全局面解析は MultiPV 1。prd/12 §2.2）。
+        // 取り下げられたら次の info で stop を送って打ち切る（結果は捨てる）
+        const result = await withMultiPv(current.session, settings.multiPv, () =>
+          current.session.analyze(sfenPositionCommand(sfen), positionGoCommand(settings.movetimeMs), {
+            stopWhen: () => signal.aborted,
+          }),
+        );
+        if (signal.aborted) return { kind: 'aborted' };
+        return {
+          kind: 'ok',
+          candidates: positionCandidatesOf(result, settings.multiPv, settings.pvMaxPlies),
+          threads: current.threads,
+        };
+      } catch (error) {
+        // 死・時間切れ・`info string Error!`。エンジンは必ず作り直す
+        disposeEngine();
+        detail = messageOf(error);
+        log.warn(`position: engine failed (${attempt + 1}): ${detail}`);
+      }
+    }
+    return { kind: 'failed', detail };
+  };
+
   return {
     analyze,
     evaluateNamed,
+    evaluatePosition,
     dispose: () => {
       disposed = true;
       disposeEngine();

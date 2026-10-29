@@ -1,7 +1,8 @@
 /**
- * 出題の採点の読み（名指し評価。prd/13 §5.3・prd/14 §5.10）を、画面から常駐の解析へ頼む口。
+ * 出題の採点の読み（名指し評価。prd/13 §5.3・prd/14 §5.10）と検討盤の局面評価（prd/12 §2.4）を、画面から常駐の解析へ頼む口。
  *
  * 解答の口が「この局面のこの手を名指しで読んで」（`status: 'evaluate'`）を返したら、出題の画面がここを呼ぶ。
+ * 担当 `browser` の利用者が検討盤で「評価する」を押したら、検討盤がここを呼ぶ（`studyEval.ts`）。
  * 常駐の解析（`controller.ts`）が動いていれば、全局面解析より先に同じエンジンで読む。
  *
  * 🔒 **エンジンを使えない端末では読まない**（推測で判定しない）。同意の前・解析できない環境・エンジンが無い・止まっている、
@@ -10,7 +11,12 @@
  * ⚠ このモジュールは出題の画面からも読み込むので、エンジンや runner の実装を import しない（型だけ）。
  * 常駐の解析の本体は、動かすときにだけ読み込む（`components/BrowserAnalysis.tsx`）。
  */
-import type { NamedEvalOutcome, NamedEvalRequest } from './runner';
+import type {
+  NamedEvalOutcome,
+  NamedEvalRequest,
+  PositionEvalOutcome,
+  PositionEvalRequest,
+} from './runner';
 import type { BrowserAnalysisPhase } from './store';
 
 /** 採点の読みを頼めない理由（端末の状態） */
@@ -32,13 +38,24 @@ export type GradingResult =
   | NamedEvalOutcome
   | { kind: 'unavailable'; reason: GradingUnavailableReason };
 
-type Grader = (request: NamedEvalRequest) => Promise<NamedEvalOutcome>;
+/** 検討盤の局面評価の結果（{@link requestBrowserPositionEval}） */
+export type PositionReadingResult =
+  | PositionEvalOutcome
+  | { kind: 'unavailable'; reason: GradingUnavailableReason };
 
-let grader: Grader | null = null;
+/** 常駐の解析が受け持つ読み（どちらも全局面解析より先に、同じエンジンで読む） */
+export interface BrowserReader {
+  /** 出題の採点の名指しの読み */
+  named(request: NamedEvalRequest): Promise<NamedEvalOutcome>;
+  /** 検討盤の局面評価。`signal` が中断されたら読まない・読みを打ち切る */
+  position(request: PositionEvalRequest, signal: AbortSignal): Promise<PositionEvalOutcome>;
+}
+
+let grader: BrowserReader | null = null;
 const graderListeners = new Set<() => void>();
 
-/** 常駐の解析が、採点の読みを受け持つ（止めるときは返り値で外す） */
-export function setBrowserGrader(next: Grader): () => void {
+/** 常駐の解析が、採点の読みと局面評価を受け持つ（止めるときは返り値で外す） */
+export function setBrowserReader(next: BrowserReader): () => void {
   grader = next;
   for (const listener of [...graderListeners]) listener();
   return () => {
@@ -76,11 +93,12 @@ export interface GradingDeps {
   setTimeout(callback: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
   /**
-   * 同意の前（`needs-consent`）なら、利用者に同意を求めて答えを待つ（担当 `worker` の詰将棋の判定。prd/13 §5.5）。
+   * 同意の前（`needs-consent`）なら、利用者に同意を求めて答えを待つ（担当 `worker` の詰将棋の判定。prd/13 §5.5。担当 `browser` の検討盤の局面評価。prd/12 §2.4）。
    * true は同意した（常駐が起動し直すのを待って頼む）、false は断った（`declined`）。
-   * 無ければ今までどおり、同意の前はすぐ `needs-consent` を返す（同意は画面の案内から）
+   * 無ければ今までどおり、同意の前はすぐ `needs-consent` を返す（同意は画面の案内から）。
+   * `signal` は頼んだ側の取り下げ（検討盤の局面評価。取り下げられたら案内を閉じてよい）
    */
-  askConsent?(): Promise<boolean>;
+  askConsent?(signal?: AbortSignal): Promise<boolean>;
 }
 
 /**
@@ -92,11 +110,35 @@ export async function requestBrowserGrading(
   request: NamedEvalRequest,
   deps: GradingDeps,
 ): Promise<GradingResult> {
+  const result = await requestWith((reader) => reader.named(request), deps);
+  // 取り下げの合図（signal）を渡していないので aborted は返らない（型を閉じるだけ）
+  return result.kind === 'aborted' ? { kind: 'unavailable', reason: 'off' } : result;
+}
+
+/**
+ * 検討盤の局面評価を頼む（prd/12 §2.4。担当 `browser` の利用者）。受け持ち手の待ち方・頼めない理由・頼み直しは
+ * {@link requestBrowserGrading} と同じ。`signal` が中断されたら（局面が変わった）、待つのをやめて `aborted` を返す
+ */
+export async function requestBrowserPositionEval(
+  request: PositionEvalRequest,
+  signal: AbortSignal,
+  deps: GradingDeps,
+): Promise<PositionReadingResult> {
+  if (signal.aborted) return { kind: 'aborted' };
+  return requestWith((reader) => reader.position(request, signal), deps, signal);
+}
+
+async function requestWith<T>(
+  read: (reader: BrowserReader) => Promise<T>,
+  deps: GradingDeps,
+  signal?: AbortSignal,
+): Promise<T | { kind: 'unavailable'; reason: GradingUnavailableReason } | { kind: 'aborted' }> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const current = grader ?? (await waitForGrader(deps));
+    const current = grader ?? (await waitForGrader(deps, signal));
+    if (current === ABORTED) return { kind: 'aborted' };
     if (typeof current === 'string') return { kind: 'unavailable', reason: current };
     try {
-      return await current(request);
+      return await read(current);
     } catch {
       // 常駐が止まった（SchedulerStoppedError）。起動し直すのを待って頼み直す
     }
@@ -104,11 +146,18 @@ export async function requestBrowserGrading(
   return { kind: 'unavailable', reason: unavailableReasonOf(deps.getPhase()) ?? 'off' };
 }
 
+/** 待っている間に頼んだ側が取り下げた（{@link waitForGrader}） */
+const ABORTED = Symbol('aborted');
+
 /**
  * 受け持ち手が付くのを待つ。頼めない状態になった・時間切れなら理由を返す。
- * 同意を求める（{@link GradingDeps.askConsent}）間は時間切れを数えない——同意の後に起動を待ち直す
+ * 同意を求める（{@link GradingDeps.askConsent}）間は時間切れを数えない——同意の後に起動を待ち直す。
+ * `signal` が中断されたら {@link ABORTED}
  */
-function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableReason> {
+function waitForGrader(
+  deps: GradingDeps,
+  signal?: AbortSignal,
+): Promise<BrowserReader | GradingUnavailableReason | typeof ABORTED> {
   return new Promise((resolve) => {
     let settled = false;
     /** 同意を求めている（null）・同意した（true）。まだ求めていなければ false */
@@ -127,14 +176,16 @@ function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableRe
       if (timer !== null) deps.clearTimeout(timer);
       timer = null;
     };
-    const finish = (value: Grader | GradingUnavailableReason) => {
+    const finish = (value: BrowserReader | GradingUnavailableReason | typeof ABORTED) => {
       if (settled) return;
       settled = true;
       stopTimer();
       offPhase();
       graderListeners.delete(check);
+      signal?.removeEventListener('abort', onAbort);
       resolve(value);
     };
+    const onAbort = () => finish(ABORTED);
     const check = () => {
       if (grader) return finish(grader);
       const reason = unavailableReasonOf(deps.getPhase());
@@ -143,7 +194,7 @@ function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableRe
         if (consent !== false) return;
         consent = null;
         stopTimer();
-        deps.askConsent().then(
+        deps.askConsent(signal).then(
           (agreed) => {
             if (!agreed) return finish('declined');
             consent = true;
@@ -159,6 +210,7 @@ function waitForGrader(deps: GradingDeps): Promise<Grader | GradingUnavailableRe
     startTimer();
     const offPhase = deps.subscribe(check);
     graderListeners.add(check);
+    signal?.addEventListener('abort', onAbort);
     check();
   });
 }

@@ -6,3 +6,4 @@ export * from './session';
 export * from './kifu-analysis';
 export * from './browser-analysis';
 export * from './named-evaluation';
+export * from './position-evaluation';

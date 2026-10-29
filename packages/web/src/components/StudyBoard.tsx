@@ -13,7 +13,7 @@ import {
   type SquareRef,
   type Thresholds,
 } from 'shared';
-import { BoardWithHands } from './BoardGrid';
+import { BoardWithHands, pickerOf } from './BoardGrid';
 import {
   ArrowUturnLeftIcon,
   ArrowsRightLeftIcon,
@@ -26,10 +26,13 @@ import {
   canRedo,
   canTogglePromotion,
   canUndo,
+  cancelPromotion,
+  choosePromotion,
   clearSelection,
   commitReplay,
   createStudySession,
   currentState,
+  isChoosingPromotion,
   isLastMovePromoted,
   isStudying,
   lastMove,
@@ -38,6 +41,7 @@ import {
   redo,
   redoAll,
   resetStudy,
+  resolvePromotion,
   tapHand,
   tapSquare,
   togglePromotion,
@@ -532,7 +536,25 @@ export function StudyBoard({
     if (next !== null) setSession(clearSelection(session));
     setReplay(next);
   };
-  const onSquareClick = (square: SquareRef) => edit(tapSquare(shown, square));
+
+  /**
+   * 成 / 不成の選択待ち（prd/12 §3.2・2026-10-30。出題と同じ口: `lib/study.ts` の `resolvePromotion`）。
+   * 任意成りの手を指したら盤の上で選ばせる。成らなければいけない手は聞かずに成り、打つ手は聞かない。
+   *
+   * 🔒 **選択待ちの間は、ほかの操作を「その手の取り消し」に振り替える**（`guard`）——盤の選択肢の外・駒台・
+   * 操作パネル・コントローラー行・キーボードのどれも、操作そのものは行わずに指す前へ戻すだけ。
+   * 選択待ちのセッションへ別の操作を重ねると、不成の形で仮に置いた手が手順に残る。
+   * ⚠ 「棋譜に戻る」だけは振り替えない（検討ごと捨てるので、仮の手も一緒に消える）。
+   * ⚠ 仮に指した時点で局面は変わる（`edit`）ので、出ていた評価は `stale` になる。取り消しても戻らない
+   */
+  const choosing = isChoosingPromotion(session);
+  const cancelChoice = () => edit(cancelPromotion(session));
+  const guard = (action: () => void) => () => (choosing ? cancelChoice() : action());
+
+  const onSquareClick = (square: SquareRef) => {
+    if (choosing) return cancelChoice();
+    edit(resolvePromotion(shown, tapSquare(shown, square)));
+  };
 
   /**
    * コントローラー行（◀ ▶ ≪ ≫）へ渡す検討の操作（prd/12 §3.1・決定 2026-08-28）。
@@ -548,13 +570,13 @@ export function StudyBoard({
     studying,
     canUndo: studying && !replaying && canUndo(session),
     canRedo: studying && !replaying && canRedo(session),
-    undo: () => edit(undo(session)),
-    redo: () => edit(redo(session)),
-    undoAll: () => edit(undoAll(session)),
-    redoAll: () => edit(redoAll(session)),
+    undo: guard(() => edit(undo(session))),
+    redo: guard(() => edit(redo(session))),
+    undoAll: guard(() => edit(undoAll(session))),
+    redoAll: guard(() => edit(redoAll(session))),
     // 🔒 **`run()` の中身には触らない**（レビュー指摘 `OCL-AED22F46` / `OCL-BE4CEA52` /
     //    `OCL-17AFF653` の集積地。決定・2026-09-01）。変えるのは「呼べる場所」だけ
-    evaluate: () => void run(),
+    evaluate: guard(() => void run()),
     evaluating: evalState.kind === 'loading',
     grading: gradeTarget !== null,
   };
@@ -568,6 +590,8 @@ export function StudyBoard({
    * - それ以外: 棋譜の手送りへ流す（分岐内の移動も `keyboardNav` が持つ）
    *
    * ⚠ 入力欄（スライダー・メモ等）にフォーカスがある間と修飾キー併用時はブラウザ既定に譲る。
+   * 🔒 **成 / 不成の選択待ちの間は `Escape` と手送りのキーで、その手を取り消す**（ボタンと同じ振り替え）。
+   * 手送りのキーをそのまま流すと、仮に置いた手の上で undo / redo が走る。
    */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -580,6 +604,13 @@ export function StudyBoard({
           || target.tagName === 'TEXTAREA'
           || target.tagName === 'SELECT')
       ) return;
+
+      if (choosing) {
+        if (!['Escape', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        cancelChoice();
+        e.preventDefault();
+        return;
+      }
 
       const nav: KeyboardNav | null = controls.studying
         ? {
@@ -603,7 +634,7 @@ export function StudyBoard({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [controls, keyboardNav]);
+  }, [controls, keyboardNav, choosing, cancelChoice]);
 
   /**
    * 持ち駒を叩く口（prd/12 §3.2）。**盤上の駒と同じ 2 段選択**に揃える——
@@ -614,7 +645,7 @@ export function StudyBoard({
    * ⚠ 再生中も渡す（触れば確定する）。盤のマスと同じ扱い。
    */
   const handClick = (side: Side) => (kind: HandPieceKind) =>
-    edit(tapHand(shown, side, kind));
+    choosing ? cancelChoice() : edit(tapHand(shown, side, kind));
 
   /**
    * 駒台の受け皿（「+」ボタン）。**盤の駒を選んでいる間だけ**渡す（prd/12 §3.2）。
@@ -648,6 +679,7 @@ export function StudyBoard({
         names={{ sente, gote }}
         selection={selection}
         onSquareClick={onSquareClick}
+        promotionChoice={pickerOf(session, (promote) => edit(choosePromotion(session, promote)), cancelChoice)}
         onHandPieceClick={handClick}
         onTrayClick={trayClick}
       />
@@ -706,7 +738,7 @@ export function StudyBoard({
             <button
               type="button"
               className={clsx(btn.glyph, 'btn-outline')}
-              onClick={() => edit(toggleTurn(shown))}
+              onClick={guard(() => edit(toggleTurn(shown)))}
               aria-label={`手番を入れ替える（今は${state.sideToMove === 'sente' ? '先手' : '後手'}番）`}
               title="手番を入れ替える"
             >
@@ -738,7 +770,7 @@ export function StudyBoard({
             <button
               type="button"
               className={clsx(btn.glyph, 'btn-outline')}
-              onClick={() => edit(togglePromotion(shown))}
+              onClick={guard(() => edit(togglePromotion(shown)))}
               disabled={!canTogglePromotion(shown)}
               aria-label={
                 isLastMovePromoted(shown)

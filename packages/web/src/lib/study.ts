@@ -39,8 +39,14 @@
  *   - 行き先は `shared` の `moveDestinations` / `dropDestinations` の中だけ（外を叩いても無視）
  *   - 🔴 **盤の駒を選択中に駒台の駒を叩いたら、その持ち駒の選択に切り替える**（駒台へ移さない）
  *   - 成 / 不成の指し直しは**成れる手だけ**（`shared` の `canPromoteMove`。server の検証と同じ出所）
- *   - 指した直後に、成を選ばせるか・黙って成らせるか・そのまま答えるかを {@link promotionNeedOf} で決める
  *   🔒 **合法手生成器ではない**（王手放置・打ち歩詰めは見ない。prd/13 §3）。
+ *
+ * ## 指した直後の成り方（両モード共通。prd/13 §7.1・prd/12 §3.2・2026-10-30）
+ *
+ * 盤上の手を指したら {@link resolvePromotion} で成り方を決める: 任意成りは盤の上で選ばせ（**選択待ち**。
+ * {@link StudySession.promotionChoice}）、成らなければいけない手は黙って成らせ、それ以外（打つ手を含む）はそのまま。
+ * 選択待ちは {@link choosePromotion} で確定し、{@link cancelPromotion} で指す前へ戻す。
+ * ⚠ 検討盤（`free`）は指した後の「成」ボタン（{@link togglePromotion}）も残す——局面を自由に作るため。
  */
 import {
   applyMove,
@@ -120,6 +126,17 @@ export interface StudySession {
   selection: StudySelection | null;
   /** 盤操作のモード。作ったときに決まり、以後変わらない */
   mode: StudyMode;
+  /**
+   * 成 / 不成の選択待ち（{@link resolvePromotion}）。null でなければ、最後の段は**不成の形で仮に指した手**。
+   * 🔒 **選択待ちの間は {@link choosePromotion} / {@link cancelPromotion} 以外を呼ばない**——画面は
+   * 盤・駒台・操作のどれを触っても取り消しに振り替える（出題も検討盤も同じ。prd/13 §7.1）
+   */
+  promotionChoice: PromotionChoiceState | null;
+}
+
+/** 成 / 不成の選択待ち。取り消したら `before`（指す前のセッション）へ戻す */
+export interface PromotionChoiceState {
+  before: StudySession;
 }
 
 /** 棋譜の局面を起点にセッションを作る（`mode` を省けば自由編集） */
@@ -129,6 +146,7 @@ export function createStudySession(base: BoardState, mode: StudyMode = 'free'): 
     cursor: 0,
     selection: null,
     mode,
+    promotionChoice: null,
   };
 }
 
@@ -438,7 +456,8 @@ export function canTogglePromotion(session: StudySession): boolean {
 /**
  * 直前の手の成り / 不成を切り替える（指し直す）。
  *
- * タップ 2 段では成りを聞かないので、**指した後にここで切り替える**。
+ * 成れる手は指した直後に盤の上で選ばせる（{@link resolvePromotion}）が、検討盤では**指した後にここでも切り替えられる**
+ * （局面を自由に作るため。prd/12 §3.2・2026-10-30）。
  * 段を積み増さず**直前の段を差し替える**（成 / 不成は 1 つの手の 2 つの形なので、
  * undo 2 回で元へ戻る形にすると手順の意味がずれる）。
  *
@@ -474,10 +493,10 @@ export function isLastMovePromoted(session: StudySession): boolean {
 export type PromotionNeed = 'choose' | 'must' | 'none';
 
 /**
- * 直前の手の成り方の決まり方（出題。prd/13 §7.1・2026-10-29 決定）。
+ * 直前の手の成り方の決まり方（出題 prd/13 §7.1・2026-10-29 決定。検討盤も 2026-10-30 から同じ。prd/12 §3.2）。
  * - `choose`: 成も不成も指せる（任意成り）。盤の上で選ばせる
  * - `must`: 不成だと行き所のない駒になる。選ばせずに成らせる
- * - `none`: 成れない手（打つ手・成りの領域に出入りしない・成れない駒・成駒を動かした）。そのまま答える
+ * - `none`: 成れない手（打つ手・成りの領域に出入りしない・成れない駒・成駒を動かした）。そのまま指す
  *
  * 🔒 **規則は server の検証と同じ出所**（`shared` の `canPromoteMove` / `mustPromoteMove`）。
  * ⚠ 見るのは**直前の手の盤上の移動**で、今の成り / 不成の形は問わない（`7g7f` と `7g7f+` は同じ答え）。
@@ -499,6 +518,62 @@ export function promotionNeedOf(session: StudySession): PromotionNeed {
  */
 export function withPromotion(session: StudySession, promote: boolean): StudySession {
   return isLastMovePromoted(session) === promote ? session : togglePromotion(session);
+}
+
+/**
+ * タップの結果（`next`）で盤上の手が 1 つ増えていたら、成り方を決める（冒頭の「指した直後の成り方」）。
+ * - 任意成り（{@link promotionNeedOf} が `choose`）: **選択待ち**にする（盤は不成の形のまま）
+ * - 成らなければいけない手（`must`）: 聞かずに成らせる
+ * - それ以外（打つ手・成れない手・選択だけ変わった・編集の段）: `next` をそのまま返す
+ *
+ * 🔒 **判定は駒の持ち主の側の敵陣で行う**（`shared` の `canPromoteMove` / `mustPromoteMove` は動かした駒の
+ * `side` を見る）。自由編集で相手の駒を動かしても、その駒から見た敵陣で決まる。
+ * `before` は叩く前のセッション（取り消したときの戻り先）。
+ */
+export function resolvePromotion(before: StudySession, next: StudySession): StudySession {
+  if (next.cursor !== before.cursor + 1 || lastMove(next) === null) return next;
+  switch (promotionNeedOf(next)) {
+    case 'choose':
+      return { ...next, promotionChoice: { before } };
+    case 'must':
+      return withPromotion(next, true);
+    case 'none':
+      return next;
+  }
+}
+
+/** 成 / 不成の選択待ちか（盤の上に選択肢を出している間） */
+export function isChoosingPromotion(session: StudySession): boolean {
+  return session.promotionChoice !== null;
+}
+
+/** 選択待ちの手を成 / 不成に決める（選択待ちでなければそのまま返す） */
+export function choosePromotion(session: StudySession, promote: boolean): StudySession {
+  if (!isChoosingPromotion(session)) return session;
+  return { ...withPromotion(session, promote), promotionChoice: null };
+}
+
+/**
+ * 選択待ちの手を取り消す（指す前の局面へ。選択も解く）。選択待ちでなければそのまま返す。
+ * ⚠ 指す前のセッションへそのまま戻すので、**指したときに捨てた redo 分も戻る**
+ */
+export function cancelPromotion(session: StudySession): StudySession {
+  if (session.promotionChoice === null) return session;
+  return clearSelection(session.promotionChoice.before);
+}
+
+/**
+ * 盤の上に出す成 / 不成の選択肢の中身（行き先のマスと、不成の形の駒）。選択待ちでなければ null。
+ * 選ぶ前の盤は不成の形で駒が乗っているので、行き先の駒をそのまま「成らない形」として出す
+ */
+export function promotionChoiceOf(
+  session: StudySession,
+): { square: SquareRef; side: Side; piece: PieceKind } | null {
+  const move = isChoosingPromotion(session) ? lastMove(session) : null;
+  if (!move) return null;
+  const square = squareOfUsi(move.slice(2, 4));
+  const piece = pieceAt(currentState(session), square);
+  return piece ? { square, side: piece.side, piece: piece.kind } : null;
 }
 
 function promotionRetry(

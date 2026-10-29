@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import type { BoardState, HandPieceKind, PieceKind, Side, SquareRef } from 'shared';
-import type { StudySelection } from '../lib/study';
+import { promotionChoiceOf, type StudySelection, type StudySession } from '../lib/study';
 import { PlusIcon } from './icons';
 
 /**
@@ -163,7 +163,7 @@ export function HandDisplay({
 }
 
 /**
- * 盤の上に重ねる「成」「不成」の選択（出題。prd/13 §7.1・2026-10-29）。
+ * 盤の上に重ねる「成」「不成」の選択（出題 prd/13 §7.1・2026-10-29。検討盤も 2026-10-30 から。prd/12 §3.2）。
  * 成った駒と成らない駒の 2 つを、行き先のマスの上に並べて出す（多くの将棋アプリと同じ形）。
  */
 export interface PromotionChoice {
@@ -176,6 +176,19 @@ export interface PromotionChoice {
   onChoose: (promote: boolean) => void;
   /** 選択肢の外（盤のほかのマス・筋段のラベル）を叩いた */
   onCancel: () => void;
+}
+
+/**
+ * セッションの成 / 不成の選択待ち（`lib/study.ts` の `promotionChoiceOf`）を、盤に重ねる選択肢にする。
+ * 選択待ちでなければ null（検討盤と出題が同じ口で使う）
+ */
+export function pickerOf(
+  session: StudySession | null,
+  onChoose: (promote: boolean) => void,
+  onCancel: () => void,
+): PromotionChoice | null {
+  const choice = session ? promotionChoiceOf(session) : null;
+  return choice ? { ...choice, onChoose, onCancel } : null;
 }
 
 export function BoardGrid({
@@ -205,7 +218,7 @@ export function BoardGrid({
    */
   destinations?: SquareRef[] | null;
   /**
-   * 成 / 不成の選択を盤の上に重ねる（出題。prd/13 §7.1）。**渡さなければ何も変わらない**。
+   * 成 / 不成の選択を盤の上に重ねる（出題・検討盤。prd/13 §7.1）。**渡さなければ何も変わらない**。
    * 出している間は盤全体を覆い、選択肢の外を叩くと `onCancel` を呼ぶ（マスの `onSquareClick` は呼ばない）
    */
   promotionChoice?: PromotionChoice | null;

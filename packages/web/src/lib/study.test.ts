@@ -10,6 +10,8 @@ import {
 import {
   applyStudyMoves,
   baseState,
+  cancelPromotion,
+  choosePromotion,
   clearSelection,
   commitReplay,
   canPutSelectionOnHand,
@@ -18,15 +20,18 @@ import {
   canUndo,
   createStudySession,
   currentState,
+  isChoosingPromotion,
   isLastMovePromoted,
   isStudying,
   lastMove,
   lastMoveGradeTarget,
   positionEvalTarget,
+  promotionChoiceOf,
   promotionNeedOf,
   redo,
   redoAll,
   resetStudy,
+  resolvePromotion,
   selectionDestinations,
   squareOfUsi,
   tapHand,
@@ -736,5 +741,107 @@ describe('自由編集のモード（検討盤。既定）', () => {
     expect(session.mode).toBe('free');
     expect(pieceAt(currentState(session), sq('7g'))).toBeNull();
     expect(handCount(currentState(session), 'sente', 'P')).toBe(1);
+  });
+});
+
+describe('成 / 不成の選択待ち（出題・検討盤。prd/13 §7.1・prd/12 §3.2）', () => {
+  // 先手: 1四の歩・2四の香・4四の銀・持ち駒の歩。後手: 9六の歩
+  const pos = parseSfen('4k4/9/9/5S1LP/9/p8/9/9/4K4 b P 1')!;
+  /** 叩く前のセッションから 2 回叩いて指し、成り方を決める（画面の流れと同じ） */
+  const play = (before: ReturnType<typeof createStudySession>, from: string, to: string) =>
+    resolvePromotion(before, tapSquare(tapSquare(before, sq(from)), sq(to)));
+
+  for (const mode of ['rules', 'free'] as const) {
+    describe(mode, () => {
+      const start = () => createStudySession(pos, mode);
+
+      it('任意成りは選択待ちになり、盤は不成の形のまま', () => {
+        const choosing = play(start(), '1d', '1c');
+        expect(isChoosingPromotion(choosing)).toBe(true);
+        expect(lastMove(choosing)).toBe('1d1c');
+        expect(promotionChoiceOf(choosing)).toEqual({ square: sq('1c'), side: 'sente', piece: 'P' });
+      });
+
+      it('choosePromotion で成 / 不成に決まり、選択待ちが解ける', () => {
+        const choosing = play(start(), '4d', '4c');
+        const promoted = choosePromotion(choosing, true);
+        expect(lastMove(promoted)).toBe('4d4c+');
+        expect(pieceAt(currentState(promoted), sq('4c'))).toEqual({ side: 'sente', kind: '+S' });
+        expect(isChoosingPromotion(promoted)).toBe(false);
+        const plain = choosePromotion(choosing, false);
+        expect(lastMove(plain)).toBe('4d4c');
+        expect(isChoosingPromotion(plain)).toBe(false);
+        expect(currentState(plain).sideToMove).toBe('gote');
+      });
+
+      it('cancelPromotion で指す前の局面へ戻り、選択も解ける', () => {
+        const choosing = play(start(), '1d', '1c');
+        const cancelled = cancelPromotion(choosing);
+        expect(isStudying(cancelled)).toBe(false);
+        expect(cancelled.selection).toBeNull();
+        expect(isChoosingPromotion(cancelled)).toBe(false);
+        expect(currentState(cancelled)).toBe(pos);
+      });
+
+      it('成らなければいけない手は聞かずに成る（香の 1 段目）', () => {
+        const forced = play(start(), '2d', '2a');
+        expect(isChoosingPromotion(forced)).toBe(false);
+        expect(lastMove(forced)).toBe('2d2a+');
+      });
+
+      it('成れない手・打つ手・選択だけの変化は聞かない', () => {
+        const plain = play(start(), '4d', '5e');
+        expect(isChoosingPromotion(plain)).toBe(false);
+        expect(lastMove(plain)).toBe('4d5e');
+        const held = tapHand(start(), 'sente', 'P');
+        const dropped = resolvePromotion(held, tapSquare(held, sq('5c')));
+        expect(lastMove(dropped)).toBe('P*5c');
+        expect(isChoosingPromotion(dropped)).toBe(false);
+        const picked = tapSquare(start(), sq('1d'));
+        expect(resolvePromotion(start(), picked)).toBe(picked);
+      });
+
+      it('選択待ちでなければ choosePromotion / cancelPromotion は何もしない', () => {
+        const s = start();
+        expect(choosePromotion(s, true)).toBe(s);
+        expect(cancelPromotion(s)).toBe(s);
+        expect(promotionChoiceOf(s)).toBeNull();
+      });
+    });
+  }
+
+  describe('free（検討盤）だけの規則', () => {
+    const start = () => createStudySession(pos, 'free');
+
+    it('🔒 相手の駒は、その駒の持ち主から見た敵陣で決まる', () => {
+      // 先手番のまま後手の歩を動かす。後手から見た敵陣（7〜9 段目）に入れば選択待ち
+      const intoZone = play(start(), '9f', '9g');
+      expect(isChoosingPromotion(intoZone)).toBe(true);
+      expect(promotionChoiceOf(intoZone)).toEqual({ square: sq('9g'), side: 'gote', piece: 'P' });
+      // 後手の歩が 3 段目へ下がっても（先手の敵陣だが、後手には自陣）聞かない
+      expect(isChoosingPromotion(play(start(), '9f', '9c'))).toBe(false);
+      // 後手の歩が 9 段目なら成らなければいけない
+      expect(lastMove(play(start(), '9f', '9i'))).toBe('9f9i+');
+    });
+
+    it('敵陣から出る手も聞く', () => {
+      const s = applyStudyMoves(pos, ['4d4c'], 'free');
+      const back = play(toggleTurn(s), '4c', '4d');
+      expect(isChoosingPromotion(back)).toBe(true);
+    });
+
+    it('取り消せば、指したときに捨てた redo 分も戻る', () => {
+      const undone = undo(applyStudyMoves(pos, ['4d5e'], 'free'));
+      expect(canRedo(undone)).toBe(true);
+      const cancelled = cancelPromotion(play(undone, '1d', '1c'));
+      expect(canRedo(cancelled)).toBe(true);
+      expect(redo(cancelled).steps[1].move).toBe('4d5e');
+    });
+
+    it('決めた後も「成」ボタン（togglePromotion）で切り替えられる', () => {
+      const plain = choosePromotion(play(start(), '1d', '1c'), false);
+      expect(canTogglePromotion(plain)).toBe(true);
+      expect(lastMove(togglePromotion(plain))).toBe('1d1c+');
+    });
   });
 });

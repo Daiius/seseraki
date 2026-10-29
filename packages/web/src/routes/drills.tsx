@@ -2,24 +2,25 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { createFileRoute, Link, redirect, useNavigate, useRouter } from '@tanstack/react-router';
 import {
   parseSfen,
-  pieceAt,
   usiToJapaneseWithPiece,
   type BoardState,
   type HandPieceKind,
   type SquareRef,
 } from 'shared';
 import { client } from '../lib/honoClient';
-import { BoardWithHands, handSidesOf, type PromotionChoice } from '../components/BoardGrid';
+import { BoardWithHands, handSidesOf, pickerOf } from '../components/BoardGrid';
 import {
   applyStudyMoves,
+  cancelPromotion,
+  choosePromotion,
   currentState,
+  isChoosingPromotion,
   lastMove,
-  promotionNeedOf,
+  promotionChoiceOf,
+  resolvePromotion,
   selectionDestinations,
-  squareOfUsi,
   tapHand,
   tapSquare,
-  withPromotion,
   type StudySession,
 } from '../lib/study';
 import { useDrillScoring } from '../lib/drillScoring';
@@ -631,8 +632,6 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
    * 答えた手は盤に残し、エンジンが使えるようになったら同じ手で判定し直す（prd/13 §7.1・2026-10-29）
    */
   const [ungradableAt, setUngradableAt] = useState<BrowserAnalysisPhase | null>(null);
-  /** 任意成りの手を指して、盤の上で成 / 不成を選んでいる（prd/13 §7.1・2026-10-29） */
-  const [choosing, setChoosing] = useState(false);
 
   /**
    * 解いた後の大きいボタン。🔒 **次の問題も loader に選ばせる**（prd/13 §7.8）——問題の指定を落として replace で
@@ -659,6 +658,11 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
    * エンジンの準備を待つ間（`ungradableAt`）にだけある
    */
   const pending = session && session.steps.length > line.length + 1 ? lastMove(session) : null;
+  /**
+   * 任意成りの手を指して、盤の上で成 / 不成を選んでいる（prd/13 §7.1・2026-10-29）。
+   * 選択待ちはセッションが持つ（`lib/study.ts` の `resolvePromotion`。検討盤と同じ口）
+   */
+  const choosing = session !== null && isChoosingPromotion(session);
 
   /**
    * 盤を叩く。🔒 **盤操作は「ルールどおり」のモード**（`lib/study.ts`）——手番側の駒だけ選べ、
@@ -668,12 +672,13 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
    * ⚠ 検討盤は自由編集のまま——**出題だけの規則**。
    *
    * 🔒 **指したら確定のボタンを待たずに判定する**（prd/13 §7.1・2026-10-29。旧仕様の「この手で答える」は廃止）。
-   * 任意成りだけ盤の上で成 / 不成を選ばせ、成らなければいけない手は黙って成らせる（`promotionNeedOf`）。
+   * 任意成りだけ盤の上で成 / 不成を選ばせ、成らなければいけない手は黙って成らせる（`resolvePromotion`）。
    */
   function onSquare(square: SquareRef) {
     if (!session || reveal || judging) return;
     if (choosing) return cancelChoice();
-    played(tapSquare(settledSession(), square));
+    const from = settledSession();
+    played(resolvePromotion(from, tapSquare(from, square)));
   }
 
   function onHand(kind: HandPieceKind) {
@@ -694,33 +699,25 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     return sessionOf(drill, line)!;
   }
 
-  /** 叩いた結果。手が 1 つ増えていれば、成り方を決めて判定へ回す */
+  /** 叩いた結果（成り方は決めてある）。手が 1 つ増えていて、成 / 不成の選択待ちでなければ判定へ回す */
   function played(next: StudySession) {
     const move = next.steps.length > line.length + 1 ? lastMove(next) : null;
-    if (!move) {
+    if (!move || isChoosingPromotion(next)) {
       setSession(next);
       return;
     }
-    const need = promotionNeedOf(next);
-    if (need === 'choose') {
-      setSession(next);
-      setChoosing(true);
-      return;
-    }
-    submit(need === 'must' ? withPromotion(next, true) : next);
+    submit(next);
   }
 
   /** 盤の上の成 / 不成を選んだ */
   function choose(promote: boolean) {
     if (!session) return;
-    setChoosing(false);
-    submit(withPromotion(session, promote));
+    submit(choosePromotion(session, promote));
   }
 
-  /** 選択肢の外を叩いた。**その手を取り消す**（指す前の局面へ） */
+  /** 選択肢の外を叩いた。**その手を取り消す**（指す前の局面へ。選択も解く） */
   function cancelChoice() {
-    setChoosing(false);
-    setSession(sessionOf(drill, line));
+    if (session) setSession(cancelPromotion(session));
   }
 
   /** 盤の最後の手で答える */
@@ -736,7 +733,6 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     setMiss(null);
     setError(null);
     setUngradableAt(null);
-    setChoosing(false);
     setConfirmGiveUp(false);
   }
 
@@ -757,7 +753,8 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
     if (!drill) return;
     const practice = recorded !== null;
     setConfirmGiveUp(false);
-    setChoosing(false);
+    // 成 / 不成を選んでいる手は捨てる（確定した手順で諦める）
+    cancelChoice();
     setJudging(true);
     setError(null);
     try {
@@ -959,7 +956,7 @@ function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSe
         selection={session?.selection}
         onSquareClick={reveal ? undefined : onSquare}
         destinations={selectionDestinations(session)}
-        promotionChoice={choosing && pending ? promotionChoiceOf(state, pending, choose, cancelChoice) : null}
+        promotionChoice={pickerOf(session, choose, cancelChoice)}
         // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
         onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
       />
@@ -1196,21 +1193,6 @@ function AttemptsOf({ drill }: { drill: Drill }) {
       </div>
     </details>
   );
-}
-
-/**
- * 盤の上に重ねる成 / 不成の選択（`BoardGrid`）。`move` は指したばかりの手（不成の形）で、`state` はそれを指した後の局面。
- * 選ぶ前の盤は不成の形で駒が乗っているので、行き先の駒をそのまま「成らない形」として出す
- */
-function promotionChoiceOf(
-  state: BoardState,
-  move: string,
-  onChoose: (promote: boolean) => void,
-  onCancel: () => void,
-): PromotionChoice | null {
-  const square = squareOfUsi(move.slice(2, 4));
-  const piece = pieceAt(state, square);
-  return piece ? { square, side: piece.side, piece: piece.kind, onChoose, onCancel } : null;
 }
 
 /** 出題局面 + 確定した手順からセッションを作る */

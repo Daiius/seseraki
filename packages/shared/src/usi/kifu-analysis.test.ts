@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   analyzeKifu,
+  analyzeTimeoutMs,
   ChunkSubmitError,
   extractMultiPvResults,
+  USI_ANALYZE_TIMEOUT_MARGIN_MS,
   isPermanentSubmitStatus,
   leadingContiguousCandidates,
   toReportCandidates,
@@ -332,10 +334,12 @@ describe("go コマンド", () => {
   /** 送られた go コマンドを記録するエンジン */
   function createCommandRecorder() {
     const commands: string[] = [];
+    const timeouts: (number | undefined)[] = [];
     const engine: UsiAnalysisEngine = {
       setOption: () => {},
-      analyze: async (_position, goCommand): Promise<UsiSearchResult> => {
+      analyze: async (_position, goCommand, options): Promise<UsiSearchResult> => {
         commands.push(goCommand);
+        timeouts.push(options?.timeoutMs);
         const info = {
           multipv: 1,
           depth: 5,
@@ -345,7 +349,7 @@ describe("go コマンド", () => {
         return { bestmove: { move: "7g7f" }, infoLines: [info], lastInfo: info };
       },
     };
-    return { engine, commands };
+    return { engine, commands, timeouts };
   }
 
   it("思考時間の指定には movetime を使う（byoyomi は指定どおりの時間にならない）", async () => {
@@ -362,6 +366,24 @@ describe("go コマンド", () => {
     await analyzeKifu(engine, [], { depth: 12, onChunk: async () => {} });
 
     expect(commands).toEqual(["go depth 12"]);
+  });
+
+  it("movetime の探索は「思考時間 + 余裕」で時間切れにし、depth の探索はセッションの既定に任せる", async () => {
+    const byTime = createCommandRecorder();
+    await analyzeKifu(byTime.engine, [], { movetime: 1000, onChunk: async () => {} });
+    expect(byTime.timeouts).toEqual([1000 + USI_ANALYZE_TIMEOUT_MARGIN_MS]);
+
+    const byDepth = createCommandRecorder();
+    await analyzeKifu(byDepth.engine, [], { depth: 12, onChunk: async () => {} });
+    expect(byDepth.timeouts).toEqual([undefined]);
+  });
+});
+
+describe("analyzeTimeoutMs", () => {
+  it("movetime があれば思考時間 + 余裕、無ければ undefined（セッションの既定）", () => {
+    expect(analyzeTimeoutMs({ movetime: 600 })).toBe(600 + USI_ANALYZE_TIMEOUT_MARGIN_MS);
+    expect(analyzeTimeoutMs({ movetime: 120_000 })).toBe(120_000 + USI_ANALYZE_TIMEOUT_MARGIN_MS);
+    expect(analyzeTimeoutMs({})).toBeUndefined();
   });
 });
 

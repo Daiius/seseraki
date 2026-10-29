@@ -12,7 +12,6 @@ import { analyzeTask } from "./analysis.js";
 import { createClient } from "./polling/client.js";
 import {
   analyzeKifu,
-  buildGoCommand,
   ChunkSubmitError,
   SubmitRejectedError,
 } from "shared";
@@ -166,17 +165,17 @@ async function main() {
         await client.reportPositionResult(id, report);
       },
     };
-    const goCommand = buildGoCommand({
+    const evalSearch = {
       depth: config.engineDepth,
       movetime: config.engineMovetime,
-    });
+    };
     /** 待っている評価ジョブを捌く。エンジンが落ちたら再起動し、捌けなかったことを返す */
     const drainPositionJobs = async (): Promise<boolean> => {
       try {
         // ⚠ MultiPV は `drainEvaluationJobs` が 3 本固定で設定する（`ENGINE_MULTIPV` は渡さない）。
         // 棋譜解析の候補手数は運用で増減できるつまみだが、局面評価の 3 本は
         // **API の契約**（prd/12 §2.2）で、利用側はこれを前提に組む。目的が違うので同じ値に乗せない
-        await drainEvaluationJobs(engine, positionJobs, goCommand);
+        await drainEvaluationJobs(engine, positionJobs, evalSearch);
         return true;
       } catch (err) {
         if (!(err instanceof InteractiveEngineError)) throw err;
@@ -276,7 +275,7 @@ async function main() {
               // shutdown はこの poll の終わりを待ってからエンジンを止める
               if (!running) return true;
               // ⚠ ここでも MultiPV は渡さない（3 本固定・上の drainPositionJobs と同じ理由）
-              await drainEvaluationJobs(engine, positionJobs, goCommand);
+              await drainEvaluationJobs(engine, positionJobs, evalSearch);
               // 🔴 full を解析中に quick 待ちが現れたら、局面境界で中断して quick を先に処理する
               // （未送信チャンクは `analyzeKifu` が送ってから抜ける。prd/05 §1.1d）。
               // 優先順位は **位置評価ジョブ > quick > full** なので、判定はジョブを捌いた後。

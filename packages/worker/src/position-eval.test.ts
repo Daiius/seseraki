@@ -8,10 +8,11 @@ import {
   type PositionEvalOutcome,
   type PositionJobSource,
 } from "./position-eval.js";
-import type { UsiInfo, UsiSearchResult } from "shared";
+import { USI_ANALYZE_TIMEOUT_MARGIN_MS, type UsiInfo, type UsiSearchResult } from "shared";
 
 /** 局面キー（手数を持たない 3 フィールドの SFEN） */
 const SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b -";
+const SEARCH = { movetime: 1000 };
 const GO = "go movetime 1000";
 
 /** info 行 1 本（1 候補手ぶん） */
@@ -36,13 +37,13 @@ function createStubEngine(
   responses: UsiSearchResult[],
   initialOptions: Record<string, string> = {},
 ) {
-  const calls: { position: string; go: string }[] = [];
+  const calls: { position: string; go: string; timeoutMs?: number }[] = [];
   /** setoption の送信履歴（`MultiPV=3` のような文字列）。**探索との前後関係も見たい** */
   const optionCalls: string[] = [];
   const options = new Map(Object.entries(initialOptions));
   const engine: EvalEngine = {
-    analyze: async (position: string, go: string) => {
-      calls.push({ position, go });
+    analyze: async (position: string, go: string, options?: { timeoutMs?: number }) => {
+      calls.push({ position, go, timeoutMs: options?.timeoutMs });
       optionCalls.push("(go)");
       const next = responses.shift();
       if (!next) throw new Error("no canned response left");
@@ -79,7 +80,7 @@ describe("evaluateJob（局面評価）", () => {
     const result = await evaluateJob(
       engine,
       { id: "eval-1", sfen: SFEN, move: null },
-      GO,
+      SEARCH,
     );
 
     // 3 フィールドの局面キーに手数 1 を補って渡す（USI は 4 フィールドを要求する）
@@ -106,7 +107,7 @@ describe("evaluateJob（局面評価）", () => {
       ]),
     ]);
 
-    const result = await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    const result = await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
     expect(result).toMatchObject({
       candidates: [{ move: "2g2f" }, { move: "7g7f" }, { move: "6i7h" }],
@@ -122,7 +123,7 @@ describe("evaluateJob（局面評価）", () => {
       searchResult([info(1, ["7g7f"], 50)]),
     ]);
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
     // 設定 → 探索 → 復元の順であること（探索中に値が変わっていないこと）
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
@@ -134,7 +135,7 @@ describe("evaluateJob（局面評価）", () => {
       { MultiPV: "3" },
     );
 
-    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3);
 
     expect(optionCalls).toEqual(["(go)"]);
   });
@@ -143,10 +144,27 @@ describe("evaluateJob（局面評価）", () => {
     const { engine, optionCalls } = createStubEngine([], { MultiPV: "1" });
 
     await expect(
-      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, GO, 3),
+      evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH, 3),
     ).rejects.toThrow();
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
+  });
+
+  it("思考時間 + 余裕で時間切れにし、depth の探索はセッションの既定に任せる", async () => {
+    const { engine, calls } = createStubEngine([
+      searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["7g7f"], 50)]),
+      searchResult([info(1, ["9g9f"], -20)]),
+    ]);
+    await evaluateJob(engine, { id: "eval-1", sfen: SFEN, move: null }, SEARCH);
+    await evaluateJob(engine, { id: "eval-2", sfen: SFEN, move: null }, { depth: 12 });
+    await evaluateJob(engine, { id: "eval-3", sfen: SFEN, move: "9g9f" }, { depth: 12 });
+
+    expect(calls.map((c) => [c.go, c.timeoutMs])).toEqual([
+      [GO, 1000 + USI_ANALYZE_TIMEOUT_MARGIN_MS],
+      ["go depth 12", undefined],
+      ["go depth 12 searchmoves 9g9f", undefined],
+    ]);
   });
 
   it("手数付き（4 フィールド）の SFEN はそのまま渡す", async () => {
@@ -156,7 +174,7 @@ describe("evaluateJob（局面評価）", () => {
     await evaluateJob(
       engine,
       { id: "eval-1", sfen: `${SFEN} 25`, move: null },
-      GO,
+      SEARCH,
     );
     expect(calls[0].position).toBe(`position sfen ${SFEN} 25`);
   });
@@ -170,7 +188,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9g9f", "3c3d", "2g2f"], -20)]),
     ]);
 
-    const result = await evaluateJob(engine, job, GO);
+    const result = await evaluateJob(engine, job, SEARCH);
 
     expect(calls).toHaveLength(1);
     expect(calls[0].go).toBe(`${GO} searchmoves 9g9f`);
@@ -192,7 +210,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9g9f", "3c3d"], -20)]),
     ]);
 
-    await evaluateJob(engine, job, GO, 3);
+    await evaluateJob(engine, job, SEARCH, 3);
 
     expect(optionCalls).toEqual([
       "GenerateAllLegalMoves=true",
@@ -206,7 +224,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9d9c", "9b9c"], -300)]),
     ]);
 
-    const result = await evaluateJob(engine, { ...job, move: "9d9c" }, GO);
+    const result = await evaluateJob(engine, { ...job, move: "9d9c" }, SEARCH);
 
     expect(calls[0].go).toBe(`${GO} searchmoves 9d9c`);
     expect(optionCalls[0]).toBe("GenerateAllLegalMoves=true");
@@ -216,7 +234,7 @@ describe("evaluateJob（名指し評価）", () => {
   it("探索が失敗しても GenerateAllLegalMoves を戻す", async () => {
     const { engine, optionCalls } = createStubEngine([]);
 
-    await expect(evaluateJob(engine, job, GO)).rejects.toThrow();
+    await expect(evaluateJob(engine, job, SEARCH)).rejects.toThrow();
 
     expect(optionCalls.at(-1)).toBe("GenerateAllLegalMoves=false");
   });
@@ -226,7 +244,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["7g7f", "3c3d"], 50)]),
     ]);
 
-    await evaluateJob(engine, { ...job, move: null }, GO, 1);
+    await evaluateJob(engine, { ...job, move: null }, SEARCH, 1);
 
     expect(optionCalls.some((c) => c.startsWith("GenerateAllLegalMoves"))).toBe(false);
   });
@@ -238,7 +256,7 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["7g7f", "3c3d"], 50)]),
     ]);
 
-    const result = await evaluateJob(engine, job, GO);
+    const result = await evaluateJob(engine, job, SEARCH);
 
     expect(calls).toHaveLength(1);
     expect(result).toEqual({
@@ -252,8 +270,8 @@ describe("evaluateJob（名指し評価）", () => {
       searchResult([info(1, ["9g9f", "3c3d"], -20)]),
     ]);
 
-    await evaluateJob(engine, job, GO);
-    const second = await evaluateJob(engine, job, GO);
+    await evaluateJob(engine, job, SEARCH);
+    const second = await evaluateJob(engine, job, SEARCH);
 
     expect(calls.map((c) => c.go)).toEqual([`${GO} searchmoves 9g9f`, `${GO} searchmoves 9g9f`]);
     expect(second).toMatchObject({ candidates: [{ move: "9g9f", score: { type: "cp", value: -20 } }] });
@@ -263,7 +281,7 @@ describe("evaluateJob（名指し評価）", () => {
     const { engine } = createStubEngine([
       { bestmove: { move: "9g9f" }, infoLines: [], lastInfo: {} },
     ]);
-    expect(await evaluateJob(engine, job, GO)).toEqual({ candidates: [] });
+    expect(await evaluateJob(engine, job, SEARCH)).toEqual({ candidates: [] });
   });
 
   it("即詰みの手は mate の評価をそのまま返す（ブラウザの採点と同じ解釈）", async () => {
@@ -272,7 +290,7 @@ describe("evaluateJob（名指し評価）", () => {
         { multipv: 1, depth: 1, score: { type: "mate", value: 1 }, pv: ["9g9f"] },
       ]),
     ]);
-    expect(await evaluateJob(engine, job, GO)).toEqual({
+    expect(await evaluateJob(engine, job, SEARCH)).toEqual({
       candidates: [
         { rank: 1, move: "9g9f", score: { type: "mate", value: 1 }, pv: ["9g9f"], depth: 1 },
       ],
@@ -302,7 +320,7 @@ describe("drainEvaluationJobs", () => {
     ]);
     const { source, reports } = createStubSource([job("eval-1"), job("eval-2")]);
 
-    const processed = await drainEvaluationJobs(engine, source, GO);
+    const processed = await drainEvaluationJobs(engine, source, SEARCH);
 
     expect(processed).toBe(2);
     expect(reports.map((r) => r.id)).toEqual(["eval-1", "eval-2"]);
@@ -317,7 +335,7 @@ describe("drainEvaluationJobs", () => {
     );
     const { source } = createStubSource([job("eval-1")]);
 
-    await drainEvaluationJobs(engine, source, GO);
+    await drainEvaluationJobs(engine, source, SEARCH);
 
     expect(optionCalls).toEqual(["MultiPV=3", "(go)", "MultiPV=1"]);
   });
@@ -333,7 +351,7 @@ describe("drainEvaluationJobs", () => {
       job("eval-3"),
     ]);
 
-    const processed = await drainEvaluationJobs(engine, source, GO, {
+    const processed = await drainEvaluationJobs(engine, source, SEARCH, {
       maxJobs: 2,
     });
 
@@ -351,7 +369,7 @@ describe("drainEvaluationJobs", () => {
     };
     const { source, reports } = createStubSource([job("eval-1")]);
 
-    await expect(drainEvaluationJobs(engine, source, GO)).rejects.toBeInstanceOf(
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).rejects.toBeInstanceOf(
       InteractiveEngineError,
     );
     // エラーも完了として報告する（結果もエラーも出ないまま宙に浮かせない）
@@ -373,7 +391,7 @@ describe("drainEvaluationJobs", () => {
       job("eval-2"),
     ]);
 
-    await expect(drainEvaluationJobs(engine, source, GO)).resolves.toBe(2);
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(2);
     expect(reports[0]).toEqual({
       id: "eval-1",
       report: { error: "Named move was not searched (requested 9g9f, returned 7g7f)" },
@@ -389,7 +407,7 @@ describe("drainEvaluationJobs", () => {
       },
       report: async () => {},
     };
-    await expect(drainEvaluationJobs(engine, source, GO)).resolves.toBe(0);
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(0);
   });
 
   it("報告の失敗も握りつぶして戻る", async () => {
@@ -404,6 +422,6 @@ describe("drainEvaluationJobs", () => {
       },
     };
     // 1 件目の報告で失敗したらそこで戻る（2 件目は次の境界で拾う）
-    await expect(drainEvaluationJobs(engine, source, GO)).resolves.toBe(1);
+    await expect(drainEvaluationJobs(engine, source, SEARCH)).resolves.toBe(1);
   });
 });

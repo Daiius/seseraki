@@ -14,7 +14,7 @@ import type { UsiAnalyzeOptions, UsiInfo, UsiScore, UsiSearchResult } from "./ty
  */
 export interface UsiAnalysisEngine {
   setOption(name: string, value: string): void;
-  /** `options`（打ち切り）を使うのはブラウザの名指し評価だけ。手元 worker の実装は受けなくてよい */
+  /** `options` の打ち切り（`stopWhen`）を使うのはブラウザの読みだけ。時間切れ（`timeoutMs`）は解析のループも渡す */
   analyze(position: string, goCommand: string, options?: UsiAnalyzeOptions): Promise<UsiSearchResult>;
 }
 
@@ -175,6 +175,25 @@ export function buildGoCommand(options: {
 }
 
 /**
+ * 思考時間で止める探索の、`bestmove` を待つ時間の余裕（思考時間に足す分）。
+ * 置換表の確保・スレッドの立ち上げ・出力の遅れ・端末の混雑を見込む。超えたらエンジンが応答しないとみなす
+ */
+export const USI_ANALYZE_TIMEOUT_MARGIN_MS = 30_000;
+
+/**
+ * 探索 1 回の時間切れ（`analyze` の `timeoutMs`）。
+ *
+ * - `movetime` があれば **思考時間 + {@link USI_ANALYZE_TIMEOUT_MARGIN_MS}**。思考時間が長い構成でも時間切れで
+ *   落ちず、短い構成では止まったエンジンに早く気づく
+ * - 🔒 **depth の探索（`movetime` なし）は undefined**（セッションの既定・60 秒のまま）。所要時間は局面・評価関数・
+ *   深さで桁が変わり上限を見積もれない。depth は dev（MATERIAL・depth 10）で使う指定で、本番は movetime で回す
+ */
+export function analyzeTimeoutMs(options: { movetime?: number }): number | undefined {
+  const { movetime } = options;
+  return movetime ? movetime + USI_ANALYZE_TIMEOUT_MARGIN_MS : undefined;
+}
+
+/**
  * 同じ multipv 番号について、後から来た info 行で上書きしてよいかを判定する。
  *
  * 基本は「後の行ほど深い結果」なので上書きしてよい。ただし byoyomi で探索を打ち切ると
@@ -321,6 +340,7 @@ export async function analyzeKifu(
     onPositionBoundary,
   } = options;
   const goCommand = buildGoCommand({ depth, movetime });
+  const timeoutMs = analyzeTimeoutMs({ movetime });
 
   const total = usiMoves.length + 1;
   // 既に入っている局面は飛ばす（チャンク submit 中断からの再開）。範囲外の値でも走り抜けないよう挟む
@@ -369,7 +389,7 @@ export async function analyzeKifu(
     const t0 = Date.now();
     let result;
     try {
-      result = await engine.analyze(position, goCommand);
+      result = await engine.analyze(position, goCommand, { timeoutMs });
     } catch (err) {
       log?.error(
         `[Analysis] ${i}/${usiMoves.length} Engine error at position: ${position}`,

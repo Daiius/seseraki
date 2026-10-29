@@ -16,6 +16,8 @@
  * 設定した値は探索後に**元へ戻す**ので、割り込まれた棋譜解析の候補手数は変わらない。
  */
 import {
+  analyzeTimeoutMs,
+  buildGoCommand,
   extractMultiPvResults,
   namedEvaluationOf,
   searchmovesGoCommand,
@@ -24,6 +26,15 @@ import {
   withMultiPv,
   type UsiCandidate,
 } from "shared";
+
+/**
+ * 局面評価の探索の指定（棋譜解析の full と同じ `ENGINE_MOVETIME` / `ENGINE_DEPTH`。prd/12 §2.1）。
+ * `movetime` があれば depth より優先する（`buildGoCommand`）
+ */
+export interface EvalSearch {
+  movetime?: number;
+  depth?: number;
+}
 import type { UsiEngine } from "./usi/engine.js";
 
 /** `evaluateJob` が使うエンジンの範囲（テストからスタブを差し込めるよう最小限に絞る） */
@@ -101,15 +112,18 @@ export interface DrainOptions {
 export async function evaluateJob(
   engine: EvalEngine,
   job: PositionEvalJob,
-  goCommand: string,
+  search: EvalSearch,
   multiPv: number = DEFAULT_EVAL_MULTI_PV,
 ): Promise<PositionEvalOutcome> {
+  const goCommand = buildGoCommand(search);
+  // 思考時間 + 余裕で時間切れにする（depth の探索はセッションの既定）
+  const options = { timeoutMs: analyzeTimeoutMs(search) };
   // 局面キー（3 フィールド）なら手数 1 を補う
   const position = sfenPositionCommand(job.sfen);
 
   if (job.move === null) {
     const result = await withMultiPv(engine, multiPv, () =>
-      engine.analyze(position, goCommand),
+      engine.analyze(position, goCommand, options),
     );
     // 定跡の列挙が MultiPV を超えて候補を出すので、要求した本数に切り詰める（issue #67）
     return { candidates: extractMultiPvResults(result.infoLines, { multiPv }) };
@@ -119,7 +133,7 @@ export async function evaluateJob(
   // `searchmoves` に渡しても通常の探索に落ちる。shared の `withAllLegalMoves`。prd/12 §2.2）。棋譜解析の探索には効かせない
   const move = job.move;
   const result = await withAllLegalMoves(engine, () =>
-    engine.analyze(position, searchmovesGoCommand(goCommand, move)),
+    engine.analyze(position, searchmovesGoCommand(goCommand, move), options),
   );
   const named = namedEvaluationOf(result, move);
   if (named.kind === "mismatch") {
@@ -158,7 +172,7 @@ export async function evaluateJob(
 export async function drainEvaluationJobs(
   engine: EvalEngine,
   source: PositionJobSource,
-  goCommand: string,
+  search: EvalSearch,
   options: DrainOptions = {},
 ): Promise<number> {
   const { maxJobs = MAX_JOBS_PER_DRAIN } = options;
@@ -175,7 +189,7 @@ export async function drainEvaluationJobs(
 
     let result: PositionEvalOutcome;
     try {
-      result = await evaluateJob(engine, job, goCommand, DEFAULT_EVAL_MULTI_PV);
+      result = await evaluateJob(engine, job, search, DEFAULT_EVAL_MULTI_PV);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[PositionEval] Evaluation failed (${job.id}):`, reason);

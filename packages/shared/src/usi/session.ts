@@ -43,7 +43,10 @@ export interface UsiLog {
   error(message: string): void;
 }
 
-/** 応答を待つ時間の既定値（`usiok` / `readyok` / `bestmove`） */
+/**
+ * 応答を待つ時間の既定値（`usiok` / `readyok`、および時間切れを指定しない `bestmove`）。
+ * 探索は呼び出しごとに {@link UsiAnalyzeOptions.timeoutMs} で渡せる
+ */
 export const USI_DEFAULT_TIMEOUT_MS = 60_000;
 
 export interface UsiSessionOptions {
@@ -76,7 +79,8 @@ export interface UsiSession {
   getName(): string | undefined;
   /**
    * `position …` と `go …` を送り、`bestmove` までの info 行を集めて返す。
-   * `options.stopWhen` を渡すと、それが true を返した `info` で `stop` を送って打ち切る（詰将棋の判定。prd/13 §5.5）
+   * `options.stopWhen` を渡すと、それが true を返した `info` で `stop` を送って打ち切る（詰将棋の判定。prd/13 §5.5）。
+   * `options.timeoutMs` で `bestmove` を待つ時間を呼び出しごとに決める（省略時はセッションの既定）
    */
   analyze(position: string, goCommand: string, options?: UsiAnalyzeOptions): Promise<UsiSearchResult>;
   /** `expected` と一致する行（前後の空白は無視）が来るまで待つ */
@@ -236,7 +240,7 @@ export function createUsiSession(
       const infoLines: UsiInfo[] = [];
       let stoppedBy: UsiInfo | undefined;
       return waitForReply<UsiSearchResult>(
-        defaultTimeoutMs,
+        analyzeOptions.timeoutMs ?? defaultTimeoutMs,
         '[USI] Analysis timed out',
         (line, settle) => {
           if (line.startsWith('info string Error!')) {

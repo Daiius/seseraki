@@ -49,4 +49,9 @@ export interface UsiAnalyzeOptions {
    * （その後の `bestmove` までは今までどおり待つ）
    */
   stopWhen?(info: UsiInfo): boolean;
+  /**
+   * `bestmove` を待つ時間（ms）。省略時はセッションの既定（`UsiSessionOptions.timeoutMs`・既定 60 秒）。
+   * 思考時間で止める探索は `analyzeTimeoutMs` で「思考時間 + 余裕」を渡す
+   */
+  timeoutMs?: number;
 }

@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import {
   createUsiSession,
+  type UsiAnalyzeOptions,
   type UsiLog,
   type UsiSearchResult,
   type UsiSession,
@@ -171,11 +172,13 @@ export class UsiEngine {
     return this.session?.getOption(name);
   }
 
+  /** `options.timeoutMs` で `bestmove` を待つ時間を決める（省略時はセッションの既定 60 秒） */
   async analyze(
     position: string,
     goCommand: string,
+    options?: UsiAnalyzeOptions,
   ): Promise<UsiSearchResult> {
-    return this.active().analyze(position, goCommand);
+    return this.active().analyze(position, goCommand, options);
   }
 
   async quit(): Promise<void> {

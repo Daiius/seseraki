@@ -3,11 +3,18 @@ import {
   GRADER_WAIT_MS,
   gradingFailureMessage,
   requestBrowserGrading,
-  setBrowserGrader,
+  requestBrowserPositionEval,
+  setBrowserReader,
   unavailableReasonOf,
+  type BrowserReader,
   type GradingDeps,
 } from './grading';
-import type { NamedEvalOutcome, NamedEvalRequest } from './runner';
+import type {
+  NamedEvalOutcome,
+  NamedEvalRequest,
+  PositionEvalOutcome,
+  PositionEvalRequest,
+} from './runner';
 import type { BrowserAnalysisPhase } from './store';
 
 const REQUEST: NamedEvalRequest = {
@@ -25,6 +32,10 @@ const REQUEST: NamedEvalRequest = {
 };
 
 const OK: NamedEvalOutcome = { kind: 'mismatch', returned: '7g7f' };
+
+/** 名指しの読みだけを受け持つ常駐（局面評価は使わない） */
+const setBrowserGrader = (named: BrowserReader['named']) =>
+  setBrowserReader({ named, position: async () => ({ kind: 'aborted' }) });
 
 /** 状態と時計を外から動かせる依存 */
 function deps(initial: BrowserAnalysisPhase) {
@@ -165,6 +176,77 @@ describe('requestBrowserGrading', () => {
     });
     expect(await requestBrowserGrading(REQUEST, deps('idle').d)).toEqual(OK);
     expect(calls).toBe(1);
+  });
+});
+
+describe('requestBrowserPositionEval（検討盤の局面評価。prd/12 §2.4）', () => {
+  const POSITION: PositionEvalRequest = { sfen: REQUEST.sfen, settings: { ...REQUEST.settings, multiPv: 3 } };
+  const DONE: PositionEvalOutcome = { kind: 'ok', candidates: [], threads: 4 };
+
+  it('受け持ち手がいれば、取り下げの合図ごと頼む', async () => {
+    const seen: { request: PositionEvalRequest; signal: AbortSignal }[] = [];
+    offs.push(
+      setBrowserReader({
+        named: async () => OK,
+        position: async (request, signal) => {
+          seen.push({ request, signal });
+          return DONE;
+        },
+      }),
+    );
+    const signal = new AbortController().signal;
+    expect(await requestBrowserPositionEval(POSITION, signal, deps('idle').d)).toEqual(DONE);
+    expect(seen).toEqual([{ request: POSITION, signal }]);
+  });
+
+  it('取り下げられていれば頼まない', async () => {
+    let calls = 0;
+    offs.push(setBrowserReader({ named: async () => OK, position: async () => (calls++, DONE) }));
+    const controller = new AbortController();
+    controller.abort();
+    expect(await requestBrowserPositionEval(POSITION, controller.signal, deps('idle').d)).toEqual({
+      kind: 'aborted',
+    });
+    expect(calls).toBe(0);
+  });
+
+  it('受け持ち手を待つ間に取り下げられたら、待つのをやめて aborted', async () => {
+    const controller = new AbortController();
+    const pending = requestBrowserPositionEval(POSITION, controller.signal, deps('off').d);
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'aborted' });
+  });
+
+  it('同意の前は、同意を求める手立てに取り下げの合図を渡して答えを待つ', async () => {
+    const { d, setPhase } = deps('needs-consent');
+    const controller = new AbortController();
+    const signals: (AbortSignal | undefined)[] = [];
+    const pending = requestBrowserPositionEval(POSITION, controller.signal, {
+      ...d,
+      askConsent: async (signal) => {
+        signals.push(signal);
+        return true;
+      },
+    });
+    await Promise.resolve();
+    expect(signals).toEqual([controller.signal]);
+    setPhase('off');
+    offs.push(setBrowserReader({ named: async () => OK, position: async () => DONE }));
+    expect(await pending).toEqual(DONE);
+  });
+
+  it('同意を断ったら declined、解析できない環境なら unsupported（読まない）', async () => {
+    const signal = new AbortController().signal;
+    expect(
+      await requestBrowserPositionEval(POSITION, signal, {
+        ...deps('needs-consent').d,
+        askConsent: async () => false,
+      }),
+    ).toEqual({ kind: 'unavailable', reason: 'declined' });
+    expect(await requestBrowserPositionEval(POSITION, signal, deps('unsupported').d)).toEqual({
+      kind: 'unavailable',
+      reason: 'unsupported',
+    });
   });
 });
 

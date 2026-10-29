@@ -10,6 +10,10 @@
  * （`StudyBoard.tsx` の `EvalResultView`）。「棋譜の自動解析が走っている間は押せない」という
  * 制約も作らない——差し込み評価（解析の合間に気になる局面だけ評価する）が動機そのものなので、
  * それを妨げる disabled 条件を足してはいけない。
+ *
+ * 「ブラウザで解析」の利用者も押せる（2026-10-29。このブラウザのエンジンで読む。prd/12 §2.4）。
+ * ⚠ それまではこの利用者だけ押せなくしていた（評価の口が 403 を返すため）。同意の前・解析できない端末でも
+ * 押せるままにし、同意は押した時点で求め、読めない理由は評価結果ブロックが言う
  */
 
 /** title の元になる状況。`studying` / `grading` が false なら常に棋譜側の文面になる */
@@ -20,18 +24,10 @@ export interface EvaluateButtonInput {
   grading: boolean;
   /** 評価要求が実行中か */
   evaluating: boolean;
-  /**
-   * 評価を使えないか（省略時は使える）。
-   *
-   * 「ブラウザで解析」のユーザーは、検討盤の評価がまだ使えない（評価の口は手元 worker にジョブを積むので
-   * 403 になる。ブラウザでの評価が入るまで。prd/14 §5.7・§5.11）。🔒 これは「評価中」以外で唯一ボタンを
-   * 押せなくする条件——押せば必ず断られる操作を、押せるまま置かない。
-   */
-  unavailable?: boolean;
 }
 
 export interface EvaluateButtonViewState {
-  /** ボタンを押せなくするか（評価中と、評価を使えないときだけ true） */
+  /** ボタンを押せなくするか（評価中のときだけ true） */
   disabled: boolean;
   /** アイコンをスピナーに差し替えるか（評価中のときだけ true） */
   busy: boolean;
@@ -42,7 +38,6 @@ export interface EvaluateButtonViewState {
 const TITLE_KIFU = 'この局面をエンジンに評価させる';
 const TITLE_GRADING = 'この局面を評価し、直前の手が最善とどれだけ離れていたかも出す';
 const TITLE_EVALUATING = '評価しています';
-const TITLE_UNAVAILABLE = 'ブラウザで解析する設定では、局面の評価はまだ使えません';
 
 /**
  * ボタンの見た目を決める（prd/12 §3.2・決定 2026-09-01）。
@@ -58,11 +53,7 @@ export function evaluateButtonViewState({
   studying,
   grading,
   evaluating,
-  unavailable = false,
 }: EvaluateButtonInput): EvaluateButtonViewState {
-  if (unavailable) {
-    return { disabled: true, busy: false, title: TITLE_UNAVAILABLE };
-  }
   if (evaluating) {
     return { disabled: true, busy: true, title: TITLE_EVALUATING };
   }

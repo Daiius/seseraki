@@ -58,6 +58,9 @@ import {
   type MoveGrade,
 } from '../lib/positionEval';
 import { useDisplaySize } from '../lib/displaySize';
+import { useAnalysisAssignee } from '../lib/useMe';
+import { requestBrowserStudyEval } from '../lib/browserAnalysis/studyEval';
+import { StudyEvalBrowserStatus } from './BrowserAnalysis';
 
 /**
  * 検討盤（prd/12 §3）。
@@ -299,6 +302,11 @@ export function StudyBoard({
   const trackerRef = useRef(new EvalRequestTracker());
   // 操作ボタンの大きさは棋譜の操作行（`BoardControls`）と同じ設定で切り替わる
   const btn = useStudyButtons();
+  /**
+   * 「ブラウザで解析」の利用者は、局面評価をこのブラウザのエンジンで読む（prd/12 §2.4・2026-10-29）。
+   * server の評価の口は手元 worker にジョブを積むので、この利用者には 403 を返す
+   */
+  const inBrowser = useAnalysisAssignee() === 'browser';
 
   // 🔴 **起点が変わったら検討を捨てる**（= 手送りされた。prd/12 §3.1）。
   // 確認ダイアログは出さない（連打を妨げないため・検討は元々保存しない）。
@@ -414,8 +422,20 @@ export function StudyBoard({
     //    **server の評価キュー（有限）の最後の 1 枠を副次が取り、主が 503 になる**。
     //    「採点は進んでいるのに主は『キューが一杯』」という優先順位の逆転が起きるため、
     //    **枠の取り合いでは主を先に通す。** ⚠ 同時実行は保つ（await は下でまとめて行う）。
-    const resultPromise = requestPositionEval(target, signal);
-    const gradePromise = grading ? requestPositionEval(grading.target, signal) : null;
+    //
+    // 🔴 **ブラウザで読むときだけは直列にする**（2026-10-29。prd/12 §2.4）。エンジンはこのブラウザに 1 本なので、
+    //    並行に頼んでも順に読むだけ——**主を読み終えてから 1 手前を読む**ことを明示する（主の結果を先に出し、
+    //    採点は後から足す、という見え方は同じ）。主が出なければ 1 手前は読まない。
+    //    取り下げ（局面が変わった）は同じ `signal` で、まだ読んでいない側は読まずに捨てる
+    const evaluate = inBrowser ? requestBrowserStudyEval : requestPositionEval;
+    const resultPromise = evaluate(target, signal);
+    const gradePromise = grading
+      ? inBrowser
+        ? resultPromise.then((first) =>
+            first.kind === 'done' ? evaluate(grading.target, signal) : first,
+          )
+        : evaluate(grading.target, signal)
+      : null;
 
     const result = await resultPromise;
     // 🔒 待っている間に局面が変わっていたら**この結果は今の盤のものではない**
@@ -818,6 +838,7 @@ function EvalResultView({
   // 読み筋の再生ボタンも棋譜の操作行と同じ設定で小さくなる
   // ⚠ **早期 return より前に呼ぶ**（フックの規則）
   const btn = useStudyButtons();
+  const inBrowser = useAnalysisAssignee() === 'browser';
 
   // まだ一度も評価していない（`idle`）なら何も出さない（器ごと出さない。呼び出し側と対）
   if (evalState.kind === 'idle') return null;
@@ -843,6 +864,9 @@ function EvalResultView({
         盤が変わったので前の評価は消した。もう一度評価できる
       </p>
     );
+  } else if (evalState.kind === 'loading' && inBrowser) {
+    // このブラウザで読んでいる（ダウンロードの同意・エンジンの準備の進捗もここに出す）
+    body = <StudyEvalBrowserStatus />;
   } else if (evalState.kind === 'loading') {
     body = (
       <div className="flex items-center gap-2">

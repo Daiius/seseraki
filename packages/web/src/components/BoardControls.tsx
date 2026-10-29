@@ -10,7 +10,6 @@ import {
 import type { StudyControls } from './StudyBoard';
 import { useDisplaySize } from '../lib/displaySize';
 import { evaluateButtonViewState } from '../lib/evaluateButton';
-import { useAnalysisAssignee } from '../lib/useMe';
 
 /** 操作ボタンの高さ（`StudyBoard.tsx` の `TOUCH_BTN` と同じ流儀）。モバイル 44px（375px 未満は 40px）、md 以上は 32px。 */
 const TOUCH_BTN =
@@ -105,7 +104,6 @@ export function BoardControls({
   const atStart = !branchActive && moveIndex === 0;
   const atEnd = !branchActive && moveIndex === totalMoves;
   const { displaySize } = useDisplaySize();
-  const assignee = useAnalysisAssignee();
   const compact = displaySize.controlSize === 'compact';
   const iconBtn = compact ? ICON_BTN_COMPACT : ICON_BTN;
   const iconBtnFlex = compact ? ICON_BTN_FLEX_COMPACT : ICON_BTN_FLEX;
@@ -115,8 +113,6 @@ export function BoardControls({
     studying: study.studying,
     grading: study.grading,
     evaluating: study.evaluating,
-    // 「ブラウザで解析」のユーザーは、検討盤の評価がまだ使えない（prd/14 §5.7・§5.11）
-    unavailable: assignee === 'browser',
   });
 
   return (

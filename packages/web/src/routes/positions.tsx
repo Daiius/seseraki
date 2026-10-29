@@ -3,6 +3,7 @@ import type { InferResponseType } from 'hono/client';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { stateFromBytes, usiToJapaneseWithPiece } from 'shared';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import { BoardGrid, HandDisplay } from '../components/BoardGrid';
 
 /**
@@ -18,16 +19,12 @@ export interface PositionsSearch {
 }
 
 async function loadPosition(pos: string | undefined) {
-  try {
-    const res = await client.api.positions.$get({ query: { pos } });
-    if (res.status === 404) {
-      return { position: null, error: 'この局面を通った棋譜はまだ無い' };
-    }
-    if (!res.ok) return { position: null, error: `サーバーエラー (${res.status})` };
-    return { position: await res.json(), error: null };
-  } catch {
-    return { position: null, error: 'サーバーに接続できません' };
-  }
+  const result = await callApi(client.api.positions.$get({ query: { pos } }));
+  if (result.ok) return { position: result.data, error: null };
+  return {
+    position: null,
+    error: result.status === 404 ? 'この局面を通った棋譜はまだ無い' : result.error,
+  };
 }
 
 export const Route = createFileRoute('/positions')({
@@ -58,8 +55,7 @@ function SourceBadge({ source }: { source: Position['games'][number]['source'] }
  */
 const GAMES_PAGE = 20;
 
-// ⚠ 200 の型に絞る。素の戻りは 404（`{ error }`）とのユニオンで、
-// `res.ok` では絞り込めない
+// state の型に書くので 200 の本文の型を取り出す（素の戻りは 404 の `{ error }` とのユニオン）
 type Similar = InferResponseType<typeof client.api.positions.similar.$get, 200>;
 
 /**
@@ -81,16 +77,8 @@ function SimilarSection({
 
   const load = async () => {
     setState({ kind: 'loading' });
-    try {
-      const res = await client.api.positions.similar.$get({ query: { pos: sfen } });
-      if (!res.ok) {
-        setState({ kind: 'error' });
-        return;
-      }
-      setState({ kind: 'done', data: await res.json() });
-    } catch {
-      setState({ kind: 'error' });
-    }
+    const result = await callApi(client.api.positions.similar.$get({ query: { pos: sfen } }));
+    setState(result.ok ? { kind: 'done', data: result.data } : { kind: 'error' });
   };
 
   return (
@@ -189,16 +177,8 @@ function SubjectSection({ sfen }: { sfen: string }) {
 
   const load = async (side: 'sente' | 'gote') => {
     setState({ kind: 'loading' });
-    try {
-      const res = await client.api.positions.subject.$get({ query: { pos: sfen, side } });
-      if (!res.ok) {
-        setState({ kind: 'error' });
-        return;
-      }
-      setState({ kind: 'done', side, data: await res.json() });
-    } catch {
-      setState({ kind: 'error' });
-    }
+    const result = await callApi(client.api.positions.subject.$get({ query: { pos: sfen, side } }));
+    setState(result.ok ? { kind: 'done', side, data: result.data } : { kind: 'error' });
   };
 
   return (

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { usiToJapaneseWithPiece, type BoardState } from 'shared';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import { refParam, type Drill, type Reveal } from '../lib/drillApi';
 import { matePliesText, movesText, practiceNote, resultBadge } from '../lib/drillAnswer';
 import { MODE_LABEL, modeSearch, type DrillMode } from '../lib/drillSearch';
@@ -130,17 +131,16 @@ function AttemptsOf({ drill }: { drill: Drill }) {
   const { kifuNo, moveNumber, kind } = drill;
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].attempts.$get({
+    void (async () => {
+      const result = await callApi(
+        client.api.drills[':kifuNo'][':moveNumber'][':kind'].attempts.$get({
           param: refParam({ kifuNo, moveNumber, kind }),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        const body = await res.json();
-        if (!cancelled) setRows(body.attempts);
-      } catch {
-        if (!cancelled) setError('解答履歴を読み込めませんでした');
-      }
+        }),
+      );
+      if (cancelled) return;
+      // 失敗の理由は出さない（履歴は添え物。読めなかったことだけ伝える）
+      if (result.ok) setRows(result.data.attempts);
+      else setError('解答履歴を読み込めませんでした');
     })();
     return () => {
       cancelled = true;

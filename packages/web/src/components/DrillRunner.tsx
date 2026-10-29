@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { parseSfen, type HandPieceKind, type SquareRef } from 'shared';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import { BoardWithHands, handSidesOf, pickerOf } from './BoardGrid';
 import {
   applyStudyMoves,
@@ -319,19 +320,14 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     if (!drill) return;
     const signal = screenSignal();
     setError(null);
-    try {
-      const res = await client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({
-        param: refParam(drill),
-      });
-      // 待っている間に画面を離れた。離れた先から勝手に移らない
-      if (signal.aborted) return;
-      if (!res.ok) {
-        setError(`自明だった問題として記録できませんでした (${res.status})`);
-        return;
-      }
-    } catch {
-      if (signal.aborted) return;
-      setError('サーバーに接続できません');
+    const result = await callApi(
+      client.api.drills[':kifuNo'][':moveNumber'][':kind'].exclude.$post({ param: refParam(drill) }),
+      { fallback: (status) => `自明だった問題として記録できませんでした (${status})` },
+    );
+    // 待っている間に画面を離れた。離れた先から勝手に移らない
+    if (signal.aborted) return;
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     onNext();

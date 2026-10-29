@@ -1,9 +1,14 @@
 import { useState } from 'react';
-import type { InferResponseType } from 'hono/client';
+import type { ClientResponse, InferResponseType } from 'hono/client';
 import { client } from '../lib/honoClient';
 import { NETWORK_ERROR_MESSAGE } from '../lib/requestError';
+import { callApi } from '../lib/callApi';
 
 type Me = InferResponseType<typeof client.api.users.me.$get, 200>;
+
+/** 書き込みの 1 往復を送り、結果を画面に出す（`ok` は成功の文。引き直した局数を受ける） */
+// 応答の型は口ごとに違うので any で受ける（本文は `rederived` だけ読む）
+type Run = (fn: () => Promise<ClientResponse<any, any, any>>, ok: (n: number) => string) => Promise<void>;
 
 /**
  * 「自分」の設定（prd/11 §6.3）。表示名と、対局者名と突き合わせる**名前候補**。
@@ -18,25 +23,22 @@ export function SelfSettings({ me, onChanged }: { me: Me; onChanged: () => void 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const run = async (fn: () => Promise<Response>, ok: (n: number) => string) => {
+  const run: Run = async (fn, ok) => {
     setBusy(true);
     setMessage(null);
-    try {
-      const res = await fn();
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setMessage(body?.error ?? `失敗しました (${res.status})`);
-        return;
-      }
-      const body = (await res.json()) as { rederived?: number };
-      setMessage(ok(body.rederived ?? 0));
-      onChanged();
-    } catch {
-      // 通信の失敗（server に届かない）。黙って終わらせず、画面に出す
-      setMessage(NETWORK_ERROR_MESSAGE);
-    } finally {
-      setBusy(false);
+    // 通信の失敗（server に届かない）も黙って終わらせず、画面に出す
+    const result = await callApi(fn(), {
+      fallback: (status) => `失敗しました (${status})`,
+      network: NETWORK_ERROR_MESSAGE,
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setMessage(result.error);
+      return;
     }
+    const body = result.data as { rederived?: number };
+    setMessage(ok(body.rederived ?? 0));
+    onChanged();
   };
 
   return (
@@ -138,7 +140,7 @@ function AliasRow({
 }: {
   alias: Me['aliases'][number];
   busy: boolean;
-  run: (fn: () => Promise<Response>, ok: (n: number) => string) => Promise<void>;
+  run: Run;
 }) {
   const [from, setFrom] = useState(alias.validFrom ?? '');
   const [to, setTo] = useState(alias.validTo ?? '');

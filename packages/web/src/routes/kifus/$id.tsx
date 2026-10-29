@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router';
 import clsx from 'clsx';
 import { client } from '../../lib/honoClient';
+import { callApi } from '../../lib/callApi';
 import { buildPositions } from 'shared';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { isAnalysisPending } from '../../lib/analysisPending';
@@ -160,20 +161,16 @@ function KifuDetailPage() {
     if (!confirm('この棋譜を削除しますか？')) return;
     setActionResult(null);
     setBusy(true);
-    try {
-      const res = await client.api.kifus[':no'].$delete({
-        param: { no: String(kifu.no) },
-      });
-      if (!res.ok) {
-        setActionResult({ kind: 'error', message: `削除に失敗しました (${res.status})` });
-        return;
-      }
-      navigate({ to: '/' });
-    } catch {
-      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
-    } finally {
-      setBusy(false);
+    const result = await callApi(
+      client.api.kifus[':no'].$delete({ param: { no: String(kifu.no) } }),
+      { fallback: (status) => `削除に失敗しました (${status})` },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setActionResult({ kind: 'error', message: result.error });
+      return;
     }
+    navigate({ to: '/' });
   };
 
   // kifText を再変換して解析状態をリセットし、worker に拾い直させる。
@@ -182,24 +179,20 @@ function KifuDetailPage() {
     setActionResult(null);
     setDismissedError(null);
     setBusy(true);
-    try {
-      const res = await client.api.kifus[':no'].reanalyze.$post({
-        param: { no: String(kifu.no) },
-      });
-      if (!res.ok) {
-        setActionResult({ kind: 'error', message: `再解析に失敗しました (${res.status})` });
-        return;
-      }
-      setActionResult({
-        kind: 'info',
-        message: '再解析を開始しました。完了までしばらくかかります',
-      });
-      router.invalidate();
-    } catch {
-      setActionResult({ kind: 'error', message: 'サーバーに接続できません' });
-    } finally {
-      setBusy(false);
+    const result = await callApi(
+      client.api.kifus[':no'].reanalyze.$post({ param: { no: String(kifu.no) } }),
+      { fallback: (status) => `再解析に失敗しました (${status})` },
+    );
+    setBusy(false);
+    if (!result.ok) {
+      setActionResult({ kind: 'error', message: result.error });
+      return;
     }
+    setActionResult({
+      kind: 'info',
+      message: '再解析を開始しました。完了までしばらくかかります',
+    });
+    router.invalidate();
   };
 
   // 主体側は server が導出済み（prd/11 §4）

@@ -3,6 +3,7 @@ import { useRouter } from '@tanstack/react-router';
 import { engineEntryDownloadBytes, engineEntryOf } from 'shared';
 import { forgetMe, type AnalysisAssignee, type Me } from '../lib/auth';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import {
   setBrowserAnalysisSettings,
   useBrowserAnalysisSettings,
@@ -101,18 +102,17 @@ export function AnalysisSettings({ me }: { me: Me }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await client.api.users.me['analysis-assignee'].$put({
-        json: { assignee },
-      });
-      if (!res.ok) {
-        setError(`切り替えられませんでした (${res.status})`);
+      const result = await callApi(
+        client.api.users.me['analysis-assignee'].$put({ json: { assignee } }),
+        { fallback: (status) => `切り替えられませんでした (${status})` },
+      );
+      if (!result.ok) {
+        setError(result.error);
         return;
       }
       // ログイン状態はページ単位で覚えているので、捨ててから取り直す（常駐の解析もこれで切り替わる）
       forgetMe();
       await router.invalidate();
-    } catch {
-      setError('サーバーに接続できません');
     } finally {
       setBusy(false);
     }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import {
   DEFAULT_MATE_MAX,
   loadMateMax,
@@ -74,16 +75,14 @@ export const Route = createFileRoute('/stats')({
     // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は kifus.subjectSide に
     // 導出済み（prd/11 §4）。名前候補が未設定なら全局が「自分未確定」に落ちるが、
     // それは server が数えて `excluded.ambiguousSelf` として返す
-    try {
-      const res = await client.api.stats.tactics.$get({
+    const result = await callApi(
+      client.api.stats.tactics.$get({
         query: { mateMax: deps.mateMax, from: deps.from, to: deps.to },
-      });
-      if (!res.ok)
-        return { stats: null, error: `サーバーエラー (${res.status})` };
-      return { stats: await res.json(), error: null };
-    } catch {
-      return { stats: null, error: 'サーバーに接続できません' };
-    }
+      }),
+    );
+    return result.ok
+      ? { stats: result.data, error: null }
+      : { stats: null, error: result.error };
   },
   component: StatsPage,
 });

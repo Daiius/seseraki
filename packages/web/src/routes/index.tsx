@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 import {
   DEFAULT_ORDER,
   DEFAULT_SORT,
@@ -110,20 +111,14 @@ export const Route = createFileRoute('/')({
     // ⭐ 名前候補はもう送らない。「自分」は server が持ち、主体側は
     // kifus.subjectSide に導出済み（prd/11 §4）。
     // `me` は「名前候補が設定されているか」を見るために取る（絞り込み UI の出し分け）
-    try {
-      const [res, meRes] = await Promise.all([
-        client.api.kifus.$get({ query: deps }),
-        client.api.users.me.$get(),
-      ]);
-      if (!res.ok) {
-        return { kifus: [], pagination: null, me: null, error: `サーバーエラー (${res.status})` };
-      }
-      const data = await res.json();
-      const me = meRes.ok ? await meRes.json() : null;
-      return { kifus: data.kifus, pagination: data.pagination, me, error: null };
-    } catch {
-      return { kifus: [], pagination: null, me: null, error: 'サーバーに接続できません' };
-    }
+    // `me` が取れなくても一覧は出す（絞り込み UI の出し分けが控えめになるだけ）
+    const [list, meResult] = await Promise.all([
+      callApi(client.api.kifus.$get({ query: deps })),
+      callApi(client.api.users.me.$get()),
+    ]);
+    if (!list.ok) return { kifus: [], pagination: null, me: null, error: list.error };
+    const me = meResult.ok ? meResult.data : null;
+    return { kifus: list.data.kifus, pagination: list.data.pagination, me, error: null };
   },
   component: KifuListPage,
 });

@@ -15,15 +15,12 @@ import { AnalysisSettings } from '../components/AnalysisSettings';
 import { BuildVersionInfo } from '../components/BuildVersionInfo';
 import { useMe } from '../lib/useMe';
 import { client } from '../lib/honoClient';
+import { callApi } from '../lib/callApi';
 
 export const Route = createFileRoute('/settings')({
   loader: async () => {
-    try {
-      const res = await client.api.users.me.$get();
-      return { me: res.ok ? await res.json() : null };
-    } catch {
-      return { me: null };
-    }
+    const result = await callApi(client.api.users.me.$get());
+    return { me: result.ok ? result.data : null };
   },
   component: SettingsPage,
 });

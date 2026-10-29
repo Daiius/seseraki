@@ -15,6 +15,7 @@ import {
   type DrillNamedEvaluation,
   type NamedEvalSettings,
 } from 'shared';
+import { serverErrorText } from './callApi';
 import type { GradingResult } from './browserAnalysis/drillGrading';
 import { applyStudyMoves } from './study';
 import type { BrowserAnalysisPhase } from './browserAnalysis/store';
@@ -77,13 +78,13 @@ function isSettings(value: unknown): value is NamedEvalSettings {
 export function answerStepOf<Done>(status: number, body: unknown): AnswerStep<Done> {
   if (status === 202) {
     if (isRecord(body) && typeof body.jobId === 'string') return { kind: 'wait-job', jobId: body.jobId };
-    return { kind: 'error', text: `サーバーエラー (${status})` };
+    return { kind: 'error', text: serverErrorText(status) };
   }
   if (status < 200 || status >= 300) {
     if (isRecord(body) && 'error' in body) return { kind: 'error', text: String(body.error) };
-    return { kind: 'error', text: `サーバーエラー (${status})` };
+    return { kind: 'error', text: serverErrorText(status) };
   }
-  if (!isRecord(body)) return { kind: 'error', text: `サーバーエラー (${status})` };
+  if (!isRecord(body)) return { kind: 'error', text: serverErrorText(status) };
   switch (body.status) {
     case 'evaluate':
       if (typeof body.sfen === 'string' && typeof body.move === 'string' && isSettings(body.settings)) {
@@ -105,7 +106,7 @@ export function answerStepOf<Done>(status: number, body: unknown): AnswerStep<Do
     case 'done':
       return { kind: 'done', result: body as Done };
   }
-  return { kind: 'error', text: `サーバーエラー (${status})` };
+  return { kind: 'error', text: serverErrorText(status) };
 }
 
 /**

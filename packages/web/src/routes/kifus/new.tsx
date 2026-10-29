@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { client } from '../../lib/honoClient';
 import { ClipboardIcon } from '../../components/icons';
 import { NETWORK_ERROR_MESSAGE, responseErrorMessage } from '../../lib/requestError';
+import { callApi } from '../../lib/callApi';
 
 export const Route = createFileRoute('/kifus/new')({
   component: NewKifuPage,
@@ -32,27 +33,20 @@ function NewKifuPage() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
-    try {
-      let res;
-      try {
-        res = await client.api.kifus.$post({
-          json: { title: title.trim() || undefined, kifText, sourceTz },
-        });
-      } catch {
-        setError(NETWORK_ERROR_MESSAGE);
-        return;
-      }
-      if (!res.ok) {
-        const body: unknown = await res.json().catch(() => null);
-        setError(`登録できませんでした: ${responseErrorMessage(res.status, body)}`);
-        return;
-      }
-      // 返るのは棋譜の番号（所有者ごと。prd/14 §4.4）
-      const { no } = await res.json();
-      navigate({ to: '/kifus/$id', params: { id: String(no) } });
-    } finally {
-      setSubmitting(false);
+    const result = await callApi(
+      client.api.kifus.$post({ json: { title: title.trim() || undefined, kifText, sourceTz } }),
+      {
+        describe: (status, body) => `登録できませんでした: ${responseErrorMessage(status, body)}`,
+        network: NETWORK_ERROR_MESSAGE,
+      },
+    );
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
     }
+    // 返るのは棋譜の番号（所有者ごと。prd/14 §4.4）
+    navigate({ to: '/kifus/$id', params: { id: String(result.data.no) } });
   };
 
   return (

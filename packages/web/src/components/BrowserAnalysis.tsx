@@ -25,6 +25,7 @@ import {
 } from '../lib/browserAnalysis/store';
 import { unsupportedMessage } from '../lib/browserAnalysis/support';
 import { megabytes } from '../lib/browserAnalysis/format';
+import { useDownloadNoticeVisible } from '../lib/browserAnalysis/downloadNotice';
 import {
   answerDrillEngineConsent,
   askDrillEngineConsent,
@@ -179,7 +180,7 @@ export function DrillEngineConsent() {
  *
  * - 同意を求めている（押した時点でダウンロードに同意していなかった）: 大きさを示して明示の開始を求める（prd/14 §5.10）。
  *   同意すれば全局面解析にも効く（同意は端末ごと・評価関数ごとに 1 つ）。やめたら評価しない
- * - エンジンを準備している: ダウンロードの進捗
+ * - エンジンを準備している: ダウンロードの進捗（ダウンロード済みですぐ終わるときは出さない）
  * - それ以外: 評価している旨だけ
  *
  * 文言に内部の用語（担当・MultiPV）は出さない
@@ -188,6 +189,8 @@ export function StudyEvalBrowserStatus() {
   const asking = useStudyEvalConsentAsking();
   const { phase, manifest, download } = useBrowserAnalysisState();
   const settings = useBrowserAnalysisSettings();
+  // ダウンロード済みならすぐ終わるので出さない（downloadNotice.ts）
+  const loading = useDownloadNoticeVisible(download) && phase === 'loading';
   if (asking && manifest) {
     const entry = engineEntryOf(manifest, settings.evalId);
     return (
@@ -223,11 +226,11 @@ export function StudyEvalBrowserStatus() {
       <div className="flex items-center gap-2">
         <span className="loading loading-dots loading-md" aria-label="評価しています" />
         <span className="text-base-content/60">
-          {phase === 'loading' ? '解析エンジンを準備しています' : 'このブラウザで評価しています'}
-          {phase === 'loading' && <EngineDownloadAmount download={download} />}
+          {loading ? '解析エンジンを準備しています' : 'このブラウザで評価しています'}
+          {loading && <EngineDownloadAmount download={download} />}
         </span>
       </div>
-      {phase === 'loading' && <EngineDownloadProgress download={download} />}
+      {loading && <EngineDownloadProgress download={download} />}
     </div>
   );
 }
@@ -321,7 +324,7 @@ function EngineDownloadProgress({ download }: { download: DownloadProgress }) {
 }
 
 /**
- * ブラウザ解析の案内（同意・準備中・解析できない理由）。解析が普通に動いている間は何も出さない。
+ * ブラウザ解析の案内（同意・準備中・解析できない理由）。解析が普通に動いている間と、ダウンロード済みですぐ終わる準備の間は何も出さない。
  *
  * 🔒 **その端末での初回は、ダウンロードの大きさを示して明示の開始を求める**（prd/14 §5.10）。
  * ボタンを押すまで、評価関数は落とし始めない。
@@ -332,6 +335,8 @@ export function BrowserAnalysisNotice() {
   const { phase, manifest, unsupported, download, error } =
     useBrowserAnalysisState();
   const settings = useBrowserAnalysisSettings();
+  // ダウンロード済みならすぐ終わるので出さない（downloadNotice.ts）
+  const showsLoading = useDownloadNoticeVisible(download);
 
   switch (phase) {
     case 'needs-consent': {
@@ -362,6 +367,7 @@ export function BrowserAnalysisNotice() {
       );
     }
     case 'loading':
+      if (!showsLoading) return null;
       return (
         <div
           role="status"

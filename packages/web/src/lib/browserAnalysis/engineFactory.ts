@@ -43,9 +43,10 @@ export async function createEngine(params: CreateEngineParams): Promise<Analysis
   log.info(
     `loading engine eval=${entry.id} build=${entry.engine.buildId} nn=${entry.nn.sha256.slice(0, 16)} load=${load} host=${engineHostUrl}`,
   );
+  const startedAt = Date.now();
   patch({
     phase: 'loading',
-    download: { loaded: 0, total: engineEntryDownloadBytes(entry) },
+    download: { loaded: 0, total: engineEntryDownloadBytes(entry), startedAt },
   });
   let worker: Worker | null = null;
   let connection: ReturnType<typeof connectEngineHost> | null = null;
@@ -58,7 +59,7 @@ export async function createEngine(params: CreateEngineParams): Promise<Analysis
       worker as unknown as HostWorkerLike,
       initRequest(entry, engineUrls(origin, entry)),
       {
-        onDownload: (loaded, total) => patch({ download: { loaded, total } }),
+        onDownload: (loaded, total) => patch({ download: { loaded, total, startedAt } }),
       },
     );
     connection = connected;

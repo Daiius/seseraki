@@ -33,8 +33,8 @@ export interface BrowserAnalysisState {
   /** 配信されているエンジンの一覧（取得できたとき）。同意の画面とライセンスの表示に使う */
   manifest: EngineManifest | null;
   unsupported: readonly UnsupportedReason[];
-  /** 評価関数の受信バイト数（`loading` の間） */
-  download: { loaded: number; total: number } | null;
+  /** 評価関数の受信バイト数と、読み込みを始めた時刻（`loading` の間。表示の判定は `downloadNotice.ts`） */
+  download: { loaded: number; total: number; startedAt: number } | null;
   /** 解析中の棋譜の進捗（`analyzing` の間） */
   progress: LocalProgress | null;
   /** `error` のときの文 */

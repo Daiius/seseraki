@@ -152,6 +152,7 @@
     **server のイメージは `--build-arg GIT_COMMIT=$(git rev-parse HEAD)` などを付けてビルドする**
     （ほかに `BUILD_TIME`（`date -u +%Y-%m-%dT%H:%M:%SZ`）・`GIT_DIRTY`（`true` / `false`））。付けなければ `unknown`。
     dev の Dockerfile と compose は渡さない（`unknown`）。
+    Actions のビルド（`.github/workflows/build-push-server.yml`）も同じ引数を渡す（`GIT_COMMIT` は `github.sha`・`GIT_DIRTY` は常に `false`）。
   - 設定ページの隅に、web と server の版（短い SHA・ビルド日時。dirty なら `*`）を小さく出す。
 - **ブラウザ解析のエンジンと評価関数**（決定・2026-10-14。**ビルドと web への同梱は実装済み・本番の配信の設定も済み（2026-10-15）**。[14](./14-multi-user.md) §5.5）:
   - エンジン（WASM）は `packages/engine-wasm` でビルドする（`pnpm engine:build`。`packages/engine-wasm/dist/engine/` に

@@ -173,6 +173,42 @@
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する
   （[README](./README.md) §公開リポジトリでの秘匿方針）。
 
+### 5.1 server は main に入ると本番に出る（タグの追従。2026-11-18 決定）
+
+**状態: workflow は実装済み・本番の追従は未有効（2026-11-18 時点）。** 今は main への push で server のイメージがビルドされ、
+`latest` が動くところまで。VPS の側で追従が有効になると、以下の流れで本番に出る（有効になったら、この行を日付つきで書き換える）。
+
+**追従が有効になったあとは、main にマージされた server の変更は、数分で本番に出る。**
+
+- 流れ: main への push → [`build-push-server.yml`](../.github/workflows/build-push-server.yml) が
+  イメージをビルドして `<40 桁の SHA>` と `latest` を付ける → 本番の VPS がレジストリの `latest` を数分おきに見て、
+  変わっていれば入れ替える → VPS の側で疎通と版（`/api/version` の `commit` がイメージの `GIT_COMMIT` と一致するか）を
+  確かめ、駄目なら前のイメージに自動で戻す。動いているが挙動がおかしいときは、所有者が VPS で手で戻す（エージェントは VPS に触らない）。
+  デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
+- ビルドが走るのは、`packages/server/Dockerfile.prod` が読むものに触れた push だけ（workflow の `paths`。
+  `packages/server/**`・`packages/shared/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json`・workflow 自身）。
+  文書や web・worker・kifu-vision・deploy-static・engine-wasm だけの変更では、本番は入れ替わらない。
+  `packages/web/package.json`・`packages/worker/package.json` は Dockerfile が COPY するが入れていない（`--frozen-lockfile` のためだけ。依存を変えれば `pnpm-lock.yaml` が変わる）。
+- `latest` は、**main の回で、そのコミットがいまの main の先頭か祖先であり、そこから先頭までの間に
+  `paths` に当たる変更が無い**ときだけ付ける（＝イメージの中身が main の最新と同じ）。
+  - server の変更のあとに文書だけのコミットが入っても、server の変更の回が `latest` を付ける（文書だけのコミットでは
+    ビルドが起動しないので、先頭だけを条件にすると取り残される）
+  - 手動起動でほかの枝を選んだ回、main に無いコミット、あとに server の変更がある古い回の再実行には付けない
+    （それまでの workflow は、手動起動ならどの枝でも `latest` を付けていた）
+  - 判定できないとき（履歴が浅い・main を取れない・`paths` の一覧を読めない）は付けない。結果と理由は実行の Summary に 1 行出る
+  - `paths` の一覧は workflow の起動条件の 1 か所だけにあり、判定の step はそれを読む。同じ ref のビルドは直列に走る（`concurrency`）
+- 🔒 **順序を守るのは、マージする人とエージェント。** 仕組みの側にマイグレーションで止める関所は無い（所有者の方針。2026-11-18）。
+  - マイグレーション・環境変数の追加・デプロイ前後の手作業（後処理の一括処理など）を伴う PR は、マージの前に所有者と段取りを決める。
+    エージェントは勝手にマージしない。seseraki で具体的に何が当たるかは [AGENTS.md](../AGENTS.md) の冒頭の節。
+  - マイグレーションは**古い server でも動く形（足すだけ）**にし、**先に本番へ流してからマージする**。
+    同梱の `migrate.js` を管理用のサービスで流すには（[15](./15-postgres.md) §2）、そのマイグレーションを含むイメージが先に要る。
+    PR の枝で workflow を手動起動すれば、`latest` を動かさずに `<40 桁の SHA>` のイメージができる。どう流すかは所有者と決める。
+  - RLS（[15](./15-postgres.md) §2.1）のように古い server と両立しない変更は、「先に流してからマージ」が成り立たない。
+  - ⚠ 切り戻しで server を戻しても、スキーマは戻らない。戻した server が新しいスキーマで動けることが前提になる。
+- server だけが自動で出て、web（静的配信）と worker は今までどおり手で出す。server と web・worker の口を変える変更は、出る時刻がずれる。
+- 「実装済み（本番は未反映）」の書き分け: server の変更については、追従が有効になると「main に入れた ＝ 数分で本番に出た」になる。
+  この書き方は main に入れていない間だけのものになる（既存の記述は、有効にするときに所有者が確かめる）。
+
 ## 6. 開発環境（docker compose watch）
 
 `pnpm dev`（`docker compose up --build --watch`）で全サービスを起動する。

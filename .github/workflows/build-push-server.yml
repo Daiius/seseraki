@@ -22,8 +22,8 @@ on:
     # 入れていないもの（COPY はされるが、server の実行物を変えない）:
     #   packages/web/package.json・packages/worker/package.json（--frozen-lockfile のためだけ。依存を変えれば
     #   pnpm-lock.yaml が変わる）。
-    # ⚠ 下の印の間は「latest を付けるか」の step もこのファイルから読む（一覧はここ 1 か所だけ）。
-    #   形は「- <パス>」を 1 行ずつ。印を消したり、ほかの形の行を挟むと、その step は latest を付けずに止まる。
+    # ⚠ 下の印の間は、latest を動かす job「promote」も（main の先頭のこのファイルから）読む（一覧はここ 1 か所だけ）。
+    #   形は「- <パス>」を 1 行ずつ。印を消したり、ほかの形の行を挟むと、その job は latest を動かさずに失敗で止まる。
     paths:
       # >>> server-paths
       - packages/server/**
@@ -37,31 +37,24 @@ on:
       # <<< server-paths
   workflow_dispatch:
 
-# 同じコミットの回（push と手動起動の重複・再実行）だけを直列にする。ほかのコミットの回は並んで走ってよい。
-# ref ごとの直列にしないのは、GitHub の待ち枠が 1 つしかなく、古い回の再実行が来ると、待っていた
-# 最新のコミットの回が取り消されて、その版に latest が付かないまま残るため。
-# 並んで走っても正しいのは、latest の判定を、ビルドと SHA のタグの push が済んだあと・付ける直前に、
-# main を取り直して行うから（下の step「Move latest」）。
-# 走っている回は打ち切らない（cancel-in-progress: false）: push の途中で止めると、半端な状態が残りうる。
-concurrency:
-  group: build-push-server-${{ github.sha }}
-  cancel-in-progress: false
-
 env:
   IMAGE_NAME: ghcr.io/daiius/seseraki-server
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # 同じコミットの回（push と手動起動の重複・再実行）だけを直列にする。ほかのコミットのビルドは並んで走ってよい
+    # （latest を動かすのは下の job「promote」で、そちらはコミットに依らない突き合わせを、固定の group で直列に行う）。
+    # 走っている回は打ち切らない: push の途中で止めると、半端な状態が残りうる。
+    concurrency:
+      group: build-push-server-${{ github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
 
     steps:
-      # 「latest を付けるか」の判定に main の履歴が要る（祖先の判定と差分）。浅い取得にしない。
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: docker/login-action@v3
         with:
@@ -79,7 +72,7 @@ jobs:
           context: .
           file: packages/server/Dockerfile.prod
           push: true
-          # ここで push するのは `<40 桁の SHA>`（固定参照用）だけ。`latest` は、push のあとの step「Move latest」が判定して付ける。
+          # ここで push するのは `<40 桁の SHA>`（固定参照用）だけ。`latest` は、この回のあとの job「promote」が、main に突き合わせて動かす。
           tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           # checkout したままのツリーからビルドするので dirty は常に false。
           build-args: |
@@ -87,96 +80,127 @@ jobs:
             BUILD_TIME=${{ steps.buildtime.outputs.value }}
             GIT_DIRTY=false
 
-      # `latest`（本番が追いかけるタグ）は、ビルドと SHA のタグの push が済んだあとで、ここで付ける。
-      # SHA のタグで push 済みのイメージに、`docker buildx imagetools create` で latest を付ける（作り直さない）。
-      # 付けるのは、付ける直前に main を取り直して、次の全部を満たすときだけ:
-      #   1. 既定の枝（main）の回である（手動起動でほかの枝を選んだ回には付けない）
-      #   2. このコミットが、いまのリモートの main の先頭か、その祖先である（main に無いコミットには付けない）
-      #   3. このコミットから main の先頭までの間に、上の paths（ビルド対象）に効く変更が無い
-      #      ＝このイメージは main の最新と同じ中身。効く変更があれば、そのコミットの回が付ける。
-      #      （先頭だけを見ると、効く変更 A のあとに文書だけの B が入ったとき、A に付かず、B ではビルドが
-      #        起動しないので、A が本番に出ないまま残る）
-      # 判定できないとき（履歴が浅い・main を取れない・paths の一覧を読めない）は、安全側で付けない。
-      # 並んで走っても正しい理由: 古いコミットの回があとで終わっても、その時点の main に効く変更があれば 3 で付けない
-      #   （新しい版を上書きしない）。あとから入ったのが効かない変更だけなら、中身が同じなので付けてよい。
-      # 残る窓: 判定してから付けるまで（数秒）の間に、より新しいコミットの回がビルドから付与までを終えると、
-      #   この回が latest を古い版に戻しうる（ビルドに数分かかるので起きにくい）。付けたあとでもう一度判定し、
-      #   崩れていたら警告を出す（そのときは main で手動起動し直すと、最新の版に付け直せる）。
-      # 結果と理由は実行の Summary に出す。
-      # paths の照合は git の pathspec（:(glob)）で行う。`*` は `/` を越えず、末尾の `/**` は配下すべてで、
-      # 今の一覧の書き方では GitHub の paths フィルタと同じ範囲になる（`?`・`+`・`!`・`{}` などは使わないこと）。
-      - name: Move latest
+  # `latest`（本番が追いかけるタグ）を動かす job。ビルドと SHA のタグの push が済んだ回のあとに走る。
+  # この job は「この回のコミット」ではなく、その時点の main から latest が指すべき版を求めて、突き合わせる:
+  #   1. main を取り直し、main の先頭の workflow の印の間から paths の一覧を読む
+  #   2. main の first-parent の履歴で paths に当たる最後のコミット T を求める（merge commit なら、それ自身が T）
+  #   3. T の SHA のタグのイメージがあれば、それに latest を向ける。T から main の先頭までのコミットは
+  #      ビルドの入力が T と同じなので、T のイメージが無く、それらのイメージがあれば（効く変更と文書を 1 回で
+  #      push したときは、先頭のコミットでしかビルドされない）、新しいものに向ける
+  #   4. どれのイメージも無ければ（T のビルドがまだ終わっていない・失敗した）何もしない。T の回が終われば、その回が付ける。
+  #      T のビルドが失敗していれば、T の回を再実行すれば付く（Summary に出る）
+  #   どの回のこの job も同じ突き合わせをするので、古い回の再実行でも latest は戻らず、待っていた回が
+  #   取り消されても害が無い（生き残った回が、より新しい main で同じ突き合わせをする）。
+  # 固定の group で直列にする（判定と付与の間に、別の回の付与が割り込まない）。走っている回は打ち切らない。
+  # main 以外の枝の回では走らせない（突き合わせるだけなので害は無いが、枝の回が latest に触れないと分かる方がよい）。
+  # 突き合わせられないとき（main を取れない・履歴が浅い・paths の一覧を読めない・レジストリを確かめられない）は、
+  # latest を動かさずに失敗で終える。結果と理由は実行の Summary に出す。
+  promote:
+    needs: build-and-push
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: build-push-server-promote
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # main の履歴（paths に当たる最後のコミット）を求めるので、浅い取得にしない。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point latest at the build that main should run
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           WORKFLOW_FILE: .github/workflows/build-push-server.yml
           IMAGE: ${{ env.IMAGE_NAME }}
-          BUILT_TAG: ${{ github.sha }}
+          TAG_PREFIX: ''
         run: |
           # Actions の bash は -e -o pipefail で動く。失敗を判定に使うコマンドは if / || で受ける。
           set -u
-          # judge: verdict（true / false）と reason を決める。exit しない（付けたあとにもう一度呼ぶ）。
-          judge() {
-            verdict=false
-            if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
-              reason="既定の枝（$DEFAULT_BRANCH）の回ではない（$GITHUB_REF）"; return
-            fi
-            # paths の一覧を、このコミットの workflow の印の間から読む。
-            if [ "$(grep -c '^ *# >>> server-paths$' "$WORKFLOW_FILE")" != 1 ] ||
-               [ "$(grep -c '^ *# <<< server-paths$' "$WORKFLOW_FILE")" != 1 ]; then
-              reason="paths の一覧の印（server-paths）が見つからない"; return
-            fi
-            specs=()
-            while IFS= read -r line; do
-              t="${line#"${line%%[![:space:]]*}"}"
-              case "$t" in
-                ''|'#'*) ;;
-                '- '*) specs+=(":(glob)${t#- }") ;;
-                *) reason="paths の一覧に読めない行がある: $t"; return ;;
-              esac
-            done < <(sed -n '/^ *# >>> server-paths$/,/^ *# <<< server-paths$/p' "$WORKFLOW_FILE")
-            if [ "${#specs[@]}" -eq 0 ]; then
-              reason="paths の一覧が空"; return
-            fi
-            if ! git fetch --quiet --no-tags origin "refs/heads/$DEFAULT_BRANCH"; then
-              reason="リモートの $DEFAULT_BRANCH を取得できない"; return
-            fi
-            if [ "$(git rev-parse --is-shallow-repository)" != false ]; then
-              reason="履歴が浅く、祖先と差分を判定できない"; return
-            fi
-            if ! head=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'); then
-              reason="リモートの $DEFAULT_BRANCH の先頭を読めない"; return
-            fi
-            if [ "$head" = "$GITHUB_SHA" ]; then
-              verdict=true reason="$DEFAULT_BRANCH の先頭"; return
-            fi
-            rc=0
-            git merge-base --is-ancestor "$GITHUB_SHA" "$head" || rc=$?
-            case $rc in
-              0) ;;
-              1) reason="$DEFAULT_BRANCH の先頭（$head）の祖先ではない"; return ;;
-              *) reason="$DEFAULT_BRANCH の先頭（$head）との祖先の判定に失敗した"; return ;;
-            esac
-            if ! changed=$(git diff --name-only "$GITHUB_SHA" "$head" -- "${specs[@]}"); then
-              reason="$DEFAULT_BRANCH の先頭（$head）との差分を取れない"; return
-            fi
-            if [ -n "$changed" ]; then
-              n=$(printf '%s\n' "$changed" | wc -l)
-              reason="あとのコミットにビルド対象の変更がある（${n} 件。例: $(printf '%s\n' "$changed" | head -n 1)。その回が付ける）"; return
-            fi
-            verdict=true reason="$DEFAULT_BRANCH は先（$head）へ進んだが、間にビルド対象の変更が無い"
+          note() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          fail() { note "latest を動かさない（失敗）: $1"; exit 1; }
+          errf=$(mktemp)
+          # inspect <参照>: 標準出力にダイジェスト。終了コードは 0 = ある・1 = 無い・2 = 確かめられない（レジストリの不調など）。
+          # 「無い」は、エラーの文に not found / manifest unknown があるときだけとみなす。それ以外は「確かめられない」。
+          # 取り違えても安全側: 本当は無いのに「確かめられない」なら失敗で終わるだけ、本当は不調なのに「無い」なら動かさないだけ。
+          inspect() {
+            local out rc=0
+            out=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1" 2>"$errf") || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+            if grep -qiE 'not found|manifest unknown' "$errf"; then return 1; fi
+            cat "$errf" >&2
+            return 2
           }
-          note() { echo "$1（${GITHUB_SHA}）" | tee -a "$GITHUB_STEP_SUMMARY"; }
 
-          judge
-          if [ "$verdict" != true ]; then
-            note "latest を付けない: $reason"
+          if ! git fetch --quiet --no-tags origin "refs/heads/$DEFAULT_BRANCH"; then
+            fail "リモートの $DEFAULT_BRANCH を取得できない"
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" != false ]; then
+            fail "履歴が浅く、paths に当たる最後のコミットを求められない"
+          fi
+          if ! head=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'); then
+            fail "リモートの $DEFAULT_BRANCH の先頭を読めない"
+          fi
+          # paths の一覧を、main の先頭の workflow の印の間から読む。
+          if ! wf=$(git show "$head:$WORKFLOW_FILE"); then
+            fail "main の先頭に $WORKFLOW_FILE が無い"
+          fi
+          if [ "$(grep -c '^ *# >>> server-paths$' <<<"$wf")" != 1 ] ||
+             [ "$(grep -c '^ *# <<< server-paths$' <<<"$wf")" != 1 ]; then
+            fail "main の先頭の paths の一覧の印（server-paths）が見つからない"
+          fi
+          specs=()
+          while IFS= read -r line; do
+            t="${line#"${line%%[![:space:]]*}"}"
+            case "$t" in
+              ''|'#'*) ;;
+              '- '*) specs+=(":(glob)${t#- }") ;;
+              *) fail "paths の一覧に読めない行がある: $t" ;;
+            esac
+          done < <(sed -n '/^ *# >>> server-paths$/,/^ *# <<< server-paths$/p' <<<"$wf")
+          if [ "${#specs[@]}" -eq 0 ]; then
+            fail "paths の一覧が空"
+          fi
+          # first-parent の履歴で見る（merge commit を、マージした枝のコミットに置き換えない）。
+          if ! T=$(git log -1 --first-parent --format=%H "$head" -- "${specs[@]}") || [ -z "$T" ]; then
+            fail "main で paths に当たる最後のコミットを求められない"
+          fi
+          # 候補: T、続いて T から先頭までのコミット（新しい順。入力は T と同じ）。多すぎるときは打ち切る。
+          mapfile -t newer < <(git rev-list --first-parent --max-count=30 "$T..$head")
+          cands=("$T" "${newer[@]}")
+
+          src='' src_digest=''
+          for x in "${cands[@]}"; do
+            rc=0
+            d=$(inspect "$IMAGE:$TAG_PREFIX$x") || rc=$?
+            case $rc in
+              0) src=$x src_digest=$d; break ;;
+              1) ;;
+              *) fail "レジストリで $IMAGE:$TAG_PREFIX$x を確かめられない" ;;
+            esac
+          done
+          if [ -z "$src" ]; then
+            note "latest を動かさない: 指すべき版 T（$T）のイメージがまだ無い（ビルド中か、失敗した）。T の回が終われば付く。失敗していれば T の回を再実行する"
             exit 0
           fi
-          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$BUILT_TAG"
-          note "latest を付けた: $reason"
-          # 付けたあとでもう一度判定する（上の「残る窓」）。
-          judge
-          if [ "$verdict" != true ]; then
-            echo "::warning::latest を付けたあとで main が進み、この版は最新と同じ中身ではなくなった: $reason"
-            note "⚠ 付けたあとの再判定で崩れた: $reason。新しいコミットの回が付けていなければ、main で手動起動し直す"
+          rc=0
+          cur=$(inspect "$IMAGE:latest") || rc=$?
+          case $rc in
+            0|1) ;;
+            *) fail "レジストリで $IMAGE:latest を確かめられない" ;;
+          esac
+          if [ "$rc" -eq 0 ] && [ "$cur" = "$src_digest" ]; then
+            note "latest はもう指すべき版を指している: $src（T=$T）"
+            exit 0
           fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$TAG_PREFIX$src"
+          note "latest を動かした: $src（T=$T・main の先頭 $head）"

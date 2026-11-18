@@ -176,15 +176,10 @@ jobs:
           fi
           # 候補: T から先頭までの first-parent のコミット全部（入力は T と同じ）。打ち切らない（打ち切ると、
           # イメージのあるコミットが範囲の外に出たとき、成功したビルドが配信されない）。
-          # 調べる順: T → この回のコミット（範囲にあれば。いちばんありそうな候補）→ 残りを新しい方から。
+          # 調べる順は回に依らない: T → 残りを新しい方から（どの回が走っても、同じ main と同じレジストリなら同じ答えになる。
+          # この回のコミットを先にすると、古い回の再実行が、より新しい同じ中身のイメージから latest を戻してしまう）。
           mapfile -t newer < <(git rev-list --first-parent "$T..$head")
-          cands=("$T")
-          for x in "${newer[@]}"; do
-            if [ "$x" = "$GITHUB_SHA" ]; then cands+=("$x"); fi
-          done
-          for x in "${newer[@]}"; do
-            if [ "$x" != "$GITHUB_SHA" ]; then cands+=("$x"); fi
-          done
+          cands=("$T" "${newer[@]}")
 
           src='' src_digest=''
           for x in "${cands[@]}"; do

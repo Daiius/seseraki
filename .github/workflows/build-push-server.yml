@@ -1,14 +1,41 @@
 name: Build and push server image
 
+# 本番の server イメージを CI でビルドして GHCR へ push する（prd/02 §5・§5.1）。
+# main への push（下の paths に当たるとき）と、手動起動（workflow_dispatch）で走る。
+# ⚠ 本番の VPS の側で `latest` の追従を有効にすると、VPS が `latest` を数分おきに見て、変わっていれば自動で入れ替える。
+#   そのあとは **main に入った server の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」・prd/02 §5.1）。
+#   マイグレーションを伴う変更は、マージの前に所有者と段取りを決める（仕組みの側に止める関所は無い）。
+# web（静的配信。pnpm deploy:web）と worker（本番ホスト上でビルド）は対象外。
+
 on:
+  push:
+    branches: [main]
+    # packages/server/Dockerfile.prod が読むものだけ（漏れると server に効く変更がビルドされず、
+    # 広すぎると関係ない変更で本番が再起動する）。
+    #   - 根の package.json / pnpm-lock.yaml / pnpm-workspace.yaml / tsconfig.json: 先頭の COPY
+    #     （server・shared の tsconfig.json は根の tsconfig.json を extends する）
+    #   - packages/{shared,server}/**: ディレクトリごとの COPY（package.json の COPY も含む）。
+    #     server の drizzle/ は最終ステージにも COPY する（migrate.js が実行時に読む SQL）。
+    #     Dockerfile.prod 自身も packages/server/ の下（esbuild.config.ts がビルドの中で照合する）
+    #   - 根の .dockerignore: ビルドの文脈に入るファイルを決める（ディレクトリごとの COPY の結果が変わりうる）
+    #   - この workflow 自身: ビルドの手順・タグ・ビルド引数
+    # 入れていないもの（COPY はされるが、server の実行物を変えない）:
+    #   packages/web/package.json・packages/worker/package.json（--frozen-lockfile のためだけ。依存を変えれば
+    #   pnpm-lock.yaml が変わる）。
+    # ⚠ 下の印の間は、latest を動かす job「promote」も（main の先頭のこのファイルから）読む（一覧はここ 1 か所だけ）。
+    #   形は「- <パス>」を 1 行ずつ。印を消したり、ほかの形の行を挟むと、その job は latest を動かさずに失敗で止まる。
+    paths:
+      # >>> server-paths
+      - packages/server/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.json
+      - .dockerignore
+      - .github/workflows/build-push-server.yml
+      # <<< server-paths
   workflow_dispatch:
-  # TODO: staging 環境導入時に push トリガーを有効化
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - packages/server/**
-  #     - package.json
-  #     - pnpm-lock.yaml
 
 env:
   IMAGE_NAME: ghcr.io/daiius/seseraki-server
@@ -16,6 +43,12 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # 同じコミットの回（push と手動起動の重複・再実行）だけを直列にする。ほかのコミットのビルドは並んで走ってよい
+    # （latest を動かすのは下の job「promote」で、そちらはコミットに依らない突き合わせを、固定の group で直列に行う）。
+    # 走っている回は打ち切らない: push の途中で止めると、半端な状態が残りうる。
+    concurrency:
+      group: build-push-server-${{ github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -39,11 +72,138 @@ jobs:
           context: .
           file: packages/server/Dockerfile.prod
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # ここで push するのは `<40 桁の SHA>`（固定参照用）だけ。`latest` は、この回のあとの job「promote」が、main に突き合わせて動かす。
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
           # checkout したままのツリーからビルドするので dirty は常に false。
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             BUILD_TIME=${{ steps.buildtime.outputs.value }}
             GIT_DIRTY=false
+
+  # `latest`（本番が追いかけるタグ）を動かす job。ビルドと SHA のタグの push が済んだ回のあとに走る。
+  # この job は「この回のコミット」ではなく、その時点の main から latest が指すべき版を求めて、突き合わせる:
+  #   1. main を取り直し、main の先頭の workflow の印の間から paths の一覧を読む
+  #   2. main の first-parent の履歴で paths に当たる最後のコミット T を求める（merge commit なら、それ自身が T）
+  #   3. T の SHA のタグのイメージがあれば、それに latest を向ける。T から main の先頭までのコミットは
+  #      ビルドの入力が T と同じなので、T のイメージが無く、それらのイメージがあれば（効く変更と文書を 1 回で
+  #      push したときは、先頭のコミットでしかビルドされない）、そのうちイメージのあるものに向ける（打ち切らずに全部を調べる）
+  #   4. どれのイメージも無ければ（T のビルドがまだ終わっていない・失敗した）何もしない。T の回が終われば、その回が付ける。
+  #      T のビルドが失敗していれば、T の回を再実行すれば付く（Summary に出る）
+  #   どの回のこの job も同じ突き合わせをするので、古い回の再実行でも latest は戻らず、待っていた回が
+  #   取り消されても害が無い（生き残った回が、より新しい main で同じ突き合わせをする）。
+  # 固定の group で直列にする（判定と付与の間に、別の回の付与が割り込まない）。走っている回は打ち切らない。
+  # main 以外の枝の回では走らせない（突き合わせるだけなので害は無いが、枝の回が latest に触れないと分かる方がよい）。
+  # 突き合わせられないとき（main を取れない・履歴が浅い・paths の一覧を読めない・レジストリを確かめられない）は、
+  # latest を動かさずに失敗で終える。結果と理由は実行の Summary に出す。
+  promote:
+    needs: build-and-push
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: build-push-server-promote
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # main の履歴（paths に当たる最後のコミット）を求めるので、浅い取得にしない。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point latest at the build that main should run
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_FILE: .github/workflows/build-push-server.yml
+          IMAGE: ${{ env.IMAGE_NAME }}
+          TAG_PREFIX: ''
+        run: |
+          # Actions の bash は -e -o pipefail で動く。失敗を判定に使うコマンドは if / || で受ける。
+          set -u
+          note() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          fail() { note "latest を動かさない（失敗）: $1"; exit 1; }
+          errf=$(mktemp)
+          # inspect <参照>: 標準出力にダイジェスト。終了コードは 0 = ある・1 = 無い・2 = 確かめられない（レジストリの不調など）。
+          # 「無い」は、エラーの文に not found / manifest unknown があるときだけとみなす。それ以外は「確かめられない」。
+          # 取り違えても安全側: 本当は無いのに「確かめられない」なら失敗で終わるだけ、本当は不調なのに「無い」なら動かさないだけ。
+          inspect() {
+            local out rc=0
+            out=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1" 2>"$errf") || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+            if grep -qiE 'not found|manifest unknown' "$errf"; then return 1; fi
+            cat "$errf" >&2
+            return 2
+          }
+
+          if ! git fetch --quiet --no-tags origin "refs/heads/$DEFAULT_BRANCH"; then
+            fail "リモートの $DEFAULT_BRANCH を取得できない"
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" != false ]; then
+            fail "履歴が浅く、paths に当たる最後のコミットを求められない"
+          fi
+          if ! head=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'); then
+            fail "リモートの $DEFAULT_BRANCH の先頭を読めない"
+          fi
+          # paths の一覧を、main の先頭の workflow の印の間から読む。
+          if ! wf=$(git show "$head:$WORKFLOW_FILE"); then
+            fail "main の先頭に $WORKFLOW_FILE が無い"
+          fi
+          if [ "$(grep -c '^ *# >>> server-paths$' <<<"$wf")" != 1 ] ||
+             [ "$(grep -c '^ *# <<< server-paths$' <<<"$wf")" != 1 ]; then
+            fail "main の先頭の paths の一覧の印（server-paths）が見つからない"
+          fi
+          specs=()
+          while IFS= read -r line; do
+            t="${line#"${line%%[![:space:]]*}"}"
+            case "$t" in
+              ''|'#'*) ;;
+              '- '*) specs+=(":(glob)${t#- }") ;;
+              *) fail "paths の一覧に読めない行がある: $t" ;;
+            esac
+          done < <(sed -n '/^ *# >>> server-paths$/,/^ *# <<< server-paths$/p' <<<"$wf")
+          if [ "${#specs[@]}" -eq 0 ]; then
+            fail "paths の一覧が空"
+          fi
+          # first-parent の履歴で見る（merge commit を、マージした枝のコミットに置き換えない）。
+          if ! T=$(git log -1 --first-parent --format=%H "$head" -- "${specs[@]}") || [ -z "$T" ]; then
+            fail "main で paths に当たる最後のコミットを求められない"
+          fi
+          # 候補: T から先頭までの first-parent のコミット全部（入力は T と同じ）。打ち切らない（打ち切ると、
+          # イメージのあるコミットが範囲の外に出たとき、成功したビルドが配信されない）。
+          # 調べる順は回に依らない: T → 残りを新しい方から（どの回が走っても、同じ main と同じレジストリなら同じ答えになる。
+          # この回のコミットを先にすると、古い回の再実行が、より新しい同じ中身のイメージから latest を戻してしまう）。
+          mapfile -t newer < <(git rev-list --first-parent "$T..$head")
+          cands=("$T" "${newer[@]}")
+
+          src='' src_digest=''
+          for x in "${cands[@]}"; do
+            rc=0
+            d=$(inspect "$IMAGE:$TAG_PREFIX$x") || rc=$?
+            case $rc in
+              0) src=$x src_digest=$d; break ;;
+              1) ;;
+              *) fail "レジストリで $IMAGE:$TAG_PREFIX$x を確かめられない" ;;
+            esac
+          done
+          if [ -z "$src" ]; then
+            note "latest を動かさない: 指すべき版 T（$T）のイメージがまだ無い（ビルド中か、失敗した）。T の回が終われば付く。失敗していれば T の回を再実行する"
+            exit 0
+          fi
+          rc=0
+          cur=$(inspect "$IMAGE:latest") || rc=$?
+          case $rc in
+            0|1) ;;
+            *) fail "レジストリで $IMAGE:latest を確かめられない" ;;
+          esac
+          if [ "$rc" -eq 0 ] && [ "$cur" = "$src_digest" ]; then
+            note "latest はもう指すべき版を指している: $src（T=$T）"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$TAG_PREFIX$src"
+          note "latest を動かした: $src（T=$T・main の先頭 $head）"

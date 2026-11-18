@@ -173,6 +173,47 @@
   ローカル限定の運用メモは gitignore 対象の `.claude-personal/` に置き、「存在すれば参照」する
   （[README](./README.md) §公開リポジトリでの秘匿方針）。
 
+### 5.1 server は main に入ると本番に出る（タグの追従。2026-11-18 決定）
+
+**状態: workflow は実装済み・本番の追従は未有効（2026-11-18 時点）。** 今は main への push で server のイメージがビルドされ、
+`latest` が動くところまで。VPS の側で追従が有効になると、以下の流れで本番に出る（有効になったら、この行を日付つきで書き換える）。
+
+**追従が有効になったあとは、main にマージされた server の変更は、数分で本番に出る。**
+
+- 流れ: main への push → [`build-push-server.yml`](../.github/workflows/build-push-server.yml) が
+  イメージをビルドして `<40 桁の SHA>` で push し、そのあとの job が main に突き合わせて `latest` を動かす → 本番の VPS がレジストリの `latest` を数分おきに見て、
+  変わっていれば入れ替える → VPS の側で疎通と版（`/api/version` の `commit` がイメージの `GIT_COMMIT` と一致するか）を
+  確かめ、駄目なら前のイメージに自動で戻す。動いているが挙動がおかしいときは、所有者が VPS で手で戻す（エージェントは VPS に触らない）。
+  デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
+- ビルドが走るのは、`packages/server/Dockerfile.prod` が読むものに触れた push だけ（workflow の `paths`。
+  `packages/server/**`・`packages/shared/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json` / `.dockerignore`・workflow 自身）。
+  文書や web・worker・kifu-vision・deploy-static・engine-wasm だけの変更では、本番は入れ替わらない。
+  `packages/web/package.json`・`packages/worker/package.json` は Dockerfile が COPY するが入れていない（`--frozen-lockfile` のためだけ。依存を変えれば `pnpm-lock.yaml` が変わる）。
+- `latest` は、ビルドの job とは別の job「promote」が動かす。この job は**その回のコミットに依らず、その時点の main に突き合わせる**:
+  - main を取り直し、main の先頭の workflow から `paths` の一覧を読み、main の first-parent の履歴で `paths` に当たる最後のコミット T を求める
+    （merge commit なら、それ自身が T）。`latest` のイメージの `GIT_COMMIT` は、ふつう T（ビルドの入力が変わった最後のコミット）になる
+  - T の SHA のタグのイメージがあれば、`latest` をそれに向ける（push 済みのイメージにあとから付ける。作り直さない。既に同じなら何もしない）。
+    効く変更と文書を 1 回で push したときは先頭のコミットでしかビルドされないので、T のイメージが無ければ、T から先頭までのコミット
+    （入力は T と同じ）のうちイメージのあるものに向ける（打ち切らずに全部を調べる。調べる順は回に依らず新しい方からで、どの回の job も同じ答えになる）
+  - どのイメージも無ければ（T のビルドがまだ終わっていない・失敗した）何もしない。T の回が終われば、その回の job が付ける。
+    T のビルドが失敗していれば `latest` は前の版のままで、Summary に「T のイメージがまだ無い」と出る。T の回を再実行すれば付く
+  - 突き合わせられないとき（main を取れない・履歴が浅い・`paths` の一覧を読めない・レジストリを確かめられない）は、動かさずに失敗で終わる
+  - この job は固定の group で直列に走る（判定と付与の間に、別の回の付与が割り込まない）。どの回のこの job も同じ突き合わせをするので、
+    古い回の再実行でも `latest` は戻らず、待っていた回が取り消されても、生き残った回がより新しい main で同じ突き合わせをする。
+    ビルドの job は並んで走ってよい（同じコミットの重複だけ直列）。main 以外の枝の回では、この job は走らない
+  - `paths` の一覧は workflow の起動条件の 1 か所だけにあり、job「promote」は main の先頭のそれを読む
+- 🔒 **順序を守るのは、マージする人とエージェント。** 仕組みの側にマイグレーションで止める関所は無い（所有者の方針。2026-11-18）。
+  - マイグレーション・環境変数の追加・デプロイ前後の手作業（後処理の一括処理など）を伴う PR は、マージの前に所有者と段取りを決める。
+    エージェントは勝手にマージしない。seseraki で具体的に何が当たるかは [AGENTS.md](../AGENTS.md) の冒頭の節。
+  - マイグレーションは**古い server でも動く形（足すだけ）**にし、**先に本番へ流してからマージする**。
+    同梱の `migrate.js` を管理用のサービスで流すには（[15](./15-postgres.md) §2）、そのマイグレーションを含むイメージが先に要る。
+    PR の枝で workflow を手動起動すれば、`latest` を動かさずに `<40 桁の SHA>` のイメージができる。どう流すかは所有者と決める。
+  - RLS（[15](./15-postgres.md) §2.1）のように古い server と両立しない変更は、「先に流してからマージ」が成り立たない。
+  - ⚠ 切り戻しで server を戻しても、スキーマは戻らない。戻した server が新しいスキーマで動けることが前提になる。
+- server だけが自動で出て、web（静的配信）と worker は今までどおり手で出す。server と web・worker の口を変える変更は、出る時刻がずれる。
+- 「実装済み（本番は未反映）」の書き分け: server の変更については、追従が有効になると「main に入れた ＝ 数分で本番に出た」になる。
+  この書き方は main に入れていない間だけのものになる（既存の記述は、有効にするときに所有者が確かめる）。
+
 ## 6. 開発環境（docker compose watch）
 
 `pnpm dev`（`docker compose up --build --watch`）で全サービスを起動する。

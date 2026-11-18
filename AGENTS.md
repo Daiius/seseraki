@@ -3,6 +3,38 @@
 > このファイルがリポジトリの**正典**です（使用する各コーディングエージェント共通）。簡潔・リンク中心に保つこと。
 > 詳細仕様は [`prd/`](./prd/) を参照。
 
+## ⚠ main に入ると server は数分で本番に出る（マージの前に必ず読む）
+
+> **状態: workflow は実装済み・本番の追従は未有効（2026-11-18 時点）。** 今は「main に入ると server のイメージが自動でビルドされ、`latest` が動く」ところまで。
+> 下の決まりは、追従が有効になった前提で書いてある（有効になったら、この行を有効にした日付に書き換える）。
+
+- **server は、main にマージされると数分で本番に出る。** main への push で server のイメージがビルドされ
+  （[`build-push-server.yml`](./.github/workflows/build-push-server.yml)。`paths` に当たる変更のとき。`packages/server`・`packages/shared`・根の依存の定義）、
+  本番の VPS がレジストリの `latest` を数分おきに見て、変わっていれば自動で入れ替える。
+  **「マージしても本番には出ない」と考えない。** 出したくない変更は main に入れない。
+  - そのため、server の変更について「実装済み（本番は未反映）」と書けるのは、**main に入れていない間だけ**になる。
+    今ある「本番は未反映」の記述（追従を有効にする前に書いたもの）は、有効にした時点で main の server の分が本番に出るので、意味が変わる（書き換えは所有者が確かめてから）。
+- 対象は server だけ。**web（静的配信。`pnpm deploy:web`）と worker（解析用のホストでビルド）は対象外**で、今までどおり所有者が手で出す。
+  server だけが先に出るので、web・worker との口（Hono RPC の形・worker の報告の形）を変える PR は、古い web・worker でも動く形にするか、出す順を所有者と決める。
+- 🔒 **次の PR は、マージの前に所有者と段取りを決める。エージェントは勝手にマージしない。**
+  - **マイグレーション**（`packages/server/src/db/schema.ts` の変更と `packages/server/drizzle/` の追加）を伴う。
+    本番は、イメージ同梱の `migrate.js` を、管理ロールの資格情報を持つ**管理用のサービス**で人が流す（下の「本番イメージ同梱のエントリ」・[prd/15](./prd/15-postgres.md) §2）。
+    マイグレーションは**古い server でも動く形（足すだけ）**にし、**先に本番へ流してからマージする**（main に入った瞬間に新しい server が先に出るため）。
+  - **古い server と両立しないマイグレーション**。例: RLS（`owner_scope_rls`）は、流した瞬間から古い server が何も読み書きできなくなり、
+    system ロールを先に作る・流した後すぐ入れ替える、という順序があった（[prd/15](./prd/15-postgres.md) §2.1）。この種類は「先に流してからマージ」が成り立たないので、必ず所有者と段取りを決める。
+  - **マイグレーションの直後に 1 回だけ流す後処理**を伴う。表を作るマイグレーションの後の `rebuild-positions.js`（`kifu_positions`）・`generate-drills.js`（`drills`）。
+    流すまで局面検索が 404・出題が 0 問になる（下の「本番イメージ同梱のエントリ」）。
+  - **入れ替えた後に一括処理が要る**変更。局面のハッシュ（`shared` の `position-hash.ts`）を変えたら `rebuild-positions.js`（流すまで局面検索が黙って空になる）、
+    戦型の判定を変えたら `redetect-tactics.js`、主体の導出規則を変えたら `rebuild-subjects.js`、出題の抽出規則を変えたら `generate-drills.js`。
+    `shared` だけの変更でも server が作り直されて出ることに注意する。
+  - **環境変数の追加・変更**を伴う（本番の env は所有者が置く。`DB_SYSTEM_*` のように、無いと server が起動しないものもある）。
+- 「先に本番へ流す」には、そのマイグレーションを含むイメージが要る。PR の枝で workflow を手動起動すれば、`latest` を動かさずに
+  `<40 桁の SHA>` のタグのイメージができる（`latest` は main の最新と同じ中身のときだけ付く）。これを管理用のサービスで流すのが手段の 1 つだが、どう流すかは所有者と決める。
+- 切り戻しで server を戻しても、スキーマは戻らない。戻した server が新しいスキーマの上で動けることが前提になる（RLS のように前の server が動けない変更は、[prd/15](./prd/15-postgres.md) §2.1 の切り戻しのような手当てが要る）。
+- 本番の server の版は `GET /api/version` の `commit` で確かめる（設定ページの隅にも出る。[prd/02](./prd/02-architecture.md) §5「版の確かめ方」）。
+  **おかしいときの戻し方（VPS での切り戻し）は所有者の作業。エージェントは VPS に触らない。**
+- 詳細は [prd/02](./prd/02-architecture.md) §5.1。デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
+
 ## プロジェクト目的
 
 将棋の棋譜を取り込み・エンジン解析し、疑問手 / 分岐 / 評価値推移を閲覧できる**個人用**の棋譜解析サービス。
@@ -15,7 +47,7 @@
 |---|---|
 | [prd/README.md](./prd/README.md) | 目的 / スコープ / アーキ概観 / 索引 / 公開リポ方針 |
 | [prd/01-domain.md](./prd/01-domain.md) | 将棋棋譜ドメインとプロダクト動機（KIF/USI・対局メタ・解析の意味・戦型ラベル（3 層の判定・銀の戦法）） |
-| [prd/02-architecture.md](./prd/02-architecture.md) | 技術スタック / monorepo / 型・ロジック共有 / 開発環境 / デプロイ姿勢 |
+| [prd/02-architecture.md](./prd/02-architecture.md) | 技術スタック / monorepo / 型・ロジック共有 / 開発環境 / デプロイ姿勢（server は main で自動。§5.1。本番の追従は未有効） |
 | [prd/03-data-model.md](./prd/03-data-model.md) | DB スキーマ（kifus / moveAnalyses / candidateMoves / commentaries） |
 | [prd/04-ingestion.md](./prd/04-ingestion.md) | 投入ルート / KIF→USI 変換 / メタ抽出（swars 一括取り込みは撤去済み） |
 | [prd/05-analysis.md](./prd/05-analysis.md) | worker エンジン解析 / Web 可視化 |

@@ -73,7 +73,7 @@
 ## 文書索引
 
 1. [01-domain.md](./01-domain.md) — 将棋棋譜ドメインとプロダクト動機（KIF/USI・対局メタ・解析の意味）
-2. [02-architecture.md](./02-architecture.md) — 技術スタック / monorepo / 型共有 / 開発環境 / デプロイ姿勢
+2. [02-architecture.md](./02-architecture.md) — 技術スタック / monorepo / 型共有 / 開発環境 / デプロイ姿勢（server は main で自動。§5.1）
 3. [03-data-model.md](./03-data-model.md) — DB スキーマ（kifus / moveAnalyses / candidateMoves）
 4. [04-ingestion.md](./04-ingestion.md) — 投入ルート / KIF→USI 変換 / メタ抽出（swars 一括取り込みは撤去済み）
 5. [05-analysis.md](./05-analysis.md) — worker エンジン解析 / Web 可視化（盤面・評価値・候補手・悪手判定）

@@ -86,7 +86,7 @@ jobs:
   #   2. main の first-parent の履歴で paths に当たる最後のコミット T を求める（merge commit なら、それ自身が T）
   #   3. T の SHA のタグのイメージがあれば、それに latest を向ける。T から main の先頭までのコミットは
   #      ビルドの入力が T と同じなので、T のイメージが無く、それらのイメージがあれば（効く変更と文書を 1 回で
-  #      push したときは、先頭のコミットでしかビルドされない）、新しいものに向ける
+  #      push したときは、先頭のコミットでしかビルドされない）、そのうちイメージのあるものに向ける（打ち切らずに全部を調べる）
   #   4. どれのイメージも無ければ（T のビルドがまだ終わっていない・失敗した）何もしない。T の回が終われば、その回が付ける。
   #      T のビルドが失敗していれば、T の回を再実行すれば付く（Summary に出る）
   #   どの回のこの job も同じ突き合わせをするので、古い回の再実行でも latest は戻らず、待っていた回が
@@ -174,9 +174,17 @@ jobs:
           if ! T=$(git log -1 --first-parent --format=%H "$head" -- "${specs[@]}") || [ -z "$T" ]; then
             fail "main で paths に当たる最後のコミットを求められない"
           fi
-          # 候補: T、続いて T から先頭までのコミット（新しい順。入力は T と同じ）。多すぎるときは打ち切る。
-          mapfile -t newer < <(git rev-list --first-parent --max-count=30 "$T..$head")
-          cands=("$T" "${newer[@]}")
+          # 候補: T から先頭までの first-parent のコミット全部（入力は T と同じ）。打ち切らない（打ち切ると、
+          # イメージのあるコミットが範囲の外に出たとき、成功したビルドが配信されない）。
+          # 調べる順: T → この回のコミット（範囲にあれば。いちばんありそうな候補）→ 残りを新しい方から。
+          mapfile -t newer < <(git rev-list --first-parent "$T..$head")
+          cands=("$T")
+          for x in "${newer[@]}"; do
+            if [ "$x" = "$GITHUB_SHA" ]; then cands+=("$x"); fi
+          done
+          for x in "${newer[@]}"; do
+            if [ "$x" != "$GITHUB_SHA" ]; then cands+=("$x"); fi
+          done
 
           src='' src_digest=''
           for x in "${cands[@]}"; do

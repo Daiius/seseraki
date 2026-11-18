@@ -1,14 +1,47 @@
 name: Build and push server image
 
+# 本番の server イメージを CI でビルドして GHCR へ push する（prd/02 §5・§5.1）。
+# main への push（下の paths に当たるとき）と、手動起動（workflow_dispatch）で走る。
+# ⚠ 本番の VPS の側で `latest` の追従を有効にすると、VPS が `latest` を数分おきに見て、変わっていれば自動で入れ替える。
+#   そのあとは **main に入った server の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」・prd/02 §5.1）。
+#   マイグレーションを伴う変更は、マージの前に所有者と段取りを決める（仕組みの側に止める関所は無い）。
+# web（静的配信。pnpm deploy:web）と worker（本番ホスト上でビルド）は対象外。
+
 on:
+  push:
+    branches: [main]
+    # packages/server/Dockerfile.prod が読むものだけ（漏れると server に効く変更がビルドされず、
+    # 広すぎると関係ない変更で本番が再起動する）。
+    #   - 根の package.json / pnpm-lock.yaml / pnpm-workspace.yaml / tsconfig.json: 先頭の COPY
+    #     （server・shared の tsconfig.json は根の tsconfig.json を extends する）
+    #   - packages/{shared,server}/**: ディレクトリごとの COPY（package.json の COPY も含む）。
+    #     server の drizzle/ は最終ステージにも COPY する（migrate.js が実行時に読む SQL）。
+    #     Dockerfile.prod 自身も packages/server/ の下（esbuild.config.ts がビルドの中で照合する）
+    #   - この workflow 自身: ビルドの手順・タグ・ビルド引数
+    # 入れていないもの（COPY はされるが、server の実行物を変えない）:
+    #   packages/web/package.json・packages/worker/package.json（--frozen-lockfile のためだけ。依存を変えれば
+    #   pnpm-lock.yaml が変わる）、.dockerignore（COPY は明示のパスだけ）。
+    # ⚠ 下の印の間は「latest を付けるか」の step もこのファイルから読む（一覧はここ 1 か所だけ）。
+    #   形は「- <パス>」を 1 行ずつ。印を消したり、ほかの形の行を挟むと、その step は latest を付けずに止まる。
+    paths:
+      # >>> server-paths
+      - packages/server/**
+      - packages/shared/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.json
+      - .github/workflows/build-push-server.yml
+      # <<< server-paths
   workflow_dispatch:
-  # TODO: staging 環境導入時に push トリガーを有効化
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - packages/server/**
-  #     - package.json
-  #     - pnpm-lock.yaml
+
+# 同じ ref のビルドは直列にする（古いコミットのビルドが、あとから `latest` を上書きしないように）。
+# 待っている回は、より新しい回が来れば GitHub が取り消す（走るのは「今の 1 つ」と「最新の 1 つ」だけ）。
+# 走っている回は打ち切らない（cancel-in-progress: false）: push の途中で止めると、タグの一部だけが
+# 付け替わった半端な状態が残りうる。待っても 1 回分のビルドで済む。
+concurrency:
+  group: build-push-server-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/daiius/seseraki-server
@@ -21,13 +54,107 @@ jobs:
       packages: write
 
     steps:
+      # 「latest を付けるか」の判定に main の履歴が要る（祖先の判定と差分）。浅い取得にしない。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `latest`（本番が追いかけるタグ）を付けるのは、次の全部を満たすときだけ:
+      #   1. 既定の枝（main）の回である（手動起動でほかの枝を選んだ回には付けない）
+      #   2. このコミットが、いまのリモートの main の先頭か、その祖先である（main に無いコミットには付けない）
+      #   3. このコミットから main の先頭までの間に、上の paths（ビルド対象）に効く変更が無い
+      #      ＝このイメージは main の最新と同じ中身。効く変更があれば、そのコミットで別の回が走って付ける。
+      #      （先頭だけを見ると、server の変更 A のあとに文書だけの B が入ったとき、A に付かず、B ではビルドが
+      #        起動しないので、A が本番に出ないまま残る。古い回の再実行は 3 で弾かれ、latest は戻らない）
+      # 判定できないとき（履歴が浅い・main を取れない・paths の一覧を読めない）は、安全側で付けない。
+      # 結果と理由は実行の Summary に 1 行出す。
+      # paths の照合は git の pathspec（:(glob)）で行う。`*` は `/` を越えず、末尾の `/**` は配下すべてで、
+      # 今の一覧の書き方では GitHub の paths フィルタと同じ範囲になる（`?`・`+`・`!` などは使わないこと）。
+      - name: Decide whether to move latest
+        id: latest
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_FILE: .github/workflows/build-push-server.yml
+        run: |
+          # Actions の bash は -e -o pipefail で動く。失敗を判定に使うコマンドは if / || で受ける。
+          set -u
+          decide() {
+            echo "enable=$1" >> "$GITHUB_OUTPUT"
+            if [ "$1" = true ]; then verb="latest を付ける"; else verb="latest を付けない"; fi
+            echo "${verb}: $2（${GITHUB_SHA}）" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            decide false "既定の枝（$DEFAULT_BRANCH）の回ではない（$GITHUB_REF）"
+          fi
+
+          # paths の一覧を、このコミットの workflow の印の間から読む。
+          if [ "$(grep -c '^ *# >>> server-paths$' "$WORKFLOW_FILE")" != 1 ] ||
+             [ "$(grep -c '^ *# <<< server-paths$' "$WORKFLOW_FILE")" != 1 ]; then
+            decide false "paths の一覧の印（server-paths）が見つからない"
+          fi
+          specs=()
+          while IFS= read -r line; do
+            t="${line#"${line%%[![:space:]]*}"}"
+            case "$t" in
+              ''|'#'*) ;;
+              '- '*) specs+=(":(glob)${t#- }") ;;
+              *) decide false "paths の一覧に読めない行がある: $t" ;;
+            esac
+          done < <(sed -n '/^ *# >>> server-paths$/,/^ *# <<< server-paths$/p' "$WORKFLOW_FILE")
+          if [ "${#specs[@]}" -eq 0 ]; then
+            decide false "paths の一覧が空"
+          fi
+
+          if ! git fetch --quiet --no-tags origin "refs/heads/$DEFAULT_BRANCH"; then
+            decide false "リモートの $DEFAULT_BRANCH を取得できない"
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" != false ]; then
+            decide false "履歴が浅く、祖先と差分を判定できない"
+          fi
+          if ! head=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'); then
+            decide false "リモートの $DEFAULT_BRANCH の先頭を読めない"
+          fi
+
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            decide true "$DEFAULT_BRANCH の先頭"
+          fi
+          rc=0
+          git merge-base --is-ancestor "$GITHUB_SHA" "$head" || rc=$?
+          case $rc in
+            0) ;;
+            1) decide false "$DEFAULT_BRANCH の先頭（$head）の祖先ではない" ;;
+            *) decide false "$DEFAULT_BRANCH の先頭（$head）との祖先の判定に失敗した" ;;
+          esac
+          if ! changed=$(git diff --name-only "$GITHUB_SHA" "$head" -- "${specs[@]}"); then
+            decide false "$DEFAULT_BRANCH の先頭（$head）との差分を取れない"
+          fi
+          if [ -n "$changed" ]; then
+            n=$(printf '%s\n' "$changed" | wc -l)
+            decide false "あとのコミットにビルド対象の変更がある（${n} 件。例: $(printf '%s\n' "$changed" | head -n 1)。その回が付ける）"
+          fi
+          decide true "$DEFAULT_BRANCH は先（$head）へ進んだが、間にビルド対象の変更が無い"
+
+      # push するタグ: `<40 桁の SHA>`（固定参照用。いつも付ける）と、上の step が付けると決めたときだけ `latest`。
+      - name: Tags
+        id: tags
+        env:
+          SHA: ${{ github.sha }}
+          LATEST: ${{ steps.latest.outputs.enable }}
+        run: |
+          {
+            echo 'value<<TAGS_EOF'
+            echo "$IMAGE_NAME:$SHA"
+            if [ "$LATEST" = true ]; then echo "$IMAGE_NAME:latest"; fi
+            echo 'TAGS_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       # ビルドの版（GET /api/version が返す。prd/02 §5「版の確かめ方」）。日時は UTC。
       - name: Build time
@@ -39,9 +166,7 @@ jobs:
           context: .
           file: packages/server/Dockerfile.prod
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.value }}
           # checkout したままのツリーからビルドするので dirty は常に false。
           build-args: |
             GIT_COMMIT=${{ github.sha }}

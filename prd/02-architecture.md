@@ -181,12 +181,12 @@
 **追従が有効になったあとは、main にマージされた server の変更は、数分で本番に出る。**
 
 - 流れ: main への push → [`build-push-server.yml`](../.github/workflows/build-push-server.yml) が
-  イメージをビルドして `<40 桁の SHA>` と `latest` を付ける → 本番の VPS がレジストリの `latest` を数分おきに見て、
+  イメージをビルドして `<40 桁の SHA>` で push し、条件を満たせばそのイメージに `latest` を付ける → 本番の VPS がレジストリの `latest` を数分おきに見て、
   変わっていれば入れ替える → VPS の側で疎通と版（`/api/version` の `commit` がイメージの `GIT_COMMIT` と一致するか）を
   確かめ、駄目なら前のイメージに自動で戻す。動いているが挙動がおかしいときは、所有者が VPS で手で戻す（エージェントは VPS に触らない）。
   デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
 - ビルドが走るのは、`packages/server/Dockerfile.prod` が読むものに触れた push だけ（workflow の `paths`。
-  `packages/server/**`・`packages/shared/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json`・workflow 自身）。
+  `packages/server/**`・`packages/shared/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json` / `.dockerignore`・workflow 自身）。
   文書や web・worker・kifu-vision・deploy-static・engine-wasm だけの変更では、本番は入れ替わらない。
   `packages/web/package.json`・`packages/worker/package.json` は Dockerfile が COPY するが入れていない（`--frozen-lockfile` のためだけ。依存を変えれば `pnpm-lock.yaml` が変わる）。
 - `latest` は、**main の回で、そのコミットがいまの main の先頭か祖先であり、そこから先頭までの間に
@@ -195,8 +195,15 @@
     ビルドが起動しないので、先頭だけを条件にすると取り残される）
   - 手動起動でほかの枝を選んだ回、main に無いコミット、あとに server の変更がある古い回の再実行には付けない
     （それまでの workflow は、手動起動ならどの枝でも `latest` を付けていた）
-  - 判定できないとき（履歴が浅い・main を取れない・`paths` の一覧を読めない）は付けない。結果と理由は実行の Summary に 1 行出る
-  - `paths` の一覧は workflow の起動条件の 1 か所だけにあり、判定の step はそれを読む。同じ ref のビルドは直列に走る（`concurrency`）
+  - **判定するのは、ビルドと SHA のタグの push が済んだあと・`latest` を付ける直前**（main を取り直す。ビルドの間に main が進むことがあるため）。
+    `latest` は push 済みのイメージにあとから付ける（作り直さない）。判定できないとき（履歴が浅い・main を取れない・`paths` の一覧を読めない）は付けない。
+    結果と理由は実行の Summary に出る
+  - 回は並んで走ってよい（`concurrency` は同じコミットの重複だけを直列にする）。古いコミットの回があとで終わっても、
+    その時点の main に効く変更があれば付けないので、新しい版を上書きしない。あとから入ったのが効かない変更だけなら、中身が同じなので付けてよい。
+    ref ごとの直列にしないのは、GitHub の待ち枠が 1 つしかなく、古い回の再実行が待っていた最新の回を取り消してしまうため
+  - 残る窓: 判定してから付けるまで（数秒）の間に、より新しいコミットの回がビルドから付与までを終えると、古い版が `latest` を上書きしうる
+    （ビルドに数分かかるので起きにくい）。付けたあとでもう一度判定し、崩れていれば実行に警告が出る。そのときは main で手動起動し直す
+  - `paths` の一覧は workflow の起動条件の 1 か所だけにあり、判定の step はそれを読む
 - 🔒 **順序を守るのは、マージする人とエージェント。** 仕組みの側にマイグレーションで止める関所は無い（所有者の方針。2026-11-18）。
   - マイグレーション・環境変数の追加・デプロイ前後の手作業（後処理の一括処理など）を伴う PR は、マージの前に所有者と段取りを決める。
     エージェントは勝手にマージしない。seseraki で具体的に何が当たるかは [AGENTS.md](../AGENTS.md) の冒頭の節。

@@ -5,8 +5,7 @@
 
 ## ⚠ main に入ると server は数分で本番に出る（マージの前に必ず読む）
 
-> **状態: workflow は実装済み・本番の追従は未有効（2026-11-18 時点）。** 今は「main に入ると server のイメージが自動でビルドされ、`latest` が動く」ところまで。
-> 下の決まりは、追従が有効になった前提で書いてある（有効になったら、この行を有効にした日付に書き換える）。
+> **状態: workflow は実装済み・本番の追従は有効（2026-11-19 に有効化）。** 有効化の直後に、本番が main のイメージへ入れ替わり、版の口が main のコミットを返すことを確かめた。
 
 - **server は、main にマージされると数分で本番に出る。** main への push で server のイメージがビルドされ
   （[`build-push-server.yml`](./.github/workflows/build-push-server.yml)。`paths` に当たる変更のとき。`packages/server`・`packages/shared`・根の依存の定義）、
@@ -14,6 +13,7 @@
   **「マージしても本番には出ない」と考えない。** 出したくない変更は main に入れない。
   - そのため、server の変更について「実装済み（本番は未反映）」と書けるのは、**main に入れていない間だけ**になる。
     今ある「本番は未反映」の記述（追従を有効にする前に書いたもの）は、有効にした時点で main の server の分が本番に出るので、意味が変わる（書き換えは所有者が確かめてから）。
+    有効化の時点で、本番の server は main と同じ中身だった（server・shared に効く差分は無かった）。
 - 対象は server だけ。**web（静的配信。`pnpm deploy:web`）と worker（解析用のホストでビルド）は対象外**で、今までどおり所有者が手で出す。
   server だけが先に出るので、web・worker との口（Hono RPC の形・worker の報告の形）を変える PR は、古い web・worker でも動く形にするか、出す順を所有者と決める。
 - 🔒 **次の PR は、マージの前に所有者と段取りを決める。エージェントは勝手にマージしない。**
@@ -47,7 +47,7 @@
 |---|---|
 | [prd/README.md](./prd/README.md) | 目的 / スコープ / アーキ概観 / 索引 / 公開リポ方針 |
 | [prd/01-domain.md](./prd/01-domain.md) | 将棋棋譜ドメインとプロダクト動機（KIF/USI・対局メタ・解析の意味・戦型ラベル（3 層の判定・銀の戦法）） |
-| [prd/02-architecture.md](./prd/02-architecture.md) | 技術スタック / monorepo / 型・ロジック共有 / 開発環境 / デプロイ姿勢（server は main で自動。§5.1。本番の追従は未有効） |
+| [prd/02-architecture.md](./prd/02-architecture.md) | 技術スタック / monorepo / 型・ロジック共有 / 開発環境 / デプロイ姿勢（server は main で自動。§5.1。本番の追従は有効。2026-11-19 に有効化） |
 | [prd/03-data-model.md](./prd/03-data-model.md) | DB スキーマ（kifus / moveAnalyses / candidateMoves / commentaries） |
 | [prd/04-ingestion.md](./prd/04-ingestion.md) | 投入ルート / KIF→USI 変換 / メタ抽出（swars 一括取り込みは撤去済み） |
 | [prd/05-analysis.md](./prd/05-analysis.md) | worker エンジン解析 / Web 可視化 |

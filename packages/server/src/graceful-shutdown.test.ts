@@ -225,6 +225,39 @@ describe('installGracefulShutdown', () => {
     );
   });
 
+  it('closer を始めた後に既存の接続から届いたリクエストは、アプリに渡さず 503 で断る', async () => {
+    const closing = deferred();
+    const finish = deferred();
+    const t = await setup({
+      closerTimeoutMs: 5_000,
+      closers: [
+        {
+          name: 'db',
+          close: () => {
+            closing.resolve();
+            return finish.promise;
+          },
+        },
+      ],
+    });
+    let appCalled = false;
+    void t.started.then(() => (appCalled = true));
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    expect(await get(t.port, '/fast', agent)).toMatchObject({ status: 200 });
+
+    const done = t.shutdown('test');
+    await closing.promise;
+    expect(await get(t.port, '/held', agent)).toEqual({
+      status: 503,
+      body: 'shutting down',
+    });
+    expect(appCalled).toBe(false);
+    finish.resolve();
+    await done;
+    expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
+    agent.destroy();
+  });
+
   it('合図が 2 回来ても、手順は 1 回だけ動く', async () => {
     const closer = vi.fn();
     const t = await setup({ closers: [{ name: 'db', close: closer }] });

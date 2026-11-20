@@ -3,6 +3,7 @@
  *
  * 手順: 受け付けを止める → 処理中の応答が 0 になり、{@link SETTLE_MS} のあいだ新しく始まらないのを待つ
  * （上限 {@link SHUTDOWN_TIMEOUT_MS}）→ closer を順に閉じる → ログの書き出しを待つ → `exit`。
+ * closer を始めた後に届いたリクエストは、アプリに渡さず 503（`Retry-After: 1`）で断る。
  * 残った接続（アイドルの keep-alive など）は、プロセスの終了で OS が閉じる。
  *
  * 写すときの注意:
@@ -119,6 +120,13 @@ export function installGracefulShutdown(options: GracefulShutdownOptions): {
         ? '[shutdown] 処理中のリクエストが終わった'
         : `[shutdown] warn: ${timeoutMs}ms を過ぎたので待つのをやめた`,
     );
+    // 閉じ始めた後に既存の接続から届いたリクエストは、アプリに渡さず 503 で断る（数えない・待たない）。
+    // `upgrade` には触らない（`@hono/node-server` は websocket を渡したときだけ付ける。ここでは使っていない）
+    server.removeAllListeners('request');
+    server.on('request', (_req, res) => {
+      res.writeHead(503, { Connection: 'close', 'Retry-After': '1' });
+      res.end('shutting down');
+    });
     for (const closer of closers) {
       const result = await withTimeout(
         Promise.resolve().then(closer.close),

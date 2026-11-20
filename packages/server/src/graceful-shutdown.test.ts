@@ -137,7 +137,7 @@ describe('createGracefulShutdown', () => {
     await t.started;
     t.signal('SIGTERM');
     // 待っているあいだに届いた新しい接続のリクエストも処理される（合図の時点で受け付けを止めると ECONNREFUSED になり、
-    // 前段のプロキシでは 502 になる。infra-supra#206 のレビュー）
+    // 前段のプロキシでは 502 になる）
     expect(await get(t.port, '/fast')).toEqual({ status: 200, body: 'fast' });
     expect(order).toEqual([]);
 

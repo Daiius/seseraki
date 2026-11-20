@@ -137,6 +137,9 @@ pnpm deploy:web             # web をビルドして配信ディレクトリへ�
 pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビルドし、評価関数を取得して packages/engine-wasm/dist/engine に揃える（Docker が要る・冪等。`pnpm build` からは走らない。個別・`--check` は packages/engine-wasm/README.md）
 ```
 
+> **CI**（[`ci.yml`](./.github/workflows/ci.yml)。PR と main への push・チェック名 `check`）は `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm -r test` → `pnpm build` を流す。
+> エンジンのビルド（Docker）と `test:db`（Postgres）は流さない。`pnpm-workspace.yaml` の `minimumReleaseAge` により、公開から 3 日未満の版は lockfile に入れられない。
+
 > **DB は Postgres 18**（[prd/15](./prd/15-postgres.md)）。日時は `timestamptz` で、接続の時刻帯に依存しない。
 > **ロールを 3 つに分ける**: 管理ロール（DDL。`migrate.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）・
 > server ロール（DML のみ・RLS が効く。常駐の server のログインの経路。`DB_USER` / `DB_PASSWORD`）・system ロール（下記）。dev は

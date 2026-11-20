@@ -1,0 +1,52 @@
+name: CI
+
+# PR と main への push で、型検査・テスト・ビルドを流す（マージの条件にするチェック「check」）。
+# 必須のチェックにするので paths では絞らない（絞ると、当たらない PR でチェックが来ずにマージできなくなる）。
+# 外しているもの（どれも Node だけでは流せない・外部のものが要る）:
+#   - engine-wasm のエンジンのビルド（pnpm engine:build）: Docker と上流の取得が要る。成果物はコミットしていないので、
+#     engine-wasm の統合テストは成果物が無いとして skip になり、web のビルドもエンジンを含めずに作る（ENGINE_REQUIRED は立てない）
+#   - server の実 DB テスト（test:db）: Postgres が要る
+#   - lint: scripts に無い（prettier は手元の整形だけ）
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# 同じ PR の古い実行だけを止める。main への push はコミットごとの group にして、打ち切らない。
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # server のイメージ（packages/server/Dockerfile.prod）と同じ Node 24 + corepack。pnpm の版は package.json の packageManager に従う。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      # pnpm-workspace.yaml の minimumReleaseAge（公開から 3 日未満の版を入れない）も、ここで lockfile に対して確かめられる。
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Build
+        run: pnpm build

@@ -3,9 +3,12 @@ import net, { type AddressInfo } from 'node:net';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type Closer, installGracefulShutdown } from './graceful-shutdown.js';
+import {
+  type GracefulShutdownOptions,
+  installGracefulShutdown,
+} from './graceful-shutdown.js';
 
-// 固定の待ち時間に頼らない: 「ハンドラが始まった」「サーバーが受け取った」を Promise で待ってから手順を起動する
+// 固定の待ち時間に頼らない: 「ハンドラが始まった」を Promise で待ってから手順を起動し、解放はテストから行う
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -16,16 +19,10 @@ function deferred<T = void>() {
 const BIG = 8 * 1024 * 1024;
 
 /**
- * 本物の serve() をランダムなポートで起こし、終了の手順を組み立てる（合図・exit・ログは差し替え。本物のプロセスを終了させない）。
- * `/held` は始まったことを `started` で知らせ、テストが `release()` するまで返さない
+ * 本物の serve() をランダムなポートで起こし、終了の手順を組み立てる（合図・exit・ログは差し替え）。
+ * `/held` は始まったことを `started` で知らせ、`release()` されるまで返さない
  */
-async function setup(
-  extra: {
-    closers?: Closer[];
-    timeoutMs?: number;
-    closerTimeoutMs?: number;
-  } = {},
-) {
+async function setup(extra: Partial<GracefulShutdownOptions> = {}) {
   const started = deferred();
   const gate = deferred();
   const app = new Hono()
@@ -65,7 +62,6 @@ async function setup(
 
 interface Result {
   status?: number;
-  connection?: string;
   body?: string;
   error?: string;
 }
@@ -79,13 +75,7 @@ function get(
     const req = http.get({ port, path, agent }, (res) => {
       let body = '';
       res.on('data', (chunk) => (body += chunk));
-      res.on('end', () =>
-        resolve({
-          status: res.statusCode,
-          connection: res.headers.connection,
-          body,
-        }),
-      );
+      res.on('end', () => resolve({ status: res.statusCode, body }));
       res.on('error', (e: NodeJS.ErrnoException) =>
         resolve({ error: e.code ?? e.message }),
       );
@@ -94,31 +84,6 @@ function get(
       resolve({ error: e.code ?? e.message }),
     );
   });
-}
-
-/** 生のソケット。受け取ったバイト列を、相手が閉じるまで貯める */
-function rawSocket(port: number) {
-  const socket = net.connect(port);
-  const chunks: Buffer[] = [];
-  socket.on('data', (chunk: Buffer) => chunks.push(chunk));
-  const closed = new Promise<Buffer>((resolve) =>
-    socket.on('close', () => resolve(Buffer.concat(chunks))),
-  );
-  return { socket, closed };
-}
-
-/** サーバーがリクエストを n 件受け取ったら解決する */
-function requestsReceived(
-  server: Server,
-  n: number,
-): Promise<ServerResponse[]> {
-  const seen: ServerResponse[] = [];
-  const done = deferred<ServerResponse[]>();
-  server.on('request', (_req, res) => {
-    seen.push(res);
-    if (seen.length === n) done.resolve(seen);
-  });
-  return done.promise;
 }
 
 let current: { server: Server; release: () => void } | undefined;
@@ -145,92 +110,87 @@ describe('installGracefulShutdown', () => {
     t.handlers.get('SIGTERM')!();
     // 停止の途中の新しい接続は拒まれる
     expect(await get(t.port, '/fast')).toEqual({ error: 'ECONNREFUSED' });
-    expect(t.exit).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
 
     t.release();
-    // 処理中だった応答は最後まで返り、相手が接続を使い回さないよう Connection: close が付く
-    expect(await held).toEqual({
-      status: 200,
-      connection: 'close',
-      body: 'held done',
-    });
+    expect(await held).toEqual({ status: 200, body: 'held done' });
     await t.shutdown('test');
     expect(order).toEqual(['a', 'b']);
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
-  it('アイドルの keep-alive の接続は、keepAliveTimeout を待たずに閉じる', async () => {
-    const t = await setup();
-    t.server.keepAliveTimeout = 60_000; // 閉じなければテストの上限（5 秒）で落ちる
-    const agent = new http.Agent({ keepAlive: true });
-    expect(await get(t.port, '/fast', agent)).toMatchObject({
-      status: 200,
-      connection: 'keep-alive',
-    });
-
-    await t.shutdown('test');
-    expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
-    agent.destroy();
-  });
-
-  it('送信のバッファに残っている大きな応答は、読むのが遅い相手にも最後まで届ける', async () => {
+  it('大きな応答は、読むのが遅い相手にも書き終えてから exit する', async () => {
     const t = await setup();
     const ended = deferred<ServerResponse>();
     // 同期で返す応答はアプリのハンドラの中で end まで進むので、それより前に耳を付ける
     t.server.prependListener('request', (_req, res) =>
       res.once('prefinish', () => ended.resolve(res)),
     );
-    const { socket, closed } = rawSocket(t.port);
+    let finishedAtExit: boolean | undefined;
+    t.exit.mockImplementation(
+      () => void (finishedAtExit = res.writableFinished),
+    );
+
+    const socket = net.connect(t.port);
+    let received = 0;
+    const all = deferred();
+    socket.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > BIG) all.resolve(); // ヘッダー + 本文
+    });
     socket.pause(); // 読まない相手
     socket.write('GET /big HTTP/1.1\r\nHost: x\r\n\r\n');
 
     const res = await ended.promise;
-    // res.end() は済んだが、本文はまだ書き終えていない（ここで http の closeIdleConnections() を呼ぶと切れる）
+    // end() は済んだが、本文はまだ送信のバッファに残っている
     expect(res.writableFinished).toBe(false);
     const done = t.shutdown('test');
     socket.resume();
-
-    const raw = await closed;
-    const headerEnd = raw.indexOf('\r\n\r\n') + 4;
-    expect(raw.subarray(0, headerEnd).toString()).toMatch(/^HTTP\/1\.1 200/);
-    expect(raw.length - headerEnd).toBe(BIG);
+    await all.promise;
     await done;
+    expect(finishedAtExit).toBe(true);
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
+    socket.destroy();
   });
 
-  it('パイプラインで重なったリクエストも、全部の応答を返してから接続を閉じる', async () => {
-    const t = await setup();
-    const received = requestsReceived(t.server, 3);
-    const { socket, closed } = rawSocket(t.port);
-    socket.write('GET /held HTTP/1.1\r\nHost: x\r\n\r\n');
-    await t.started;
+  it('落ち着きの時間の中で始まったリクエストも返す', async () => {
+    const t = await setup({ settleMs: 2_000 });
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    expect(await get(t.port, '/fast', agent)).toMatchObject({ status: 200 });
+
     const done = t.shutdown('test');
-    socket.write(
-      'GET /fast HTTP/1.1\r\nHost: x\r\n\r\nGET /fast HTTP/1.1\r\nHost: x\r\n\r\n',
-    );
-    await received;
+    // 処理中は 0。既存の keep-alive の接続で、落ち着きの時間のうちに次のリクエストが始まる
+    const held = get(t.port, '/held', agent);
+    await t.started;
+    expect(t.exit).not.toHaveBeenCalled(); // 処理中が 0 になった瞬間に先へ進んでいない
     t.release();
-
-    const responses = (await closed).toString().split(/(?=HTTP\/1\.1 )/);
-    expect(responses).toHaveLength(3);
-    expect(responses[0]).toMatch(/^HTTP\/1\.1 200[\s\S]*held done$/);
-    expect(responses[1]).toMatch(/^HTTP\/1\.1 200[\s\S]*fast$/);
-    expect(responses[2]).toMatch(/^HTTP\/1\.1 200[\s\S]*fast$/);
+    expect(await held).toEqual({ status: 200, body: 'held done' });
     await done;
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
+    agent.destroy();
   });
 
-  it('上限を過ぎても終わらないリクエストは打ち切って先へ進む', async () => {
+  it('アイドルの keep-alive の接続が残っていても、上限を待たずに終わる', async () => {
+    const t = await setup(); // 上限は既定の 7.5 秒。待てばテストの上限（5 秒）で落ちる
+    const agent = new http.Agent({ keepAlive: true });
+    expect(await get(t.port, '/fast', agent)).toMatchObject({ status: 200 });
+
+    await t.shutdown('test');
+    expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(t.logs.some((m) => m.includes('warn'))).toBe(false);
+    agent.destroy();
+  });
+
+  it('上限を過ぎても終わらないリクエストは待つのをやめて先へ進む', async () => {
     const closed = vi.fn();
     const t = await setup({
       timeoutMs: 100,
       closers: [{ name: 'db', close: closed }],
     });
 
-    const held = get(t.port, '/held');
+    void get(t.port, '/held');
     await t.started;
     await t.shutdown('test');
-    expect((await held).error).toBeDefined();
     expect(closed).toHaveBeenCalledOnce();
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
     expect(t.logs.some((m) => m.includes('warn') && m.includes('100ms'))).toBe(

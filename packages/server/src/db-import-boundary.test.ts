@@ -34,6 +34,7 @@ const BOUNDARIES: Boundary[] = [
       'src/auth.ts': 'Better Auth のアダプタ（user / session / account / verification。RLS の対象外）',
       'src/dev-login.ts': '手元の development だけの dev ログイン（user / account の作成と付け替え。RLS の対象外）',
       'link-owner-account.ts': '移行時に 1 回だけ流すエントリ（account / users の付け替え。RLS の対象外）',
+      'src/index.ts': '常駐の server の入口。停止の合図でプールを閉じるだけ（問い合わせはしない）',
     },
   },
   {
@@ -173,8 +174,12 @@ describe('DB の接続の import 境界（prd/14 §4・prd/15 §2）', () => {
   });
 
   it('🔴 RLS を迂回するプールと server ロールのプールを両方 import するモジュールは無い（取り違えを接続の単位で防ぐ）', () => {
+    // 例外は常駐の server の入口だけ: 起動時の検査と、停止の合図でプールを閉じるため。問い合わせはしない
+    const bothAllowed = new Set(['src/index.ts']);
     const server = new Set(importers('src/db/index.ts'));
-    expect(importers('src/db/system.ts').filter((path) => server.has(path))).toEqual([]);
+    expect(
+      importers('src/db/system.ts').filter((path) => server.has(path) && !bothAllowed.has(path)),
+    ).toEqual([]);
   });
 
   it('route.ts と routes/（ログインの経路）はどのプールも import しない', () => {

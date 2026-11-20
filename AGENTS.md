@@ -224,6 +224,11 @@ server の本番イメージ（`packages/server/Dockerfile.prod`）には、常�
 **使い捨てコンテナとして明示的に実行する**エントリを同梱している。distroless は `ENTRYPOINT=node` なので
 **command はパスだけでよい**。
 
+> **常駐の server の停止**（`src/graceful-shutdown.ts`）: SIGTERM / SIGINT を受けると新しい接続を止め、処理中のリクエストを最大 8 秒待ってから
+> 残りの接続を切り、DB のプールを閉じて終了する（終了コード 0。2 回目の合図は無視）。**コンテナの停止の猶予（docker の既定 10 秒）より短く**保つ
+> ——猶予を縮めるなら `SHUTDOWN_TIMEOUT_MS` も下げる。⚠ メモリの上の局面評価のジョブ（`position-eval.ts`）は保存しないので、停止で失われる。
+> 使い捨てのエントリはこの処理を通らない（今までどおり）。
+
 | エントリ | 何をするか | 既定 | 実書込 |
 |---|---|---|---|
 | `/app/migrate.js` | 未適用のマイグレーションを適用（[prd/03](./prd/03-data-model.md)） | 適用する | — |

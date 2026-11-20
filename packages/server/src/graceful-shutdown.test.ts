@@ -4,11 +4,15 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  createGracefulShutdown,
   type GracefulShutdownOptions,
-  installGracefulShutdown,
+  SETTLE_MS,
 } from './graceful-shutdown.js';
 
-// 固定の待ち時間に頼らない: 「ハンドラが始まった」を Promise で待ってから手順を起動し、解放はテストから行う
+// 固定の待ち時間に頼らない: 「ハンドラが始まった」を Promise で待ってから手順を起動し、解放はテストから行う。
+// 例外は「まだ進んでいない」ことを見る箇所だけ（落ち着きの時間を越えるまで待つ。`sleep`）
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -20,11 +24,14 @@ const BIG = 8 * 1024 * 1024;
 
 /**
  * 本物の serve() をランダムなポートで起こし、終了の手順を組み立てる（合図・exit・ログは差し替え）。
- * `/held` は始まったことを `started` で知らせ、`release()` されるまで返さない
+ * `/held` は始まったことを `started` で知らせ、`release()` されるまで返さない。
+ * `/save` は接続が切れても保存を続けるハンドラの代わり（`saving` で始まりを知らせ、`finishSave()` まで終わらない）
  */
 async function setup(extra: Partial<GracefulShutdownOptions> = {}) {
   const started = deferred();
   const gate = deferred();
+  const saving = deferred();
+  const saveGate = deferred();
   const app = new Hono()
     .get('/held', async (c) => {
       started.resolve();
@@ -32,28 +39,49 @@ async function setup(extra: Partial<GracefulShutdownOptions> = {}) {
       return c.text('held done');
     })
     .get('/big', (c) => c.body(new Uint8Array(BIG).fill(97)))
+    .get('/save', async (c) => {
+      saving.resolve();
+      await saveGate.promise;
+      return c.text('saved');
+    })
     .get('/fast', (c) => c.text('fast'));
-  const server = await new Promise<Server>((resolve) => {
-    const s = serve({ fetch: app.fetch, port: 0 }, () => resolve(s as Server));
-  });
-  current = { server, release: gate.resolve };
 
   const handlers = new Map<string, () => void>();
   const exit = vi.fn<(code: number) => void>();
   const logs: string[] = [];
-  const { shutdown } = installGracefulShutdown({
-    server,
+  const graceful = createGracefulShutdown({
     ...extra,
     onSignal: (signal, handler) => handlers.set(signal, handler),
     exit,
     log: (m) => logs.push(m),
   });
+  const server = await new Promise<Server>((resolve) => {
+    const s = serve({ fetch: graceful.track(app.fetch), port: 0 }, () =>
+      resolve(s as Server),
+    );
+  });
+  current = {
+    server,
+    release: () => {
+      gate.resolve();
+      saveGate.resolve();
+    },
+  };
+  const { shutdown } = graceful.install(server);
   return {
     server,
     port: (server.address() as AddressInfo).port,
     started: started.promise,
     release: () => gate.resolve(),
+    saving: saving.promise,
+    finishSave: () => saveGate.resolve(),
     handlers,
+    /** 登録された合図のハンドラを呼ぶ（登録されていなければ失敗させる） */
+    signal: (name: NodeJS.Signals) => {
+      const handler = handlers.get(name);
+      if (!handler) throw new Error(`${name} のハンドラが登録されていない`);
+      handler();
+    },
     exit,
     logs,
     shutdown,
@@ -94,7 +122,7 @@ afterEach(() => {
   current = undefined;
 });
 
-describe('installGracefulShutdown', () => {
+describe('createGracefulShutdown', () => {
   it('処理中のリクエストを 200 で返し終えてから closer を順に閉じ、exit(0) する', async () => {
     const order: string[] = [];
     const t = await setup({
@@ -107,7 +135,7 @@ describe('installGracefulShutdown', () => {
 
     const held = get(t.port, '/held');
     await t.started;
-    t.handlers.get('SIGTERM')!();
+    t.signal('SIGTERM');
     // 停止の途中の新しい接続は拒まれる
     expect(await get(t.port, '/fast')).toEqual({ error: 'ECONNREFUSED' });
     expect(order).toEqual([]);
@@ -120,16 +148,17 @@ describe('installGracefulShutdown', () => {
   });
 
   it('大きな応答は、読むのが遅い相手にも書き終えてから exit する', async () => {
-    const t = await setup();
+    const closed = vi.fn();
+    const t = await setup({ closers: [{ name: 'db', close: closed }] });
     const ended = deferred<ServerResponse>();
     // 同期で返す応答はアプリのハンドラの中で end まで進むので、それより前に耳を付ける
     t.server.prependListener('request', (_req, res) =>
       res.once('prefinish', () => ended.resolve(res)),
     );
     let finishedAtExit: boolean | undefined;
-    t.exit.mockImplementation(
-      () => void (finishedAtExit = res.writableFinished),
-    );
+    t.exit.mockImplementation(() => {
+      finishedAtExit = res.writableFinished;
+    });
 
     const socket = net.connect(t.port);
     let received = 0;
@@ -145,12 +174,43 @@ describe('installGracefulShutdown', () => {
     // end() は済んだが、本文はまだ送信のバッファに残っている
     expect(res.writableFinished).toBe(false);
     const done = t.shutdown('test');
+    // 落ち着きの時間を越えても、書き出しが終わっていない間は先へ進まない（`end()` で数から外すと、ここで進む）
+    await sleep(SETTLE_MS * 3);
+    expect(res.writableFinished).toBe(false);
+    expect(closed).not.toHaveBeenCalled();
+    expect(t.exit).not.toHaveBeenCalled();
     socket.resume();
     await all.promise;
     await done;
     expect(finishedAtExit).toBe(true);
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
     socket.destroy();
+  });
+
+  it('応答の前に接続が切れても、ハンドラが終わるまで closer と exit に進まない', async () => {
+    const closed = vi.fn();
+    const t = await setup({ closers: [{ name: 'db', close: closed }] });
+    const responseClosed = deferred();
+    t.server.on('request', (_req, res) =>
+      res.once('close', () => responseClosed.resolve()),
+    );
+
+    const req = http.get({ port: t.port, path: '/save', agent: false });
+    req.on('error', () => {});
+    await t.saving;
+    const done = t.shutdown('test');
+    req.destroy(); // 利用者が応答を待たずに離れた（前段のプロキシが上流の接続を閉じた）
+    await responseClosed.promise;
+    // 応答の書き出しは数から外れたが、ハンドラ（保存）はまだ動いている
+    await sleep(SETTLE_MS * 3);
+    expect(closed).not.toHaveBeenCalled();
+    expect(t.exit).not.toHaveBeenCalled();
+
+    t.finishSave();
+    await done;
+    expect(closed).toHaveBeenCalledOnce();
+    expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(t.logs.some((m) => m.includes('warn'))).toBe(false);
   });
 
   it('落ち着きの時間の中で始まったリクエストも返す', async () => {
@@ -262,9 +322,9 @@ describe('installGracefulShutdown', () => {
     const closer = vi.fn();
     const t = await setup({ closers: [{ name: 'db', close: closer }] });
 
-    t.handlers.get('SIGTERM')!();
-    t.handlers.get('SIGINT')!();
-    t.handlers.get('SIGTERM')!();
+    t.signal('SIGTERM');
+    t.signal('SIGINT');
+    t.signal('SIGTERM');
     await t.shutdown('test');
     expect(closer).toHaveBeenCalledOnce();
     expect(t.exit).toHaveBeenCalledExactlyOnceWith(0);

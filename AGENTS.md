@@ -139,6 +139,7 @@ pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビ�
 
 > **CI**（[`ci.yml`](./.github/workflows/ci.yml)。PR と main への push・チェック名 `check`）は `pnpm install --frozen-lockfile` → `pnpm typecheck` → `pnpm -r test` → `pnpm build` を流す。
 > エンジンのビルド（Docker）と `test:db`（Postgres）は流さない。`pnpm-workspace.yaml` の `minimumReleaseAge` により、公開から 3 日未満の版は lockfile に入れられない。
+> 公開から 3 日未満の版を含む lockfile の PR（Dependabot が出たばかりの版を選んだときなど）は、`check` が Install で落ちる。日が経っても結果は自動では変わらないので、3 日を過ぎたら落ちた `check` を再実行する（PR の Checks → Re-run failed jobs。Dependabot の PR なら `@dependabot rebase` でもよい）。
 
 > **DB は Postgres 18**（[prd/15](./prd/15-postgres.md)）。日時は `timestamptz` で、接続の時刻帯に依存しない。
 > **ロールを 3 つに分ける**: 管理ロール（DDL。`migrate.js` だけ。`DB_ADMIN_USER` / `DB_ADMIN_PASSWORD`）・

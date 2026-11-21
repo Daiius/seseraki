@@ -98,7 +98,8 @@ export function ReplayLines({
   onSelect: (index: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-2">
+    // 🔒 no-tap-select: 送りの行を連打したときに、iOS のダブルタップの文字選択がこの一覧に掛からないように
+    <div className="flex flex-col gap-2 no-tap-select">
       {lines.map((line, index) => {
         const selected = cursor?.line === index;
         const texts = lineTexts(line);

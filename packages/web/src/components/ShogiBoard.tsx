@@ -466,7 +466,9 @@ function CandidateList({
   const lossText = loss ? formatLoss(loss) : null;
 
   return (
-    <div ref={ref}>
+    // 🔒 no-tap-select: 盤の下の送りの行を連打すると、iOS のダブルタップの文字選択がすぐ下の「候補手」に掛かり、
+    //    呼び出しメニュー（翻訳など）から別の画面が開いてしまうため
+    <div ref={ref} className="no-tap-select">
       <div className="mb-1 flex items-center gap-2 text-sm text-base-content/60">
         <span>候補手</span>
         {/* CPL が第一級の指標なので、ラベルが付かない手でも損失そのものは常に出す */}

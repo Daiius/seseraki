@@ -5,13 +5,13 @@ name: Build and push web image
 # main への push（下の paths に当たるとき）と、手動起動（workflow_dispatch。どの枝でもよい）で走る。PR・ほかの枝の push では走らない。
 # main 以外の枝の手動起動は、その枝の先頭の <40 桁の SHA> を作るだけで、latest は動かさない（promote は main の回だけ。候補も main のコミットだけ）。
 # ⚠ main を選んだ手動起動では promote も走る。promote はその回のコミットではなく main に突き合わせるので、latest は push の回と同じ版
-#   （main の paths に当たる最後のコミットのイメージ）にしか向かない。latest が無い・ずれているときは直すことになる（追従を有効にしたあとは配信も進む）。
+#   （main の paths に当たる最後のコミットのイメージ）にしか向かない。latest が無い・ずれているときは直すことになる（配信も進む）。
 #   ⚠ 同じコミットを作り直すと（再実行・手動起動）、builtAt が変わるので、同じ <40 桁の SHA> のタグが別のダイジェストに付け替わる。
 #   それが latest の指すべき版なら、latest も新しいダイジェストへ動き、版のほかは中身が同じ世代が進む（変わるのは version.json・版を埋め込んだ JS・その JS の内容ハッシュ入りの名前を指す index.html などのファイル）。
 # イメージは起動しない。本番の VPS が中の /site を取り出して、配信ディレクトリへ世代として置く。
-# ⚠ 本番の VPS が web の `latest` を追いかけるようにすると（VPS の側の登録。所有者が有効にする）、
+# ⚠ 本番の VPS は web の `latest` を追いかけている（2026-11-21 に有効化）。
 #   **main に入った web の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」）。
-#   有効にしたあとは `pnpm deploy:web` を使わない（prd/02 §5.2）。
+#   `pnpm deploy:web` は使わない（prd/02 §5.2）。
 #
 # ビルドは Docker の中ではなく runner の上で行い、できた packages/web/dist だけを FROM scratch のイメージへ入れる
 # （packages/web/Dockerfile.static の冒頭。根の .dockerignore が **/dist と .git を除くため、中でビルドすると version.json が unknown になる）。

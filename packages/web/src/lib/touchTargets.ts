@@ -21,7 +21,7 @@
 import type { ControlSize } from './displaySize';
 
 /** アイコンのみのボタン（ヘッダーの操作・ドロップダウンのトリガー） */
-export const ICON_BTN = 'btn btn-ghost btn-sm btn-square max-sm:size-11 max-[374px]:size-10';
+export const ICON_BTN = 'btn btn-ghost btn-sm btn-square max-sm:size-11 max-[375px]:size-10';
 
 /**
  * ドロップダウンのメニュー項目。上のボタンと同じ 44px の当たり判定を持たせる。
@@ -58,7 +58,7 @@ export const MENU_LIST = 'dropdown-content menu bg-base-200 rounded-box z-20 mt-
 */
 
 /** 操作系のボタン。モバイル 44px（375px 未満は 40px）・デスクトップは小さく */
-const CONTROL_TOUCH = 'btn max-md:h-11 max-md:min-h-11 max-[374px]:h-10 max-[374px]:min-h-10 md:btn-sm';
+const CONTROL_TOUCH = 'btn max-md:h-11 max-md:min-h-11 max-[375px]:h-10 max-[375px]:min-h-10 md:btn-sm';
 const CONTROL_TOUCH_COMPACT = 'btn btn-sm';
 
 /** {@link controlButtonsOf} の返り値。どれも枠（`btn-outline` など）は呼び出し側で足す */
@@ -94,10 +94,10 @@ export interface ControlButtons {
 const CONTROL_BUTTONS: Record<ControlSize, ControlButtons> = {
   normal: {
     touch: CONTROL_TOUCH,
-    icon: `${CONTROL_TOUCH} shrink-0 px-0 max-md:w-11 max-[374px]:w-10 md:w-8`,
-    glyph: `${CONTROL_TOUCH} shrink-0 px-2 gap-1 max-md:min-w-11 max-[374px]:min-w-10 md:min-w-8`,
+    icon: `${CONTROL_TOUCH} shrink-0 px-0 max-md:w-11 max-[375px]:w-10 md:w-8`,
+    glyph: `${CONTROL_TOUCH} shrink-0 px-2 gap-1 max-md:min-w-11 max-[375px]:min-w-10 md:min-w-8`,
     iconFlex: `${CONTROL_TOUCH} flex-1 md:flex-none md:shrink-0 md:px-0 md:w-8`,
-    eval: `${CONTROL_TOUCH} shrink-0 gap-1 max-md:px-0 max-md:w-11 max-[374px]:w-10 md:w-auto md:px-3`,
+    eval: `${CONTROL_TOUCH} shrink-0 gap-1 max-md:px-0 max-md:w-11 max-[375px]:w-10 md:w-auto md:px-3`,
   },
   compact: {
     touch: CONTROL_TOUCH_COMPACT,

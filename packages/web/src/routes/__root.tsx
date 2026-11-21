@@ -111,7 +111,7 @@ function RootComponent() {
             {/* ロゴは極小幅でだけ縮める（44px ターゲットを優先して幅を譲る） */}
             <Link
               to="/"
-              className="btn btn-ghost text-2xl max-sm:px-2 max-[374px]:px-1 max-[374px]:text-xl"
+              className="btn btn-ghost text-2xl max-sm:px-2 max-[375px]:px-1 max-[375px]:text-xl"
               aria-label="細流棋"
             >
               <Logo />
@@ -120,10 +120,10 @@ function RootComponent() {
           {/* 常用する導線だけを表に出す。使用頻度の低いものは末尾のメニューへ畳む。
               表の項目はモバイル幅ではアイコンだけにして横並びが潰れないようにする。
               「棋譜を登録」は最も頻繁に押す書き込み操作なので先頭に置く */}
-          <div className="flex flex-none items-center gap-2 pe-2 max-[374px]:gap-1">
+          <div className="flex flex-none items-center gap-2 pe-2 max-[375px]:gap-1">
             <Link
               to="/kifus/new"
-              className="btn btn-primary btn-sm max-sm:btn-square max-sm:size-11 max-[374px]:size-10"
+              className="btn btn-primary btn-sm max-sm:btn-square max-sm:size-11 max-[375px]:size-10"
               aria-label="棋譜を登録"
             >
               <PlusIcon className="size-5 sm:hidden" />
@@ -155,7 +155,7 @@ function RootComponent() {
             */}
             <details ref={menuRef} className="dropdown dropdown-end group ms-3">
               <summary
-                className="btn btn-ghost btn-sm gap-1 px-2 list-none max-sm:h-11 max-[374px]:h-10 max-[374px]:px-1 group-open:btn-active [&::-webkit-details-marker]:hidden"
+                className="btn btn-ghost btn-sm gap-1 px-2 list-none max-sm:h-11 max-[375px]:h-10 max-[375px]:px-1 group-open:btn-active [&::-webkit-details-marker]:hidden"
                 aria-label="メニュー"
               >
                 <Bars3Icon />

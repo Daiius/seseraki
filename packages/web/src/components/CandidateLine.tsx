@@ -139,7 +139,7 @@ export function PvLine({
         className={clsx(
           // 🔒 1 手だけの手順でも叩ける高さを確保する（操作ボタンと同じ区分: モバイル 44px・375px 未満 40px・md 以上 32px。
           //    prd/05 §2.1・レビュー `OCL-9760C79F`）。選択中・未選択で同じ寸法にして、切り替えで下の行が動かないようにする
-          'flex items-center min-h-11 max-[374px]:min-h-10 md:min-h-8 rounded-lg p-2',
+          'flex items-center min-h-11 max-[375px]:min-h-10 md:min-h-8 rounded-lg p-2',
           onSummaryClick && 'cursor-pointer hover:bg-base-300/50',
           className,
           bar,

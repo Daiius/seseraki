@@ -91,6 +91,7 @@ export function PvLine({
   open,
   onToggle,
   onSummaryClick,
+  firstInSummary = false,
   collapse,
   countText,
   summary,
@@ -108,6 +109,8 @@ export function PvLine({
   onToggle?: (e: SyntheticEvent<HTMLDetailsElement>) => void;
   /** 見出しを叩いた（渡したら既定の開閉は止める） */
   onSummaryClick?: () => void;
+  /** 1 手目は見出し（`summary`）の中に出してある（`never` のとき。手の並びは 2 手目から） */
+  firstInSummary?: boolean;
   collapse: 'mobile' | 'never';
   /** 畳んだ見出しの右端に出す手数（`never` では出さない） */
   countText?: string;
@@ -143,7 +146,7 @@ export function PvLine({
       >
         <div className="font-mono text-xs text-base-content/60 leading-relaxed">
           <span className="me-2 font-sans">{summary}</span>
-          <PvMoves texts={texts} position={position} />
+          <PvMoves texts={texts} position={position} from={firstInSummary ? 1 : 0} />
         </div>
         {children}
       </div>
@@ -195,8 +198,18 @@ export function PvLine({
  * 読み筋の手の並び。🔴 **太字にするのは `position - 1` の手——いま盤に出ている局面へ至った直前の手**（prd/12 §3.2）。
  * 太字以外の装飾は足さない（{@link PvLine} の中で使う）
  */
-export function PvMoves({ texts, position }: { texts: readonly string[]; position: number }) {
-  return texts.flatMap((text, j) => {
+export function PvMoves({
+  texts,
+  position,
+  from = 0,
+}: {
+  texts: readonly string[];
+  position: number;
+  /** この手から並べる（それより前は呼び出し側が別に出す。出題は 1 手目を見出しのバッジに入れる） */
+  from?: number;
+}) {
+  return texts.slice(from).flatMap((text, k) => {
+    const j = from + k;
     const node =
       j === position - 1 ? (
         <strong key={j} className="text-base-content font-bold">
@@ -205,7 +218,7 @@ export function PvMoves({ texts, position }: { texts: readonly string[]; positio
       ) : (
         <span key={j}>{text}</span>
       );
-    return j > 0 ? [' ', node] : [node];
+    return k > 0 ? [' ', node] : [node];
   });
 }
 

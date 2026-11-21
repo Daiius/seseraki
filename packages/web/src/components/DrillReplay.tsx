@@ -114,9 +114,13 @@ export function ReplayLines({
             selectable
             onSummaryClick={() => onSelect(index)}
             collapse="never"
+            // 🔒 1 手目（正解手・答えた手）は名前と一緒にバッジに入れる（「あなたの解答 △5五銀(64)」）。
+            //    再生位置が 1 手目ならバッジの中の手を太字にする（`PvMoves` と同じ規則）
+            firstInSummary
             summary={
-              <span className={clsx('badge badge-sm whitespace-nowrap', selected ? 'badge-primary' : 'badge-ghost')}>
+              <span className={clsx('badge badge-sm h-auto gap-1 whitespace-nowrap', selected ? 'badge-primary' : 'badge-ghost')}>
                 {line.label}
+                {selected && cursor.position === 1 ? <strong>{texts[0]}</strong> : <span>{texts[0]}</span>}
               </span>
             }
             texts={texts}

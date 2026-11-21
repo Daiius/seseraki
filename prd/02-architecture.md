@@ -231,7 +231,7 @@ VPS の側の仕組みは所有者の非公開のリポジトリにある（こ�
   `packages/web/dist` だけを入れたイメージ（[`packages/web/Dockerfile.static`](../packages/web/Dockerfile.static)。`FROM scratch` の `/site` に `dist/` の中身）を
   `<40 桁の SHA>` だけで push → 別の job が main に突き合わせて `latest` を動かす（考え方は §5.1 の server と同じ。`paths` の印は `web-paths`）。
   手動起動（workflow_dispatch）はどの枝でもでき、main 以外の枝ではその枝の先頭の `<40 桁の SHA>` を作るだけで `latest` は動かさない。
-  ⚠ main を選んだ手動起動では `latest` を動かす job も走り、push の回と同じく main に突き合わせる（`latest` が無い・ずれていれば直す。有効にしたあとは配信も進む）。
+  ⚠ main を選んだ手動起動では `latest` を動かす job も走り、push の回と同じく main に突き合わせる（`latest` が無い・ずれていれば直す。直すと本番の配信の世代も進む）。
   同じコミットを作り直すと（再実行・手動起動）、`builtAt` が変わるので同じ SHA のタグが別のダイジェストに付け替わり、それが指すべき版なら `latest` も動いて世代が進む
   （版のほかは中身が同じ。変わるのは `version.json`・版を埋め込んだ JS・その JS の内容ハッシュ入りの名前を指す `index.html` などのファイル）。`latest` は、照合したダイジェストから付ける
   → 本番の VPS が `latest` を数分おきに見て、変わっていればイメージを pull し、**起動せずに**中の `/site` を取り出して、

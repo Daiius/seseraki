@@ -22,22 +22,23 @@ COPY . /site
 #    index.html（VPS の既定の STATIC_MARKER）と engine/manifest.json（ENGINE_REQUIRED=1 のビルドなら必ずある）も確かめる。
 ARG GIT_COMMIT=unknown
 #    値そのもの（改行を含まない 40 桁）を node で確かめる（grep は行ごとに見るので、複数行の値の 1 行だけが合っても通ってしまう）。
+#    値は引数でなく環境変数（ARG は RUN の環境に入る）で渡す（引数だと `--` などが node のオプションとして読まれ、検証が飛ばされうる）。
 RUN set -eu; \
     for f in index.html version.json engine/manifest.json; do \
       [ -f "/site/$f" ] || { echo "/site/$f が無い（packages/web/dist を文脈にしているか）" >&2; exit 1; }; \
     done; \
     node -e ' \
-      if (!/^[0-9a-f]{40}$/.test(process.argv[1])) { \
-        console.error(`GIT_COMMIT は 40 桁の小文字の 16 進: ${JSON.stringify(process.argv[1])}`); \
+      if (!/^[0-9a-f]{40}$/.test(process.env.GIT_COMMIT)) { \
+        console.error(`GIT_COMMIT は 40 桁の小文字の 16 進: ${JSON.stringify(process.env.GIT_COMMIT)}`); \
         process.exit(1); \
       } \
       const v = JSON.parse(require("fs").readFileSync("/site/version.json", "utf8")); \
-      if (v === null || typeof v !== "object" || v.commit !== process.argv[1]) { \
-        console.error(`version.json の commit（${v && v.commit}）が GIT_COMMIT（${process.argv[1]}）と違う`); \
+      if (v === null || typeof v !== "object" || v.commit !== process.env.GIT_COMMIT) { \
+        console.error(`version.json の commit（${v && v.commit}）が GIT_COMMIT（${process.env.GIT_COMMIT}）と違う`); \
         process.exit(1); \
       } \
       console.log(JSON.stringify(v)); \
-    ' "$GIT_COMMIT"
+    '
 
 # ---- 成果物だけ ---------------------------------------------------------------------------
 FROM scratch

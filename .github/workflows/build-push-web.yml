@@ -7,7 +7,7 @@ name: Build and push web image
 # ⚠ main を選んだ手動起動では promote も走る。promote はその回のコミットではなく main に突き合わせるので、latest は push の回と同じ版
 #   （main の paths に当たる最後のコミットのイメージ）にしか向かない。latest が無い・ずれているときは直すことになる（追従を有効にしたあとは配信も進む）。
 #   ⚠ 同じコミットを作り直すと（再実行・手動起動）、builtAt が変わるので、同じ <40 桁の SHA> のタグが別のダイジェストに付け替わる。
-#   それが latest の指すべき版なら、latest も新しいダイジェストへ動き、中身（version.json と版を埋め込んだ JS のほかは同じ）の世代が進む。
+#   それが latest の指すべき版なら、latest も新しいダイジェストへ動き、版のほかは中身が同じ世代が進む（変わるのは version.json・版を埋め込んだ JS・その JS の内容ハッシュ入りの名前を指す index.html などのファイル）。
 # イメージは起動しない。本番の VPS が中の /site を取り出して、配信ディレクトリへ世代として置く。
 # ⚠ 本番の VPS が web の `latest` を追いかけるようにすると（VPS の側の登録。所有者が有効にする）、
 #   **main に入った web の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」）。
@@ -23,7 +23,7 @@ on:
     #   - packages/web: ソース・Vite の設定とプラグイン（engine-plugin・build-version）。Dockerfile.static 自身も packages/web/ の下
     #   - packages/shared: web の実行時の依存
     #   - packages/server: web の build（tsc -b && vite build）の tsc が API の型（Hono RPC）を辿る（web の devDependencies の server）。
-    #     server だけの変更でも web の世代が進む（変わるのは version.json と、版を埋め込んだ JS（__BUILD_VERSION__。設定ページの隅の表示）。
+    #     server だけの変更でも web の世代が進む（変わるのは version.json と、版（__BUILD_VERSION__。設定ページの隅の表示）を埋め込んだ JS と、その JS の内容ハッシュ入りの名前を指す index.html などのファイル。
     #     CSS や画面の中身は変わらない）
     #   - packages/engine-wasm: エンジンの配信物（UPSTREAM・build.sh・lib.sh・fetch-eval.sh・評価関数の許諾文）。web の build が dist/engine/ へコピーする
     #   - 根の package.json（engine:build などのスクリプト・packageManager）/ pnpm-lock.yaml / pnpm-workspace.yaml（catalog・overrides・minimumReleaseAge）/

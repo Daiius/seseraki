@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { applyMove, createInitialState } from 'shared';
 import {
   answerMovesOf,
+  canStep,
   cursorState,
   initialCursor,
-  linePositions,
+  lineTexts,
   missLine,
-  moveCursor,
   revealLines,
   selectLine,
   startPositionOf,
+  stepCursor,
 } from './drillReplay';
 
 const base = createInitialState();
@@ -116,8 +117,21 @@ describe('カーソルの操作と局面', () => {
   });
 
   it('端で止める', () => {
-    expect(moveCursor(lines, { line: 0, position: 1 }, 5)).toEqual({ line: 0, position: 2 });
-    expect(moveCursor(lines, { line: 0, position: 1 }, -1)).toEqual({ line: 0, position: 0 });
+    expect(stepCursor(lines, { line: 0, position: 2 }, 'forward')).toEqual({ line: 0, position: 2 });
+    expect(stepCursor(lines, { line: 0, position: 0 }, 'back')).toEqual({ line: 0, position: 0 });
+    expect(stepCursor(lines, { line: 1, position: 1 }, 'last')).toEqual({ line: 1, position: 2 });
+    expect(stepCursor(lines, { line: 1, position: 1 }, 'first')).toEqual({ line: 1, position: 0 });
+    expect(canStep(lines, { line: 0, position: 2 }, 'forward')).toBe(false);
+    expect(canStep(lines, { line: 0, position: 2 }, 'back')).toBe(true);
+  });
+
+  it('再生に入っていなければ ▶ は先頭の手順の始める局面、≫ は最後から入る。戻る向きには動かない', () => {
+    expect(stepCursor(lines, null, 'forward')).toEqual({ line: 0, position: 0 });
+    expect(stepCursor(lines, null, 'last')).toEqual({ line: 0, position: 2 });
+    expect(stepCursor(lines, null, 'back')).toBeNull();
+    expect(stepCursor(lines, null, 'first')).toBeNull();
+    expect(canStep(lines, null, 'forward')).toBe(true);
+    expect(canStep(lines, null, 'back')).toBe(false);
   });
 
   it('違う手順を選んだらその手順の始める位置へ。同じ手順なら位置はそのまま', () => {
@@ -133,15 +147,49 @@ describe('カーソルの操作と局面', () => {
   });
 
   it('1 手ずつの表記（手番記号付き）', () => {
-    const { texts, states } = linePositions(lines[0]);
-    expect(texts).toEqual(['▲７六歩(77)', '△３四歩(33)']);
-    expect(states).toHaveLength(3);
+    expect(lineTexts(lines[0])).toEqual(['▲７六歩(77)', '△３四歩(33)']);
   });
 });
 
-describe('手番記号は指す前の局面の手番から', () => {
+describe('手番記号は始める局面の手番から', () => {
   it('後手番から始まる手順は △ から', () => {
     const goteToMove = applyMove(base, '7g7f');
-    expect(linePositions({ base: goteToMove, moves: ['3c3d', '2g2f'] }).texts).toEqual(['△３四歩(33)', '▲２六歩(27)']);
+    expect(lineTexts({ base: goteToMove, moves: ['3c3d', '2g2f'] })).toEqual(['△３四歩(33)', '▲２六歩(27)']);
+  });
+});
+
+describe('盤に指せない手（レビュー OCL-8072DDF1）', () => {
+  it('正解手順は指せる先頭部分で打ち切る（終端の記号・その局面では指せない手）', () => {
+    const lines = revealLines({
+      kind: 'best',
+      base,
+      played: [],
+      answerMove: '7g7f',
+      answerPv: ['7g7f', '3c3d', 'resign'],
+      refutation: undefined,
+    });
+    expect(lines[0].moves).toEqual(['7g7f', '3c3d']);
+    const broken = revealLines({
+      kind: 'best',
+      base,
+      played: [],
+      answerMove: '7g7f',
+      answerPv: ['7g7f', '5e5d', '3c3d'],
+      refutation: undefined,
+    });
+    expect(broken[0].moves).toEqual(['7g7f']);
+  });
+
+  it('咎めの手が 1 つも指せない咎め筋は出さない', () => {
+    const lines = revealLines({
+      kind: 'best',
+      base,
+      played: ['2g2f'],
+      answerMove: '7g7f',
+      answerPv: null,
+      refutation: ['rep_draw'],
+    });
+    expect(lines.map((l) => l.label)).toEqual(['正解手順']);
+    expect(missLine(base, '2g2f', ['5e5d'])).toBeNull();
   });
 });

@@ -61,24 +61,31 @@ export function CandidateLine({
       {pvLen > 0 && (
         <>
           <div className="mt-1 font-mono text-xs text-base-content/60 pl-5">
-            {pv.flatMap((text, j) => {
-              // 🔴 太字にするのは `position - 1` の手——**いま盤に出ている局面へ至った直前の手**
-              const node =
-                j === replay.position - 1 ? (
-                  <strong key={j} className="text-base-content font-bold">
-                    {text}
-                  </strong>
-                ) : (
-                  <span key={j}>{text}</span>
-                );
-              return j > 0 ? [' ', node] : [node];
-            })}
+            <PvMoves texts={pv} position={replay.position} />
           </div>
           <PvReplay {...replay} pvLen={pvLen} />
         </>
       )}
     </details>
   );
+}
+
+/**
+ * 読み筋の手の並び。🔴 **太字にするのは `position - 1` の手——いま盤に出ている局面へ至った直前の手**（prd/12 §3.2）。
+ * 太字以外の装飾は足さない。棋譜側・検討盤（`CandidateLine`）と出題の手順の再生（`DrillReplay`）が共用する
+ */
+export function PvMoves({ texts, position }: { texts: readonly string[]; position: number }) {
+  return texts.flatMap((text, j) => {
+    const node =
+      j === position - 1 ? (
+        <strong key={j} className="text-base-content font-bold">
+          {text}
+        </strong>
+      ) : (
+        <span key={j}>{text}</span>
+      );
+    return j > 0 ? [' ', node] : [node];
+  });
 }
 
 /** 読み筋の再生ボタン（◀ `n/N` ▶）。状態は呼び出し側が持つ */

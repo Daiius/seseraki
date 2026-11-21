@@ -9,7 +9,7 @@ import {
 } from 'shared';
 import { CandidateLine } from './CandidateLine';
 import { StudyEvalBrowserStatus } from './BrowserAnalysis';
-import { formatTurnScore, mateLineOf, pvTexts } from '../lib/usi';
+import { formatTurnScore, mateLineOf, pvTexts, turnSymbolFrom } from '../lib/usi';
 import {
   headlineCandidate,
   type EvalSource,
@@ -33,12 +33,6 @@ import { useAnalysisAssignee } from '../lib/useMe';
 export interface Replay {
   candidate: number;
   depth: number;
-}
-
-/** 手番側から数えて i 手目の手番記号 */
-function symbolAt(sideToMove: Side, i: number): string {
-  const sente = (i % 2 === 0) === (sideToMove === 'sente');
-  return sente ? '▲' : '△';
 }
 
 /**
@@ -200,7 +194,7 @@ export function EvalResultView({
               if (!e.currentTarget.open && active !== null) onReplay(null);
             }}
             rank={c.rank}
-            moveText={`${symbolAt(side, 0)}${usiToJapaneseWithPiece(base, c.move)}`}
+            moveText={`${turnSymbolFrom(side, 0)}${usiToJapaneseWithPiece(base, c.move)}`}
             scoreText={formatTurnScore(
               c.scoreType,
               c.scoreValue,
@@ -210,7 +204,7 @@ export function EvalResultView({
             depth={c.depth}
             // 🔴 **再生位置の手を太字にする**（`CandidateLine`）。手がかりが再生カウンタ（`3/9`）だけだと、
             //    長い読み筋のどこにいるのか読み筋の側から分からない。見せ方は棋譜側と同じ
-            pv={pvTexts(base, c.pv, (j) => symbolAt(side, j))}
+            pv={pvTexts(base, c.pv, (j) => turnSymbolFrom(side, j))}
             /*
               咎め筋の再生は**確定前のプレビュー**（prd/12 §3.2・決定 2026-09-01）。
               盤を触ればここまでが手順に確定し、「再生をやめる」なら確定せずに戻る。
@@ -304,7 +298,7 @@ function MoveGradeView({
   thresholds: Thresholds;
 }) {
   const side = grade.from.sideToMove;
-  const symbol = symbolAt(side, 0);
+  const symbol = turnSymbolFrom(side, 0);
   /*
     🔒 **色は棋譜側の悪手マーカーと同じ閾値・同じ判定**（`cpl.ts` の `lossLabel`）。
     実機で「損失 5」が警告色になり、探索誤差を咎めているように見えた——同じ画面に

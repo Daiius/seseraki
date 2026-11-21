@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { isNavIgnored, navActionOf } from '../lib/keyboardNav';
 import {
   DEFAULT_THRESHOLDS,
   type BoardState,
@@ -387,18 +388,11 @@ export function StudyBoard({
    */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      const target = e.target;
-      if (
-        target instanceof HTMLElement
-        && (target.isContentEditable
-          || target.tagName === 'INPUT'
-          || target.tagName === 'TEXTAREA'
-          || target.tagName === 'SELECT')
-      ) return;
+      if (isNavIgnored(e)) return;
+      const action = navActionOf(e.key);
 
       if (choosing) {
-        if (!['Escape', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        if (e.key !== 'Escape' && action === null) return;
         cancelChoice();
         e.preventDefault();
         return;
@@ -414,13 +408,8 @@ export function StudyBoard({
         : keyboardNav ?? null;
       if (nav === null) return;
 
-      switch (e.key) {
-        case 'ArrowLeft': nav.back(); break;
-        case 'ArrowRight': nav.forward(); break;
-        case 'Home': nav.first(); break;
-        case 'End': nav.last(); break;
-        default: return;
-      }
+      if (action === null) return;
+      nav[action]();
       // ページのスクロールを起こさない
       e.preventDefault();
     };

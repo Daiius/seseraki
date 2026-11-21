@@ -4,6 +4,7 @@ import {
   usiToJapaneseWithPiece,
   type BoardState,
   type MateLine,
+  type Side,
 } from 'shared';
 
 /**
@@ -53,6 +54,29 @@ export function pvTexts(
     st = applyMove(st, move);
     return text;
   });
+}
+
+/** 手番側（`sideToMove`）から数えて i 手目の手番記号。局面から始まる読み筋・手順に使う */
+export function turnSymbolFrom(sideToMove: Side, i: number): string {
+  const sente = (i % 2 === 0) === (sideToMove === 'sente');
+  return sente ? '▲' : '△';
+}
+
+/**
+ * 盤に指せる先頭部分。`applyMove` が読み飛ばす手（書式に合わない・終端の記号・その局面では指せない手）で打ち切る
+ * ——読み飛ばした手の後ろを盤に並べると、手数と局面がずれる
+ */
+export function playableMoves(base: BoardState, moves: readonly string[]): string[] {
+  const result: string[] = [];
+  let state = base;
+  for (const move of moves) {
+    const next = applyMove(state, move);
+    // 読み飛ばした手は盤を変えない（手番だけ進む）
+    if (next.board === state.board) break;
+    result.push(move);
+    state = next;
+  }
+  return result;
 }
 
 /**

@@ -6,6 +6,7 @@ import { callApi } from '../lib/callApi';
 import { refParam, type Drill, type Reveal } from '../lib/drillApi';
 import { matePliesText, practiceNote, resultBadge } from '../lib/drillAnswer';
 import type { ReplayCursor, ReplayLine } from '../lib/drillReplay';
+import { turnSymbolFrom } from '../lib/usi';
 import { ReplayLineText } from './DrillReplay';
 import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
 import { DrillAttemptHistory, type DrillAttemptRow } from './DrillCards';
@@ -68,7 +69,7 @@ export function Result({
         )}
         {reveal.gaveUp && <span className="text-sm text-base-content/70">答えを見ました</span>}
         <span className="text-sm">
-          正解 {usiToJapaneseWithPiece(base, reveal.answerMove)}
+          正解 {turnSymbolFrom(base.sideToMove, 0)}{usiToJapaneseWithPiece(base, reveal.answerMove)}
         </span>
       </div>
       {note && <p className="text-xs text-base-content/60">{note}</p>}
@@ -90,7 +91,7 @@ export function Result({
       </div>
       {reveal.playedMove && (
         <p className="text-sm">
-          実戦は {usiToJapaneseWithPiece(base, reveal.playedMove)}
+          実戦は {turnSymbolFrom(base.sideToMove, 0)}{usiToJapaneseWithPiece(base, reveal.playedMove)}
           {reveal.playedLossCp !== null && `（損失 ${reveal.playedLossCp}cp）`}
         </p>
       )}

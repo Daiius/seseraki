@@ -43,7 +43,6 @@ import { Result, type Shown } from './DrillResult';
 import { ReplayControls, ReplayLineText, useReplayKeys } from './DrillReplay';
 import {
   cursorState,
-  IDLE_CURSOR,
   initialCursor,
   missLine,
   revealLines,
@@ -176,7 +175,7 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
   function moveReplay(next: ReplayCursor) {
     if (replayOwner) setReplay({ of: replayOwner, cursor: next });
   }
-  useReplayKeys(lines, cursor ?? (lines.length > 0 ? IDLE_CURSOR : null), moveReplay);
+  useReplayKeys(lines, cursor, moveReplay);
   /**
    * 間違えた手の咎め筋を、解いている局面から離れて再生している。🔒 **盤を叩いたら解いている局面へ戻す**
    * （その叩きでは駒を選ばない。prd/13 §7.9）
@@ -199,7 +198,6 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
    */
   function onSquare(square: SquareRef) {
     if (!session || reveal || judging) return;
-    if (replayingAway) return backToSolving();
     if (choosing) return cancelChoice();
     const from = settledSession();
     played(resolvePromotion(from, tapSquare(from, square)));
@@ -207,7 +205,6 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
 
   function onHand(kind: HandPieceKind) {
     if (!session || reveal || judging) return;
-    if (replayingAway) return backToSolving();
     // 成 / 不成を選んでいる間に駒台を叩いたら、選択肢の外を叩いたのと同じく取り消す
     if (choosing) return cancelChoice();
     const from = settledSession();
@@ -418,20 +415,36 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
         )}
       </div>
 
-      <BoardWithHands
-        state={replayed?.state ?? state}
-        flipped={flipped}
-        lastMoveTo={replayed?.lastMove ? moveDestination(replayed.lastMove) : null}
-        selection={replayed ? null : session?.selection}
-        onSquareClick={reveal ? undefined : onSquare}
-        destinations={replayed ? null : selectionDestinations(session)}
-        promotionChoice={replayed ? null : pickerOf(session, choose, cancelChoice)}
-        // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
-        onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
-      />
+      {/*
+        咎め筋の再生で解いている局面から離れている間は、盤・駒台（相手側・空の駒台も）のどこを叩いても解いている局面へ戻す。
+        叩いた操作は盤に届けない（駒を選ばない。prd/13 §7.9）
+      */}
+      <div
+        onClickCapture={
+          replayingAway
+            ? (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                backToSolving();
+              }
+            : undefined
+        }
+      >
+        <BoardWithHands
+          state={replayed?.state ?? state}
+          flipped={flipped}
+          lastMoveTo={replayed?.lastMove ? moveDestination(replayed.lastMove) : null}
+          selection={replayed ? null : session?.selection}
+          onSquareClick={reveal ? undefined : onSquare}
+          destinations={replayed ? null : selectionDestinations(session)}
+          promotionChoice={replayed ? null : pickerOf(session, choose, cancelChoice)}
+          // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
+          onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
+        />
+      </div>
 
       {/* 手順の再生の送り（棋譜再生画面の ≪ ◀ ▶ ≫ と同じ並び。prd/13 §7.9） */}
-      {lines.length > 0 && <ReplayControls lines={lines} cursor={cursor ?? IDLE_CURSOR} onMove={moveReplay} />}
+      {lines.length > 0 && <ReplayControls lines={lines} cursor={cursor} onMove={moveReplay} />}
 
       {error && <p className="text-error text-sm">{error}</p>}
       {/*

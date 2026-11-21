@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
   ChevronDoubleLeftIcon,
@@ -6,112 +6,78 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from './icons';
+import { PvMoves } from './CandidateLine';
 import { useDisplaySize } from '../lib/displaySize';
 import { controlButtonsOf } from '../lib/touchTargets';
-import { linePositions, moveCursor, type ReplayCursor, type ReplayLine } from '../lib/drillReplay';
+import { isNavIgnored, navActionOf, type NavAction } from '../lib/keyboardNav';
+import { canStep, lineTexts, stepCursor, type ReplayCursor, type ReplayLine } from '../lib/drillReplay';
 
 /*
   出題の手順の再生（prd/13 §7.9）。盤の下の送りの行と、手順 1 本の表示。
-  🔒 **棋譜再生画面と同じ感覚にする**——≪ ◀ ▶ ≫ の並びと ← → Home End は `BoardControls`、
-  再生位置の手を太字にするのは `CandidateLine` と同じ。状態（どの手順の何手目）は `DrillRunner` が持つ。
+  🔒 **棋譜再生画面と同じ感覚にする**——キーの判定は `lib/keyboardNav.ts`、太字の規則は `CandidateLine` の `PvMoves`、
+  ボタンの寸法は `lib/touchTargets.ts` を棋譜側と共用する。状態（どの手順の何手目）は `DrillRunner` が持つ。
+  ⚠ 送りの行そのものは `BoardControls` と別にしている——あちらは検討の undo / redo・スライダー・反転・評価と一体で、
+  出題の再生には要らない
 */
 
-/** 盤の下の送りの行（≪ ◀ n/N ▶ ≫） */
+/** 盤の下の送りの行（≪ ◀ n/N ▶ ≫）。再生に入っていなければ位置を `–` にする */
 export function ReplayControls({
   lines,
   cursor,
   onMove,
 }: {
   lines: readonly ReplayLine[];
-  cursor: ReplayCursor;
+  cursor: ReplayCursor | null;
   onMove: (next: ReplayCursor) => void;
 }) {
   const { displaySize } = useDisplaySize();
   const btn = controlButtonsOf(displaySize.controlSize);
-  const length = lines[cursor.line]?.moves.length ?? 0;
-  const { position } = cursor;
-  const go = (to: number) => onMove(moveCursor(lines, cursor, to));
+  const length = lines[cursor?.line ?? 0]?.moves.length ?? 0;
+  const go = (action: NavAction) => {
+    const next = stepCursor(lines, cursor, action);
+    if (next) onMove(next);
+  };
+  const button = (action: NavAction, className: string, title: string, label: string, icon: ReactNode) => (
+    <button
+      type="button"
+      className={clsx(className, 'btn-outline')}
+      onClick={() => go(action)}
+      disabled={!canStep(lines, cursor, action)}
+      title={title}
+      aria-label={label}
+    >
+      {icon}
+    </button>
+  );
   return (
     <div className="flex items-center gap-2 max-w-3xl no-tap-select">
-      <button
-        type="button"
-        className={clsx(btn.icon, 'btn-outline')}
-        onClick={() => go(0)}
-        disabled={position === 0}
-        title="手順の最初へ (Home)"
-        aria-label="手順の最初へ"
-      >
-        <ChevronDoubleLeftIcon />
-      </button>
-      <button
-        type="button"
-        className={clsx(btn.iconFlex, 'btn-outline')}
-        onClick={() => go(position - 1)}
-        disabled={position === 0}
-        title="1 手戻る (←)"
-        aria-label="1 手戻る"
-      >
-        <ChevronLeftIcon />
-      </button>
+      {button('first', btn.icon, '手順の最初へ (Home)', '手順の最初へ', <ChevronDoubleLeftIcon />)}
+      {button('back', btn.iconFlex, '1 手戻る (←)', '1 手戻る', <ChevronLeftIcon />)}
       <span className="text-sm font-mono text-base-content/60 w-14 text-center shrink-0">
-        {position}/{length}
+        {cursor ? cursor.position : '–'}/{length}
       </span>
-      <button
-        type="button"
-        className={clsx(btn.iconFlex, 'btn-outline')}
-        onClick={() => go(position + 1)}
-        disabled={position === length}
-        title="1 手進む (→)"
-        aria-label="1 手進む"
-      >
-        <ChevronRightIcon />
-      </button>
-      <button
-        type="button"
-        className={clsx(btn.icon, 'btn-outline')}
-        onClick={() => go(length)}
-        disabled={position === length}
-        title="手順の最後へ (End)"
-        aria-label="手順の最後へ"
-      >
-        <ChevronDoubleRightIcon />
-      </button>
+      {button('forward', btn.iconFlex, '1 手進む (→)', '1 手進む', <ChevronRightIcon />)}
+      {button('last', btn.icon, '手順の最後へ (End)', '手順の最後へ', <ChevronDoubleRightIcon />)}
     </div>
   );
 }
 
-/**
- * ← → Home End で再生を送る（`StudyBoard` の手送りと同じキー・同じ除外）。`cursor` が null の間は何もしない
- */
+/** ← → Home End で再生を送る（棋譜側と同じキー・同じ除外。`lib/keyboardNav.ts`）。手順が無い間は何もしない */
 export function useReplayKeys(
   lines: readonly ReplayLine[],
   cursor: ReplayCursor | null,
   onMove: (next: ReplayCursor) => void,
 ) {
   useEffect(() => {
-    if (!cursor) return;
+    if (lines.length === 0) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-      const target = e.target;
-      if (
-        target instanceof HTMLElement
-        && (target.isContentEditable
-          || target.tagName === 'INPUT'
-          || target.tagName === 'TEXTAREA'
-          || target.tagName === 'SELECT')
-      ) return;
-      const length = lines[cursor.line]?.moves.length ?? 0;
-      let to: number;
-      switch (e.key) {
-        case 'ArrowLeft': to = cursor.position - 1; break;
-        case 'ArrowRight': to = cursor.position + 1; break;
-        case 'Home': to = 0; break;
-        case 'End': to = length; break;
-        default: return;
-      }
+      if (isNavIgnored(e)) return;
+      const action = navActionOf(e.key);
+      if (action === null) return;
       // ページのスクロールを起こさない
       e.preventDefault();
-      onMove(moveCursor(lines, cursor, to));
+      const next = stepCursor(lines, cursor, action);
+      if (next) onMove(next);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -120,8 +86,7 @@ export function useReplayKeys(
 
 /**
  * 手順 1 本（見出し + 手の並び）。叩くとその手順の再生に切り替わる。
- * 🔴 **再生位置の手（いま盤に出ている局面へ至った直前の手）を太字にする**（`CandidateLine` と同じ規則）。
- * 再生していない手順は太字を付けない
+ * 再生位置の手を太字にする規則は棋譜側と同じ（`PvMoves`）。再生していない手順は太字を付けない
  */
 export function ReplayLineText({
   line,
@@ -132,11 +97,10 @@ export function ReplayLineText({
   line: ReplayLine;
   /** この手順を再生している位置（再生していなければ null） */
   position: number | null;
-  /** 複数の手順を並べていて、これを再生している（枠で示す） */
+  /** これを再生している（背景で示す） */
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { texts } = linePositions(line);
   return (
     <button
       type="button"
@@ -148,19 +112,9 @@ export function ReplayLineText({
       )}
     >
       <span className="me-1">{line.label}</span>
-      {texts.map((text, j) => {
-        const node =
-          position !== null && j === position - 1 ? (
-            <strong key={j} className="font-bold">
-              {text}
-            </strong>
-          ) : (
-            <span key={j} className={position !== null ? 'text-base-content/70' : undefined}>
-              {text}
-            </span>
-          );
-        return j > 0 ? [' ', node] : [node];
-      })}
+      <span className={position !== null ? 'text-base-content/70' : undefined}>
+        <PvMoves texts={lineTexts(line)} position={position ?? 0} />
+      </span>
     </button>
   );
 }

@@ -132,9 +132,16 @@ describe('カーソルの操作と局面', () => {
     expect(cursorState(lines, { line: 0, position: 0 })).toEqual({ state: base, lastMove: null });
   });
 
-  it('1 手ずつの表記', () => {
+  it('1 手ずつの表記（手番記号付き）', () => {
     const { texts, states } = linePositions(lines[0]);
-    expect(texts).toEqual(['７六歩(77)', '３四歩(33)']);
+    expect(texts).toEqual(['▲７六歩(77)', '△３四歩(33)']);
     expect(states).toHaveLength(3);
+  });
+});
+
+describe('手番記号は指す前の局面の手番から', () => {
+  it('後手番から始まる手順は △ から', () => {
+    const goteToMove = applyMove(base, '7g7f');
+    expect(linePositions({ base: goteToMove, moves: ['3c3d', '2g2f'] }).texts).toEqual(['△３四歩(33)', '▲２六歩(27)']);
   });
 });

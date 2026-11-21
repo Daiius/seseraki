@@ -27,11 +27,16 @@ export interface ReplayCursor {
   position: number;
 }
 
-/** 手順の局面と、1 手ずつの日本語の表記を作る（`states[k]` は k 手指した後） */
+/**
+ * 手順の局面と、1 手ずつの日本語の表記を作る（`states[k]` は k 手指した後）。
+ * 🔒 **表記に手番記号（▲△）を付ける**——どちらの手かを読み取れるように。記号は指す前の局面の手番から取る
+ */
 export function linePositions(line: Pick<ReplayLine, 'base' | 'moves'>): { states: BoardState[]; texts: string[] } {
   const session = applyStudyMoves(line.base, line.moves);
   const states = session.steps.map((step) => step.state);
-  const texts = line.moves.map((move, i) => usiToJapaneseWithPiece(states[i], move));
+  const texts = line.moves.map(
+    (move, i) => `${states[i].sideToMove === 'sente' ? '▲' : '△'}${usiToJapaneseWithPiece(states[i], move)}`,
+  );
   return { states, texts };
 }
 

@@ -22,7 +22,6 @@ import { BrowserAnalysisNotice, DrillEngineConsent } from './BrowserAnalysis';
 import {
   lineAfterUndoTurn,
   missText,
-  movesText,
   retriesAfterEngineReady,
   type MissReason,
 } from '../lib/drillAnswer';
@@ -41,6 +40,17 @@ import { listSearch, modeSearch, type DrillsSearch } from '../lib/drillSearch';
 import { drillRound } from '../lib/drillRound';
 import { RoundBar } from './DrillRoundBar';
 import { Result, type Shown } from './DrillResult';
+import { ReplayControls, ReplayLines, useReplayKeys } from './DrillReplay';
+import {
+  cursorState,
+  initialCursor,
+  missLine,
+  revealLines,
+  selectLine,
+  type ReplayCursor,
+  type ReplayLine,
+} from '../lib/drillReplay';
+import { moveDestination } from '../lib/usi';
 
 /*
   出題の解く画面（prd/13 §7.1・§7.6）。`routes/drills.tsx` から切り出した。
@@ -52,8 +62,8 @@ import { Result, type Shown } from './DrillResult';
 /** 詰将棋で間違えた手の案内（その手は盤から取り消してある） */
 interface Miss {
   reason: MissReason;
-  /** 咎め筋（受けの手）。日本語にして持つ（読む局面は取り消す前の盤） */
-  refutationText: string | null;
+  /** 咎め筋（解いている局面から、間違えた手と受けの手。prd/13 §7.9）。無ければ null */
+  line: ReplayLine | null;
 }
 
 export function DrillRunner({ initial, search }: { initial: SolveData; search: DrillsSearch }) {
@@ -135,6 +145,46 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
    * 選択待ちはセッションが持つ（`lib/study.ts` の `resolvePromotion`。検討盤と同じ口）
    */
   const choosing = session !== null && isChoosingPromotion(session);
+
+  /**
+   * 再生できる手順（prd/13 §7.9）。解答後は正解手順と咎め筋、詰将棋で間違えた直後はその咎め筋
+   */
+  const lines: ReplayLine[] =
+    reveal && drill && base
+      ? revealLines({
+          kind: drill.kind,
+          base,
+          played: reveal.played,
+          answerMove: reveal.answerMove,
+          answerPv: reveal.answerPv,
+          refutation: reveal.refutation,
+        })
+      : miss?.line && !judging
+        ? [miss.line]
+        : [];
+  /** 手順の持ち主（解答後の表示か、間違えた手の案内）。持ち主が替わったら再生の位置は捨てる */
+  const replayOwner: object | null = reveal ?? (lines.length > 0 ? miss : null);
+  const [replay, setReplay] = useState<{ of: object; cursor: ReplayCursor } | null>(null);
+  /** 再生の位置。null は再生に入っていない（盤は解いている局面・答えた局面のまま） */
+  const cursor: ReplayCursor | null =
+    replayOwner === null
+      ? null
+      : replay?.of === replayOwner
+        ? replay.cursor
+        : initialCursor(lines, reveal ? reveal.played : []);
+  function moveReplay(next: ReplayCursor) {
+    if (replayOwner) setReplay({ of: replayOwner, cursor: next });
+  }
+  useReplayKeys(lines, cursor, moveReplay);
+  /**
+   * 間違えた手の咎め筋を、解いている局面から離れて再生している。🔒 **盤を叩いたら解いている局面へ戻す**
+   * （その叩きでは駒を選ばない。prd/13 §7.9）
+   */
+  const replayingAway = !reveal && cursor !== null && cursor.position !== lines[cursor.line]?.start;
+  const replayed = cursor && (reveal || replayingAway) ? cursorState(lines, cursor) : null;
+  function backToSolving() {
+    if (cursor) moveReplay({ line: cursor.line, position: lines[cursor.line].start });
+  }
 
   /**
    * 盤を叩く。🔒 **盤操作は「ルールどおり」のモード**（`lib/study.ts`）——手番側の駒だけ選べ、
@@ -242,7 +292,7 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     if (!practice) noteRecorded(step.result.verdict);
     setSession(sessionOf(drill, line));
     setMiss(null);
-    setReveal({ ...step.result, practice, recorded: nextRecorded });
+    setReveal({ ...step.result, practice, recorded: nextRecorded, played: line });
   }
 
   /** 判定に回す。`at` は答えた手を指した後のセッション（state の反映を待たずに読むので引数で受ける） */
@@ -256,8 +306,6 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
     setMiss(null);
     setConfirmGiveUp(false);
     const practice = recorded !== null;
-    /** 答えた手を指した後の局面（咎め筋はここから読む） */
-    const answered = currentState(at);
     const outcome = await requestAnswer(
       drill,
       { line: [...line, move], ...scoring, ...(practice ? { practice: true } : {}) },
@@ -290,7 +338,7 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
         if (!practice) noteRecorded('wrong');
         setMiss({
           reason: outcome.reason,
-          refutationText: outcome.refutation.length > 0 ? movesText(answered, outcome.refutation) : null,
+          line: missLine(currentState(sessionOf(drill, line)!), move, outcome.refutation),
         });
         setSession(sessionOf(drill, line));
         setJudging(false);
@@ -298,7 +346,7 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
       case 'done': {
         const nextRecorded = practice ? recorded : outcome.result.verdict;
         if (!practice) noteRecorded(outcome.result.verdict);
-        setReveal({ ...outcome.result, practice, recorded: nextRecorded });
+        setReveal({ ...outcome.result, practice, recorded: nextRecorded, played: [...line, move] });
         setJudging(false);
         return;
       }
@@ -367,16 +415,36 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
         )}
       </div>
 
-      <BoardWithHands
-        state={state}
-        flipped={flipped}
-        selection={session?.selection}
-        onSquareClick={reveal ? undefined : onSquare}
-        destinations={selectionDestinations(session)}
-        promotionChoice={pickerOf(session, choose, cancelChoice)}
-        // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
-        onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
-      />
+      {/*
+        咎め筋の再生で解いている局面から離れている間は、盤・駒台（相手側・空の駒台も）のどこを叩いても解いている局面へ戻す。
+        叩いた操作は盤に届けない（駒を選ばない。prd/13 §7.9）
+      */}
+      <div
+        onClickCapture={
+          replayingAway
+            ? (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                backToSolving();
+              }
+            : undefined
+        }
+      >
+        <BoardWithHands
+          state={replayed?.state ?? state}
+          flipped={flipped}
+          lastMoveTo={replayed?.lastMove ? moveDestination(replayed.lastMove) : null}
+          selection={replayed ? null : session?.selection}
+          onSquareClick={reveal ? undefined : onSquare}
+          destinations={replayed ? null : selectionDestinations(session)}
+          promotionChoice={replayed ? null : pickerOf(session, choose, cancelChoice)}
+          // 叩けるのは解いている側（下）の駒台だけ。相手の駒台は表示専用
+          onHandPieceClick={(side) => (side === bottomSide && !reveal && !judging ? onHand : undefined)}
+        />
+      </div>
+
+      {/* 手順の再生の送り（棋譜再生画面の ≪ ◀ ▶ ≫ と同じ並び。prd/13 §7.9） */}
+      {lines.length > 0 && <ReplayControls lines={lines} cursor={cursor} onMove={moveReplay} />}
 
       {error && <p className="text-error text-sm">{error}</p>}
       {/*
@@ -403,7 +471,18 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
       {miss && !reveal && !judging && (
         <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1">
           <span>{missText(miss.reason)}。その手を取り消しました</span>
-          {miss.refutationText && <span className="break-all">咎め筋 {miss.refutationText}</span>}
+          {miss.line && (
+            <div className="w-full">
+              <ReplayLines
+                lines={[miss.line]}
+                cursor={cursor}
+                onSelect={(index) => {
+                  const next = selectLine(lines, cursor, index);
+                  if (next) moveReplay(next);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -458,8 +537,12 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
           reveal={reveal}
           drill={drill}
           base={base!}
-          // 咎め筋は**答えた手を指した後**の局面から読む（相手の応手から始まるため）
-          answered={state}
+          lines={lines}
+          cursor={cursor}
+          onSelectLine={(index) => {
+            const next = selectLine(lines, cursor, index);
+            if (next) moveReplay(next);
+          }}
           mode={mode}
           onNext={onNext}
         />

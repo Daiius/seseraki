@@ -6,7 +6,9 @@ import {
   formatTurnScore,
   mateLineOf,
   moveDestination,
+  playableMoves,
   pvTexts,
+  turnSymbolFrom,
 } from './usi';
 
 /**
@@ -325,5 +327,21 @@ describe('pvTexts', () => {
 
   it('空の読み筋は空', () => {
     expect(pvTexts(createInitialState(), [], () => '▲')).toEqual([]);
+  });
+});
+
+describe('turnSymbolFrom（局面の手番から数えた手番記号）', () => {
+  it('先手番からは ▲ △ ▲、後手番からは △ ▲ △', () => {
+    expect([0, 1, 2].map((i) => turnSymbolFrom('sente', i))).toEqual(['▲', '△', '▲']);
+    expect([0, 1, 2].map((i) => turnSymbolFrom('gote', i))).toEqual(['△', '▲', '△']);
+  });
+});
+
+describe('playableMoves（盤に指せる先頭部分）', () => {
+  it('読み飛ばす手（書式違い・終端の記号・移動元が空）で打ち切る', () => {
+    const base = createInitialState();
+    expect(playableMoves(base, ['7g7f', '3c3d'])).toEqual(['7g7f', '3c3d']);
+    expect(playableMoves(base, ['7g7f', 'resign', '3c3d'])).toEqual(['7g7f']);
+    expect(playableMoves(base, ['5e5d', '7g7f'])).toEqual([]);
   });
 });

@@ -498,8 +498,8 @@ function CandidateList({
                 isPlayed && 'bg-base-200',
                 isNotBest && isSevere && 'border border-error/30',
                 isNotBest && label === 'dubious' && 'border border-warning/30',
-                isActiveBranch && 'border-l-4 border-l-primary pl-3',
               )}
+              active={isActiveBranch}
               rank={c.rank}
               moveText={`${turnSymbol(evalMoveNumber)}${usiToJapaneseWithPiece(prevState, c.move)}`}
               scoreText={formatScore(

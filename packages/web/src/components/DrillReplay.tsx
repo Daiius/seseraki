@@ -85,8 +85,8 @@ export function useReplayKeys(
 }
 
 /**
- * 再生できる手順の一覧。🔒 **棋譜側の候補手と同じ外枠（`PvLine`）で描く**——再生している手順だけを開き、左に太い線を引く。
- * 再生していない手順は見出し（名前と最初の手）だけに畳む。見出しを叩くとその手順の再生に切り替わる（prd/13 §7.9）
+ * 再生できる手順の一覧。🔒 **棋譜側の候補手と同じ外枠（`PvLine`）で描く**——再生している手順は左に primary の線、
+ * ほかはグレーの線を引く。🔒 **畳まない**（叩いても高さが変わらない）。どこを叩いてもその手順の再生に切り替わる（prd/13 §7.9）
  */
 export function ReplayLines({
   name,
@@ -101,7 +101,7 @@ export function ReplayLines({
   onSelect: (index: number) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       {lines.map((line, index) => {
         const selected = cursor?.line === index;
         const texts = lineTexts(line);
@@ -111,15 +111,13 @@ export function ReplayLines({
             name={name}
             className="text-sm"
             active={selected}
-            open={selected}
+            selectable
             onSummaryClick={() => onSelect(index)}
-            collapse="always"
-            countText={`${texts.length}手`}
+            collapse="never"
             summary={
-              <>
-                <span className="font-bold shrink-0">{line.label}</span>
-                <span className="truncate text-base-content/70">{texts[0]}</span>
-              </>
+              <span className={clsx('badge badge-sm whitespace-nowrap', selected ? 'badge-primary' : 'badge-ghost')}>
+                {line.label}
+              </span>
             }
             texts={texts}
             position={selected ? cursor.position : 0}

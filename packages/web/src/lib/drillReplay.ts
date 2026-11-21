@@ -11,7 +11,7 @@ import type { NavAction } from './keyboardNav';
 
 /** 再生できる手順 1 本 */
 export interface ReplayLine {
-  /** 一覧の中での見出し（「正解手順」「詰み手順」「咎め筋」） */
+  /** 一覧の中での見出し（「正解手順」「詰み手順」「あなたの解答」。🔒 「咎め筋」は解いた直後には伝わりにくいので使わない） */
   label: string;
   /** 手順を始める局面 */
   base: BoardState;
@@ -88,7 +88,7 @@ export function revealLines(input: {
   if (input.refutation && input.refutation.length > 0 && played.length > 0) {
     const refutation = playableMoves(base, [...played, ...input.refutation]);
     if (refutation.length > played.length) {
-      lines.push({ label: '咎め筋', base, moves: refutation, start: played.length });
+      lines.push({ label: 'あなたの解答', base, moves: refutation, start: played.length });
     }
   }
   return lines;
@@ -101,7 +101,7 @@ export function revealLines(input: {
 export function missLine(solving: BoardState, wrongMove: string, refutation: readonly string[]): ReplayLine | null {
   const moves = playableMoves(solving, [wrongMove, ...refutation]);
   if (moves.length < 2) return null;
-  return { label: '咎め筋', base: solving, moves, start: 0 };
+  return { label: 'あなたの解答', base: solving, moves, start: 0 };
 }
 
 /**

@@ -78,7 +78,7 @@ export function Result({
         正解手順・咎め筋（prd/13 §7.9）。棋譜側の候補手と同じ外枠で、再生している手順だけを開く。
         見出しを叩くとその手順を問題の盤で再生し、盤の下の送りの行・← → で 1 手ずつ進める
       */}
-      <div className="-mx-2">
+      <div className="-mx-2 py-2">
         <ReplayLines name="drill-lines" lines={lines} cursor={cursor} onSelect={onSelectLine} />
       </div>
       {reveal.playedMove && (

@@ -62,7 +62,7 @@ describe('revealLines（解答後の手順）', () => {
       answerPv: ['7g7f', '3c3d'],
       refutation: ['8c8d', '2f2e'],
     });
-    expect(lines.map((l) => l.label)).toEqual(['正解手順', '咎め筋']);
+    expect(lines.map((l) => l.label)).toEqual(['正解手順', 'あなたの解答']);
     expect(lines[1].moves).toEqual(['2g2f', '8c8d', '2f2e']);
     expect(lines[0].start).toBe(0);
     expect(lines[1].start).toBe(1);
@@ -98,7 +98,7 @@ describe('revealLines（解答後の手順）', () => {
 describe('missLine（詰将棋の途中の咎め筋）', () => {
   it('解いている局面から、間違えた手 + 受けの手。始める位置は 0', () => {
     const line = missLine(base, '2g2f', ['8c8d']);
-    expect(line).toEqual({ label: '咎め筋', base, moves: ['2g2f', '8c8d'], start: 0 });
+    expect(line).toEqual({ label: 'あなたの解答', base, moves: ['2g2f', '8c8d'], start: 0 });
     expect(initialCursor([line!], [])).toEqual({ line: 0, position: 0 });
   });
   it('受けの手が無ければ出さない', () => {

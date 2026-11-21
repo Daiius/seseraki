@@ -75,15 +75,19 @@ export function CandidateLine({
  *
  * - `name` で排他アコーディオンにする（開いているのは 1 本だけ）
  * - 畳んだ見出しの右端に手数（`PV{n}` / `{n}手`）と ▼ を出す
- * - 🔴 **再生している読み筋は左に太い線を引く**（`active`。棋譜側の分岐の再生と同じ印）。どれを再生しているかを、開閉と別に示す
+ * - 🔴 **再生している読み筋は左に太い線を引く**（`active`。棋譜側の分岐の再生と同じ印）。どれを再生しているかを、開閉と別に示す。
+ *   `selectable` のときは**再生していない読み筋にも同じ太さの線をグレーで引く**（選べるものが並んでいると分かるように。出題の手順）
  * - `collapse="mobile"` は md 未満だけ畳む（md 以上は `app.css` の `details[name=…]` の規則で常時展開。棋譜側の候補手）。
- *   `"always"` はどの幅でも畳む（出題の手順。再生していない手順を畳む）
+ *   `"never"` は畳まない（出題の手順）。🔒 **叩いても高さが変わらない**——別の手順も見ようとしたとき、叩く場所が動かないように
+ *   （2026-11-21 ユーザー判断。畳む形は撤回した）。見出しの行を持たず、見出し（`summary`）を手の並びの先頭に置く。手数（`countText`）は出さない。
+ *   どこを叩いても `onSummaryClick` を呼ぶ
  * - 開閉を呼び出し側が持つときは `open` と `onSummaryClick` を渡す（見出しを叩いたときの既定の開閉は止める）
  */
 export function PvLine({
   name,
   className,
   active = false,
+  selectable = false,
   open,
   onToggle,
   onSummaryClick,
@@ -97,14 +101,16 @@ export function PvLine({
   name: string;
   className?: string;
   active?: boolean;
+  /** 再生していない読み筋にもグレーの線を引く */
+  selectable?: boolean;
   /** 開閉を呼び出し側が持つ（省けば `details` の既定の開閉） */
   open?: boolean;
   onToggle?: (e: SyntheticEvent<HTMLDetailsElement>) => void;
   /** 見出しを叩いた（渡したら既定の開閉は止める） */
   onSummaryClick?: () => void;
-  collapse: 'mobile' | 'always';
-  /** 畳んだ見出しの右端に出す手数 */
-  countText: string;
+  collapse: 'mobile' | 'never';
+  /** 畳んだ見出しの右端に出す手数（`never` では出さない） */
+  countText?: string;
   /** 見出しの行の中身 */
   summary: ReactNode;
   /** 手の並び（手番記号付き）。空なら畳む中身を出さない */
@@ -114,12 +120,41 @@ export function PvLine({
   /** 手の並びの下に置くもの（棋譜側の ◀ n/N ▶） */
   children?: ReactNode;
 }) {
+  const bar = clsx(
+    (active || selectable) && 'border-l-4 pl-3',
+    active ? 'border-l-primary' : selectable && 'border-l-base-content/20',
+  );
+  if (collapse === 'never') {
+    // 畳まない読み筋は `details` にしない（見出しの行も持たず、見出しを手の並びの先頭に置いて 1 行ぶん詰める）。
+    // 全体を叩くとその読み筋の再生に切り替わる
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={active}
+        className={clsx('rounded-lg p-2', onSummaryClick && 'cursor-pointer hover:bg-base-300/50', className, bar)}
+        onClick={onSummaryClick}
+        onKeyDown={(e) => {
+          if (onSummaryClick && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            onSummaryClick();
+          }
+        }}
+      >
+        <div className="font-mono text-xs text-base-content/60 leading-relaxed">
+          <span className="me-2 font-sans">{summary}</span>
+          <PvMoves texts={texts} position={position} />
+        </div>
+        {children}
+      </div>
+    );
+  }
   const mobileOnly = collapse === 'mobile';
   return (
     <details
       name={name}
       open={open}
-      className={clsx('group rounded-lg p-2', className, active && 'border-l-4 border-l-primary pl-3')}
+      className={clsx('group rounded-lg p-2', className, bar)}
       onToggle={onToggle}
     >
       <summary

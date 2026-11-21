@@ -20,3 +20,6 @@ overrides:
   # drizzle-orm の任意の peer の mssql は使わない（pg だけ）。msal-node の脆弱性ごと外す。
   mssql: "-"
   "@types/mssql": "-"
+  # Dependabot #70 / #71（seroval の GHSA-9wx9-5pv9-3349・GHSA-f86p-h4j2-7qgj）。@tanstack/router-core 経由。
+  # router-core の範囲（^1.6.7）が 1.6.11 以上へ解決するようになったら外す。
+  seroval@<1.6.11: "~1.6.11"

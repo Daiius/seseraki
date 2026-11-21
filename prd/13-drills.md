@@ -797,6 +797,9 @@ dev の解析から拾った詰み局面 11 問（rank1 が正の `mate`・手�
 - 🔴 **手順は盤に指せる先頭部分で打ち切る**（`lib/usi.ts` の `playableMoves`。レビュー `OCL-8072DDF1`）。読み筋に終端の記号やその局面で指せない手が
   混ざると、`applyMove` はその手を読み飛ばすので、手数と局面がずれる。
 - 計算は `lib/drillReplay.ts`（純粋な関数）、描画は `components/DrillReplay.tsx`。server の口は変えない（`answerPv` と `refutation` は以前から返している）。
+- **手順の一覧は棋譜側の候補手と同じ外枠**（`CandidateLine.tsx` の `PvLine`。2026-11-21 ユーザー判断）。🔒 **再生している手順だけを開き、左に太い線を引く**。
+  再生していない手順は見出し（名前・最初の手・手数）だけに畳み、見出しを叩くとその手順の再生に切り替わる。棋譜側と違い md 以上でも畳む。
+  開いた手順の中に ◀ n/N ▶ は置かない（盤の直下の送りの行と重なるため）。
   🔒 **棋譜側と部品を共用する**: 手の表記と手番記号（`lib/usi.ts` の `pvTexts` / `turnSymbolFrom`。検討盤も同じ）・手送りのキーの判定（`lib/keyboardNav.ts`。`StudyBoard` も同じ）・
   再生位置の太字（`CandidateLine` の `PvMoves`）。送りの行は `BoardControls` と別にする（あちらは検討の undo / redo・スライダー・反転・評価と一体）。
 - 結果欄の上の行（「正解 …」「実戦は …」）にも手番記号を付ける（2026-11-21 ユーザー判断）。

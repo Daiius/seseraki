@@ -40,7 +40,7 @@ import { listSearch, modeSearch, type DrillsSearch } from '../lib/drillSearch';
 import { drillRound } from '../lib/drillRound';
 import { RoundBar } from './DrillRoundBar';
 import { Result, type Shown } from './DrillResult';
-import { ReplayControls, ReplayLineText, useReplayKeys } from './DrillReplay';
+import { ReplayControls, ReplayLines, useReplayKeys } from './DrillReplay';
 import {
   cursorState,
   initialCursor,
@@ -472,15 +472,17 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
         <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1">
           <span>{missText(miss.reason)}。その手を取り消しました</span>
           {miss.line && (
-            <ReplayLineText
-              line={miss.line}
-              position={cursor?.position ?? null}
-              selected={false}
-              onSelect={() => {
-                const next = selectLine(lines, cursor, 0);
-                if (next) moveReplay(next);
-              }}
-            />
+            <div className="w-full">
+              <ReplayLines
+                name="drill-miss-line"
+                lines={[miss.line]}
+                cursor={cursor}
+                onSelect={(index) => {
+                  const next = selectLine(lines, cursor, index);
+                  if (next) moveReplay(next);
+                }}
+              />
+            </div>
           )}
         </div>
       )}

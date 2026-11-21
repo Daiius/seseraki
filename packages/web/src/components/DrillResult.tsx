@@ -7,7 +7,7 @@ import { refParam, type Drill, type Reveal } from '../lib/drillApi';
 import { matePliesText, practiceNote, resultBadge } from '../lib/drillAnswer';
 import type { ReplayCursor, ReplayLine } from '../lib/drillReplay';
 import { turnSymbolFrom } from '../lib/usi';
-import { ReplayLineText } from './DrillReplay';
+import { ReplayLines } from './DrillReplay';
 import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
 import { DrillAttemptHistory, type DrillAttemptRow } from './DrillCards';
 import { ChevronDownIcon, DrillModeIcon } from './icons';
@@ -75,19 +75,11 @@ export function Result({
       {note && <p className="text-xs text-base-content/60">{note}</p>}
 
       {/*
-        正解手順・咎め筋（prd/13 §7.9）。叩くとその手順を問題の盤で再生し、盤の下の送りの行・← → で 1 手ずつ進める。
-        再生している手順は背景で、いま盤に出ている局面へ至った手は太字で示す
+        正解手順・咎め筋（prd/13 §7.9）。棋譜側の候補手と同じ外枠で、再生している手順だけを開く。
+        見出しを叩くとその手順を問題の盤で再生し、盤の下の送りの行・← → で 1 手ずつ進める
       */}
       <div className="-mx-2">
-        {lines.map((line, index) => (
-          <ReplayLineText
-            key={line.label}
-            line={line}
-            position={cursor?.line === index ? cursor.position : null}
-            selected={cursor?.line === index}
-            onSelect={() => onSelectLine(index)}
-          />
-        ))}
+        <ReplayLines name="drill-lines" lines={lines} cursor={cursor} onSelect={onSelectLine} />
       </div>
       {reveal.playedMove && (
         <p className="text-sm">

@@ -6,7 +6,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
 } from './icons';
-import { PvMoves } from './CandidateLine';
+import { PvLine } from './CandidateLine';
 import { useDisplaySize } from '../lib/displaySize';
 import { controlButtonsOf } from '../lib/touchTargets';
 import { isNavIgnored, navActionOf, type NavAction } from '../lib/keyboardNav';
@@ -14,7 +14,7 @@ import { canStep, lineTexts, stepCursor, type ReplayCursor, type ReplayLine } fr
 
 /*
   出題の手順の再生（prd/13 §7.9）。盤の下の送りの行と、手順 1 本の表示。
-  🔒 **棋譜再生画面と同じ感覚にする**——キーの判定は `lib/keyboardNav.ts`、太字の規則は `CandidateLine` の `PvMoves`、
+  🔒 **棋譜再生画面と同じ感覚にする**——キーの判定は `lib/keyboardNav.ts`、手順の外枠と太字の規則は `CandidateLine.tsx` の `PvLine`、
   ボタンの寸法は `lib/touchTargets.ts` を棋譜側と共用する。状態（どの手順の何手目）は `DrillRunner` が持つ。
   ⚠ 送りの行そのものは `BoardControls` と別にしている——あちらは検討の undo / redo・スライダー・反転・評価と一体で、
   出題の再生には要らない
@@ -85,36 +85,47 @@ export function useReplayKeys(
 }
 
 /**
- * 手順 1 本（見出し + 手の並び）。叩くとその手順の再生に切り替わる。
- * 再生位置の手を太字にする規則は棋譜側と同じ（`PvMoves`）。再生していない手順は太字を付けない
+ * 再生できる手順の一覧。🔒 **棋譜側の候補手と同じ外枠（`PvLine`）で描く**——再生している手順だけを開き、左に太い線を引く。
+ * 再生していない手順は見出し（名前と最初の手）だけに畳む。見出しを叩くとその手順の再生に切り替わる（prd/13 §7.9）
  */
-export function ReplayLineText({
-  line,
-  position,
-  selected,
+export function ReplayLines({
+  name,
+  lines,
+  cursor,
   onSelect,
 }: {
-  line: ReplayLine;
-  /** この手順を再生している位置（再生していなければ null） */
-  position: number | null;
-  /** これを再生している（背景で示す） */
-  selected: boolean;
-  onSelect: () => void;
+  /** 排他アコーディオンの名前（解答後と途中の間違いで分ける） */
+  name: string;
+  lines: readonly ReplayLine[];
+  cursor: ReplayCursor | null;
+  onSelect: (index: number) => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={clsx(
-        'block w-full text-left text-sm break-all rounded-lg px-2 py-1 cursor-pointer',
-        selected ? 'bg-base-300' : 'hover:bg-base-300/50',
-      )}
-    >
-      <span className="me-1">{line.label}</span>
-      <span className={position !== null ? 'text-base-content/70' : undefined}>
-        <PvMoves texts={lineTexts(line)} position={position ?? 0} />
-      </span>
-    </button>
+    <div className="flex flex-col gap-1">
+      {lines.map((line, index) => {
+        const selected = cursor?.line === index;
+        const texts = lineTexts(line);
+        return (
+          <PvLine
+            key={line.label}
+            name={name}
+            className="text-sm"
+            active={selected}
+            open={selected}
+            onSummaryClick={() => onSelect(index)}
+            collapse="always"
+            countText={`${texts.length}手`}
+            summary={
+              <>
+                <span className="font-bold shrink-0">{line.label}</span>
+                <span className="truncate text-base-content/70">{texts[0]}</span>
+              </>
+            }
+            texts={texts}
+            position={selected ? cursor.position : 0}
+          />
+        );
+      })}
+    </div>
   );
 }

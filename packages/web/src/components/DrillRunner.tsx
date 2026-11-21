@@ -469,7 +469,7 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
       )}
 
       {miss && !reveal && !judging && (
-        <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1">
+        <div className="alert alert-warning py-2 text-sm flex flex-col items-start gap-1 no-tap-select">
           <span>{missText(miss.reason)}。その手を取り消しました</span>
           {miss.line && (
             <div className="w-full">

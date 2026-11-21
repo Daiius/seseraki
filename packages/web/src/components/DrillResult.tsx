@@ -59,7 +59,8 @@ export function Result({
   const otherModes = MODES.filter((other) => other !== mode);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* 🔒 no-tap-select: 送りの行を連打したときに、iOS のダブルタップの文字選択が結果の見出しに掛からないように */}
+      <div className="flex items-center gap-2 flex-wrap no-tap-select">
         <span className={`badge ${verdict.className}`}>{verdict.label}</span>
         {reveal.lossCp !== null && (
           <span className="text-sm">損失 {reveal.lossCp}cp</span>
@@ -82,7 +83,7 @@ export function Result({
         <ReplayLines lines={lines} cursor={cursor} onSelect={onSelectLine} />
       </div>
       {reveal.playedMove && (
-        <p className="text-sm">
+        <p className="text-sm no-tap-select">
           実戦は {turnSymbolFrom(base.sideToMove, 0)}{usiToJapaneseWithPiece(base, reveal.playedMove)}
           {reveal.playedLossCp !== null && `（損失 ${reveal.playedLossCp}cp）`}
         </p>

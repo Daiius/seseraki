@@ -3,9 +3,10 @@
 > このファイルがリポジトリの**正典**です（使用する各コーディングエージェント共通）。簡潔・リンク中心に保つこと。
 > 詳細仕様は [`prd/`](./prd/) を参照。
 
-## ⚠ main に入ると server は数分で本番に出る（マージの前に必ず読む）
+## ⚠ main に入ると server（と web）は数分で本番に出る（マージの前に必ず読む）
 
-> **状態: workflow は実装済み・本番の追従は有効（2026-11-19 に有効化）。** 有効化の直後に、本番が main のイメージへ入れ替わり、版の口が main のコミットを返すことを確かめた。
+> **状態: server は workflow は実装済み・本番の追従は有効（2026-11-19 に有効化）。** 有効化の直後に、本番が main のイメージへ入れ替わり、版の口が main のコミットを返すことを確かめた。
+> **web は workflow を足した段（準備中）。** 本番の VPS が web の `latest` を追いかけるようにするのは別の作業で、所有者が有効にする（下の web の項）。
 
 - **server は、main にマージされると数分で本番に出る。** main への push で server のイメージがビルドされ
   （[`build-push-server.yml`](./.github/workflows/build-push-server.yml)。`paths` に当たる変更のとき。`packages/server`・`packages/shared`・根の依存の定義）、
@@ -14,8 +15,16 @@
   - そのため、server の変更について「実装済み（本番は未反映）」と書けるのは、**main に入れていない間だけ**になる。
     今ある「本番は未反映」の記述（追従を有効にする前に書いたもの）は、有効にした時点で main の server の分が本番に出るので、意味が変わる（書き換えは所有者が確かめてから）。
     有効化の時点で、本番の server は main と同じ中身だった（server・shared に効く差分は無かった）。
-- 対象は server だけ。**web（静的配信。`pnpm deploy:web`）と worker（解析用のホストでビルド）は対象外**で、今までどおり所有者が手で出す。
-  server だけが先に出るので、web・worker との口（Hono RPC の形・worker の報告の形）を変える PR は、古い web・worker でも動く形にするか、出す順を所有者と決める。
+- **web（静的配信）も同じ形にする**（[`build-push-web.yml`](./.github/workflows/build-push-web.yml)。runner の上でエンジンと web をビルドし、
+  `packages/web/dist` だけを入れたイメージを作る。VPS が中身を配信ディレクトリへ世代として取り出す。[prd/02](./prd/02-architecture.md) §5.2）。
+  `paths` は `packages/{web,shared,server,engine-wasm}/**`・根の依存の定義と `tsconfig.json` など（web の `tsc` が server の型を辿るので、server だけの変更でも web の世代が進む）。
+  - **状態: 準備中**（workflow はあるが、VPS はまだ web の `latest` を追いかけていない。有効にするのは所有者）。
+    有効になるまでは、main に入っても web は本番に出ない（今までどおり所有者が `pnpm deploy:web` で手で出す）。
+  - 有効になったあとは、web の変更も server と同じく数分で本番に出る。🔒 **有効になったあとは `pnpm deploy:web` を使わない**
+    （緊急でも。配っている世代を直接書き換えてしまう）。緊急の戻しは所有者が VPS で行う（prd/02 §5.2）。
+- **worker（解析用のホストでビルド）は対象外**で、今までどおり所有者が手で出す。
+  server（と、有効にしたあとの web）が先に出るので、web・worker との口（Hono RPC の形・worker の報告の形）を変える PR は、古い web・worker でも動く形にするか、出す順を所有者と決める。
+  web の追従を有効にしたあとも、server と web は別のイメージで、出る時刻はずれうる（どちらが先とは決まらない）。
 - 🔒 **次の PR は、マージの前に所有者と段取りを決める。エージェントは勝手にマージしない。**
   - **マイグレーション**（`packages/server/src/db/schema.ts` の変更と `packages/server/drizzle/` の追加）を伴う。
     本番は、イメージ同梱の `migrate.js` を、管理ロールの資格情報を持つ**管理用のサービス**で人が流す（下の「本番イメージ同梱のエントリ」・[prd/15](./prd/15-postgres.md) §2）。
@@ -32,8 +41,9 @@
   `<40 桁の SHA>` のタグのイメージができる（`latest` は main の最新と同じ中身のときだけ付く）。これを管理用のサービスで流すのが手段の 1 つだが、どう流すかは所有者と決める。
 - 切り戻しで server を戻しても、スキーマは戻らない。戻した server が新しいスキーマの上で動けることが前提になる（RLS のように前の server が動けない変更は、[prd/15](./prd/15-postgres.md) §2.1 の切り戻しのような手当てが要る）。
 - 本番の server の版は `GET /api/version` の `commit` で確かめる（設定ページの隅にも出る。[prd/02](./prd/02-architecture.md) §5「版の確かめ方」）。
+  web は配信される `/version.json` の `commit`（追従のイメージのものは、イメージの `GIT_COMMIT` と同じ値）。
   **おかしいときの戻し方（VPS での切り戻し）は所有者の作業。エージェントは VPS に触らない。**
-- 詳細は [prd/02](./prd/02-architecture.md) §5.1。デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
+- 詳細は [prd/02](./prd/02-architecture.md) §5.1（web は §5.2）。デプロイの仕組みの設計は、所有者の非公開のリポジトリにある。
 
 ## プロジェクト目的
 
@@ -89,7 +99,7 @@
 | [`packages/worker`](./packages/worker) | 棋譜解析（USI / やねうら王）。分離実行環境で稼働 |
 | [`packages/shared`](./packages/shared) | 将棋ドメインの純ロジック（[prd/02](./prd/02-architecture.md) §3.2）。**環境非依存**（`lib: esnext` / `types: []`・DOM も node も前提にしない） |
 | [`packages/kifu-vision`](./packages/kifu-vision) | 録画から棋譜を復元して取り込む手元の CLI（実験。取り込みは server の API_KEY の口へ送る。[prd/10](./prd/10-video-analysis.md)） |
-| [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドのデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5） |
+| [`packages/deploy-static`](./packages/deploy-static) | web の静的ビルドの手元のデプロイ（システムの ssh / rsync を呼ぶ。判断は純粋な関数でテスト。[prd/02](./prd/02-architecture.md) §5）。web の追従が準備中のあいだの出し方で、**追従を有効にしたあとは使わない**（緊急でも。§5.2） |
 | [`packages/engine-wasm`](./packages/engine-wasm) | ブラウザ解析のエンジン（やねうら王の WASM ビルド。評価関数の arch ごとに 1 本）と評価関数（つようら王11mini / micro・MIT。`nn.bin` + `progress.bin`）を配信物の形に揃える。**このパッケージだけ GPL-3.0**（評価関数は MIT・許諾文を同梱）・上流の SHA と配布物の sha256 は `UPSTREAM` で固定・**成果物はコミットしない**（[prd/14](./prd/14-multi-user.md) §5.5。web は `packages/web/engine-plugin` が `/engine/*` として配り、Worker から読み込む） |
 
 **理想構成の追加（未実装・gap。[prd/08](./prd/08-roadmap.md)）**:
@@ -133,7 +143,7 @@ pnpm tactics:redetect       # 戦型ラベルの一括再判定（既定 dry-run
 pnpm positions:rebuild      # 局面索引の一括再構築（既定 dry-run / REBUILD_POSITIONS_APPLY=1 で実書込）
 pnpm subjects:rebuild       # 主体側の一括再導出（既定 dry-run / REBUILD_SUBJECTS_APPLY=1 で実書込）
 pnpm drills:generate        # 出題の一括生成（既定 dry-run / GENERATE_DRILLS_APPLY=1 で実書込）
-pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）。⚠ エンジンの成果物が無いとビルドで落ちる（ENGINE_REQUIRED=1。先に pnpm engine:build）
+pnpm deploy:web             # web をビルドして配信ディレクトリへ置く（.env.deploy を読む・assets/ は今回と 1 つ前だけ残す・既定 dry-run / --apply で実書込。prd/02 §5）。⚠ エンジンの成果物が無いとビルドで落ちる（ENGINE_REQUIRED=1。先に pnpm engine:build）。🔒 web の追従の準備中だけ使う。**追従を有効にしたあとは使わない**（prd/02 §5.2）
 pnpm engine:build           # ブラウザ解析のエンジン（WASM）をビルドし、評価関数を取得して packages/engine-wasm/dist/engine に揃える（Docker が要る・冪等。`pnpm build` からは走らない。個別・`--check` は packages/engine-wasm/README.md）
 ```
 

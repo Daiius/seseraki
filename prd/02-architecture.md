@@ -117,8 +117,10 @@
     定跡を同梱し、esbuild バンドルで実行（[05](./05-analysis.md) §エンジン構成）。
     - 2026-10-16 決定（実装済み・本番は未反映）: 評価関数を水匠5 から **つようら王11mini**（SFNN・`nn.bin` + `progress.bin`）に替え、
       上流のコミットを `packages/engine-wasm/UPSTREAM` と同じものに固定し、配布物を sha256 で照合する（[05](./05-analysis.md) §1.2）。
-- **web**: Vite の静的ビルド（`index.html` + ハッシュ付きの `assets/*`）を配信ディレクトリへ置く
-  （`pnpm deploy:web`・`packages/deploy-static`。接続先は `.env.deploy`、既定 dry-run / `--apply` で書き込む）。
+- **web**: Vite の静的ビルド（`index.html` + ハッシュ付きの `assets/*`）を配信ディレクトリへ置く。置き方は 2 つある:
+  main に入ると出る追従（§5.2。workflow を足した段で、**準備中**）と、手の `pnpm deploy:web`（下の項目。追従を有効にするまでの出し方）。
+  🔒 **追従を有効にしたあとは `pnpm deploy:web` を使わない（緊急でも。§5.2）。**
+  以下は `pnpm deploy:web`（`packages/deploy-static`。接続先は `.env.deploy`、既定 dry-run / `--apply` で書き込む）の性質。
   - **`assets/` には「今回」と「1 つ前」のデプロイのファイルだけを残す。** 上書きだけだと古いチャンクが
     溜まり続け、全部消すとデプロイ前から開いていたタブが旧チャンクを取りに来て 404 になる。
     1 つ前まで残せば、開きっぱなしのタブも次の画面遷移までは動く。
@@ -146,6 +148,7 @@
     アプリ内（`__BUILD_VERSION__`）に埋め込む。git が無い・失敗したら `unknown`。dev は `/version.json` を同じ形で返す。
     `version.json` は名前が固定のトップレベルのファイルなので、`deploy:web` が `index.html` と一緒に送る（世代管理には載らない）。
     `deploy:web` は `version.json` が無ければ止まり、送る版を計画と一緒に表示する。
+    追従のイメージ（§5.2）は、`version.json` の `commit` と同じ値を環境変数 `GIT_COMMIT` に持ち、VPS は切り替える前に両者を照合する。
     ⚠ **配信の側で `version.json` は `index.html` と同じく no-cache にする**（キャッシュされると古い版が見える）。
   - **server**: `GET /api/version`（認証なし・DB に触れない）。値はイメージのビルド引数を `Dockerfile.prod` の最終ステージで
     `ENV` に入れたもの（`.dockerignore` が `.git` を除くので、イメージの中では git から取れない）。
@@ -163,7 +166,7 @@
       水匠5 は配らない（本番に反映するまでは水匠5 を配っている）。
   - **web のビルドが `dist/engine/` へコピーする**（`packages/web/engine-plugin`）。成果物が無ければ警告して飛ばし、
     `ENGINE_REQUIRED=1` のときは落とす。**`pnpm deploy:web` はこれを立てる**ので、先に `pnpm engine:build` を流しておく
-    （エンジンを入れ忘れたデプロイを止める）。
+    （エンジンを入れ忘れたデプロイを止める）。追従の workflow（§5.2）も同じく立てて、runner の上で `pnpm engine:build` を流す。
   - **評価関数は `assets/` の世代管理の外の別ディレクトリ（`engine/`）に、内容ハッシュ入りの名前で置く。`deploy:web` の削除の対象にしない**
     （トップレベルの転送は削除をしない。古いビルド・古い評価関数は溜まるので手で消す）。端末の側は HTTP キャッシュに任せる。
   - エンジンのホスト（Worker のスクリプト）だけは `assets/` に内容ハッシュ入りの名前で出る（世代管理に載る）。
@@ -209,9 +212,41 @@
     PR の枝で workflow を手動起動すれば、`latest` を動かさずに `<40 桁の SHA>` のイメージができる。どう流すかは所有者と決める。
   - RLS（[15](./15-postgres.md) §2.1）のように古い server と両立しない変更は、「先に流してからマージ」が成り立たない。
   - ⚠ 切り戻しで server を戻しても、スキーマは戻らない。戻した server が新しいスキーマで動けることが前提になる。
-- server だけが自動で出て、web（静的配信）と worker は今までどおり手で出す。server と web・worker の口を変える変更は、出る時刻がずれる。
+- worker は今までどおり手で出す。web（静的配信）は同じ形に乗せる準備中（§5.2）で、有効になるまでは手で出す。
+  server と web・worker の口を変える変更は、出る時刻がずれる（web の追従を有効にしたあとも、server と web は別のイメージで、出る順は決まらない）。
 - 「実装済み（本番は未反映）」の書き分け: server の変更については、追従が有効になったので「main に入れた ＝ 数分で本番に出た」になる。
   この書き方は main に入れていない間だけのものになる（既存の記述は、所有者が確かめる）。
+
+### 5.2 web は main に入ると本番に出る（タグの追従。準備中）
+
+**状態: 準備中**——workflow はあるが、本番の VPS はまだ web の `latest` を追いかけていない
+（有効にするのは所有者。VPS の側の作業で、このリポジトリの外。有効になるまでは §5 の `pnpm deploy:web` で手で出す）。
+
+- 流れ: main への push → [`build-push-web.yml`](../.github/workflows/build-push-web.yml) が runner の上でエンジン（`pnpm engine:build`）と
+  web（`ENGINE_REQUIRED=1 pnpm --filter web build`。手元の `pnpm deploy:web` と同じビルド）を作り、
+  `packages/web/dist` だけを入れたイメージ（[`packages/web/Dockerfile.static`](../packages/web/Dockerfile.static)。`FROM scratch` の `/site` に `dist/` の中身）を
+  `<40 桁の SHA>` だけで push → 別の job が main に突き合わせて `latest` を動かす（考え方は §5.1 の server と同じ。`paths` の印は `web-paths`）。
+  手動起動（workflow_dispatch）はどの枝でもでき、その枝の先頭の `<40 桁の SHA>` を作るだけで `latest` は動かさない
+  → 本番の VPS が `latest` を数分おきに見て、変わっていればイメージを pull し、**起動せずに**中の `/site` を取り出して、
+  配信ディレクトリへ新しい「世代」として置き、リンクを切り替える。駄目なら 1 つ前の世代に戻す（仕組みの設計は所有者の非公開のリポジトリにある）。
+- **ビルドを Docker の中でしない理由**: 根の `.dockerignore` が `**/dist` と `.git` を除く。中でビルドすると、`version.json` を作る
+  Vite のプラグイン（`packages/web/build-version`）が git を読めず `unknown` になる。そこで runner の上でビルドし、`dist` をビルドの文脈にして COPY だけを行う。
+- **版**: イメージは配信される `/version.json`（§5「版の確かめ方」の形）と、同じ commit の環境変数 `GIT_COMMIT` を持つ。
+  VPS は切り替える前に、`version.json` の最上位の `commit` とイメージの `GIT_COMMIT` が一致することを確かめる。
+  workflow は、ビルドの前後で追跡しているファイルが変わっていないこと（`dirty` が `false` になる）・`version.json` の `commit` がその回のコミットであること・
+  `dist` にシンボリックリンクなどが無いことを確かめてから push する。`Dockerfile.static` も、`GIT_COMMIT` が 40 桁の 16 進で `version.json` と一致しなければ止まる。
+- **エンジンの成果物はキャッシュする**（Actions のキャッシュ。鍵は `packages/engine-wasm` の `UPSTREAM`・`build.sh`・`lib.sh`・`fetch-eval.sh`・`eval-licenses/`）。
+  復元しても `build.sh` / `fetch-eval.sh` が記録・内容ハッシュ・sha256 を `UPSTREAM` と照合し直し、合っていれば作り直さない。
+  エンジン（GPL-3.0）と評価関数の許諾文・`manifest.json`（対応ソースの上流の SHA とビルドの手順を辿れる）は、`deploy:web` と同じく `dist/engine/` に入る。
+- `paths`: `packages/{web,shared,server,engine-wasm}/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json` / `.dockerignore`・workflow 自身。
+  web の `tsc` が API の型（server）を辿るので、server だけの変更でも web の世代が進む（JS・CSS は変わらず `version.json` だけが変わる）。
+- **開きっぱなしのタブ**: VPS の側が、新しい世代に 1 つ前の世代のファイルも併せて置く（§5 の `deploy:web` の「今回と 1 つ前」と同じ性質）。
+  `engine/` も世代の中身になるので、`deploy:web` のように古いエンジン・評価関数が配信先に溜まり続けることはない。
+- 🔒 **追従を有効にしたあとは `pnpm deploy:web` を使わない（緊急でも）。** VPS の配信ディレクトリは世代へのリンクになり、
+  手で rsync すると今の世代の中身をその場で書き換える（記録されたイメージと中身・`version.json` が食い違い、次の版が引き継ぐファイルの記録とも合わなくなる）。
+  しかも VPS は記録の上では版が合っているとみなすので、**次に main が変わるまで戻らない**。
+  緊急で戻したいときは、所有者が VPS で 1 つ前の世代に戻して固定する（server と同じく VPS での作業。エージェントは VPS に触らない）。
+  `pnpm deploy:web` に戻るのは、追従をやめて、配信ディレクトリを実体のディレクトリに戻したあと。`packages/deploy-static` はそのために残す。
 
 ## 6. 開発環境（docker compose watch）
 

@@ -1,0 +1,322 @@
+name: Build and push web image
+
+# 本番 web の静的ビルド（Vite の出力 + version.json + エンジンの配信物）だけを入れたイメージを CI で作って GHCR へ push する（prd/02 §5.2）。
+# 形は build-push-server.yml と同じ（build は SHA のタグだけ・latest は job「promote」が main に突き合わせて動かす）。
+# main への push（下の paths に当たるとき）と、手動起動（workflow_dispatch。どの枝でもよい）で走る。PR・ほかの枝の push では走らない。
+# 手動起動はその枝の先頭の <40 桁の SHA> を作るだけで、latest は動かさない（promote は main の回だけ。候補も main のコミットだけ）。
+# イメージは起動しない。本番の VPS が中の /site を取り出して、配信ディレクトリへ世代として置く。
+# ⚠ 本番の VPS が web の `latest` を追いかけるようにすると（VPS の側の登録。所有者が有効にする）、
+#   **main に入った web の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」）。
+#   有効にしたあとは `pnpm deploy:web` を使わない（prd/02 §5.2）。
+#
+# ビルドは Docker の中ではなく runner の上で行い、できた packages/web/dist だけを FROM scratch のイメージへ入れる
+# （packages/web/Dockerfile.static の冒頭。根の .dockerignore が **/dist と .git を除くため、中でビルドすると version.json が unknown になる）。
+
+on:
+  push:
+    branches: [main]
+    # web の出力（packages/web/dist）を変えうるものだけ（漏れると web に効く変更がビルドされず、広すぎると関係ない変更で配信の世代が進む）。
+    #   - packages/web: ソース・Vite の設定とプラグイン（engine-plugin・build-version）。Dockerfile.static 自身も packages/web/ の下
+    #   - packages/shared: web の実行時の依存
+    #   - packages/server: web の build（tsc -b && vite build）の tsc が API の型（Hono RPC）を辿る（web の devDependencies の server）。
+    #     server だけの変更でも、出力（JS・CSS）は変わらず version.json だけが変わる
+    #   - packages/engine-wasm: エンジンの配信物（UPSTREAM・build.sh・lib.sh・fetch-eval.sh・評価関数の許諾文）。web の build が dist/engine/ へコピーする
+    #   - 根の package.json（engine:build などのスクリプト・packageManager）/ pnpm-lock.yaml / pnpm-workspace.yaml（catalog・overrides・minimumReleaseAge）/
+    #     tsconfig.json（packages/web・server・shared の tsconfig.json が extends する）
+    #   - 根の .dockerignore: 今の形（dist を文脈にする）では読まれないが、server の paths と揃えて入れておく
+    #   - この workflow 自身: ビルドの手順・タグ・ビルド引数
+    # 入れていないもの（web の出力を変えない）: packages/{worker,kifu-vision,deploy-static}（依存を変えれば pnpm-lock.yaml が変わる）、文書。
+    # ⚠ 下の印の間は、latest を動かす job「promote」も（main の先頭のこのファイルから）読む（一覧はここ 1 か所だけ）。
+    #   形は「- <パス>」を 1 行ずつ。印を消したり、ほかの形の行を挟むと、その job は latest を動かさずに失敗で止まる。
+    paths:
+      # >>> web-paths
+      - packages/web/**
+      - packages/shared/**
+      - packages/server/**
+      - packages/engine-wasm/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - tsconfig.json
+      - .dockerignore
+      - .github/workflows/build-push-web.yml
+      # <<< web-paths
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/daiius/seseraki-web
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # エンジンのビルド（キャッシュが外れたとき。上流の make を EDITION ごとに 1 回）は数十分かかりうる。
+    timeout-minutes: 90
+    # 同じコミットの回（push と手動起動の重複・再実行）だけを直列にする。ほかのコミットのビルドは並んで走ってよい
+    # （latest を動かすのは下の job「promote」で、そちらはコミットに依らない突き合わせを、固定の group で直列に行う）。
+    # 走っている回は打ち切らない: push の途中で止めると、半端な状態が残りうる。
+    concurrency:
+      group: build-push-web-${{ github.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ci.yml の check と同じ Node 24 + corepack。pnpm の版は package.json の packageManager に従う。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # エンジンの成果物（packages/engine-wasm/dist/engine と、ビルドの記録 .cache/engine-*.stamp）のキャッシュ。
+      # 鍵は成果物を決めるファイルのハッシュ（上流の SHA・emsdk のイメージ・EDITION・評価関数の sha256 は UPSTREAM、
+      # make の行は build.sh、照合と manifest の形は lib.sh、取得と展開は fetch-eval.sh、同梱する許諾文は eval-licenses/）。
+      # 復元しても、build.sh / fetch-eval.sh が記録と内容ハッシュ・sha256 を UPSTREAM と照合し直し、合っていれば作り直さない
+      # （lib.sh の engine_up_to_date・eval_up_to_date）。上流のソース（.cache/YaneuraOu）とアーカイブ（.cache/eval）は要らないので入れない。
+      # restore-keys は付けない（鍵の違う古い成果物から始めない）。
+      - name: Restore engine artifacts
+        id: engine-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            packages/engine-wasm/dist/engine
+            packages/engine-wasm/.cache/engine-*.stamp
+          key: engine-wasm-${{ runner.os }}-${{ hashFiles('packages/engine-wasm/UPSTREAM', 'packages/engine-wasm/build.sh', 'packages/engine-wasm/lib.sh', 'packages/engine-wasm/fetch-eval.sh', 'packages/engine-wasm/eval-licenses/**') }}
+
+      # build.sh / fetch-eval.sh は、要るイメージが手元に無いと pull せずに止まる（require_image）。キャッシュが外れたときだけ用意する。
+      - name: Pull images for the engine build
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: |
+          set -u
+          upstream() { sed -n "s/^$1=//p" packages/engine-wasm/UPSTREAM; }
+          docker pull "$(upstream EMSDK_IMAGE)"
+          # 評価関数の展開は、runner に 7z が無いときだけ使い捨てのコンテナで行う（fetch-eval.sh の find_7z）。
+          if ! command -v 7z >/dev/null && ! command -v 7zz >/dev/null && ! command -v 7za >/dev/null && ! command -v 7zr >/dev/null; then
+            docker pull "$(upstream EVAL_EXTRACT_IMAGE)"
+          fi
+
+      # エンジンのビルド → 評価関数の取得（sha256 で照合）→ manifest.json。成果物が揃っていれば何も作り直さない。
+      - name: Build engine
+        run: pnpm engine:build
+
+      - name: Save engine artifacts
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            packages/engine-wasm/dist/engine
+            packages/engine-wasm/.cache/engine-*.stamp
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+
+      # version.json の dirty は、Vite の設定を読んだ時点の `git status --porcelain --untracked-files=no` で決まる（packages/web/build-version）。
+      # ここまでの手順（install・エンジンのビルド）が追跡しているファイルを変えていないことを、ビルドの前に確かめる。
+      - name: Check the tree is clean before the web build
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "追跡しているファイルが変わっている（version.json が dirty になる）:" >&2
+            git status --porcelain --untracked-files=no >&2
+            exit 1
+          fi
+
+      # 手元の `pnpm deploy:web` と同じビルド（ENGINE_REQUIRED=1: エンジンの成果物が無ければ落とす）。
+      # VITE_API_URL は渡さない（同一オリジン。.env.web.example）。
+      - name: Build web
+        run: ENGINE_REQUIRED=1 pnpm --filter web build
+
+      # できた dist を、イメージに入れる前に確かめる:
+      #   - ビルド（TanStack Router の routeTree.gen.ts の生成など）が追跡しているファイルを変えていない（変われば、コミットと出力が食い違う）
+      #   - version.json の最上位の commit がこの回のコミット・dirty が false（VPS はイメージの GIT_COMMIT とこの commit を照合する）
+      #   - ふつうのファイルとディレクトリだけ（VPS はシンボリックリンクなどがあると取り出しを止める）
+      - name: Check the build output
+        env:
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -u
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "web のビルドが追跡しているファイルを変えた:" >&2
+            git status --porcelain --untracked-files=no >&2
+            git diff --stat >&2
+            exit 1
+          fi
+          node -e '
+            const v = JSON.parse(require("fs").readFileSync("packages/web/dist/version.json", "utf8"));
+            if (v === null || typeof v !== "object" || v.commit !== process.env.EXPECTED_COMMIT || v.dirty !== false) {
+              console.error("version.json が期待と違う（commit は " + process.env.EXPECTED_COMMIT + "・dirty は false のはず）:", JSON.stringify(v));
+              process.exit(1);
+            }
+            console.log("version.json:", JSON.stringify(v));
+          '
+          odd=$(find packages/web/dist ! -type f ! -type d)
+          if [ -n "$odd" ]; then
+            echo "dist にふつうのファイルとディレクトリ以外がある:" >&2
+            printf '%s\n' "$odd" >&2
+            exit 1
+          fi
+          du -sh packages/web/dist/engine
+          du -sh packages/web/dist
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          # 文脈は dist そのもの（根の .dockerignore に阻まれない。packages/web/Dockerfile.static の冒頭）。
+          context: packages/web/dist
+          file: packages/web/Dockerfile.static
+          platforms: linux/amd64
+          push: true
+          # ここで push するのは `<40 桁の SHA>`（固定参照用）だけ。`latest` は、この回のあとの job「promote」が、main に突き合わせて動かす。
+          # 枝の名前のタグは付けない（手動起動で選んだ枝の名前が予約のタグ（latest など）と同じだと、突き合わせを経ずに書き換えてしまう）。
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # GHCR のパッケージをこのリポジトリに結び付ける（初回の push でパッケージができる）。
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Dockerfile.static が、40 桁であることと version.json の commit と一致することを確かめる。
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          # server の workflow と別の scope にする（同じ scope だと、互いのキャッシュの索引を上書きし合う）。
+          cache-from: type=gha,scope=build-push-web
+          cache-to: type=gha,mode=max,scope=build-push-web
+
+  # `latest`（本番が追いかけるタグ）を動かす job。ビルドと SHA のタグの push が済んだ回のあとに走る。
+  # この job は「この回のコミット」ではなく、その時点の main から latest が指すべき版を求めて、突き合わせる:
+  #   1. main を取り直し、main の先頭の workflow の印の間から paths の一覧を読む
+  #   2. main の first-parent の履歴で paths に当たる最後のコミット T を求める（merge commit なら、それ自身が T）
+  #   3. T の SHA のタグのイメージがあれば、それに latest を向ける。T から main の先頭までのコミットは
+  #      ビルドの入力が T と同じなので、T のイメージが無く、それらのイメージがあれば（効く変更と文書を 1 回で
+  #      push したときは、先頭のコミットでしかビルドされない）、そのうちイメージのあるものに向ける（打ち切らずに全部を調べる）
+  #   4. どれのイメージも無ければ（T のビルドがまだ終わっていない・失敗した）何もしない。T の回が終われば、その回が付ける。
+  #      T のビルドが失敗していれば、T の回を再実行すれば付く（Summary に出る）
+  #   どの回のこの job も同じ突き合わせをするので、古い回の再実行でも latest は戻らず、待っていた回が
+  #   取り消されても害が無い（生き残った回が、より新しい main で同じ突き合わせをする）。
+  # 固定の group で直列にする（判定と付与の間に、別の回の付与が割り込まない）。走っている回は打ち切らない。
+  # main 以外の枝の回では走らせない（突き合わせるだけなので害は無いが、枝の回が latest に触れないと分かる方がよい）。
+  # 突き合わせられないとき（main を取れない・履歴が浅い・paths の一覧を読めない・レジストリを確かめられない）は、
+  # latest を動かさずに失敗で終える。結果と理由は実行の Summary に出す。
+  promote:
+    needs: build
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: build-push-web-promote
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # main の履歴（paths に当たる最後のコミット）を求めるので、浅い取得にしない。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point latest at the build that main should run
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_FILE: .github/workflows/build-push-web.yml
+          IMAGE: ${{ env.IMAGE_NAME }}
+          TAG_PREFIX: ''
+        run: |
+          # Actions の bash は -e -o pipefail で動く。失敗を判定に使うコマンドは if / || で受ける。
+          set -u
+          note() { echo "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          fail() { note "latest を動かさない（失敗）: $1"; exit 1; }
+          errf=$(mktemp)
+          # inspect <参照>: 標準出力にダイジェスト。終了コードは 0 = ある・1 = 無い・2 = 確かめられない（レジストリの不調など）。
+          # 「無い」は、エラーの文に not found / manifest unknown があるときだけとみなす。それ以外は「確かめられない」。
+          # 取り違えても安全側: 本当は無いのに「確かめられない」なら失敗で終わるだけ、本当は不調なのに「無い」なら動かさないだけ。
+          inspect() {
+            local out rc=0
+            out=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$1" 2>"$errf") || rc=$?
+            if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s' "$out"; return 0; fi
+            if grep -qiE 'not found|manifest unknown' "$errf"; then return 1; fi
+            cat "$errf" >&2
+            return 2
+          }
+
+          if ! git fetch --quiet --no-tags origin "refs/heads/$DEFAULT_BRANCH"; then
+            fail "リモートの $DEFAULT_BRANCH を取得できない"
+          fi
+          if [ "$(git rev-parse --is-shallow-repository)" != false ]; then
+            fail "履歴が浅く、paths に当たる最後のコミットを求められない"
+          fi
+          if ! head=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'); then
+            fail "リモートの $DEFAULT_BRANCH の先頭を読めない"
+          fi
+          # paths の一覧を、main の先頭の workflow の印の間から読む。
+          if ! wf=$(git show "$head:$WORKFLOW_FILE"); then
+            fail "main の先頭に $WORKFLOW_FILE が無い"
+          fi
+          if [ "$(grep -c '^ *# >>> web-paths$' <<<"$wf")" != 1 ] ||
+             [ "$(grep -c '^ *# <<< web-paths$' <<<"$wf")" != 1 ]; then
+            fail "main の先頭の paths の一覧の印（web-paths）が見つからない"
+          fi
+          specs=()
+          while IFS= read -r line; do
+            t="${line#"${line%%[![:space:]]*}"}"
+            case "$t" in
+              ''|'#'*) ;;
+              '- '*) specs+=(":(glob)${t#- }") ;;
+              *) fail "paths の一覧に読めない行がある: $t" ;;
+            esac
+          done < <(sed -n '/^ *# >>> web-paths$/,/^ *# <<< web-paths$/p' <<<"$wf")
+          if [ "${#specs[@]}" -eq 0 ]; then
+            fail "paths の一覧が空"
+          fi
+          # first-parent の履歴で見る（merge commit を、マージした枝のコミットに置き換えない）。
+          if ! T=$(git log -1 --first-parent --format=%H "$head" -- "${specs[@]}") || [ -z "$T" ]; then
+            fail "main で paths に当たる最後のコミットを求められない"
+          fi
+          # 候補: T から先頭までの first-parent のコミット全部（入力は T と同じ）。打ち切らない（打ち切ると、
+          # イメージのあるコミットが範囲の外に出たとき、成功したビルドが配信されない）。
+          # 調べる順は回に依らない: T → 残りを新しい方から（どの回が走っても、同じ main と同じレジストリなら同じ答えになる。
+          # この回のコミットを先にすると、古い回の再実行が、より新しい同じ中身のイメージから latest を戻してしまう）。
+          mapfile -t newer < <(git rev-list --first-parent "$T..$head")
+          cands=("$T" "${newer[@]}")
+
+          src='' src_digest=''
+          for x in "${cands[@]}"; do
+            rc=0
+            d=$(inspect "$IMAGE:$TAG_PREFIX$x") || rc=$?
+            case $rc in
+              0) src=$x src_digest=$d; break ;;
+              1) ;;
+              *) fail "レジストリで $IMAGE:$TAG_PREFIX$x を確かめられない" ;;
+            esac
+          done
+          if [ -z "$src" ]; then
+            note "latest を動かさない: 指すべき版 T（$T）のイメージがまだ無い（ビルド中か、失敗した）。T の回が終われば付く。失敗していれば T の回を再実行する"
+            exit 0
+          fi
+          rc=0
+          cur=$(inspect "$IMAGE:latest") || rc=$?
+          case $rc in
+            0|1) ;;
+            *) fail "レジストリで $IMAGE:latest を確かめられない" ;;
+          esac
+          if [ "$rc" -eq 0 ] && [ "$cur" = "$src_digest" ]; then
+            note "latest はもう指すべき版を指している: $src（T=$T）"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$TAG_PREFIX$src"
+          note "latest を動かした: $src（T=$T・main の先頭 $head）"

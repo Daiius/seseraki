@@ -21,14 +21,16 @@ COPY . /site
 #    version.json の commit も同じ値であることをここで確かめる（違うイメージは VPS で切り替わらずに止まるので、作らない）。
 #    index.html（VPS の既定の STATIC_MARKER）と engine/manifest.json（ENGINE_REQUIRED=1 のビルドなら必ずある）も確かめる。
 ARG GIT_COMMIT=unknown
+#    値そのもの（改行を含まない 40 桁）を node で確かめる（grep は行ごとに見るので、複数行の値の 1 行だけが合っても通ってしまう）。
 RUN set -eu; \
-    if ! printf '%s' "$GIT_COMMIT" | grep -Eqx '[0-9a-f]{40}'; then \
-      echo "GIT_COMMIT は 40 桁の小文字の 16 進: '$GIT_COMMIT'" >&2; exit 1; \
-    fi; \
     for f in index.html version.json engine/manifest.json; do \
       [ -f "/site/$f" ] || { echo "/site/$f が無い（packages/web/dist を文脈にしているか）" >&2; exit 1; }; \
     done; \
     node -e ' \
+      if (!/^[0-9a-f]{40}$/.test(process.argv[1])) { \
+        console.error(`GIT_COMMIT は 40 桁の小文字の 16 進: ${JSON.stringify(process.argv[1])}`); \
+        process.exit(1); \
+      } \
       const v = JSON.parse(require("fs").readFileSync("/site/version.json", "utf8")); \
       if (v === null || typeof v !== "object" || v.commit !== process.argv[1]) { \
         console.error(`version.json の commit（${v && v.commit}）が GIT_COMMIT（${process.argv[1]}）と違う`); \

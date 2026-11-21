@@ -3,7 +3,11 @@ name: Build and push web image
 # 本番 web の静的ビルド（Vite の出力 + version.json + エンジンの配信物）だけを入れたイメージを CI で作って GHCR へ push する（prd/02 §5.2）。
 # 形は build-push-server.yml と同じ（build は SHA のタグだけ・latest は job「promote」が main に突き合わせて動かす）。
 # main への push（下の paths に当たるとき）と、手動起動（workflow_dispatch。どの枝でもよい）で走る。PR・ほかの枝の push では走らない。
-# 手動起動はその枝の先頭の <40 桁の SHA> を作るだけで、latest は動かさない（promote は main の回だけ。候補も main のコミットだけ）。
+# main 以外の枝の手動起動は、その枝の先頭の <40 桁の SHA> を作るだけで、latest は動かさない（promote は main の回だけ。候補も main のコミットだけ）。
+# ⚠ main を選んだ手動起動では promote も走る。promote はその回のコミットではなく main に突き合わせるので、latest は push の回と同じ版
+#   （main の paths に当たる最後のコミットのイメージ）にしか向かない。latest が無い・ずれているときは直すことになる（追従を有効にしたあとは配信も進む）。
+#   ⚠ 同じコミットを作り直すと（再実行・手動起動）、builtAt が変わるので、同じ <40 桁の SHA> のタグが別のダイジェストに付け替わる。
+#   それが latest の指すべき版なら、latest も新しいダイジェストへ動き、中身（version.json と版を埋め込んだ JS のほかは同じ）の世代が進む。
 # イメージは起動しない。本番の VPS が中の /site を取り出して、配信ディレクトリへ世代として置く。
 # ⚠ 本番の VPS が web の `latest` を追いかけるようにすると（VPS の側の登録。所有者が有効にする）、
 #   **main に入った web の変更は、このビルドを経て数分で本番に出る**（AGENTS.md「main に入ると本番に出る」）。
@@ -19,7 +23,8 @@ on:
     #   - packages/web: ソース・Vite の設定とプラグイン（engine-plugin・build-version）。Dockerfile.static 自身も packages/web/ の下
     #   - packages/shared: web の実行時の依存
     #   - packages/server: web の build（tsc -b && vite build）の tsc が API の型（Hono RPC）を辿る（web の devDependencies の server）。
-    #     server だけの変更でも、出力（JS・CSS）は変わらず version.json だけが変わる
+    #     server だけの変更でも web の世代が進む（変わるのは version.json と、版を埋め込んだ JS（__BUILD_VERSION__。設定ページの隅の表示）。
+    #     CSS や画面の中身は変わらない）
     #   - packages/engine-wasm: エンジンの配信物（UPSTREAM・build.sh・lib.sh・fetch-eval.sh・評価関数の許諾文）。web の build が dist/engine/ へコピーする
     #   - 根の package.json（engine:build などのスクリプト・packageManager）/ pnpm-lock.yaml / pnpm-workspace.yaml（catalog・overrides・minimumReleaseAge）/
     #     tsconfig.json（packages/web・server・shared の tsconfig.json が extends する）
@@ -92,16 +97,35 @@ jobs:
             packages/engine-wasm/.cache/engine-*.stamp
           key: engine-wasm-${{ runner.os }}-${{ hashFiles('packages/engine-wasm/UPSTREAM', 'packages/engine-wasm/build.sh', 'packages/engine-wasm/lib.sh', 'packages/engine-wasm/fetch-eval.sh', 'packages/engine-wasm/eval-licenses/**') }}
 
-      # build.sh / fetch-eval.sh は、要るイメージが手元に無いと pull せずに止まる（require_image）。キャッシュが外れたときだけ用意する。
-      - name: Pull images for the engine build
-        if: steps.engine-cache.outputs.cache-hit != 'true'
+      # build.sh / fetch-eval.sh は、要るイメージが手元に無いと pull せずに止まる（require_image）。
+      # キャッシュに当たったかではなく、復元した成果物を build.sh / fetch-eval.sh と同じ判定（lib.sh）で確かめ、作り直すものがあるときだけ用意する
+      # （鍵が一致しても中身が欠けていれば作り直しになる。その回も止まらずに作り直せるように）。
+      # ⚠ 欠けたキャッシュは同じ鍵では上書きされない（下の保存はキャッシュが外れたときだけ）。毎回作り直しになるので、
+      #   Summary に出たら、その鍵のキャッシュを消す（gh cache delete <鍵>）。次の回が作り直して保存する。
+      - name: Pull images for the engine build if needed
+        env:
+          CACHE_HIT: ${{ steps.engine-cache.outputs.cache-hit }}
+          CACHE_KEY: ${{ steps.engine-cache.outputs.cache-primary-key }}
         run: |
-          set -u
-          upstream() { sed -n "s/^$1=//p" packages/engine-wasm/UPSTREAM; }
-          docker pull "$(upstream EMSDK_IMAGE)"
+          . packages/engine-wasm/lib.sh
+          load_upstream
+          need_engine=0 need_eval=0
+          for edition in "${ENGINE_EDITIONS[@]}"; do
+            engine_up_to_date "$edition" || need_engine=1
+          done
+          for id in "${EVAL_ID_LIST[@]}"; do
+            eval_up_to_date "$id" || need_eval=1
+          done
+          echo "作り直すもの: エンジン=$need_engine・評価関数=$need_eval（キャッシュ: ${CACHE_HIT:-miss}）"
+          if [ "$CACHE_HIT" = true ] && [ $((need_engine + need_eval)) -gt 0 ]; then
+            echo "⚠ 復元したエンジンのキャッシュが欠けていた（作り直す）。鍵 $CACHE_KEY のキャッシュを消すと、次の回が作り直して保存する" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$need_engine" = 1 ]; then
+            docker pull "$UP_EMSDK_IMAGE"
+          fi
           # 評価関数の展開は、runner に 7z が無いときだけ使い捨てのコンテナで行う（fetch-eval.sh の find_7z）。
-          if ! command -v 7z >/dev/null && ! command -v 7zz >/dev/null && ! command -v 7za >/dev/null && ! command -v 7zr >/dev/null; then
-            docker pull "$(upstream EVAL_EXTRACT_IMAGE)"
+          if [ "$need_eval" = 1 ] && ! command -v 7z >/dev/null && ! command -v 7zz >/dev/null && ! command -v 7za >/dev/null && ! command -v 7zr >/dev/null; then
+            docker pull "$UP_EVAL_EXTRACT_IMAGE"
           fi
 
       # エンジンのビルド → 評価関数の取得（sha256 で照合）→ manifest.json。成果物が揃っていれば何も作り直さない。
@@ -190,8 +214,9 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ github.sha }}
           # server の workflow と別の scope にする（同じ scope だと、互いのキャッシュの索引を上書きし合う）。
+          # キャッシュの書き出しの失敗（Actions のキャッシュの不調）では止めない（push は済んでいるのに build が失敗になり、promote が走らない）。
           cache-from: type=gha,scope=build-push-web
-          cache-to: type=gha,mode=max,scope=build-push-web
+          cache-to: type=gha,mode=max,scope=build-push-web,ignore-error=true
 
   # `latest`（本番が追いかけるタグ）を動かす job。ビルドと SHA のタグの push が済んだ回のあとに走る。
   # この job は「この回のコミット」ではなく、その時点の main から latest が指すべき版を求めて、突き合わせる:
@@ -318,5 +343,6 @@ jobs:
             note "latest はもう指すべき版を指している: $src（T=$T）"
             exit 0
           fi
-          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$TAG_PREFIX$src"
+          # 照合したダイジェストから付ける（タグから付けると、照合のあとに同じコミットの作り直しでタグが付け替わったとき、照合していない版に付く）。
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE@$src_digest"
           note "latest を動かした: $src（T=$T・main の先頭 $head）"

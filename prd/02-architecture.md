@@ -226,7 +226,10 @@
   web（`ENGINE_REQUIRED=1 pnpm --filter web build`。手元の `pnpm deploy:web` と同じビルド）を作り、
   `packages/web/dist` だけを入れたイメージ（[`packages/web/Dockerfile.static`](../packages/web/Dockerfile.static)。`FROM scratch` の `/site` に `dist/` の中身）を
   `<40 桁の SHA>` だけで push → 別の job が main に突き合わせて `latest` を動かす（考え方は §5.1 の server と同じ。`paths` の印は `web-paths`）。
-  手動起動（workflow_dispatch）はどの枝でもでき、その枝の先頭の `<40 桁の SHA>` を作るだけで `latest` は動かさない
+  手動起動（workflow_dispatch）はどの枝でもでき、main 以外の枝ではその枝の先頭の `<40 桁の SHA>` を作るだけで `latest` は動かさない。
+  ⚠ main を選んだ手動起動では `latest` を動かす job も走り、push の回と同じく main に突き合わせる（`latest` が無い・ずれていれば直す。有効にしたあとは配信も進む）。
+  同じコミットを作り直すと（再実行・手動起動）、`builtAt` が変わるので同じ SHA のタグが別のダイジェストに付け替わり、それが指すべき版なら `latest` も動いて世代が進む
+  （中身は `version.json` と版を埋め込んだ JS のほかは同じ）。`latest` は、照合したダイジェストから付ける
   → 本番の VPS が `latest` を数分おきに見て、変わっていればイメージを pull し、**起動せずに**中の `/site` を取り出して、
   配信ディレクトリへ新しい「世代」として置き、リンクを切り替える。駄目なら 1 つ前の世代に戻す（仕組みの設計は所有者の非公開のリポジトリにある）。
 - **ビルドを Docker の中でしない理由**: 根の `.dockerignore` が `**/dist` と `.git` を除く。中でビルドすると、`version.json` を作る
@@ -237,9 +240,11 @@
   `dist` にシンボリックリンクなどが無いことを確かめてから push する。`Dockerfile.static` も、`GIT_COMMIT` が 40 桁の 16 進で `version.json` と一致しなければ止まる。
 - **エンジンの成果物はキャッシュする**（Actions のキャッシュ。鍵は `packages/engine-wasm` の `UPSTREAM`・`build.sh`・`lib.sh`・`fetch-eval.sh`・`eval-licenses/`）。
   復元しても `build.sh` / `fetch-eval.sh` が記録・内容ハッシュ・sha256 を `UPSTREAM` と照合し直し、合っていれば作り直さない。
+  workflow も同じ判定で作り直すものがあるかを見て、あるときだけビルドに要るイメージを pull する（鍵が一致しても中身が欠けていれば、その回で作り直せる）。
+  欠けたキャッシュは同じ鍵では上書きされず毎回作り直しになるので、Summary に出たらそのキャッシュを消す。
   エンジン（GPL-3.0）と評価関数の許諾文・`manifest.json`（対応ソースの上流の SHA とビルドの手順を辿れる）は、`deploy:web` と同じく `dist/engine/` に入る。
 - `paths`: `packages/{web,shared,server,engine-wasm}/**`・根の `package.json` / `pnpm-lock.yaml` / `pnpm-workspace.yaml` / `tsconfig.json` / `.dockerignore`・workflow 自身。
-  web の `tsc` が API の型（server）を辿るので、server だけの変更でも web の世代が進む（JS・CSS は変わらず `version.json` だけが変わる）。
+  web の `tsc` が API の型（server）を辿るので、server だけの変更でも web の世代が進む（変わるのは `version.json` と、版を埋め込んだ JS（`__BUILD_VERSION__`。設定ページの隅の表示）。CSS や画面の中身は変わらない）。
 - **開きっぱなしのタブ**: VPS の側が、新しい世代に 1 つ前の世代のファイルも併せて置く（§5 の `deploy:web` の「今回と 1 つ前」と同じ性質）。
   `engine/` も世代の中身になるので、`deploy:web` のように古いエンジン・評価関数が配信先に溜まり続けることはない。
 - 🔒 **追従を有効にしたあとは `pnpm deploy:web` を使わない（緊急でも）。** VPS の配信ディレクトリは世代へのリンクになり、

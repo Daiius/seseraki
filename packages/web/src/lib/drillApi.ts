@@ -86,6 +86,7 @@ export async function loadList(search: DrillsSearch) {
 export interface Reveal {
   verdict: 'correct' | 'close' | 'wrong';
   lossCp: number | null;
+  /** 答えた手に続く読み筋（相手の応手から）。不正解なら咎め筋、別解（正解手と違う手で正解・惜しい）ならその手の続き（prd/13 §7.9） */
   refutation?: string[];
   /** 棋譜の番号（所有者ごと。prd/14 §4.4） */
   kifuNo: number;

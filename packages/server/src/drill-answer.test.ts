@@ -9,6 +9,7 @@ import {
   isPrefixOf,
   isReachableMove,
   mateStep,
+  continuationOf,
   scoreFromCandidates,
   scoreMove,
   stateOfAnswer,
@@ -62,6 +63,27 @@ describe('scoreFromCandidates', () => {
       verdict: 'wrong',
       lossCp: 400,
     });
+  });
+
+  it('候補の読み筋があれば、正解手以外の手に続き（相手の応手から）を付ける。正解手・読み筋の無い行（古い行）には付けない', () => {
+    const withPv: DrillAnswerKey = {
+      ...KEY,
+      candidates: [
+        { rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 500, pv: ['2g2f', '8c8d'] },
+        { rank: 2, move: '7g7f', scoreType: 'cp', scoreValue: 450, pv: ['7g7f', '3c3d', '2g2f'] },
+        { rank: 3, move: '6i7h', scoreType: 'cp', scoreValue: 100, pv: ['6i7h', '8c8d'] },
+      ],
+    };
+    expect(scoreFromCandidates(withPv, '7g7f', DEFAULT_SCORING)).toEqual({ verdict: 'correct', lossCp: 50, refutation: ['3c3d', '2g2f'] });
+    expect(scoreFromCandidates(withPv, '6i7h', DEFAULT_SCORING)).toEqual({ verdict: 'wrong', lossCp: 400, refutation: ['8c8d'] });
+    expect(scoreFromCandidates(withPv, '2g2f', DEFAULT_SCORING)).toEqual({ verdict: 'correct', lossCp: 0 });
+  });
+
+  it('continuationOf: 先頭が答えた手でない・その手で終わる読み筋には付けない', () => {
+    expect(continuationOf(KEY, '7g7f', ['2g2f', '3c3d'])).toBeUndefined();
+    expect(continuationOf(KEY, '7g7f', ['7g7f'])).toBeUndefined();
+    expect(continuationOf(KEY, '7g7f', null)).toBeUndefined();
+    expect(continuationOf(KEY, '7g7f', ['7g7f', '3c3d'])).toEqual(['3c3d']);
   });
 
   it('候補に無ければ null（エンジンへ回す合図）', () => {

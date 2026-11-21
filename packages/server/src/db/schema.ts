@@ -20,6 +20,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { defineRelations, sql, type SQL } from 'drizzle-orm';
 import type { AnalysisDetail, AnalysisRun } from '../kifu-analysis-detail.js';
+import type { DrillCandidateSnapshot } from '../drill-answer.js';
 
 // --- 命名（prd/15 §3.6）---
 
@@ -192,6 +193,7 @@ function ownerPolicy(column: AnyPgColumn) {
  * 🔒 **本人の同定は `account.accountId`（Google の `sub`）で行う。** `email` は同定に使わない
  * （メールは変わりうる。prd/07 §1）。
  */
+
 export const users = table('users', {
   id: authId(),
   /** Google の表示名（Better Auth が書く）。画面には出さない——出すのは `displayName` */
@@ -680,11 +682,11 @@ export const drills = table(
     /** 正解手の読み筋。`mate` では**指し継ぎの正解手順**そのもの（prd/13 §5.2） */
     answerPv: jsonb().$type<string[]>(),
     /**
-     * 出題時点の候補手（rank 順・pv を除く）。**採点はここを引く**ので、
-     * 解析の再実行に影響されない（prd/13 §5.1）。
+     * 出題時点の候補手（rank 順）。**採点はここを引く**ので、解析の再実行に影響されない（prd/13 §5.1）。
+     * `pv` は別解の続きを解答後に再生するためのもの（prd/13 §7.9・2026-11-22）。それより前に作った行には無い（作り直すと入る）
      */
     candidates: jsonb()
-      .$type<{ rank: number; move: string; scoreType: string; scoreValue: number }[]>()
+      .$type<DrillCandidateSnapshot[]>()
       .notNull(),
     /** エンジンの詰み距離（plies）。`kind='mate'` のときのみ。⚠ 詰将棋の「N手詰」ではない */
     matePlies: integer(),

@@ -69,6 +69,20 @@ describe('revealLines（解答後の手順）', () => {
     expect(initialCursor(lines, ['2g2f'])).toEqual({ line: 1, position: 1 });
   });
 
+  it('次の一手で別解（正解手と違う手で正解）: あなたの解答に答えた手の続きを出し、最初はそれを選ぶ', () => {
+    const lines = revealLines({
+      kind: 'best',
+      base,
+      played: ['2g2f'],
+      answerMove: '7g7f',
+      answerPv: ['7g7f', '3c3d'],
+      refutation: ['3c3d', '2f2e'],
+    });
+    expect(lines.map((l) => l.label)).toEqual(['正解手順', 'あなたの解答']);
+    expect(lines[1].moves).toEqual(['2g2f', '3c3d', '2f2e']);
+    expect(initialCursor(lines, ['2g2f'])).toEqual({ line: 1, position: 1 });
+  });
+
   it('詰将棋は「詰み手順」。正解手順と違う手順で答えたら最初は再生に入らない', () => {
     const lines = revealLines({
       kind: 'mate',

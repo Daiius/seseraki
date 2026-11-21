@@ -26,6 +26,7 @@ import {
   type BrowserStageSettings,
 } from './analysis-report.js';
 import {
+  continuationOf,
   isMateAfter,
   scoreMove,
   type DrillAnswerKey,
@@ -110,7 +111,11 @@ export type EngineAnswer =
       status: 'done';
       verdict: DrillVerdict;
       lossCp: number | null;
-      /** 不正解のときの咎め筋（相手の応手から始まる読み筋） */
+      /**
+       * 答えた手に続く読み筋（相手の応手から）。不正解なら咎め筋、正解・惜しいでも正解手と違う手（別解）なら、その手の続き
+       * （prd/13 §5.1・§7.9。web が「あなたの解答」として再生する）。正解手そのものを答えたときは付けない（正解手順と同じになる）。
+       * ⚠ 名前は咎め筋のときのまま（古い web がこの名前で読む）
+       */
       refutation?: string[];
     }
   /**
@@ -269,7 +274,9 @@ export function judgeNamedEvaluation(
   }
 
   const scored = scoreMove(drill, best, scoring);
-  return done(scored.verdict, scored.lossCp, scored.verdict === 'wrong' ? best.pv.slice(1) : undefined);
+  // 🔒 別解（正解・惜しいで正解手と違う手）にも続きの読み筋を付ける——付けないと、解答後に正解手順しか出ず、
+  //    自分の手がどう進むのかを再生できない（2026-11-22 ユーザー判断）
+  return done(scored.verdict, scored.lossCp, continuationOf(drill, move, best.pv));
 }
 
 /** 判定を反映する（解答の記録・別解の手順の記憶）。副作用はここに寄せる。記憶はコミットの後に書く */

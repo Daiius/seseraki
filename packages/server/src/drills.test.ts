@@ -45,8 +45,8 @@ describe('extractDrills', () => {
     });
     // 採点は行に焼き付けた候補手を引く（再解析に影響されない。prd/13 §5.1）
     expect(drills[0].candidates).toEqual([
-      { rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 100 },
-      { rank: 2, move: '7g7f', scoreType: 'cp', scoreValue: -600 },
+      { rank: 1, move: '2g2f', scoreType: 'cp', scoreValue: 100, pv: null },
+      { rank: 2, move: '7g7f', scoreType: 'cp', scoreValue: -600, pv: null },
     ]);
   });
 

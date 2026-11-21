@@ -102,7 +102,7 @@ describe('ブラウザに読ませる設定', () => {
 describe('judgeNamedEvaluation（次の一手。prd/13 §5.1）', () => {
   it('最善との差で 3 段階に分け、記録する', () => {
     const close = judgeNamedEvaluation(input(), { scoreType: 'cp', scoreValue: 300, pv: ['7g7f', '3c3d'] });
-    expect(close.answer).toEqual({ status: 'done', verdict: 'close', lossCp: 200 });
+    expect(close.answer).toEqual({ status: 'done', verdict: 'close', lossCp: 200, refutation: ['3c3d'] });
     expect(close.attempt).toEqual({ verdict: 'close', lossCp: 200 });
     expect(close.remember).toBeNull();
   });
@@ -110,6 +110,15 @@ describe('judgeNamedEvaluation（次の一手。prd/13 §5.1）', () => {
   it('不正解には咎め筋（相手の応手から）を付ける', () => {
     const wrong = judgeNamedEvaluation(input(), { scoreType: 'cp', scoreValue: -200, pv: ['7g7f', '3c3d', '2g2f'] });
     expect(wrong.answer).toEqual({ status: 'done', verdict: 'wrong', lossCp: 700, refutation: ['3c3d', '2g2f'] });
+  });
+
+  it('別解（正解手と違う手で正解・惜しい）にも続きの読み筋を付ける。正解手そのものや続きの無い読み筋には付けない', () => {
+    const alt = judgeNamedEvaluation(input(), { scoreType: 'cp', scoreValue: 480, pv: ['7g7f', '3c3d', '2g2f'] });
+    expect(alt.answer).toEqual({ status: 'done', verdict: 'correct', lossCp: 20, refutation: ['3c3d', '2g2f'] });
+    const bare = judgeNamedEvaluation(input(), { scoreType: 'cp', scoreValue: 480, pv: ['7g7f'] });
+    expect(bare.answer).toEqual({ status: 'done', verdict: 'correct', lossCp: 20 });
+    const same = judgeNamedEvaluation(input(BEST, '2g2f'), { scoreType: 'cp', scoreValue: 500, pv: ['2g2f', '3c3d'] });
+    expect(same.answer).toEqual({ status: 'done', verdict: 'correct', lossCp: 0 });
   });
 
   it('正の mate は差を取らずに正解・負の mate は不正解', () => {

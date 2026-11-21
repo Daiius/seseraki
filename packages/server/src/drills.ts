@@ -18,6 +18,7 @@ import {
   type Thresholds,
 } from 'shared';
 import type { Db, Tx } from './db/index.js';
+import type { DrillCandidateSnapshot } from './drill-answer.js';
 import { drills, kifus } from './db/schema.js';
 import { decodeAll } from './kifu-analysis-detail.js';
 import { loadAnalysis } from './kifu-analysis-store.js';
@@ -27,8 +28,9 @@ import { loadAnalysis } from './kifu-analysis-store.js';
  * 行に焼き付けるので、一括再生成の対象を「古い版だけ」に絞れる。
  *
  * - `2`（2026-09-16）: 決着閾値を削除し、大差の局面の悪手も拾う（prd/05 §2.3）
+ * - `3`（2026-11-22）: 焼き付ける候補手に読み筋（`pv`）も持たせる（別解の続きの再生。prd/13 §7.9）。問題の選び方は変えていない
  */
-export const GENERATOR_REV = '2';
+export const GENERATOR_REV = '3';
 
 /** 出題に使う閾値（prd/13 §4.1）。既定は `shared` の `DEFAULT_THRESHOLDS` に合わせる */
 export interface DrillThresholds {
@@ -90,7 +92,7 @@ export interface ExtractedDrill {
   answerScoreType: string;
   answerScoreValue: number;
   answerPv: string[] | null;
-  candidates: { rank: number; move: string; scoreType: string; scoreValue: number }[];
+  candidates: DrillCandidateSnapshot[];
   matePlies: number | null;
   playedMove: string | null;
   playedLossCp: number | null;
@@ -131,6 +133,8 @@ export function extractDrills(input: ExtractInput): ExtractedDrill[] {
         move: c.move,
         scoreType: c.scoreType,
         scoreValue: c.scoreValue,
+        // 別解で答えたときに、その手の続きを解答後に再生する（prd/13 §7.9）
+        pv: c.pv ?? null,
       }))
       .sort((a, b) => a.rank - b.rank);
     const base = {

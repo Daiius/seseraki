@@ -29,6 +29,16 @@ export interface DrillScoring {
 
 export const DEFAULT_SCORING: DrillScoring = { correctMargin: 100, closeMargin: 300 };
 
+/** 出題に焼き付ける候補手 1 本（`drills.candidates`。prd/13 §5.1） */
+export interface DrillCandidateSnapshot {
+  rank: number;
+  move: string;
+  scoreType: string;
+  scoreValue: number;
+  /** 読み筋（先頭がその手）。別解の続きの再生に使う（prd/13 §7.9）。2026-11-22 より前に作った行には無い */
+  pv?: string[] | null;
+}
+
 /** 採点に要る出題の材料（`drills` の一部） */
 export interface DrillAnswerKey {
   kind: 'mate' | 'best';
@@ -36,7 +46,7 @@ export interface DrillAnswerKey {
   answerScoreType: string;
   answerScoreValue: number;
   answerPv: string[] | null;
-  candidates: { rank: number; move: string; scoreType: string; scoreValue: number }[];
+  candidates: DrillCandidateSnapshot[];
 }
 
 /** 採点した手のスコア（候補手の行 / エンジンの名指し評価、どちらも同じ形） */
@@ -88,6 +98,16 @@ export function scoreMove(
 }
 
 /**
+ * 次の一手で、答えた手に続く読み筋（相手の応手から）。解答後に「あなたの解答」として再生する（prd/13 §7.9）。
+ * 🔒 **正解手そのものには付けない**（正解手順と同じになる）。不正解なら咎め筋、正解・惜しいなら別解の続きになる。
+ * 読み筋が無い・その手で終わっているときは `undefined`
+ */
+export function continuationOf(key: Pick<DrillAnswerKey, 'answerMove'>, move: string, pv: readonly string[] | null | undefined): string[] | undefined {
+  if (move === key.answerMove || !pv || pv.length < 2 || pv[0] !== move) return undefined;
+  return pv.slice(1);
+}
+
+/**
  * 出題時点の候補手から採点する。**候補に無ければ `null`**——エンジンへ回す合図
  * （prd/13 §5.1。候補内はエンジン往復ゼロで即答する）。
  */
@@ -95,10 +115,11 @@ export function scoreFromCandidates(
   key: DrillAnswerKey,
   move: string,
   scoring: DrillScoring,
-): Scored | null {
+): (Scored & { refutation?: string[] }) | null {
   const found = key.candidates.find((c) => c.move === move);
   if (!found) return null;
-  return scoreMove(key, found, scoring);
+  const continuation = continuationOf(key, move, found.pv);
+  return { ...scoreMove(key, found, scoring), ...(continuation ? { refutation: continuation } : {}) };
 }
 
 /**

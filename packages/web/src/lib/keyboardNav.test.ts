@@ -11,6 +11,8 @@ describe('navActionOf（手送りのキー）', () => {
     expect(navActionOf('End')).toBe('last');
     expect(navActionOf('Escape')).toBeNull();
     expect(navActionOf('a')).toBeNull();
+    expect(navActionOf('constructor')).toBeNull();
+    expect(navActionOf('toString')).toBeNull();
   });
 });
 

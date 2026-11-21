@@ -474,7 +474,6 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
           {miss.line && (
             <div className="w-full">
               <ReplayLines
-                name="drill-miss-line"
                 lines={[miss.line]}
                 cursor={cursor}
                 onSelect={(index) => {

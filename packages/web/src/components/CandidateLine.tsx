@@ -99,7 +99,8 @@ export function PvLine({
   position,
   children,
 }: {
-  name: string;
+  /** 排他アコーディオンの名前（`collapse="mobile"` の `details` だけが使う） */
+  name?: string;
   className?: string;
   active?: boolean;
   /** 再生していない読み筋にもグレーの線を引く */
@@ -135,7 +136,14 @@ export function PvLine({
         role="button"
         tabIndex={0}
         aria-pressed={active}
-        className={clsx('rounded-lg p-2', onSummaryClick && 'cursor-pointer hover:bg-base-300/50', className, bar)}
+        className={clsx(
+          // 🔒 1 手だけの手順でも叩ける高さを確保する（操作ボタンと同じ区分: モバイル 44px・375px 未満 40px・md 以上 32px。
+          //    prd/05 §2.1・レビュー `OCL-9760C79F`）。選択中・未選択で同じ寸法にして、切り替えで下の行が動かないようにする
+          'flex items-center min-h-11 max-[374px]:min-h-10 md:min-h-8 rounded-lg p-2',
+          onSummaryClick && 'cursor-pointer hover:bg-base-300/50',
+          className,
+          bar,
+        )}
         onClick={onSummaryClick}
         onKeyDown={(e) => {
           if (onSummaryClick && (e.key === 'Enter' || e.key === ' ')) {
@@ -144,7 +152,7 @@ export function PvLine({
           }
         }}
       >
-        <div className="font-mono text-xs text-base-content/60 leading-relaxed">
+        <div className="w-full font-mono text-xs text-base-content/60 leading-relaxed">
           <span className="me-2 font-sans">{summary}</span>
           <PvMoves texts={texts} position={position} from={firstInSummary ? 1 : 0} />
         </div>

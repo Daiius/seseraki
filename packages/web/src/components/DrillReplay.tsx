@@ -89,13 +89,10 @@ export function useReplayKeys(
  * ほかはグレーの線を引く。🔒 **畳まない**（叩いても高さが変わらない）。どこを叩いてもその手順の再生に切り替わる（prd/13 §7.9）
  */
 export function ReplayLines({
-  name,
   lines,
   cursor,
   onSelect,
 }: {
-  /** 排他アコーディオンの名前（解答後と途中の間違いで分ける） */
-  name: string;
   lines: readonly ReplayLine[];
   cursor: ReplayCursor | null;
   onSelect: (index: number) => void;
@@ -108,7 +105,6 @@ export function ReplayLines({
         return (
           <PvLine
             key={line.label}
-            name={name}
             className="text-sm"
             active={selected}
             selectable

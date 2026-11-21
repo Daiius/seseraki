@@ -4,7 +4,9 @@ import { usiToJapaneseWithPiece, type BoardState } from 'shared';
 import { client } from '../lib/honoClient';
 import { callApi } from '../lib/callApi';
 import { refParam, type Drill, type Reveal } from '../lib/drillApi';
-import { matePliesText, movesText, practiceNote, resultBadge } from '../lib/drillAnswer';
+import { matePliesText, practiceNote, resultBadge } from '../lib/drillAnswer';
+import type { ReplayCursor, ReplayLine } from '../lib/drillReplay';
+import { ReplayLineText } from './DrillReplay';
 import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
 import { DrillAttemptHistory, type DrillAttemptRow } from './DrillCards';
 import { ChevronDownIcon, DrillModeIcon } from './icons';
@@ -13,6 +15,8 @@ import { ChevronDownIcon, DrillModeIcon } from './icons';
 export interface Shown extends Reveal {
   practice: boolean;
   recorded: Reveal['verdict'] | null;
+  /** 答えた時点で盤に出ていた、出題局面からの手順（答えた手まで。手順の再生の起点。prd/13 §7.9） */
+  played: string[];
 }
 
 /** 解答後の表示。**ここで初めて棋譜・手数・正解が出る**（prd/13 §7） */
@@ -20,15 +24,21 @@ export function Result({
   reveal,
   drill,
   base,
-  answered,
+  lines,
+  cursor,
+  onSelectLine,
   mode,
   onNext,
 }: {
   reveal: Shown;
   drill: Drill;
   base: BoardState;
-  /** 答えた手を指した後の局面（咎め筋の読み出しに使う） */
-  answered: BoardState;
+  /** 再生できる手順（正解手順・咎め筋。`lib/drillReplay.ts` の `revealLines`） */
+  lines: ReplayLine[];
+  /** 再生の位置（再生に入っていなければ null） */
+  cursor: ReplayCursor | null;
+  /** 手順を叩いた（その手順の再生に切り替える） */
+  onSelectLine: (index: number) => void;
   /** 入ってきた入口（一覧から開いた問題は null） */
   mode: DrillMode | null;
   /** 大きいボタン（入口の次の問題 / 一覧に戻る） */
@@ -63,16 +73,21 @@ export function Result({
       </div>
       {note && <p className="text-xs text-base-content/60">{note}</p>}
 
-      {drill.kind === 'mate' && reveal.answerPv && (
-        <p className="text-sm break-all">
-          詰み手順 {movesText(base, reveal.answerPv)}
-        </p>
-      )}
-      {reveal.refutation && reveal.refutation.length > 0 && (
-        <p className="text-sm break-all">
-          咎め筋 {movesText(answered, reveal.refutation)}
-        </p>
-      )}
+      {/*
+        正解手順・咎め筋（prd/13 §7.9）。叩くとその手順を問題の盤で再生し、盤の下の送りの行・← → で 1 手ずつ進める。
+        再生している手順は背景で、いま盤に出ている局面へ至った手は太字で示す
+      */}
+      <div className="-mx-2">
+        {lines.map((line, index) => (
+          <ReplayLineText
+            key={line.label}
+            line={line}
+            position={cursor?.line === index ? cursor.position : null}
+            selected={cursor?.line === index}
+            onSelect={() => onSelectLine(index)}
+          />
+        ))}
+      </div>
       {reveal.playedMove && (
         <p className="text-sm">
           実戦は {usiToJapaneseWithPiece(base, reveal.playedMove)}

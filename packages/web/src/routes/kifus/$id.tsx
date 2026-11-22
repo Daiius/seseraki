@@ -13,6 +13,7 @@ import { intParam } from '../../lib/searchParams';
 import { buildPositions } from 'shared';
 import { useAnalysisProgress } from '../../lib/useAnalysisProgress';
 import { isAnalysisPending } from '../../lib/analysisPending';
+import { KifuDrillsButton } from '../../components/KifuDrillsLink';
 import { useAnalysisAssignee } from '../../lib/useMe';
 import {
   BrowserAnalysisNotice,
@@ -206,7 +207,13 @@ function KifuDetailPage() {
           </h2>
           <TacticTags tactics={kifu.tactics} userSide={userSide} className="mt-1" />
         </div>
-        <div className="dropdown dropdown-end ml-auto">
+        {/* その対局の問題を解きに行く（prd/13 §7.10）。⋯ の左に表で置く——押せない状態も見せる */}
+        <KifuDrillsButton
+          kifuNo={kifu.no}
+          kifu={{ drillCount: kifu.drillCount, analysisProfile: kifu.analysisProfile, failed: !!kifu.analysisError }}
+          className="ml-auto"
+        />
+        <div className="dropdown dropdown-end">
           {/*
             🔒 **⋯ メニューは表示サイズの設定（`controlSize`）に連動させない**
             （prd/05 §2.1・決定 2026-09-01）。操作ボタンをモバイルでも 32px まで

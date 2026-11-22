@@ -8,7 +8,7 @@ import { matePliesText, practiceNote, resultBadge } from '../lib/drillAnswer';
 import type { ReplayCursor, ReplayLine } from '../lib/drillReplay';
 import { turnSymbolFrom } from '../lib/usi';
 import { ReplayLines } from './DrillReplay';
-import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
+import { MODE_LABEL, MODES, modeSearch, type DrillEntry } from '../lib/drillSearch';
 import { DrillAttemptHistory, type DrillAttemptRow } from './DrillCards';
 import { ChevronDownIcon, DrillModeIcon } from './icons';
 
@@ -41,21 +41,23 @@ export function Result({
   /** 手順を叩いた（その手順の再生に切り替える） */
   onSelectLine: (index: number) => void;
   /** 入ってきた入口（一覧から開いた問題は null） */
-  mode: DrillMode | null;
+  mode: DrillEntry | null;
   /** 大きいボタン（入口の次の問題 / 一覧に戻る） */
   onNext: () => void;
 }) {
   const verdict = resultBadge(drill.kind, reveal.verdict, reveal.practice);
   const note = practiceNote(reveal.practice, reveal.recorded);
   // 大きいボタンは「次の問題」＋今の入口のアイコン（読み上げは aria-label で入口名まで）
+  // 入口「この対局」（prd/13 §7.10）はアイコンを持たない（ホームの入口ではない）。ドロップダウンにはホームの 4 つを全部出し、選んだらこの入口から抜ける
   const nextLabel = mode ? (
     <>
       次の問題
-      <DrillModeIcon mode={mode} />
+      {mode !== 'kifu' && <DrillModeIcon mode={mode} />}
     </>
   ) : (
     '一覧に戻る'
   );
+  const entryLabel = mode === 'kifu' ? 'この対局' : mode ? MODE_LABEL[mode] : null;
   const otherModes = MODES.filter((other) => other !== mode);
   return (
     <div className="card bg-base-200 p-3 space-y-2">
@@ -98,7 +100,7 @@ export function Result({
           type="button"
           className="btn btn-primary join-item flex-1 px-2"
           onClick={onNext}
-          aria-label={mode ? `次の問題（${MODE_LABEL[mode]}）` : undefined}
+          aria-label={entryLabel ? `次の問題（${entryLabel}）` : undefined}
         >
           {nextLabel}
         </button>

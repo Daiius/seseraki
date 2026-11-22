@@ -7,11 +7,19 @@
  * ⚠ ファイル内のテストは同じ DATABASE を共有する。各テストは自分で作ったユーザーの行だけを見る。
  */
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { client, db, type Tx } from './db/index.js';
-import { drillAttempts, drills, users } from './db/schema.js';
+import { drillAttempts, drills, kifus, users } from './db/schema.js';
 import { drillListQuerySchema, drillNextQuerySchema } from './drill-list-query.js';
-import { drillCounts, listDrillAttemptsOf, listDrills, pickNextDrill } from './drill-query.js';
+import {
+  drillCounts,
+  drillCountsByKifu,
+  listDrillAttemptsOf,
+  listDrills,
+  ownsKifuNo,
+  pickNextDrill,
+} from './drill-query.js';
 import { insertKifu } from './kifu-number.js';
 import { withUserTx } from './user-tx.js';
 
@@ -27,6 +35,25 @@ const ago = (ms: number) => new Date(Date.now() - ms);
 let ownerId: string;
 let recentNo: number;
 let oldNo: number;
+
+/** 問題の行（答えの中身はこのテストでは見ない） */
+const drill = (kifuId: number, moveNumber: number, kind: 'mate' | 'best' = 'best') => ({
+  kifuId,
+  ownerId,
+  moveNumber,
+  kind,
+  reason: kind === 'mate' ? ('missed_mate' as const) : ('own_blunder' as const),
+  answerMove: '2g2f',
+  answerScoreType: kind === 'mate' ? ('mate' as const) : ('cp' as const),
+  answerScoreValue: kind === 'mate' ? 3 : 100,
+  answerPv: kind === 'mate' ? ['2g2f', '8c8d', '2f2e'] : null,
+  candidates: [],
+  matePlies: kind === 'mate' ? 3 : null,
+  analysisRevision: 0,
+  blunderCp: 600,
+  mateMaxPlies: 10,
+  generatorRev: 't',
+});
 
 /**
  * 問題の並び（すべて `best` だが d1 だけ `mate`）:
@@ -52,23 +79,6 @@ beforeAll(async () => {
   recentNo = recent.displayNo;
   oldNo = old.displayNo;
 
-  const drill = (kifuId: number, moveNumber: number, kind: 'mate' | 'best' = 'best') => ({
-    kifuId,
-    ownerId,
-    moveNumber,
-    kind,
-    reason: kind === 'mate' ? ('missed_mate' as const) : ('own_blunder' as const),
-    answerMove: '2g2f',
-    answerScoreType: kind === 'mate' ? ('mate' as const) : ('cp' as const),
-    answerScoreValue: kind === 'mate' ? 3 : 100,
-    answerPv: kind === 'mate' ? ['2g2f', '8c8d', '2f2e'] : null,
-    candidates: [],
-    matePlies: kind === 'mate' ? 3 : null,
-    analysisRevision: 0,
-    blunderCp: 600,
-    mateMaxPlies: 10,
-    generatorRev: 't',
-  });
   const rows = await db
     .insert(drills)
     .values([
@@ -223,5 +233,56 @@ describe('その問題の解答履歴（prd/13 §7.7）', () => {
       listDrillAttemptsOf(tx, ownerId, { kifuNo: oldNo, moveNumber: 5, kind: 'best' }),
     );
     expect(attempts).toMatchObject([{ verdict: null, excluded: true, attemptNo: null }]);
+  });
+});
+
+describe('入口「この対局」と棋譜ごとの問題の数（prd/13 §6.4・§7.10）', () => {
+  it('その棋譜の問題を、正解済みも含めて手数の小さい順に出す（除外は出さない）', async () => {
+    // old の問題: d1（1・詰将棋・未解答）・d2（2・正解済み）・d3（3）・d4（4）・d5（5・除外）
+    const kifu = { mode: 'kifu', kifuNo: String(oldNo) };
+    expect(await next(kifu)).toMatchObject({ kifuNo: oldNo, moveNumber: 1, kind: 'mate' });
+    // 別の棋譜の問題は出さない
+    expect(await next({ mode: 'kifu', kifuNo: String(recentNo) })).toMatchObject({ kifuNo: recentNo, moveNumber: 0 });
+  });
+
+  it('同じ手数なら詰将棋が先・記録した問題はこの回には出さない', async () => {
+    const k = await db.transaction((tx) =>
+      insertKifu(tx, { title: 'same-ply', kifText: '', ownerId, usiMoves: MOVES, playedAt: ago(DAY) }),
+    );
+    const [best2, mate2, best1] = (
+      await db
+        .insert(drills)
+        .values([drill(k.id, 2), drill(k.id, 2, 'mate'), drill(k.id, 1)])
+        .returning({ id: drills.id })
+    ).map((r) => r.id);
+    // この棋譜の記録はこの後に作るものだけなので、開始時刻は少し前でよい（DB と手元の時計のずれを避ける）
+    const since = ago(HOUR).toISOString();
+    const kifu = { mode: 'kifu', kifuNo: String(k.displayNo), since };
+    expect(await next(kifu)).toMatchObject({ moveNumber: 1, kind: 'best' });
+    await db.insert(drillAttempts).values({ drillId: best1, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'correct' });
+    expect(await next(kifu)).toMatchObject({ moveNumber: 2, kind: 'mate' });
+    await db.insert(drillAttempts).values({ drillId: mate2, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'wrong' });
+    expect(await next(kifu)).toMatchObject({ moveNumber: 2, kind: 'best' });
+    await db.insert(drillAttempts).values({ drillId: best2, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'correct' });
+    expect(await next(kifu)).toBeNull();
+    // 新しい回（since なし）なら、正解済みも含めて最初から
+    expect(await next({ mode: 'kifu', kifuNo: String(k.displayNo) })).toMatchObject({ moveNumber: 1 });
+  });
+
+  it('棋譜ごとの問題の数は除外を数えない・問題の無い棋譜は入らない', async () => {
+    const ids = await db
+      .select({ id: kifus.id, no: kifus.displayNo })
+      .from(kifus)
+      .where(eq(kifus.ownerId, ownerId));
+    const idOf = (no: number) => ids.find((r) => r.no === no)!.id;
+    const counts = await as((tx) => drillCountsByKifu(tx, ownerId, [idOf(oldNo), idOf(recentNo)]));
+    expect(counts.get(idOf(oldNo))).toBe(4);
+    expect(counts.get(idOf(recentNo))).toBe(1);
+    expect(await as((tx) => drillCountsByKifu(tx, ownerId, []))).toEqual(new Map());
+  });
+
+  it('入口「この対局」の 404 の判定は所有者の棋譜だけ', async () => {
+    expect(await as((tx) => ownsKifuNo(tx, ownerId, oldNo))).toBe(true);
+    expect(await as((tx) => ownsKifuNo(tx, ownerId, 99999))).toBe(false);
   });
 });

@@ -36,7 +36,7 @@ import {
 import { useBrowserAnalysisState, type BrowserAnalysisPhase } from '../lib/browserAnalysis/store';
 import { requestDrillEngine } from '../lib/browserAnalysis/drillEngine';
 import { useAnalysisAssignee } from '../lib/useMe';
-import { listSearch, modeSearch, type DrillsSearch } from '../lib/drillSearch';
+import { entrySearch, listSearch, type DrillsSearch } from '../lib/drillSearch';
 import { drillRound } from '../lib/drillRound';
 import { RoundBar } from './DrillRoundBar';
 import { Result, type Shown } from './DrillResult';
@@ -120,7 +120,9 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
    * 移ると、loader が入口の次の 1 問を選んで URL に載せ直す（履歴は積まない）。**取得は loader が持つ**
    */
   function onNext() {
-    if (mode) navigate({ search: modeSearch(mode), replace: true });
+    // 入口「この対局」なら同じ棋譜のまま（prd/13 §7.10）
+    const next = entrySearch(search);
+    if (next) navigate({ search: next, replace: true });
     else navigate({ search: listSearch(search) });
   }
 

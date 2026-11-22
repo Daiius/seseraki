@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRoundStore, roundText, type RoundStorage } from './drillRound';
+import { createRoundStore, type RoundStorage } from './drillRound';
 
 function memoryStorage(): RoundStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -65,10 +65,5 @@ describe('この回（prd/13 §7.6）', () => {
     off();
     store.record('correct');
     expect(calls).toBe(1);
-  });
-
-  it('経過の文言', () => {
-    expect(roundText(null)).toBe('この回 0 問中 0 問正解');
-    expect(roundText({ since: null, recorded: 5, correct: 3 })).toBe('この回 5 問中 3 問正解');
   });
 });

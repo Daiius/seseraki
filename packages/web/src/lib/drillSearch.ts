@@ -21,15 +21,21 @@ export interface DrillRef {
   kind: 'mate' | 'best';
 }
 
-/** 入口（prd/13 §6.4・§7.5）。server の `mode` と同じ値 */
+/** ホームの入口（prd/13 §6.4・§7.5）。server の `mode` と同じ値 */
 export type DrillMode = 'recommend' | 'mate' | 'best' | 'wrong';
+
+/**
+ * 解く画面の入口。ホームの 4 つに、棋譜詳細・棋譜一覧から入る「この対局」（`kifu`。prd/13 §7.10）を足したもの。
+ * 「この対局」はどの棋譜かを `kifu`（問題の 3 つ組と同じ名前）で持つ
+ */
+export type DrillEntry = DrillMode | 'kifu';
 
 /** 一覧の状態（prd/13 §7.7）。`all` は既定なので載せない */
 export type DrillListStatus = 'unanswered' | 'wrong' | 'correct' | 'excluded';
 
 export interface DrillsSearch {
   /** 入口（解く画面）。⚠ `from` は棋譜一覧・統計が使っているので使わない（prd/13 §7.8） */
-  mode?: DrillMode;
+  mode?: DrillEntry;
   /** 問題の一覧 */
   view?: 'list';
   /** 一覧の種類の絞り込み */
@@ -57,6 +63,7 @@ export interface DrillsSearch {
 }
 
 export const MODES = ['recommend', 'mate', 'best', 'wrong'] as const satisfies readonly DrillMode[];
+const ENTRIES = [...MODES, 'kifu'] as const satisfies readonly DrillEntry[];
 const KINDS = ['mate', 'best'] as const;
 export const STATUSES = ['unanswered', 'wrong', 'correct', 'excluded'] as const satisfies readonly DrillListStatus[];
 
@@ -93,13 +100,19 @@ export function validateDrillsSearch(search: Record<string, unknown>): DrillsSea
     ply: intParam(search.ply, 0),
     drillKind: option(KINDS, search.drillKind),
   });
+  const kifu = intParam(search.kifu, 1);
+  // 入口「この対局」は棋譜の番号が要る。無ければ入口ごと落とす（ホームへ）
+  const entry = option(ENTRIES, search.mode);
+  const mode = entry === 'kifu' && kifu === undefined ? undefined : entry;
   return {
-    mode: option(MODES, search.mode),
+    mode,
     view: search.view === 'list' ? 'list' : undefined,
     kind: option(KINDS, search.kind),
     solved: option(STATUSES, search.solved),
     page: pageParam(search.page),
     ...refSearch(ref ?? undefined),
+    // 入口「この対局」は、問題を選ぶ前（3 つ組が揃っていない）でも `kifu` を持つ（prd/13 §7.8）
+    ...(mode === 'kifu' && !ref ? { kifu } : {}),
   };
 }
 
@@ -128,6 +141,18 @@ export function pinnedSearch(search: DrillsSearch, ref: DrillRef): DrillsSearch 
  */
 export function modeSearch(mode: DrillMode): DrillsSearch {
   return { mode };
+}
+
+/** 入口「この対局」（prd/13 §7.10）の行き先。棋譜詳細・棋譜一覧のボタンと、この入口の「次の問題」 */
+export function kifuEntrySearch(kifuNo: number): DrillsSearch {
+  return { mode: 'kifu', kifu: kifuNo };
+}
+
+/** 今の入口の次の問題の行き先。「この対局」なら同じ棋譜のまま */
+export function entrySearch(search: DrillsSearch): DrillsSearch | null {
+  if (search.mode === undefined) return null;
+  if (search.mode === 'kifu') return search.kifu === undefined ? null : kifuEntrySearch(search.kifu);
+  return modeSearch(search.mode);
 }
 
 /** 一覧のつまみ（種類・状態・ページ）だけを取り出す */

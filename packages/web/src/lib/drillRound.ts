@@ -113,9 +113,8 @@ export const drillRound = createRoundStore(() => {
   }
 });
 
-/** 画面上部の経過（prd/13 §7.6）。「この回 N 問中 M 問正解」 */
-export function roundText(round: DrillRound | null): string {
-  const recorded = round?.recorded ?? 0;
-  const correct = round?.correct ?? 0;
-  return `この回 ${recorded} 問中 ${correct} 問正解`;
-}
+/**
+ * 入口「この対局」（prd/13 §7.10）で最後に出した問題の手数。在庫が尽きた画面の「元の対局に戻る」をその局面で開くため。
+ * メモリだけに持つ（読み込み直したら無くなり、そのときは棋譜詳細を先頭から開く）
+ */
+export const lastKifuDrill: { current: { kifuNo: number; moveNumber: number } | null } = { current: null };

@@ -112,14 +112,20 @@ describe('drillNextQuerySchema', () => {
     expect(drillNextQuerySchema.safeParse({ since: 'yesterday' }).success).toBe(false);
     expect(drillNextQuerySchema.safeParse({ mode: 'all' }).success).toBe(false);
   });
+
+  it('入口「この対局」は棋譜の番号が要る（prd/13 §7.10）', () => {
+    expect(drillNextQuerySchema.parse({ mode: 'kifu', kifuNo: '12' })).toEqual({ mode: 'kifu', kifuNo: 12 });
+    expect(drillNextQuerySchema.safeParse({ mode: 'kifu' }).success).toBe(false);
+    expect(drillNextQuerySchema.safeParse({ mode: 'kifu', kifuNo: '0' }).success).toBe(false);
+  });
 });
 
 describe('drillNextPlan（入口ごとの出題順。prd/13 §6.4）', () => {
   const plan = (q: Record<string, string>) => drillNextPlan(drillNextQuerySchema.parse(q));
 
   it('🔒 どの入口でも除外した問題を出さない', () => {
-    for (const mode of ['recommend', 'mate', 'best', 'wrong']) {
-      expect(render(plan({ mode }).having).sql).toContain('count(case when "drill_attempts"."excluded" then 1 end) = 0');
+    for (const mode of ['recommend', 'mate', 'best', 'wrong', 'kifu']) {
+      expect(render(plan({ mode, kifuNo: '1' }).having).sql).toContain('count(case when "drill_attempts"."excluded" then 1 end) = 0');
     }
   });
 
@@ -151,10 +157,22 @@ describe('drillNextPlan（入口ごとの出題順。prd/13 §6.4）', () => {
     expect(render(recommend.orderBy[2]).sql).toBe('random()');
   });
 
+  it('この対局はその棋譜の問題を正解済みも含めて手数順（同じ手数なら詰将棋が先。prd/13 §6.4・§7.10）', () => {
+    const kifu = plan({ mode: 'kifu', kifuNo: '7' });
+    expect(render(kifu.where)).toMatchObject({ sql: '"kifus"."display_no" = ?', params: [7] });
+    const having = render(kifu.having).sql;
+    expect(having).not.toContain('"verdict" is not null then 1 end) = 0');
+    expect(having).not.toContain("<> 'correct'");
+    expect(kifu.orderBy.map((o) => render(o).sql)).toEqual([
+      '"drills"."move_number" asc',
+      `case when "drills"."kind" = 'mate' then 0 else 1 end`,
+    ]);
+  });
+
   it('🔒 since を渡すとこの回に記録した問題を外す（除外だけの行は記録に数えない）', () => {
     const since = '2026-10-23T00:00:00.000Z';
-    for (const mode of ['recommend', 'mate', 'best', 'wrong']) {
-      const { sql, params } = render(plan({ mode, since }).having);
+    for (const mode of ['recommend', 'mate', 'best', 'wrong', 'kifu']) {
+      const { sql, params } = render(plan({ mode, since, kifuNo: '1' }).having);
       expect(sql).toContain('"verdict" is not null and "drill_attempts"."created_at" >= ?');
       expect(params).toContain(since);
     }

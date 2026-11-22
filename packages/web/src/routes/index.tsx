@@ -25,6 +25,7 @@ import { useAnalysisAssignee } from '../lib/useMe';
 import { AnalyzingRadial } from '../components/AnalyzingRadial';
 import { Pager } from '../components/Pager';
 import { TacticTags, TacticLegend } from '../components/TacticTags';
+import { KifuDrillsBadge } from '../components/KifuDrillsLink';
 import { legendModesOf } from '../lib/tacticLegend';
 
 // 一覧の絞り込み・並べ替えの許可値・検索パラメータの解釈・条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）
@@ -431,6 +432,8 @@ function KifuListPage() {
                               </span>
                             )
                           )}
+                          {/* その対局の問題（prd/13 §7.10）。0 問の行には出さない */}
+                          <KifuDrillsBadge kifuNo={kifu.no} drillCount={kifu.drillCount} />
                           {kifu.hasMemo && (
                             <span className="badge badge-sm bg-info/50 text-info-content">
                               ●

@@ -23,22 +23,29 @@ export const drillListQuerySchema = z.object({
 
 export type DrillListQuery = z.infer<typeof drillListQuerySchema>;
 
-/** 入口（prd/13 §6.4・§7.5） */
-const DRILL_MODES = ['recommend', 'mate', 'best', 'wrong'] as const;
+/** 入口（prd/13 §6.4・§7.5）。`kifu` は棋譜詳細・棋譜一覧から入る「この対局」（§7.10） */
+const DRILL_MODES = ['recommend', 'mate', 'best', 'wrong', 'kifu'] as const;
 
-export const drillNextQuerySchema = z.object({
-  mode: z.enum(DRILL_MODES).default('recommend'),
-  /**
-   * この回（prd/13 §7.6）の開始時刻。これ以降に記録のある問題は選ばない。
-   * web は前の `/drills/next` が返した server の時刻（`now`）を渡す——端末の時計のずれで、この回の記録を取りこぼさないため
-   */
-  // ⚠ `z.coerce.date()` だと RPC の入力の型が Date になり、web から文字列で渡せない
-  since: z
-    .string()
-    .datetime({ offset: true })
-    .transform((value) => new Date(value))
-    .optional(),
-});
+export const drillNextQuerySchema = z
+  .object({
+    mode: z.enum(DRILL_MODES).default('recommend'),
+    /** 入口「この対局」の棋譜の番号（prd/13 §7.10）。`mode=kifu` のときだけ要る */
+    kifuNo: z.coerce.number<number>().int().min(1).optional(),
+    /**
+     * この回（prd/13 §7.6）の開始時刻。これ以降に記録のある問題は選ばない。
+     * web は前の `/drills/next` が返した server の時刻（`now`）を渡す——端末の時計のずれで、この回の記録を取りこぼさないため
+     */
+    // ⚠ `z.coerce.date()` だと RPC の入力の型が Date になり、web から文字列で渡せない
+    since: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value))
+      .optional(),
+  })
+  .refine((query) => query.mode !== 'kifu' || query.kifuNo !== undefined, {
+    message: 'mode=kifu には kifuNo が要る',
+    path: ['kifuNo'],
+  });
 
 export type DrillNextQuery = z.infer<typeof drillNextQuerySchema>;
 
@@ -138,6 +145,8 @@ export function drillListOrderBy(): SQL[] {
  *   空でない段から選び、段の中はランダム（④だけ古い順）。間違えた直後（1 日未満）はどの段にも入らない
  * - 詰将棋 / 次の一手: その種類の未解答（ランダム）
  * - 間違えた問題: 種類混在・最後の解答が古い順（1 日の待ちは掛けない）
+ * - この対局（§7.10）: その棋譜の問題を**正解済みも含めて**手数の小さい順・同じ手数なら詰将棋が先。
+ *   棋譜の所有者は呼び出し側（`pickNextDrill` の `kifus.ownerId`）で絞る
  */
 export function drillNextPlan(query: DrillNextQuery): {
   where: SQL | undefined;
@@ -161,6 +170,12 @@ export function drillNextPlan(query: DrillNextQuery): {
         where: undefined,
         having: and(NOT_EXCLUDED, since, IS_WRONG),
         orderBy: [asc(LAST_ANSWERED_AT), random],
+      };
+    case 'kifu':
+      return {
+        where: eq(kifus.displayNo, query.kifuNo ?? 0),
+        having: and(NOT_EXCLUDED, since),
+        orderBy: [asc(drills.moveNumber), sql`case when ${drills.kind} = 'mate' then 0 else 1 end`],
       };
     case 'recommend':
       return {

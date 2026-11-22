@@ -26,6 +26,7 @@ import { AnalyzingRadial } from '../components/AnalyzingRadial';
 import { Pager } from '../components/Pager';
 import { TacticTags, TacticLegend } from '../components/TacticTags';
 import { KifuDrillsBadge } from '../components/KifuDrillsLink';
+import { ChatBubbleEllipsisIcon, ExclamationCircleIcon } from '../components/icons';
 import { legendModesOf } from '../lib/tacticLegend';
 
 // 一覧の絞り込み・並べ替えの許可値・検索パラメータの解釈・条件の要約は `lib/kifuListFilter.ts`（単体テスト付き）
@@ -367,8 +368,10 @@ function KifuListPage() {
                       className="mt-1"
                     />
                   </th>
-                  <th>状態</th>
-                  <th>対局日時</th>
+                  {/* 解析の状態（解析中・失敗・未解析）の細い列。どの行にも無ければ幅を取らない */}
+                  <th className="px-0" aria-label="解析" />
+                  <th className="pl-2">状態</th>
+                  <th>日時</th>
                 </tr>
               </thead>
               <tbody>
@@ -378,9 +381,17 @@ function KifuListPage() {
                   const outcome = subjectOutcomeOf(kifu.result, userSide);
                   const analyzing =
                     progress && progress.kifuNo === kifu.no ? progress : null;
+                  // 対局日時が取れなかった棋譜は登録日時で代替表示・並び替えされる
+                  // （`coalesce(playedAt, createdAt)` 降順）。どちらの日時かを明示する
+                  const registered = !kifu.playedAt;
+                  const at = kifu.playedAt ?? kifu.createdAt;
+                  const failed = 'failed' in kifu && kifu.failed;
+                  // 🔴 解析済みはふつうの状態なので印を出さず、**未解析のときだけ**出す。
+                  // 「解析済み」は quick 完了を含む（決定・2026-09-05 後段）。動いている段階は解析中の円環の濃さで分かる（prd/05 §2.5）
+                  const unanalyzed = !analyzing && !failed && 'analyzed' in kifu && !kifu.analyzed;
                   return (
                     <tr key={kifu.no} className="hover">
-                      <td>
+                      <td className="pr-2">
                         {/* 棋譜の番号（所有者ごと。prd/14 §4.4）。「42 番の棋譜」と呼べるように控えめに添える */}
                         <span className="mr-1 text-xs tabular-nums text-base-content/50">
                           #{kifu.no}
@@ -392,6 +403,11 @@ function KifuListPage() {
                         >
                           {kifu.title}
                         </Link>
+                        {kifu.hasMemo && (
+                          <span className="ml-1 inline-block align-[-0.125em] text-info" title="メモあり">
+                            <ChatBubbleEllipsisIcon className="size-4" />
+                          </span>
+                        )}
                         {/* 戦型タグはタイトルの下に置く。列を足すとモバイルで幅が足りない */}
                         <TacticTags
                           tactics={kifu.tactics}
@@ -399,62 +415,50 @@ function KifuListPage() {
                           className="mt-1"
                         />
                       </td>
-                      <td>
-                        <div className="flex gap-1 items-center">
-                          {outcome !== null && (
-                            outcome === 'win' ? <span className="badge badge-soft badge-success badge-sm">勝</span>
-                            : outcome === 'loss' ? <span className="badge badge-soft badge-error badge-sm">負</span>
-                            : <span className="badge badge-ghost badge-sm">−</span>
-                          )}
-                          {analyzing ? (
-                            <AnalyzingRadial
-                              profile={analyzing.profile}
-                              analyzed={analyzing.analyzed}
-                              estimated={estimated}
-                              total={analyzing.total}
-                            />
-                          ) : 'failed' in kifu && kifu.failed ? (
-                            <span className="badge badge-error badge-sm">失敗</span>
-                          ) : (
-                            /* 🔴 「解析済み」は quick 完了を含み、**簡易のみの棋譜にも
-                               追加の印は付けない**（決定・2026-09-05 後段）。詳細解析は直後に
-                               走る一時的な状態で、印を置くとモバイルで横幅を恒久的に食う。
-                               動いている段階は解析中の円環の濃さで分かる（prd/05 §2.5） */
-                            'analyzed' in kifu && (
-                              <span
-                                className={
-                                  kifu.analyzed
-                                    ? 'badge badge-success badge-sm'
-                                    : 'badge badge-ghost badge-sm'
-                                }
-                              >
-                                {kifu.analyzed ? '済' : '未'}
-                              </span>
-                            )
-                          )}
-                          {/* その対局の問題（prd/13 §7.10）。0 問の行には出さない */}
-                          <KifuDrillsBadge kifuNo={kifu.no} drillCount={kifu.drillCount} />
-                          {kifu.hasMemo && (
-                            <span className="badge badge-sm bg-info/50 text-info-content">
-                              ●
-                            </span>
-                          )}
+                      <td className="px-0 whitespace-nowrap">
+                        {analyzing ? (
+                          <AnalyzingRadial
+                            profile={analyzing.profile}
+                            analyzed={analyzing.analyzed}
+                            estimated={estimated}
+                            total={analyzing.total}
+                          />
+                        ) : failed ? (
+                          // 失敗は淡い色の丸い「!」だけにする（文字のバッジより幅を取らず、赤の塗りほど驚かせない）
+                          <span className="inline-block align-middle text-error/70" title="解析に失敗しました">
+                            <ExclamationCircleIcon className="size-5" />
+                          </span>
+                        ) : unanalyzed ? (
+                          <span className="badge badge-soft badge-warning badge-xs">未</span>
+                        ) : null}
+                      </td>
+                      <td className="pl-2">
+                        {/* 状態は決まった枠に置く（上: 勝敗、下: 問題）。無いものの枠も詰めないので、
+                            どの行でも同じ種類が同じ場所に来る */}
+                        <div className="grid grid-rows-[1.25rem_1.25rem] items-center justify-items-start gap-1">
+                          <div>
+                            {outcome !== null && (
+                              outcome === 'win' ? <span className="badge badge-soft badge-success badge-sm">勝</span>
+                              : outcome === 'loss' ? <span className="badge badge-soft badge-error badge-sm">負</span>
+                              : <span className="badge badge-ghost badge-sm">−</span>
+                            )}
+                          </div>
+                          <div>
+                            {/* その対局の問題（prd/13 §7.10）。0 問の行には出さない */}
+                            <KifuDrillsBadge kifuNo={kifu.no} drillCount={kifu.drillCount} />
+                          </div>
                         </div>
                       </td>
-                      <td>
-                        {kifu.playedAt ? (
-                          new Date(kifu.playedAt).toLocaleString('ja-JP')
-                        ) : (
-                          // 対局日時が取れなかった棋譜は登録日時で代替表示・並び替えされる
-                          // （`coalesce(playedAt, createdAt)` 降順）。どちらの日時かを明示する
-                          <span
-                            className="text-base-content/60"
-                            title="対局日時が取得できなかったため、登録日時を表示しています"
-                          >
-                            {new Date(kifu.createdAt).toLocaleString('ja-JP')}
-                            <span className="ml-1 text-xs">（登録）</span>
-                          </span>
-                        )}
+                      <td
+                        className={`tabular-nums whitespace-nowrap ${registered ? 'text-base-content/60' : ''}`}
+                        title={
+                          registered
+                            ? '対局日時が取得できなかったため、登録日時を表示しています'
+                            : new Date(at).toLocaleString('ja-JP')
+                        }
+                      >
+                        <ShortDate iso={at} />
+                        {registered && <div className="text-xs">（登録）</div>}
                       </td>
                     </tr>
                   );
@@ -471,3 +475,20 @@ function KifuListPage() {
     </div>
   );
 }
+
+/**
+ * 一覧の日時。日付と時刻を 2 行に分け、今年なら年と秒を省く（`11/22` / `12:34`）。
+ * 列の幅を抑えてタイトルに回すため（秒までの 1 行は 19 文字ほどあった）
+ */
+function ShortDate({ iso }: { iso: string }) {
+  const d = new Date(iso);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return (
+    <>
+      <div>{d.toLocaleDateString('ja-JP', sameYear ? { month: 'numeric', day: 'numeric' } : undefined)}</div>
+      <div>{d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</div>
+    </>
+  );
+}
+
+

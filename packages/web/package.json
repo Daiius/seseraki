@@ -17,7 +17,7 @@
     "@visx/scale": "^4.0.0",
     "@visx/shape": "^4.0.0",
     "clsx": "^2.1.1",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "shared": "workspace:*",

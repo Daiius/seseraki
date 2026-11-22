@@ -4,6 +4,7 @@
   "packageManager": "pnpm@12.15.0",
   "scripts": {
     "dev": "docker compose up --build --watch",
+    "dev:worker": "docker compose --profile worker up --build --watch",
     "dev:remote": "docker compose --env-file .env.remote up --build --watch",
     "dev:remote:logs": "docker compose --env-file .env.remote logs -f",
     "dev:remote:down": "docker compose --env-file .env.remote down",

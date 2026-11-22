@@ -123,7 +123,8 @@
 ## 開発コマンド
 
 ```bash
-pnpm dev          # docker compose up --build --watch で全サービス起動（db, server, web, worker）
+pnpm dev          # docker compose up --build --watch で db, server, web を起動（worker は起動しない）
+pnpm dev:worker   # 上に手元 worker（compose の profile `worker`）も加えて起動
 pnpm typecheck    # 全パッケージ tsc --noEmit
 pnpm build        # 全パッケージのビルド
 pnpm db:generate  # schema 差分から drizzle/ にバージョン管理マイグレーションを生成（DB には繋がない）

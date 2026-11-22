@@ -73,6 +73,8 @@ services:
           path: pnpm-lock.yaml
 
   worker:
+    # 既定の `pnpm dev` では起動しない（解析はブラウザ解析が主。prd/02 §6）。使うときは `pnpm dev:worker`。
+    profiles: ['worker']
     image: seseraki-worker-dev
     build:
       context: .

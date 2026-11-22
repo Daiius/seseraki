@@ -283,7 +283,8 @@ VPS の側の仕組みは所有者の非公開のリポジトリにある（こ�
 
 | コマンド | 内容 |
 |---|---|
-| `pnpm dev` | docker compose up --build --watch で db + server + web + worker を起動 |
+| `pnpm dev` | docker compose up --build --watch で db + server + web を起動（worker は起動しない） |
+| `pnpm dev:with-worker` | 上に手元 worker も加えて起動（compose の profile `worker`） |
 | `pnpm typecheck` | 全パッケージ `tsc --noEmit` |
 | `pnpm build` | 全パッケージのビルド |
 | `pnpm db:generate` | schema 差分から `packages/server/drizzle/` にマイグレーション SQL を生成（DB には繋がない。トリガーは手で足す） |
@@ -302,6 +303,8 @@ VPS の側の仕組みは所有者の非公開のリポジトリにある（こ�
 - **環境変数は `.env.*` ファイルで管理**（gitignore 対象。雛形は `.env.*.example`）。
   - `.env.database`（Postgres の管理ロール・server ロール・system ロールと接続先）/ `.env.server`（認証・API_KEY 等）/ `.env.worker`（エンジン・server 接続）/ `.env.web`（API URL。自分の名前候補は DB が正で env には持たない。[11](./11-users.md)）。
   - ⚠️ Docker の `--env-file` は**インラインコメント非対応**。値の後ろに `# コメント` を書くと値の一部になるため避ける（行頭 `#` のみ可）。
+- **dev の worker は既定では起動しない**（2026-11-22。解析はブラウザ解析を主に使うため）。compose の profile `worker` に入れてあり、
+  使うときは `pnpm dev:with-worker`。担当が `worker` の利用者で確かめるときに要る（[14](./14-multi-user.md) §5.7）。
 - **開発 dev の worker は compose 網内で完結**する（`SERVER_URL=http://server:4000`）。dev compose は
   db / server をホストに公開せず、外向きの口は web だけ（server は `/api` proxy 経由で届く）。
 - **Docker 外で worker を動かす**場合は `packages/worker/.env.example` を `.env` にコピー。`USE_MOCK=true` で

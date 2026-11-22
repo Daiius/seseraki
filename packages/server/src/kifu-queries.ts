@@ -16,6 +16,7 @@ import type { Tx } from './db/index.js';
 import { kifuAnalyses, kifus, kifuTactics } from './db/schema.js';
 import { ANALYSIS_STATE_RESET } from './analysis-submit.js';
 import { drillConfigFromEnv, syncDrills } from './drills.js';
+import { drillCountsByKifu } from './drill-query.js';
 import { decodeAll } from './kifu-analysis-detail.js';
 import { loadAnalysis } from './kifu-analysis-store.js';
 import {
@@ -180,6 +181,12 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
     ownerId,
     rows.map((r) => r.id),
   );
+  // 問題の数（prd/13 §7.10。行のバッジ）。除外した問題は数えない・数だけ返す
+  const drillCount = await drillCountsByKifu(
+    tx,
+    ownerId,
+    rows.map((r) => r.id),
+  );
 
   return {
     kifus: rows.map(({ id, analyzedAt, analysisError, hasMemo, ...r }) => ({
@@ -188,6 +195,7 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
       failed: analysisError !== null,
       hasMemo: Boolean(hasMemo),
       tactics: tactics.get(id) ?? [],
+      drillCount: drillCount.get(id) ?? 0,
     })),
     pagination: {
       page,
@@ -238,7 +246,10 @@ export async function getKifuDetail(tx: Tx, ownerId: string, no: number) {
     .from(kifuTactics)
     .where(and(eq(kifuTactics.kifuId, id), eq(kifuTactics.ownerId, ownerId)));
 
-  return { no: displayNo, ...kifu, analyses, tactics };
+  // 問題の数（prd/13 §7.10。上部の「問題 N」のボタン）
+  const drillCount = (await drillCountsByKifu(tx, ownerId, [id])).get(id) ?? 0;
+
+  return { no: displayNo, ...kifu, analyses, tactics, drillCount };
 }
 
 /**

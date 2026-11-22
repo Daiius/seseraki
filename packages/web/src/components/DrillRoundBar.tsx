@@ -1,21 +1,20 @@
-import { useSyncExternalStore } from 'react';
 import { Link } from '@tanstack/react-router';
-import { drillRound, roundText } from '../lib/drillRound';
-import { MODE_LABEL, MODES, modeSearch, type DrillMode } from '../lib/drillSearch';
+import { lastKifuDrill } from '../lib/drillRound';
+import { MODE_LABEL, MODES, modeSearch, type DrillsSearch } from '../lib/drillSearch';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 import { ArrowRestartIcon, BookOpenIcon, EllipsisVerticalIcon, EyeSlashIcon, HomeIcon } from './icons';
 // daisyUI の dropdown はフォーカスで開閉するので、項目を押したらフォーカスを外して閉じる
 import { closeMenu } from '../lib/closeMenu';
 
 /**
- * 解く画面の上部: 「この回 N 問中 M 問正解」と、右端のケバブ（prd/13 §7.6）。
- * ケバブにはホーム・元の対局・やり直す・自明だったをアイコン付きで入れる（問題が無い画面ではホームだけ）
+ * 解く画面の上部: 右端のケバブ（prd/13 §7.6）。
+ * ケバブにはホーム・元の対局・やり直す・自明だったをアイコン付きで入れる（問題が無い画面ではホームだけ）。
+ * ⚠ 左の経過（「この回 N 問中 M 問正解」）は外した（2026-11-22。あまり重要な情報でないため。代わりに出すものは prd/13 §10）。
+ * 「この回」そのもの（同じ回で記録した問題を出さない。§6.4）は `lib/drillRound.ts` が持ち続ける
  */
 export function RoundBar({ solve }: { solve?: SolveActions }) {
-  const round = useSyncExternalStore(drillRound.subscribe, drillRound.get, () => null);
   return (
     <div className="flex items-center gap-2">
-      <span className="text-sm text-base-content/70">{roundText(round)}</span>
       <div className="ms-auto">
         <SolveMenu solve={solve} />
       </div>
@@ -107,8 +106,34 @@ function SolveMenu({ solve }: { solve?: SolveActions }) {
   );
 }
 
-/** 入口の在庫が尽きた（prd/13 §6.4）。ほかの入口とホームへの導線を出す */
-export function Exhausted({ mode }: { mode: DrillMode }) {
+/**
+ * 入口の在庫が尽きた（prd/13 §6.4）。ほかの入口とホームへの導線を出す。
+ * 入口「この対局」（§7.10）は「元の対局に戻る」とホーム（最後に出した問題の局面まで進めて開く。分からなければ先頭から）
+ */
+export function Exhausted({ search }: { search: DrillsSearch }) {
+  const mode = search.mode ?? 'recommend';
+  if (mode === 'kifu' && search.kifu !== undefined) {
+    const last = lastKifuDrill.current?.kifuNo === search.kifu ? lastKifuDrill.current : null;
+    return (
+      <div className="space-y-3 p-2">
+        <p>この対局の問題はすべて解きました。</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link
+            to="/kifus/$id"
+            params={{ id: String(search.kifu) }}
+            // 出題局面の次の手（＝その問題の手）まで進めて開く（`moveNumber + 1`。§7.1 の導線と同じ）
+            search={last ? { ply: last.moveNumber + 1 } : {}}
+            className="btn btn-sm btn-primary"
+          >
+            元の対局に戻る
+          </Link>
+          <Link to="/drills" className="btn btn-sm btn-ghost">
+            ホーム
+          </Link>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-3 p-2">
       <p>この入口の問題はもうありません。</p>

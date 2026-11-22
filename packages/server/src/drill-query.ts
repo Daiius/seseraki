@@ -13,7 +13,7 @@
  * 出題の行の ID（`drills.id`）は応答に載せない——一括生成の upsert で作り直されることがあり、
  * 行の ID で指すと作り直しで URL が切れるうえ、通しの連番なので総数が分かる。
  */
-import { and, count, eq, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, sql } from 'drizzle-orm';
 import { positionSfen, usiToJapaneseWithPiece } from 'shared';
 import type { Tx } from './db/index.js';
 import { drillAttempts, drills, kifus } from './db/schema.js';
@@ -220,6 +220,35 @@ export async function drillCounts(tx: Tx, ownerId: string) {
     })
     .from(perDrill);
   return row ?? { total: 0, recommend: 0, mate: 0, best: 0, wrong: 0 };
+}
+
+/**
+ * 棋譜ごとの問題の数（prd/13 §7.10。棋譜一覧・棋譜詳細の `drillCount`）。**除外した問題は数えない**（入口「この対局」の在庫と同じ範囲）。
+ * 🔒 返すのは数だけ（答えを含む列は棋譜の口にも載せない。§5.3）。問題の無い棋譜は Map に入らない（使う側で 0）
+ */
+export async function drillCountsByKifu(tx: Tx, ownerId: string, kifuIds: number[]): Promise<Map<number, number>> {
+  if (kifuIds.length === 0) return new Map();
+  const rows = await tx
+    .select({ kifuId: drills.kifuId, n: count() })
+    .from(drills)
+    .where(
+      and(
+        eq(drills.ownerId, ownerId),
+        inArray(drills.kifuId, kifuIds),
+        sql`not exists (select 1 from ${drillAttempts} where ${drillAttempts.drillId} = ${drills.id} and ${drillAttempts.excluded})`,
+      ),
+    )
+    .groupBy(drills.kifuId);
+  return new Map(rows.map((r) => [r.kifuId, r.n]));
+}
+
+/** 所有者の棋譜にその番号があるか（入口「この対局」の 404。prd/13 §5.3） */
+export async function ownsKifuNo(tx: Tx, ownerId: string, kifuNo: number): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: kifus.id })
+    .from(kifus)
+    .where(and(eq(kifus.ownerId, ownerId), eq(kifus.displayNo, kifuNo)));
+  return row !== undefined;
 }
 
 /**

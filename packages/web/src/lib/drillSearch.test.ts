@@ -8,6 +8,8 @@ import {
   solveFromListSearch,
   validateDrillsSearch,
   type DrillRef,
+  entrySearch,
+  kifuEntrySearch,
 } from './drillSearch';
 
 const REF: DrillRef = { kifuNo: 42, moveNumber: 36, kind: 'best' };
@@ -138,5 +140,33 @@ describe('行き先', () => {
     expect(solve).toEqual({ ...list, kifu: 42, ply: 36, drillKind: 'best' });
     expect(drillScreenOf(solve)).toBe('solve');
     expect(listSearch(solve)).toEqual(list);
+  });
+});
+
+describe('入口「この対局」（prd/13 §7.8・§7.10）', () => {
+  it('棋譜の番号を持ち、問題を選ぶ前でも解く画面になる', () => {
+    const search = validateDrillsSearch({ mode: 'kifu', kifu: '12' });
+    expect(search).toMatchObject({ mode: 'kifu', kifu: 12 });
+    expect(drillRefOf(search)).toBeNull();
+    expect(drillScreenOf(search)).toBe('solve');
+  });
+
+  it('棋譜の番号が無ければ入口ごと落とす（ホーム）', () => {
+    const search = validateDrillsSearch({ mode: 'kifu' });
+    expect(search.mode).toBeUndefined();
+    expect(drillScreenOf(search)).toBe('home');
+  });
+
+  it('選んだ問題を載せた後も同じ棋譜を指し、次の問題も同じ棋譜のまま', () => {
+    const search = validateDrillsSearch({ mode: 'kifu', kifu: '12' });
+    const pinned = pinnedSearch(search, { kifuNo: 12, moveNumber: 30, kind: 'mate' })!;
+    expect(pinned).toEqual({ mode: 'kifu', kifu: 12, ply: 30, drillKind: 'mate' });
+    expect(entrySearch(validateDrillsSearch({ ...pinned }))).toEqual(kifuEntrySearch(12));
+    expect(kifuEntrySearch(12)).toEqual({ mode: 'kifu', kifu: 12 });
+  });
+
+  it('ほかの入口の次の問題は入口だけ・一覧から開いた問題は null', () => {
+    expect(entrySearch({ mode: 'wrong', kifu: 1, ply: 0, drillKind: 'best' })).toEqual({ mode: 'wrong' });
+    expect(entrySearch({ view: 'list', kifu: 1, ply: 0, drillKind: 'best' })).toBeNull();
   });
 });

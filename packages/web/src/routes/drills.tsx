@@ -19,7 +19,7 @@ import {
   validateDrillsSearch,
   type DrillsSearch,
 } from '../lib/drillSearch';
-import { drillRound } from '../lib/drillRound';
+import { drillRound, lastKifuDrill } from '../lib/drillRound';
 
 /**
  * 出題（prd/13）。溜め込んだ棋譜と解析から作った問題を解く。
@@ -78,6 +78,8 @@ async function loadScreen(search: DrillsSearch, preload: boolean) {
     // 決めないまま解くと、次の 1 問の取得が since なしで選び、さらに解答後の時刻を開始時刻にするので、
     // この回で解いた問題がまた出る（保存した URL を新しいタブで開いた・一覧から開いたとき）
     if (one.now && !preload) drillRound.startAt(one.now);
+    // 入口「この対局」で出した問題を覚える（在庫が尽きた画面の「元の対局に戻る」。prd/13 §7.10）
+    if (search.mode === 'kifu' && one.drill && !preload) lastKifuDrill.current = refOf(one.drill);
     return {
       screen: 'solve' as const,
       load: ++solveLoads,
@@ -87,7 +89,8 @@ async function loadScreen(search: DrillsSearch, preload: boolean) {
     };
   }
   const mode = search.mode ?? 'recommend';
-  const next = await loadNext(mode, drillRound.get()?.since ?? null);
+  // 入口「この対局」（prd/13 §7.10）は棋譜の番号も渡す（`validateDrillsSearch` が、番号の無い `kifu` の入口を落としている）
+  const next = await loadNext(mode, drillRound.get()?.since ?? null, search.kifu);
   // この回の開始時刻は server の時刻で決める（端末の時計のずれで、この回の記録を取りこぼさない）
   if (next.now && !preload) drillRound.startAt(next.now);
   // 🔒 **選んだ問題を URL に載せる**（prd/13 §7.8）。載せないと、棋譜詳細から戻ったときに
@@ -121,7 +124,7 @@ function DrillsPage() {
           {data.exhausted ? (
             <>
               <RoundBar />
-              <Exhausted mode={search.mode ?? 'recommend'} />
+              <Exhausted search={search} />
             </>
           ) : (
             // 🔴 **読み込むたびに中身ごと作り直す**（レビュー `OCL-5AC2D54A`）。

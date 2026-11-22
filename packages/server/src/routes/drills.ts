@@ -20,6 +20,7 @@ import {
   listDrills,
   loadDrill,
   loadDrillQuestion,
+  ownsKifuNo,
   pickNextDrill,
   recordAttempt,
   unexcludeDrill,
@@ -34,9 +35,14 @@ export const drillRoutes = new Hono()
   // ⚠ 問題を指す組（棋譜の番号・手数・種類。prd/14 §4.4）は返す——URL に載せて同じ問題へ戻るため
   // 入口（`mode`）ごとに選ぶ（prd/13 §6.4）。`since`（この回の開始時刻）以降に記録した問題は選ばない（§7.6）。
   // 在庫が尽きたら `drill: null`。`now` は server の時刻で、web はこの回の最初の値を `since` に使う
+  // 入口「この対局」（`mode=kifu&kifuNo=`。§7.10）は、他人の棋譜・無い番号を 404 にする（在庫切れの `drill: null` と分ける）
   .get('/drills/next', sessionRequired, zv('query', drillNextQuerySchema), async (c) => {
     const now = new Date().toISOString();
-    const drill = await pickNextDrill(c.get('tx'), c.get('userId'), c.req.valid('query'));
+    const query = c.req.valid('query');
+    if (query.mode === 'kifu' && !(await ownsKifuNo(c.get('tx'), c.get('userId'), query.kifuNo ?? 0))) {
+      return apiError(c, 404, 'not_found', NOT_FOUND.kifu);
+    }
+    const drill = await pickNextDrill(c.get('tx'), c.get('userId'), query);
     return c.json({ drill, now });
   })
   // ホームの数（入口ごとの在庫。prd/13 §7.5）。🔒 正答率は返さない（§10）

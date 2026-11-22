@@ -2,7 +2,7 @@ import { client } from './honoClient';
 import { abortableSleep } from './abortableSleep';
 import { callApi, CONNECTION_ERROR, serverErrorText } from './callApi';
 import type { AnalysisAssignee } from './auth';
-import type { DrillMode, DrillRef, DrillsSearch } from './drillSearch';
+import type { DrillEntry, DrillRef, DrillsSearch } from './drillSearch';
 import {
   answerBodyUnavailable,
   answerBodyWithEvaluation,
@@ -37,9 +37,16 @@ export async function loadCounts() {
   return result.ok ? { counts: result.data, error: null } : { counts: null, error: result.error };
 }
 
-export async function loadNext(mode: DrillMode, since: string | null) {
+/** 入口の次の 1 問（prd/13 §6.4）。入口「この対局」（§7.10）は棋譜の番号（`kifuNo`）も渡す */
+export async function loadNext(mode: DrillEntry, since: string | null, kifuNo?: number) {
   const result = await callApi(
-    client.api.drills.next.$get({ query: { mode, ...(since ? { since } : {}) } }),
+    client.api.drills.next.$get({
+      query: {
+        mode,
+        ...(since ? { since } : {}),
+        ...(mode === 'kifu' && kifuNo !== undefined ? { kifuNo } : {}),
+      },
+    }),
   );
   if (!result.ok) return { drill: null, now: null, error: result.error };
   return { drill: result.data.drill, now: result.data.now, error: null };

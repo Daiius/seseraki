@@ -121,6 +121,8 @@ Web UI が使うエンドポイント（`sessionRequired`。認証エンドポ�
 | ~~POST~~ | ~~`/api/swars/import`~~ | **外した**（2026-10-12）。swars 取り込みジョブ起動だったもの（§4） |
 | ~~GET~~ | ~~`/api/swars/import/status`~~ | **外した**（2026-10-12）。swars 取り込みジョブ状態だったもの（§4） |
 
+> 2026-11-22 決定・未実装: 一覧の行と詳細に **`drillCount`**（その棋譜の問題のうち除外していないものの数）を足す。棋譜から問題を解きに行く導線に使う（[13](./13-drills.md) §7.10）。
+
 ### 6.1 `GET /api/kifus` のクエリ
 
 組み立ては `packages/server/src/kifu-list-query.ts`（DB 接続を持たない純関数。route から使い、単体テストを持つ）。

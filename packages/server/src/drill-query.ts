@@ -22,6 +22,7 @@ import {
   ATTEMPT_NO,
   DRILL_PAGE_SIZE,
   EXCLUDED_COUNT,
+  IS_CORRECT,
   IS_RECENT_WRONG,
   IS_UNANSWERED,
   IS_WRONG,
@@ -33,6 +34,7 @@ import {
   drillNextPlan,
   drillStatusOf,
   isoOf,
+  type DrillDailyQuery,
   type DrillListQuery,
   type DrillNextQuery,
 } from './drill-list-query.js';
@@ -222,24 +224,79 @@ export async function drillCounts(tx: Tx, ownerId: string) {
   return row ?? { total: 0, recommend: 0, mate: 0, best: 0, wrong: 0 };
 }
 
+/** 棋譜ごとの問題の数（`drillCountsByKifu`）。`correct` は `total` のうち最後の判定が正解の問題（prd/13 §7.11） */
+export type KifuDrillCounts = { total: number; correct: number };
+
 /**
- * 棋譜ごとの問題の数（prd/13 §7.10。棋譜一覧・棋譜詳細の `drillCount`）。**除外した問題は数えない**（入口「この対局」の在庫と同じ範囲）。
+ * 棋譜ごとの問題の数（prd/13 §7.10・§7.11。棋譜一覧・棋譜詳細の `drillCount` / `drillCorrectCount`）。
+ * **除外した問題は数えない**（入口「この対局」の在庫と同じ範囲）。正解は最後の判定で読む（§6.4）。
  * 🔒 返すのは数だけ（答えを含む列は棋譜の口にも載せない。§5.3）。問題の無い棋譜は Map に入らない（使う側で 0）
  */
-export async function drillCountsByKifu(tx: Tx, ownerId: string, kifuIds: number[]): Promise<Map<number, number>> {
+export async function drillCountsByKifu(
+  tx: Tx,
+  ownerId: string,
+  kifuIds: number[],
+): Promise<Map<number, KifuDrillCounts>> {
   if (kifuIds.length === 0) return new Map();
-  const rows = await tx
-    .select({ kifuId: drills.kifuId, n: count() })
+  // 1 問 1 行に束ねてから数える（状態は履歴の集計から出る）
+  const perDrill = tx
+    .select({
+      kifuId: drills.kifuId,
+      excluded: sql<boolean>`${EXCLUDED_COUNT} > 0`.as('excluded'),
+      correct: sql<boolean>`${IS_CORRECT}`.as('correct'),
+    })
     .from(drills)
-    .where(
-      and(
-        eq(drills.ownerId, ownerId),
-        inArray(drills.kifuId, kifuIds),
-        sql`not exists (select 1 from ${drillAttempts} where ${drillAttempts.drillId} = ${drills.id} and ${drillAttempts.excluded})`,
-      ),
+    .leftJoin(drillAttempts, eq(drillAttempts.drillId, drills.id))
+    .where(and(eq(drills.ownerId, ownerId), inArray(drills.kifuId, kifuIds)))
+    .groupBy(drills.id)
+    .as('per_drill');
+  const rows = await tx
+    .select({
+      kifuId: perDrill.kifuId,
+      total: sql<number>`count(*)`.mapWith(Number),
+      correct: sql<number>`count(*) filter (where ${perDrill.correct})`.mapWith(Number),
+    })
+    .from(perDrill)
+    .where(sql`not ${perDrill.excluded}`)
+    .groupBy(perDrill.kifuId);
+  return new Map(rows.map((r) => [r.kifuId, { total: r.total, correct: r.correct }]));
+}
+
+/**
+ * 日ごとの正解した問題の数（prd/13 §7.11）。今日を含む直近 `days` 日を古い順に、0 の日も返す。
+ * - 数えるのは**正解を記録した問題**（`verdict = 'correct'`）。不正解・惜しい・諦め・除外だけの行は数えない
+ * - 同じ日に同じ問題を 2 度正解しても 1 問（`count(distinct drill_id)`）
+ * - 🔴 日の区切りは `tz` の 0 時。server の `TZ` にも接続の時刻帯にも依らせない（`at time zone` で明示する）
+ * 🔒 返すのは数だけ（どの問題かは返さない）
+ */
+export async function drillDailyCorrect(
+  tx: Tx,
+  ownerId: string,
+  query: DrillDailyQuery,
+): Promise<{ date: string; correct: number }[]> {
+  // ⚠ 引数は型を明示する（`unknown` のままだと `at time zone` の関数が解決できない）
+  const tz = sql`${query.tz}::text`;
+  const span = sql`${query.days - 1}::int`;
+  const today = sql`(now() at time zone ${tz})::date`;
+  const result = await tx.execute<{ date: string; correct: number | string }>(sql`
+    with days as (
+      select (${today} - offs)::date as day
+      from generate_series(0, ${span}) as offs
+    ),
+    counted as (
+      select (${drillAttempts.createdAt} at time zone ${tz})::date as day,
+             count(distinct ${drillAttempts.drillId}) as correct
+      from ${drillAttempts}
+      where ${drillAttempts.ownerId} = ${ownerId}
+        and ${drillAttempts.verdict} = 'correct'
+        and ${drillAttempts.createdAt} >= ((${today} - ${span})::timestamp at time zone ${tz})
+      group by 1
     )
-    .groupBy(drills.kifuId);
-  return new Map(rows.map((r) => [r.kifuId, r.n]));
+    select to_char(days.day, 'YYYY-MM-DD') as date, coalesce(counted.correct, 0) as correct
+    from days left join counted on counted.day = days.day
+    order by days.day asc
+  `);
+  return result.rows.map((r) => ({ date: r.date, correct: Number(r.correct) }));
 }
 
 /** 所有者の棋譜にその番号があるか（入口「この対局」の 404。prd/13 §5.3） */

@@ -19,8 +19,17 @@ function endRound() {
   drillRound.end();
 }
 
+/** 「2/5」の数。全部正解したら正解の色（prd/13 §7.11） */
+function progressText(correct: number, total: number) {
+  return `${correct}/${total}`;
+}
+
+function progressLabel(correct: number, total: number) {
+  return `この対局の問題を解く（${total} 問中 ${correct} 問正解）`;
+}
+
 /**
- * 棋譜詳細の上部のボタン（「問題 3」）。問題ができるまでは押せない形で、理由を添える（`lib/kifuDrills.ts`）。
+ * 棋譜詳細の上部のボタン（「問題 2/5」。正解数 / 問題数。prd/13 §7.11）。問題ができるまでは押せない形で、理由を添える（`lib/kifuDrills.ts`）。
  * 解析の経過を追って詳細を読み直しているので、解析が終われば開き直さなくても数が変わる
  */
 export function KifuDrillsButton({
@@ -29,14 +38,15 @@ export function KifuDrillsButton({
   className,
 }: {
   kifuNo: number;
-  kifu: AnalysisPendingInput & { drillCount: number };
+  kifu: AnalysisPendingInput & { drillCount: number; drillCorrectCount: number };
   className?: string;
 }) {
   const state = kifuDrillsState(kifu);
+  const allCorrect = kifu.drillCount > 0 && kifu.drillCorrectCount >= kifu.drillCount;
   const body = (
     <>
       <DrillModeIcon mode="recommend" size={5} />
-      問題 {kifu.drillCount}
+      問題 {kifu.drillCount > 0 ? progressText(kifu.drillCorrectCount, kifu.drillCount) : 0}
     </>
   );
   const base = 'btn btn-sm btn-ghost gap-1 px-2 max-sm:min-h-11 max-[375px]:min-h-10 whitespace-nowrap';
@@ -56,28 +66,37 @@ export function KifuDrillsButton({
       to="/drills"
       search={kifuEntrySearch(kifuNo)}
       onClick={endRound}
-      className={clsx(base, className)}
-      aria-label={`この対局の問題を解く（${kifu.drillCount} 問）`}
+      className={clsx(base, allCorrect && 'text-success', className)}
+      aria-label={progressLabel(kifu.drillCorrectCount, kifu.drillCount)}
     >
       {body}
     </Link>
   );
 }
 
-/** 棋譜一覧の行のバッジ。🔒 **0 問の行には出さない**（解析の状態によらず数で決める。§7.10） */
-export function KifuDrillsBadge({ kifuNo, drillCount }: { kifuNo: number; drillCount: number }) {
+/** 棋譜一覧の行のバッジ（「2/5」。prd/13 §7.11）。🔒 **0 問の行には出さない**（解析の状態によらず数で決める。§7.10） */
+export function KifuDrillsBadge({
+  kifuNo,
+  drillCount,
+  drillCorrectCount,
+}: {
+  kifuNo: number;
+  drillCount: number;
+  drillCorrectCount: number;
+}) {
   if (drillCount <= 0) return null;
+  const allCorrect = drillCorrectCount >= drillCount;
   return (
     <Link
       to="/drills"
       search={kifuEntrySearch(kifuNo)}
       onClick={endRound}
-      className="badge badge-sm badge-outline gap-0.5 px-1"
-      aria-label={`この対局の問題を解く（${drillCount} 問）`}
+      className={clsx('badge badge-sm badge-outline gap-0.5 px-1', allCorrect && 'badge-success')}
+      aria-label={progressLabel(drillCorrectCount, drillCount)}
       title="この対局の問題を解く"
     >
       <DrillModeIcon mode="recommend" size={5} />
-      {drillCount}
+      {progressText(drillCorrectCount, drillCount)}
     </Link>
   );
 }

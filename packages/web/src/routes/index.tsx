@@ -445,7 +445,11 @@ function KifuListPage() {
                           </div>
                           <div>
                             {/* その対局の問題（prd/13 §7.10）。0 問の行には出さない */}
-                            <KifuDrillsBadge kifuNo={kifu.no} drillCount={kifu.drillCount} />
+                            <KifuDrillsBadge
+                              kifuNo={kifu.no}
+                              drillCount={kifu.drillCount}
+                              drillCorrectCount={kifu.drillCorrectCount}
+                            />
                           </div>
                         </div>
                       </td>

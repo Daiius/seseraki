@@ -181,8 +181,8 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
     ownerId,
     rows.map((r) => r.id),
   );
-  // 問題の数（prd/13 §7.10。行のバッジ）。除外した問題は数えない・数だけ返す
-  const drillCount = await drillCountsByKifu(
+  // 問題の数と正解の数（prd/13 §7.10・§7.11。行のバッジ）。除外した問題は数えない・数だけ返す
+  const drillCounts = await drillCountsByKifu(
     tx,
     ownerId,
     rows.map((r) => r.id),
@@ -195,7 +195,8 @@ export async function listKifus(tx: Tx, ownerId: string, query: KifuListQuery) {
       failed: analysisError !== null,
       hasMemo: Boolean(hasMemo),
       tactics: tactics.get(id) ?? [],
-      drillCount: drillCount.get(id) ?? 0,
+      drillCount: drillCounts.get(id)?.total ?? 0,
+      drillCorrectCount: drillCounts.get(id)?.correct ?? 0,
     })),
     pagination: {
       page,
@@ -246,10 +247,12 @@ export async function getKifuDetail(tx: Tx, ownerId: string, no: number) {
     .from(kifuTactics)
     .where(and(eq(kifuTactics.kifuId, id), eq(kifuTactics.ownerId, ownerId)));
 
-  // 問題の数（prd/13 §7.10。上部の「問題 N」のボタン）
-  const drillCount = (await drillCountsByKifu(tx, ownerId, [id])).get(id) ?? 0;
+  // 問題の数と正解の数（prd/13 §7.10・§7.11。上部の「問題 2/5」のボタン）
+  const counts = (await drillCountsByKifu(tx, ownerId, [id])).get(id);
+  const drillCount = counts?.total ?? 0;
+  const drillCorrectCount = counts?.correct ?? 0;
 
-  return { no: displayNo, ...kifu, analyses, tactics, drillCount };
+  return { no: displayNo, ...kifu, analyses, tactics, drillCount, drillCorrectCount };
 }
 
 /**

@@ -16,6 +16,7 @@ import { forgetLine, recallLine } from '../drill-lines.js';
 import { resolveWithEngine } from '../drill-engine.js';
 import {
   drillCounts,
+  drillDailyCorrect,
   listDrillAttemptsOf,
   listDrills,
   loadDrill,
@@ -25,7 +26,7 @@ import {
   recordAttempt,
   unexcludeDrill,
 } from '../drill-query.js';
-import { drillListQuerySchema, drillNextQuerySchema } from '../drill-list-query.js';
+import { drillDailyQuerySchema, drillListQuerySchema, drillNextQuerySchema } from '../drill-list-query.js';
 import { drillRefParam, smallBody } from './common.js';
 
 export const drillRoutes = new Hono()
@@ -48,6 +49,11 @@ export const drillRoutes = new Hono()
   // ホームの数（入口ごとの在庫。prd/13 §7.5）。🔒 正答率は返さない（§10）
   .get('/drills/counts', sessionRequired, async (c) =>
     c.json(await drillCounts(c.get('tx'), c.get('userId'))),
+  )
+  // 日ごとの正解の数（prd/13 §7.11）。今日を含む直近 `days` 日を古い順に。日の区切りは `tz`（ブラウザの時刻帯）の 0 時。
+  // 🔒 数だけを返す（どの問題を解いたかは返さない）
+  .get('/drills/daily', sessionRequired, zv('query', drillDailyQuerySchema), async (c) =>
+    c.json({ days: await drillDailyCorrect(c.get('tx'), c.get('userId'), c.req.valid('query')) }),
   )
   // 問題の一覧（prd/13 §7.7）。🔴 **答えを含む列は返さない**（`/drills/next` と同じ規則）
   .get('/drills', sessionRequired, zv('query', drillListQuerySchema), async (c) =>

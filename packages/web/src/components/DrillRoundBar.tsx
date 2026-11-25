@@ -1,5 +1,7 @@
 import { Link } from '@tanstack/react-router';
-import { lastKifuDrill } from '../lib/drillRound';
+import { useSyncExternalStore } from 'react';
+import { drillRound, lastKifuDrill } from '../lib/drillRound';
+import { todayCorrectOf, useDrillDaily } from '../lib/drillDaily';
 import { MODE_LABEL, MODES, modeSearch, type DrillsSearch } from '../lib/drillSearch';
 import { ICON_BTN, MENU_ITEM, MENU_LIST } from '../lib/touchTargets';
 import { ArrowRestartIcon, BookOpenIcon, EllipsisVerticalIcon, EyeSlashIcon, HomeIcon } from './icons';
@@ -7,14 +9,15 @@ import { ArrowRestartIcon, BookOpenIcon, EllipsisVerticalIcon, EyeSlashIcon, Hom
 import { closeMenu } from '../lib/closeMenu';
 
 /**
- * 解く画面の上部: 右端のケバブ（prd/13 §7.6）。
+ * 解く画面の上部: 左に「今日 N 問正解」、右端のケバブ（prd/13 §7.6・§7.11）。
  * ケバブにはホーム・元の対局・やり直す・自明だったをアイコン付きで入れる（問題が無い画面ではホームだけ）。
- * ⚠ 左の経過（「この回 N 問中 M 問正解」）は外した（2026-11-22。あまり重要な情報でないため。代わりに出すものは prd/13 §10）。
+ * ⚠ 経過（「この回 N 問中 M 問正解」）は外した（2026-11-22）。代わりに今日の正解の数を出す（2026-11-25）。
  * 「この回」そのもの（同じ回で記録した問題を出さない。§6.4）は `lib/drillRound.ts` が持ち続ける
  */
 export function RoundBar({ solve }: { solve?: SolveActions }) {
   return (
     <div className="flex items-center gap-2">
+      <TodayCorrect />
       <div className="ms-auto">
         <SolveMenu solve={solve} />
       </div>
@@ -106,17 +109,30 @@ function SolveMenu({ solve }: { solve?: SolveActions }) {
   );
 }
 
+/** 今日の正解の数（prd/13 §7.11）。読み込むまでは何も出さない */
+export function TodayCorrect({ className }: { className?: string }) {
+  const { days } = useDrillDaily();
+  const today = todayCorrectOf(days);
+  if (today === null) return null;
+  return <span className={className ?? 'text-sm text-base-content/70'}>今日 {today} 問正解</span>;
+}
+
 /**
  * 入口の在庫が尽きた（prd/13 §6.4）。ほかの入口とホームへの導線を出す。
- * 入口「この対局」（§7.10）は「元の対局に戻る」とホーム（最後に出した問題の局面まで進めて開く。分からなければ先頭から）
+ * 入口「この対局」（§7.10・§7.11）は「一通り解きました」と、棋譜詳細・棋譜一覧への導線。
+ * この回で 1 問も記録せずに尽きた（入った時点で全部正解済み）なら「すべて正解しています」
+ * ——入口から入ると新しい回なので、この回の記録はこの対局のものだけ（入口を切り替えたら「この対局」から抜ける）
  */
 export function Exhausted({ search }: { search: DrillsSearch }) {
   const mode = search.mode ?? 'recommend';
+  const round = useSyncExternalStore(drillRound.subscribe, drillRound.get);
   if (mode === 'kifu' && search.kifu !== undefined) {
-    const last = lastKifuDrill.current?.kifuNo === search.kifu ? lastKifuDrill.current : null;
+    const solvedNow = (round?.recorded ?? 0) > 0;
+    // 最後に出した問題の局面まで進めて開く（この回で出したときだけ。分からなければ先頭から）
+    const last = solvedNow && lastKifuDrill.current?.kifuNo === search.kifu ? lastKifuDrill.current : null;
     return (
       <div className="space-y-3 p-2">
-        <p>この対局の問題はすべて解きました。</p>
+        <p>{solvedNow ? '一通り解きました。' : 'この対局の問題はすべて正解しています。'}</p>
         <div className="flex items-center gap-2 flex-wrap">
           <Link
             to="/kifus/$id"
@@ -125,10 +141,10 @@ export function Exhausted({ search }: { search: DrillsSearch }) {
             search={last ? { ply: last.moveNumber + 1 } : {}}
             className="btn btn-sm btn-primary"
           >
-            元の対局に戻る
+            棋譜詳細へ
           </Link>
-          <Link to="/drills" className="btn btn-sm btn-ghost">
-            ホーム
+          <Link to="/" className="btn btn-sm">
+            棋譜一覧へ
           </Link>
         </div>
       </div>

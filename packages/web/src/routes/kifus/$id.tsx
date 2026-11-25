@@ -210,7 +210,10 @@ function KifuDetailPage() {
         {/* その対局の問題を解きに行く（prd/13 §7.10）。⋯ の左に表で置く——押せない状態も見せる */}
         <KifuDrillsButton
           kifuNo={kifu.no}
-          kifu={{ drillCount: kifu.drillCount, analysisProfile: kifu.analysisProfile, failed: !!kifu.analysisError }}
+          kifu={{
+            drillCount: kifu.drillCount,
+            drillCorrectCount: kifu.drillCorrectCount,
+            analysisProfile: kifu.analysisProfile, failed: !!kifu.analysisError }}
           className="ml-auto"
         />
         <div className="dropdown dropdown-end">

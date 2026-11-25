@@ -11,10 +11,11 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { client, db, type Tx } from './db/index.js';
 import { drillAttempts, drills, kifus, users } from './db/schema.js';
-import { drillListQuerySchema, drillNextQuerySchema } from './drill-list-query.js';
+import { drillDailyQuerySchema, drillListQuerySchema, drillNextQuerySchema } from './drill-list-query.js';
 import {
   drillCounts,
   drillCountsByKifu,
+  drillDailyCorrect,
   listDrillAttemptsOf,
   listDrills,
   ownsKifuNo,
@@ -236,53 +237,123 @@ describe('その問題の解答履歴（prd/13 §7.7）', () => {
   });
 });
 
-describe('入口「この対局」と棋譜ごとの問題の数（prd/13 §6.4・§7.10）', () => {
-  it('その棋譜の問題を、正解済みも含めて手数の小さい順に出す（除外は出さない）', async () => {
-    // old の問題: d1（1・詰将棋・未解答）・d2（2・正解済み）・d3（3）・d4（4）・d5（5・除外）
+describe('入口「この対局」と棋譜ごとの問題の数（prd/13 §6.4・§7.10・§7.11）', () => {
+  it('その棋譜のまだ正解していない問題を、手数の小さい順に出す（除外は出さない）', async () => {
+    // old の問題: d1（1・詰将棋・未解答）・d2（2・正解済み）・d3（3・惜しい）・d4（4・1 時間前に間違えた）・d5（5・除外）
     const kifu = { mode: 'kifu', kifuNo: String(oldNo) };
     expect(await next(kifu)).toMatchObject({ kifuNo: oldNo, moveNumber: 1, kind: 'mate' });
     // 別の棋譜の問題は出さない
     expect(await next({ mode: 'kifu', kifuNo: String(recentNo) })).toMatchObject({ kifuNo: recentNo, moveNumber: 0 });
   });
 
-  it('同じ手数なら詰将棋が先・記録した問題はこの回には出さない', async () => {
+  it('正解済みを飛ばし・間違えた直後も出し・同じ手数なら詰将棋が先・記録した問題はこの回には出さない', async () => {
     const k = await db.transaction((tx) =>
       insertKifu(tx, { title: 'same-ply', kifText: '', ownerId, usiMoves: MOVES, playedAt: ago(DAY) }),
     );
-    const [best2, mate2, best1] = (
+    const [solved0, best2, mate2, best1, wrong3] = (
       await db
         .insert(drills)
-        .values([drill(k.id, 2), drill(k.id, 2, 'mate'), drill(k.id, 1)])
+        .values([drill(k.id, 0), drill(k.id, 2), drill(k.id, 2, 'mate'), drill(k.id, 1), drill(k.id, 3)])
         .returning({ id: drills.id })
     ).map((r) => r.id);
-    // この棋譜の記録はこの後に作るものだけなので、開始時刻は少し前でよい（DB と手元の時計のずれを避ける）
-    const since = ago(HOUR).toISOString();
+    const record = (drillId: number, verdict: 'correct' | 'wrong', createdAt?: Date) =>
+      db.insert(drillAttempts).values({ drillId, ownerId, move: '2g2f', line: ['2g2f'], verdict, createdAt });
+    // 回の前の記録: 手数 0 は正解済み・手数 3 は 1 時間前に間違えた
+    await record(solved0, 'correct', ago(2 * HOUR));
+    await record(wrong3, 'wrong', ago(HOUR));
+    // この回の開始は前の記録より後（DB と手元の時計のずれを避けて、少し前に置く）
+    const since = ago(30 * 60 * 1000).toISOString();
     const kifu = { mode: 'kifu', kifuNo: String(k.displayNo), since };
     expect(await next(kifu)).toMatchObject({ moveNumber: 1, kind: 'best' });
-    await db.insert(drillAttempts).values({ drillId: best1, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'correct' });
+    await record(best1, 'correct');
     expect(await next(kifu)).toMatchObject({ moveNumber: 2, kind: 'mate' });
-    await db.insert(drillAttempts).values({ drillId: mate2, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'wrong' });
+    await record(mate2, 'wrong');
     expect(await next(kifu)).toMatchObject({ moveNumber: 2, kind: 'best' });
-    await db.insert(drillAttempts).values({ drillId: best2, ownerId, move: '2g2f', line: ['2g2f'], verdict: 'correct' });
+    await record(best2, 'correct');
+    // 間違えた直後（1 日の待ち）でも出す
+    expect(await next(kifu)).toMatchObject({ moveNumber: 3, kind: 'best' });
+    await record(wrong3, 'correct');
     expect(await next(kifu)).toBeNull();
-    // 新しい回（since なし）なら、正解済みも含めて最初から
-    expect(await next({ mode: 'kifu', kifuNo: String(k.displayNo) })).toMatchObject({ moveNumber: 1 });
+    // 新しい回（since なし）なら、まだ正解していない問題（この回で間違えた詰将棋）だけ
+    expect(await next({ mode: 'kifu', kifuNo: String(k.displayNo) })).toMatchObject({ moveNumber: 2, kind: 'mate' });
+
+    const counts = await as((tx) => drillCountsByKifu(tx, ownerId, [k.id]));
+    expect(counts.get(k.id)).toEqual({ total: 5, correct: 4 });
   });
 
-  it('棋譜ごとの問題の数は除外を数えない・問題の無い棋譜は入らない', async () => {
+  it('棋譜ごとの問題の数は除外を数えない・正解は最後の判定・問題の無い棋譜は入らない', async () => {
     const ids = await db
       .select({ id: kifus.id, no: kifus.displayNo })
       .from(kifus)
       .where(eq(kifus.ownerId, ownerId));
     const idOf = (no: number) => ids.find((r) => r.no === no)!.id;
     const counts = await as((tx) => drillCountsByKifu(tx, ownerId, [idOf(oldNo), idOf(recentNo)]));
-    expect(counts.get(idOf(oldNo))).toBe(4);
-    expect(counts.get(idOf(recentNo))).toBe(1);
+    // old: d1〜d4（d5 は除外）。正解は d2 だけ（d3 は正解の後に惜しい）
+    expect(counts.get(idOf(oldNo))).toEqual({ total: 4, correct: 1 });
+    expect(counts.get(idOf(recentNo))).toEqual({ total: 1, correct: 0 });
     expect(await as((tx) => drillCountsByKifu(tx, ownerId, []))).toEqual(new Map());
   });
 
   it('入口「この対局」の 404 の判定は所有者の棋譜だけ', async () => {
     expect(await as((tx) => ownsKifuNo(tx, ownerId, oldNo))).toBe(true);
     expect(await as((tx) => ownsKifuNo(tx, ownerId, 99999))).toBe(false);
+  });
+});
+
+describe('日ごとの正解の数（prd/13 §7.11）', () => {
+  it('その時刻帯の日で区切り、正解した問題だけを 1 問 1 回で数える・0 の日も返す', async () => {
+    const [user] = await db
+      .insert(users)
+      .values({ name: 'n', email: `${randomUUID()}@example.invalid`, displayName: 'd' })
+      .returning({ id: users.id });
+    const uid = user.id;
+    const k = await db.transaction((tx) =>
+      insertKifu(tx, { title: 'daily', kifText: '', ownerId: uid, usiMoves: MOVES, playedAt: ago(DAY) }),
+    );
+    const [a, b, c] = (
+      await db
+        .insert(drills)
+        .values([0, 1, 2].map((n) => ({ ...drill(k.id, n), ownerId: uid })))
+        .returning({ id: drills.id })
+    ).map((r) => r.id);
+    // 東京の今日の 0 時（UTC の瞬間）
+    const JST = 9 * HOUR;
+    const midnight = new Date(Math.floor((Date.now() + JST) / DAY) * DAY - JST);
+    const at = (ms: number) => new Date(midnight.getTime() + ms);
+    const row = (drillId: number, verdict: 'correct' | 'close' | 'wrong', createdAt: Date) => ({
+      drillId,
+      ownerId: uid,
+      move: '2g2f',
+      line: ['2g2f'],
+      verdict,
+      createdAt,
+    });
+    await db.insert(drillAttempts).values([
+      // 今日: a を 2 回正解（1 問）・b を正解・c は不正解と惜しい（数えない）
+      row(a, 'correct', at(1000)),
+      row(a, 'correct', at(2000)),
+      row(b, 'correct', at(3000)),
+      row(c, 'wrong', at(4000)),
+      row(c, 'close', at(5000)),
+      // 昨日の 23:59:59（東京）
+      row(c, 'correct', at(-1000)),
+      // 3 日前（days=3 の窓の外）
+      row(b, 'correct', at(-3 * DAY + 1000)),
+    ]);
+    const daily = (tz: string, days: number) =>
+      withUserTx(db, uid, (tx) => drillDailyCorrect(tx, uid, drillDailyQuerySchema.parse({ tz, days: String(days) })));
+    const ymd = (d: Date) => new Date(d.getTime() + JST).toISOString().slice(0, 10);
+    expect(await daily('Asia/Tokyo', 3)).toEqual([
+      { date: ymd(at(-2 * DAY)), correct: 0 },
+      { date: ymd(at(-DAY)), correct: 1 },
+      { date: ymd(midnight), correct: 2 },
+    ]);
+    // 既定は 28 日
+    expect(await withUserTx(db, uid, (tx) => drillDailyCorrect(tx, uid, drillDailyQuerySchema.parse({ tz: 'Asia/Tokyo' })))).toHaveLength(28);
+  });
+
+  it('知らない時刻帯は受け付けない', () => {
+    expect(drillDailyQuerySchema.safeParse({ tz: 'Mars/Olympus' }).success).toBe(false);
+    expect(drillDailyQuerySchema.safeParse({ tz: 'Asia/Tokyo', days: '61' }).success).toBe(false);
   });
 });

@@ -247,6 +247,11 @@ const CALLS: Call[] = [
   { route: 'GET /api/drills/next', request: () => ({ url: '/api/drills/next' }), status: 200 },
   { route: 'GET /api/drills/counts', request: () => ({ url: '/api/drills/counts' }), status: 200 },
   {
+    route: 'GET /api/drills/daily',
+    request: () => ({ url: '/api/drills/daily?tz=Asia%2FTokyo&days=7' }),
+    status: 200,
+  },
+  {
     route: 'GET /api/drills/:kifuNo/:moveNumber/:kind',
     request: () => ({ url: drillPath() }),
     status: 200,

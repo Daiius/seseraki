@@ -39,6 +39,7 @@ import { useAnalysisAssignee } from '../lib/useMe';
 import { entrySearch, listSearch, type DrillsSearch } from '../lib/drillSearch';
 import { drillRound } from '../lib/drillRound';
 import { RoundBar } from './DrillRoundBar';
+import { refreshDaily } from '../lib/drillDaily';
 import { Result, type Shown } from './DrillResult';
 import { ReplayControls, ReplayLines, useReplayKeys } from './DrillReplay';
 import {
@@ -130,6 +131,8 @@ export function DrillRunner({ initial, search }: { initial: SolveData; search: D
   function noteRecorded(verdict: Reveal['verdict']) {
     setRecorded(verdict);
     drillRound.record(verdict);
+    // 上部の「今日 N 問正解」を引き直す（prd/13 §7.11。数えるのは server）
+    void refreshDaily();
   }
 
   const base = drill ? parseSfen(drill.sfen) : null;

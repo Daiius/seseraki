@@ -49,6 +49,24 @@ export const drillNextQuerySchema = z
 
 export type DrillNextQuery = z.infer<typeof drillNextQuerySchema>;
 
+/** 日ごとの正解の数の口（`GET /api/drills/daily`。prd/13 §5.3・§7.11） */
+export const drillDailyQuerySchema = z.object({
+  /** ブラウザの時刻帯（IANA）。日の区切りはこの時刻帯の 0 時 */
+  tz: z.string().min(1).max(64).refine(isKnownTimeZone, { message: '知らない時刻帯' }),
+  days: z.coerce.number<number>().int().min(1).max(60).default(28),
+});
+
+function isKnownTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type DrillDailyQuery = z.infer<typeof drillDailyQuerySchema>;
+
 // --- 1 問ごとの集計（prd/13 §6.2・§6.4）---
 
 /**
@@ -77,7 +95,7 @@ export const LAST_VERDICT = sql<
  */
 export const IS_WRONG = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} <> 'correct')`;
 /** 正解（最後の判定が正解） */
-const IS_CORRECT = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} = 'correct')`;
+export const IS_CORRECT = sql`(${ANSWER_COUNT} > 0 and ${LAST_VERDICT} = 'correct')`;
 /** 間違えてから 1 日経っていない（おすすめに出さない。prd/13 §6.4）。「1 日」は最後の解答からの 24 時間 */
 export const IS_RECENT_WRONG = sql`(${IS_WRONG} and ${LAST_ANSWERED_AT} > now() - interval '1 day')`;
 /** 未解答 */
@@ -145,8 +163,8 @@ export function drillListOrderBy(): SQL[] {
  *   空でない段から選び、段の中はランダム（④だけ古い順）。間違えた直後（1 日未満）はどの段にも入らない
  * - 詰将棋 / 次の一手: その種類の未解答（ランダム）
  * - 間違えた問題: 種類混在・最後の解答が古い順（1 日の待ちは掛けない）
- * - この対局（§7.10）: その棋譜の問題を**正解済みも含めて**手数の小さい順・同じ手数なら詰将棋が先。
- *   棋譜の所有者は呼び出し側（`pickNextDrill` の `kifus.ownerId`）で絞る
+ * - この対局（§7.10・§7.11）: その棋譜の問題のうち**まだ正解していないもの**（未解答・間違えた）を手数の小さい順・
+ *   同じ手数なら詰将棋が先。1 日の待ちは掛けない。棋譜の所有者は呼び出し側（`pickNextDrill` の `kifus.ownerId`）で絞る
  */
 export function drillNextPlan(query: DrillNextQuery): {
   where: SQL | undefined;
@@ -174,7 +192,7 @@ export function drillNextPlan(query: DrillNextQuery): {
     case 'kifu':
       return {
         where: eq(kifus.displayNo, query.kifuNo ?? 0),
-        having: and(NOT_EXCLUDED, since),
+        having: and(NOT_EXCLUDED, since, sql`not ${IS_CORRECT}`),
         orderBy: [asc(drills.moveNumber), sql`case when ${drills.kind} = 'mate' then 0 else 1 end`],
       };
     case 'recommend':

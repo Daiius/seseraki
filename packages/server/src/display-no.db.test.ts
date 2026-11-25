@@ -190,18 +190,18 @@ let pendingJobId: string;
 /** POST /kifus で作った棋譜の番号（再解析・削除はこれで行う） */
 let posted: number | undefined;
 
+/**
+ * 書き込み口の本文。🔒 **GET 以外の口はすべて Origin を検査する**（`route.ts` の `originRequiredForWrites`。prd/14 §5.8）ので、
+ * ブラウザから叩く形（`BETTER_AUTH_URL` のオリジン）で送る
+ */
+const ORIGIN = { origin: 'http://localhost:5173' };
 const json = (method: string, body: unknown): RequestInit => ({
   method,
-  headers: { 'content-type': 'application/json' },
+  headers: { 'content-type': 'application/json', ...ORIGIN },
   body: JSON.stringify(body),
 });
-
-/** Origin の検査がある書き込み口（ブラウザ解析の受け口・担当の切り替え・出題の解答。prd/14 §5.8）用 */
-const jsonFromBrowser = (method: string, body: unknown): RequestInit => ({
-  method,
-  headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' },
-  body: JSON.stringify(body),
-});
+/** 本文の無い書き込み口 */
+const bare = (method: string): RequestInit => ({ method, headers: ORIGIN });
 
 /** ブラウザ解析の来歴（エンジンのビルド識別と評価関数のハッシュ） */
 const ENGINE = { engineBuild: 'c1b80eaa-0123456789ab', evalHash: 'a'.repeat(64) };
@@ -211,6 +211,7 @@ const drillPath = () => `/api/drills/${analyzed.displayNo}/0/best`;
 /** 叩く順に並べる（作る → 読む → 書き換える → 消す） */
 const CALLS: Call[] = [
   { route: 'GET /api/me', request: () => ({ url: '/api/me' }), status: 200 },
+  { route: 'GET /api/version', request: () => ({ url: '/api/version' }), status: 200 },
   {
     route: 'POST /api/kifus',
     request: () => ({
@@ -258,17 +259,17 @@ const CALLS: Call[] = [
   },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/answer',
-    request: () => ({ url: `${drillPath()}/answer`, init: jsonFromBrowser('POST', { line: ['7g7f'] }) }),
+    request: () => ({ url: `${drillPath()}/answer`, init: json('POST', { line: ['7g7f'] }) }),
     status: 200,
   },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/give-up',
-    request: () => ({ url: `${drillPath()}/give-up`, init: jsonFromBrowser('POST', { line: [], practice: true }) }),
+    request: () => ({ url: `${drillPath()}/give-up`, init: json('POST', { line: [], practice: true }) }),
     status: 200,
   },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/exclude',
-    request: () => ({ url: `${drillPath()}/exclude`, init: { method: 'POST' } }),
+    request: () => ({ url: `${drillPath()}/exclude`, init: bare('POST') }),
     status: 200,
   },
   { route: 'GET /api/drills', request: () => ({ url: '/api/drills?status=excluded' }), status: 200 },
@@ -279,7 +280,7 @@ const CALLS: Call[] = [
   },
   {
     route: 'POST /api/drills/:kifuNo/:moveNumber/:kind/unexclude',
-    request: () => ({ url: `${drillPath()}/unexclude`, init: { method: 'POST' } }),
+    request: () => ({ url: `${drillPath()}/unexclude`, init: bare('POST') }),
     status: 200,
   },
   { route: 'GET /api/analysis/progress', request: () => ({ url: '/api/analysis/progress' }), status: 200 },
@@ -291,14 +292,14 @@ const CALLS: Call[] = [
   // --- ブラウザ解析の受け口（prd/14 §5.8）。所有者の担当は worker なので、開始は 409・報告は破棄（applied: false）---
   {
     route: 'POST /api/kifus/:no/analysis/start',
-    request: () => ({ url: `/api/kifus/${posted}/analysis/start`, init: jsonFromBrowser('POST', ENGINE) }),
+    request: () => ({ url: `/api/kifus/${posted}/analysis/start`, init: json('POST', ENGINE) }),
     status: 409,
   },
   {
     route: 'POST /api/kifus/:no/analysis/chunks',
     request: () => ({
       url: `/api/kifus/${posted}/analysis/chunks`,
-      init: jsonFromBrowser('POST', {
+      init: json('POST', {
         revision: 0,
         ...ENGINE,
         fvScale: 16,
@@ -314,7 +315,7 @@ const CALLS: Call[] = [
     route: 'POST /api/kifus/:no/analysis/error',
     request: () => ({
       url: `/api/kifus/${posted}/analysis/error`,
-      init: jsonFromBrowser('POST', { revision: 0, error: 'engine died' }),
+      init: json('POST', { revision: 0, error: 'engine died' }),
     }),
     status: 201,
   },
@@ -324,18 +325,18 @@ const CALLS: Call[] = [
     route: 'PUT /api/users/me/analysis-assignee',
     request: () => ({
       url: '/api/users/me/analysis-assignee',
-      init: jsonFromBrowser('PUT', { assignee: 'worker' }),
+      init: json('PUT', { assignee: 'worker' }),
     }),
     status: 200,
   },
   {
     route: 'POST /api/kifus/:no/reanalyze',
-    request: () => ({ url: `/api/kifus/${posted}/reanalyze`, init: { method: 'POST' } }),
+    request: () => ({ url: `/api/kifus/${posted}/reanalyze`, init: bare('POST') }),
     status: 201,
   },
   {
     route: 'DELETE /api/kifus/:no',
-    request: () => ({ url: `/api/kifus/${posted}`, init: { method: 'DELETE' } }),
+    request: () => ({ url: `/api/kifus/${posted}`, init: bare('DELETE') }),
     status: 200,
   },
 ];
